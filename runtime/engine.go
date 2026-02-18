@@ -8,24 +8,70 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/strefethen/arazzo-cli/parser"
+	"gopkg.in/yaml.v3"
 )
 
 // maxRetriesPerStep limits retry attempts to prevent infinite loops.
 const maxRetriesPerStep = 3
 
+// maxCallDepth limits sub-workflow recursion to prevent stack overflow.
+const maxCallDepth = 10
+
+// ctxKeyCallDepth is the context key for tracking sub-workflow call depth.
+type ctxKeyCallDepth struct{}
+
+// callDepth returns the current sub-workflow call depth from context.
+func callDepth(ctx context.Context) int {
+	if v, ok := ctx.Value(ctxKeyCallDepth{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
+// withCallDepth returns a new context with the call depth incremented by 1.
+func withCallDepth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyCallDepth{}, callDepth(ctx)+1)
+}
+
 // Package-level compiled regex patterns for performance.
 var (
-	pathParamRe  = regexp.MustCompile(`\{([^}]+)\}`)
-	arrayIndexRe = regexp.MustCompile(`\[(\d+)\]`)
+	pathParamRe    = regexp.MustCompile(`\{([^}]+)\}`)
+	arrayIndexRe   = regexp.MustCompile(`\[(\d+)\]`)
+	methodPrefixRe = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$`)
 )
+
+// StepEvent provides information about a step execution for tracing hooks.
+type StepEvent struct {
+	WorkflowID    string
+	StepID        string
+	OperationPath string // empty for sub-workflow steps
+	WorkflowIDRef string // non-empty for sub-workflow steps
+	StatusCode    int    // HTTP status (0 for sub-workflows or errors)
+	Outputs       map[string]any
+	Err           error
+	Duration      time.Duration
+}
+
+// TraceHook allows callers to observe workflow execution.
+type TraceHook interface {
+	BeforeStep(ctx context.Context, event StepEvent)
+	AfterStep(ctx context.Context, event StepEvent)
+}
 
 // stepResult captures the outcome of executing a step.
 type stepResult struct {
 	success  bool      // true if success criteria passed
 	response *Response // HTTP response (may be nil for network errors)
 	err      error     // network/system error (not API error)
+}
+
+// operationEntry maps an operationId to its HTTP method and path.
+type operationEntry struct {
+	Method string
+	Path   string
 }
 
 // Engine executes Arazzo workflows at runtime without code generation.
@@ -35,13 +81,65 @@ type Engine struct {
 	baseURL       string                    // from first sourceDescription
 	workflowIndex map[string]int            // workflowID → index in spec.Workflows
 	stepIndexes   map[string]map[string]int // workflowID → (stepID → index in Steps)
+	traceHook     TraceHook                 // optional execution observer
+	opIndex       map[string]operationEntry // operationId → {method, path}
+}
+
+// SetTraceHook sets an optional hook for observing step execution.
+func (e *Engine) SetTraceHook(hook TraceHook) {
+	e.traceHook = hook
+}
+
+// LoadOpenAPISpec parses an OpenAPI 3.x spec (JSON or YAML) and builds
+// an operationId → (method, path) index for operationId resolution.
+func (e *Engine) LoadOpenAPISpec(data []byte) error {
+	var spec struct {
+		Paths map[string]map[string]any `yaml:"paths" json:"paths"`
+	}
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		return fmt.Errorf("parsing OpenAPI spec: %w", err)
+	}
+
+	httpMethods := map[string]bool{
+		"get": true, "post": true, "put": true, "patch": true,
+		"delete": true, "head": true, "options": true, "trace": true,
+	}
+
+	for path, methods := range spec.Paths {
+		for method, opAny := range methods {
+			if !httpMethods[strings.ToLower(method)] {
+				continue // skip non-HTTP fields like "parameters", "summary"
+			}
+			opMap, ok := opAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			if opID, ok := opMap["operationId"].(string); ok && opID != "" {
+				e.opIndex[opID] = operationEntry{
+					Method: strings.ToUpper(method),
+					Path:   path,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// resolveOperationID looks up an operationId and returns (method, path).
+func (e *Engine) resolveOperationID(operationID string) (string, string, error) {
+	entry, ok := e.opIndex[operationID]
+	if !ok {
+		return "", "", fmt.Errorf("operationId %q not found in loaded OpenAPI specs", operationID)
+	}
+	return entry.Method, entry.Path, nil
 }
 
 // NewEngine creates an Engine from a parsed Arazzo spec.
 func NewEngine(spec *parser.ArazzoSpec, opts ...ClientOption) *Engine {
 	e := &Engine{
-		client: NewClient(opts...),
-		spec:   spec,
+		client:  NewClient(opts...),
+		spec:    spec,
+		opIndex: make(map[string]operationEntry),
 	}
 	// Extract base URL from first source description
 	if len(spec.SourceDescriptions) > 0 {
@@ -84,6 +182,11 @@ func (e *Engine) Spec() *parser.ArazzoSpec {
 
 // Execute runs a workflow with the given inputs and returns its outputs.
 func (e *Engine) Execute(ctx context.Context, workflowID string, inputs map[string]any) (map[string]any, error) {
+	// Check recursion depth for sub-workflow calls
+	if callDepth(ctx) >= maxCallDepth {
+		return nil, fmt.Errorf("max call depth (%d) exceeded calling workflow %q", maxCallDepth, workflowID)
+	}
+
 	// 1. Find workflow by ID
 	workflow := e.GetWorkflow(workflowID)
 	if workflow == nil {
@@ -107,11 +210,44 @@ func (e *Engine) Execute(ctx context.Context, workflowID string, inputs map[stri
 		}
 
 		step := workflow.Steps[stepIndex]
-		result := e.executeStepWithResult(ctx, step, vars)
 
-		nextIndex, done, err := e.handleStepResult(workflow, stepIndex, result, vars, retryCount)
+		// Trace: before step
+		if e.traceHook != nil {
+			e.traceHook.BeforeStep(ctx, StepEvent{
+				WorkflowID:    workflowID,
+				StepID:        step.StepID,
+				OperationPath: step.OperationPath,
+				WorkflowIDRef: step.WorkflowID,
+			})
+		}
+
+		start := time.Now()
+		result := e.executeStepWithResult(ctx, step, vars)
+		duration := time.Since(start)
+
+		// Trace: after step
+		if e.traceHook != nil {
+			event := StepEvent{
+				WorkflowID:    workflowID,
+				StepID:        step.StepID,
+				OperationPath: step.OperationPath,
+				WorkflowIDRef: step.WorkflowID,
+				Err:           result.err,
+				Duration:      duration,
+				Outputs:       vars.GetStepOutputs(step.StepID),
+			}
+			if result.response != nil {
+				event.StatusCode = result.response.StatusCode
+			}
+			e.traceHook.AfterStep(ctx, event)
+		}
+
+		nextIndex, done, gotoWorkflowID, err := e.handleStepResult(ctx, workflow, stepIndex, result, vars, retryCount)
 		if err != nil {
 			return nil, err
+		}
+		if gotoWorkflowID != "" {
+			return e.Execute(withCallDepth(ctx), gotoWorkflowID, vars.GetInputs())
 		}
 		if done {
 			break
@@ -132,14 +268,36 @@ func (e *Engine) Execute(ctx context.Context, workflowID string, inputs map[stri
 
 // executeStepWithResult runs a single step and returns a result struct.
 func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, vars *VarStore) stepResult {
+	// Sub-workflow step: call another workflow instead of making an HTTP request
+	if step.WorkflowID != "" {
+		return e.executeSubWorkflowStep(ctx, step, vars)
+	}
+
+	// Resolve operationId to method + path if needed
+	if step.OperationID != "" && step.OperationPath == "" {
+		method, path, err := e.resolveOperationID(step.OperationID)
+		if err != nil {
+			return stepResult{success: false, err: err}
+		}
+		step.OperationPath = method + " " + path
+	}
+
 	// 1. Build URL from operationPath + parameters
 	url := e.buildURL(step, vars)
 
-	// 2. Determine HTTP method (default GET, check for requestBody to use POST)
-	method := "GET"
+	// 2. Determine HTTP method
+	explicitMethod, _ := parseMethod(step.OperationPath)
+	method := explicitMethod
 	var body []byte
+	if method == "" {
+		// No explicit method — infer from body presence
+		if step.RequestBody != nil {
+			method = "POST"
+		} else {
+			method = "GET"
+		}
+	}
 	if step.RequestBody != nil {
-		method = "POST"
 		if payload := step.RequestBody.Payload; payload != nil {
 			// Evaluate expressions in the payload, then marshal to JSON
 			eval := NewExpressionEvaluator(vars)
@@ -183,7 +341,7 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 	// 5. Evaluate success criteria
 	evalWithResp := NewExpressionEvaluator(vars).WithResponse(resp)
 	for _, criterion := range step.SuccessCriteria {
-		if !evalWithResp.EvaluateCondition(criterion.Condition) {
+		if !evaluateCriterion(criterion, evalWithResp, resp) {
 			return stepResult{success: false, response: resp, err: nil}
 		}
 	}
@@ -208,17 +366,49 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 	return stepResult{success: true, response: resp, err: nil}
 }
 
+// executeSubWorkflowStep runs a sub-workflow as a step, propagating inputs and outputs.
+func (e *Engine) executeSubWorkflowStep(ctx context.Context, step parser.Step, vars *VarStore) stepResult {
+	// Build sub-workflow inputs from step parameters
+	eval := NewExpressionEvaluator(vars)
+	subInputs := make(map[string]any)
+	for _, param := range step.Parameters {
+		subInputs[param.Name] = eval.Evaluate(param.Value)
+	}
+
+	// Execute sub-workflow recursively with incremented call depth
+	outputs, err := e.Execute(withCallDepth(ctx), step.WorkflowID, subInputs)
+	if err != nil {
+		return stepResult{success: false, response: nil, err: fmt.Errorf("sub-workflow %s: %w", step.WorkflowID, err)}
+	}
+
+	// Store sub-workflow outputs under this step's ID
+	for name, value := range outputs {
+		vars.SetStepOutput(step.StepID, name, value)
+	}
+
+	// Evaluate success criteria (variable-based only, no response context)
+	evalPost := NewExpressionEvaluator(vars)
+	for _, criterion := range step.SuccessCriteria {
+		if !evaluateCriterion(criterion, evalPost, nil) {
+			return stepResult{success: false, response: nil, err: nil}
+		}
+	}
+
+	return stepResult{success: true, response: nil, err: nil}
+}
+
 // handleStepResult processes the outcome of a step and determines what to do next.
-func (e *Engine) handleStepResult(wf *parser.Workflow, stepIdx int, result stepResult, vars *VarStore, retryCount map[int]int) (nextIdx int, done bool, err error) {
+// Returns gotoWorkflowID if control should transfer to another workflow.
+func (e *Engine) handleStepResult(ctx context.Context, wf *parser.Workflow, stepIdx int, result stepResult, vars *VarStore, retryCount map[int]int) (nextIdx int, done bool, gotoWorkflowID string, err error) {
 	step := wf.Steps[stepIdx]
 
 	if result.success {
 		// Check onSuccess actions
 		action := e.findMatchingAction(step.OnSuccess, vars, result.response)
 		if action == nil {
-			return stepIdx + 1, false, nil // default: next step
+			return stepIdx + 1, false, "", nil // default: next step
 		}
-		return e.executeAction(wf, action, stepIdx, false, retryCount)
+		return e.executeAction(ctx, wf, action, stepIdx, false, retryCount)
 	}
 
 	// Failure path
@@ -226,16 +416,16 @@ func (e *Engine) handleStepResult(wf *parser.Workflow, stepIdx int, result stepR
 	if action == nil {
 		// No handler = workflow fails
 		if result.err != nil {
-			return 0, true, fmt.Errorf("step %s: %w", step.StepID, result.err)
+			return 0, true, "", fmt.Errorf("step %s: %w", step.StepID, result.err)
 		}
 		// Include response body in error for debugging
 		bodyPreview := string(result.response.Body)
 		if len(bodyPreview) > 500 {
 			bodyPreview = bodyPreview[:500] + "..."
 		}
-		return 0, true, fmt.Errorf("step %s: success criteria not met (status=%d, body=%s)", step.StepID, result.response.StatusCode, bodyPreview)
+		return 0, true, "", fmt.Errorf("step %s: success criteria not met (status=%d, body=%s)", step.StepID, result.response.StatusCode, bodyPreview)
 	}
-	return e.executeAction(wf, action, stepIdx, true, retryCount)
+	return e.executeAction(ctx, wf, action, stepIdx, true, retryCount)
 }
 
 // findMatchingAction returns the first action whose criteria match, or nil.
@@ -266,30 +456,44 @@ func (e *Engine) findMatchingAction(actions []parser.OnAction, vars *VarStore, r
 }
 
 // executeAction handles goto/end/retry actions.
-func (e *Engine) executeAction(wf *parser.Workflow, action *parser.OnAction, currentIdx int, isFailurePath bool, retryCount map[int]int) (nextIdx int, done bool, err error) {
+// Returns gotoWorkflowID if the action transfers control to another workflow.
+func (e *Engine) executeAction(ctx context.Context, wf *parser.Workflow, action *parser.OnAction, currentIdx int, isFailurePath bool, retryCount map[int]int) (nextIdx int, done bool, gotoWorkflowID string, err error) {
 	switch action.Type {
 	case "end":
 		if isFailurePath {
-			return 0, true, fmt.Errorf("step %s: workflow ended by onFailure action", wf.Steps[currentIdx].StepID)
+			return 0, true, "", fmt.Errorf("step %s: workflow ended by onFailure action", wf.Steps[currentIdx].StepID)
 		}
-		return 0, true, nil // success termination
+		return 0, true, "", nil // success termination
 	case "goto":
 		if action.StepID != "" {
 			idx := e.findStepIndex(wf, action.StepID)
 			if idx < 0 {
-				return 0, true, fmt.Errorf("goto: step %q not found", action.StepID)
+				return 0, true, "", fmt.Errorf("goto: step %q not found", action.StepID)
 			}
-			return idx, false, nil
+			return idx, false, "", nil
 		}
-		// TODO: action.WorkflowID for sub-workflow calls (future)
-		return 0, true, fmt.Errorf("goto: no stepId specified")
+		if action.WorkflowID != "" {
+			return 0, true, action.WorkflowID, nil
+		}
+		return 0, true, "", fmt.Errorf("goto: no stepId or workflowId specified")
 	case "retry":
-		if retryCount[currentIdx] >= maxRetriesPerStep {
-			return 0, true, fmt.Errorf("step %s: max retries (%d) exceeded", wf.Steps[currentIdx].StepID, maxRetriesPerStep)
+		limit := maxRetriesPerStep
+		if action.RetryLimit > 0 {
+			limit = action.RetryLimit
 		}
-		return currentIdx, false, nil // re-execute same step
+		if retryCount[currentIdx] >= limit {
+			return 0, true, "", fmt.Errorf("step %s: max retries (%d) exceeded", wf.Steps[currentIdx].StepID, limit)
+		}
+		if action.RetryAfter > 0 {
+			select {
+			case <-time.After(time.Duration(action.RetryAfter) * time.Second):
+			case <-ctx.Done():
+				return 0, true, "", ctx.Err()
+			}
+		}
+		return currentIdx, false, "", nil // re-execute same step
 	default:
-		return currentIdx + 1, false, nil
+		return currentIdx + 1, false, "", nil
 	}
 }
 
@@ -315,12 +519,15 @@ func (e *Engine) buildOutputs(workflow *parser.Workflow, vars *VarStore) map[str
 
 // buildURL constructs the full URL for a step, resolving path parameters.
 func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
+	// Strip method prefix if present (e.g., "PUT /users/{id}" → "/users/{id}")
+	_, opPath := parseMethod(step.OperationPath)
+
 	// Start with base URL + operation path (unless operationPath is absolute)
 	var target string
-	if strings.HasPrefix(step.OperationPath, "http://") || strings.HasPrefix(step.OperationPath, "https://") {
-		target = step.OperationPath
+	if strings.HasPrefix(opPath, "http://") || strings.HasPrefix(opPath, "https://") {
+		target = opPath
 	} else {
-		target = strings.TrimRight(e.baseURL, "/") + step.OperationPath
+		target = strings.TrimRight(e.baseURL, "/") + opPath
 	}
 
 	// Build parameter map
@@ -385,6 +592,40 @@ func resolvePayload(payload any, eval *ExpressionEvaluator) any {
 	default:
 		return v
 	}
+}
+
+// evaluateCriterion dispatches criterion evaluation based on its type.
+// Supported types: "simple" (default), "regex", "jsonpath".
+func evaluateCriterion(c parser.SuccessCriterion, eval *ExpressionEvaluator, resp *Response) bool {
+	switch c.Type {
+	case "regex":
+		// Context expression provides the value to match against.
+		contextVal := eval.EvaluateString(c.Context)
+		matched, err := regexp.MatchString(c.Condition, contextVal)
+		return err == nil && matched
+
+	case "jsonpath":
+		// Context resolves to the JSON body; condition is a gjson query.
+		// A truthy result (exists and is not false/0/empty) means success.
+		if resp == nil {
+			return false
+		}
+		result := resp.Extract(c.Condition)
+		return result != nil && result != false && result != 0.0 && result != ""
+
+	default: // "simple" or empty
+		return eval.EvaluateCondition(c.Condition)
+	}
+}
+
+// parseMethod extracts an HTTP method prefix from operationPath.
+// Supports "METHOD /path" format (e.g., "PUT /users/{id}").
+// Returns ("", operationPath) if no method prefix is present.
+func parseMethod(operationPath string) (method, path string) {
+	if m := methodPrefixRe.FindStringSubmatch(operationPath); m != nil {
+		return m[1], m[2]
+	}
+	return "", operationPath
 }
 
 // toGJSONPath converts Arazzo expression to gjson path.

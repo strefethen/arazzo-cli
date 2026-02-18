@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/strefethen/arazzo-cli/parser"
 )
@@ -360,6 +361,159 @@ func TestExecute_RetryExceedsMax(t *testing.T) {
 	}
 }
 
+// ── Retry policy tests ─────────────────────────────────────────────────
+
+func TestExecute_RetryCustomLimit(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount <= 5 {
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "retry-limit",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/flaky",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				OnFailure: []parser.OnAction{
+					{Type: "retry", RetryLimit: 6},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "retry-limit", nil)
+	if err != nil {
+		t.Fatalf("expected success with retryLimit=6, got: %v", err)
+	}
+	if callCount != 6 {
+		t.Fatalf("expected 6 calls (5 failures + 1 success), got %d", callCount)
+	}
+}
+
+func TestExecute_RetryCustomLimitExceeded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "retry-limit-exceeded",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/always-fail",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				OnFailure: []parser.OnAction{
+					{Type: "retry", RetryLimit: 2},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "retry-limit-exceeded", nil)
+	if err == nil {
+		t.Fatal("expected error after custom retry limit exceeded")
+	}
+	expected := "step s1: max retries (2) exceeded"
+	if err.Error() != expected {
+		t.Fatalf("expected error %q, got %q", expected, err.Error())
+	}
+}
+
+func TestExecute_RetryWithDelay(t *testing.T) {
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 2 {
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "retry-delay",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/flaky",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				OnFailure: []parser.OnAction{
+					{Type: "retry", RetryAfter: 1, RetryLimit: 3},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	start := time.Now()
+	_, err := engine.Execute(context.Background(), "retry-delay", nil)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+	// Should have waited ~1 second for the retry delay
+	if elapsed < 900*time.Millisecond {
+		t.Fatalf("expected >= 900ms delay from retryAfter, got %v", elapsed)
+	}
+}
+
+func TestExecute_RetryDelayCancelledByContext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "retry-cancel",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/fail",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				OnFailure: []parser.OnAction{
+					{Type: "retry", RetryAfter: 60, RetryLimit: 5}, // 60s delay
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := engine.Execute(ctx, "retry-cancel", nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected fast cancellation, took %v", elapsed)
+	}
+}
+
 func TestExecute_OnFailureCriteriaMatching(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -530,7 +684,7 @@ func TestExecute_GotoNoStepID(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for goto without stepId")
 	}
-	expected := "goto: no stepId specified"
+	expected := "goto: no stepId or workflowId specified"
 	if err.Error() != expected {
 		t.Fatalf("expected error %q, got %q", expected, err.Error())
 	}
@@ -1033,5 +1187,994 @@ func TestExecute_RequestBodyDefaultContentType(t *testing.T) {
 	}
 	if gotContentType != "application/json" {
 		t.Fatalf("expected default Content-Type 'application/json', got %q", gotContentType)
+	}
+}
+
+// ── HTTP method support ────────────────────────────────────────────────
+
+func TestParseMethod(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantMethod string
+		wantPath   string
+	}{
+		{"PUT /users/{id}", "PUT", "/users/{id}"},
+		{"DELETE /users/{id}", "DELETE", "/users/{id}"},
+		{"PATCH /items/1", "PATCH", "/items/1"},
+		{"GET /health", "GET", "/health"},
+		{"HEAD /ping", "HEAD", "/ping"},
+		{"OPTIONS /api", "OPTIONS", "/api"},
+		{"/users", "", "/users"},
+		{"", "", ""},
+		{"POST /data", "POST", "/data"},
+	}
+	for _, tt := range tests {
+		method, path := parseMethod(tt.input)
+		if method != tt.wantMethod || path != tt.wantPath {
+			t.Errorf("parseMethod(%q) = (%q, %q), want (%q, %q)",
+				tt.input, method, path, tt.wantMethod, tt.wantPath)
+		}
+	}
+}
+
+func TestExecute_PutMethod(t *testing.T) {
+	var gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"updated":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "PUT /users/123",
+			RequestBody:   &parser.RequestBody{Payload: map[string]any{"name": "Alice"}},
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PUT" {
+		t.Fatalf("expected PUT, got %s", gotMethod)
+	}
+}
+
+func TestExecute_DeleteMethod(t *testing.T) {
+	var gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(204)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:          "s1",
+			OperationPath:   "DELETE /users/123",
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 204"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Fatalf("expected DELETE, got %s", gotMethod)
+	}
+}
+
+func TestExecute_PatchMethod(t *testing.T) {
+	var gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"patched":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "PATCH /items/42",
+			RequestBody:   &parser.RequestBody{Payload: map[string]any{"status": "active"}},
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Fatalf("expected PATCH, got %s", gotMethod)
+	}
+}
+
+// ── Criterion type tests ───────────────────────────────────────────────
+
+func TestEvaluateCriterion_Simple(t *testing.T) {
+	resp := &Response{StatusCode: 200}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{Condition: "$statusCode == 200"}
+	if !evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected simple criterion to pass")
+	}
+	c.Condition = "$statusCode == 404"
+	if evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected simple criterion to fail")
+	}
+}
+
+func TestEvaluateCriterion_SimpleExplicitType(t *testing.T) {
+	resp := &Response{StatusCode: 200}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{Type: "simple", Condition: "$statusCode == 200"}
+	if !evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected explicit simple criterion to pass")
+	}
+}
+
+func TestEvaluateCriterion_Regex(t *testing.T) {
+	resp := &Response{StatusCode: 200}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{
+		Type:      "regex",
+		Context:   "$statusCode",
+		Condition: "^2\\d{2}$", // matches 2xx
+	}
+	if !evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected regex criterion to match 200")
+	}
+}
+
+func TestEvaluateCriterion_RegexNoMatch(t *testing.T) {
+	resp := &Response{StatusCode: 500}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{
+		Type:      "regex",
+		Context:   "$statusCode",
+		Condition: "^2\\d{2}$",
+	}
+	if evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected regex criterion to not match 500")
+	}
+}
+
+func TestEvaluateCriterion_RegexBodyContent(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "name", "Hello World 123")
+	eval := NewExpressionEvaluator(vars)
+	c := parser.SuccessCriterion{
+		Type:      "regex",
+		Context:   "$steps.s1.outputs.name",
+		Condition: `^Hello\s+World\s+\d+$`,
+	}
+	if !evaluateCriterion(c, eval, nil) {
+		t.Fatal("expected regex to match step output")
+	}
+}
+
+func TestEvaluateCriterion_JSONPath(t *testing.T) {
+	resp := &Response{
+		Body:        []byte(`{"users":[{"name":"Alice"},{"name":"Bob"}]}`),
+		ContentType: "json",
+	}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{
+		Type:      "jsonpath",
+		Condition: "users.0.name", // gjson path
+	}
+	if !evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected jsonpath to find users.0.name")
+	}
+}
+
+func TestEvaluateCriterion_JSONPathMissing(t *testing.T) {
+	resp := &Response{
+		Body:        []byte(`{"users":[]}`),
+		ContentType: "json",
+	}
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(resp)
+	c := parser.SuccessCriterion{
+		Type:      "jsonpath",
+		Condition: "nonexistent.path",
+	}
+	if evaluateCriterion(c, eval, resp) {
+		t.Fatal("expected jsonpath to fail for missing path")
+	}
+}
+
+func TestEvaluateCriterion_JSONPathNoResponse(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore())
+	c := parser.SuccessCriterion{
+		Type:      "jsonpath",
+		Condition: "users.0.name",
+	}
+	if evaluateCriterion(c, eval, nil) {
+		t.Fatal("expected jsonpath to fail with nil response")
+	}
+}
+
+func TestExecute_RegexCriterion(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"abc-123"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "regex-criterion",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/create",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{
+					Type:      "regex",
+					Context:   "$statusCode",
+					Condition: "^2\\d{2}$", // any 2xx
+				},
+			},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "regex-criterion", nil)
+	if err != nil {
+		t.Fatalf("expected regex criterion to pass for 201, got: %v", err)
+	}
+}
+
+func TestExecute_RegexCriterionFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = io.WriteString(w, `{"error":"fail"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "regex-fail",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/fail",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{
+					Type:      "regex",
+					Context:   "$statusCode",
+					Condition: "^2\\d{2}$",
+				},
+			},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "regex-fail", nil)
+	if err == nil {
+		t.Fatal("expected error when regex criterion fails")
+	}
+}
+
+func TestExecute_JSONPathCriterion(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"data":{"items":[{"id":1},{"id":2}]}}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "jsonpath-criterion",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/data",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{Condition: "$statusCode == 200"},
+				{
+					Type:      "jsonpath",
+					Condition: "data.items.0.id", // gjson: check first item exists
+				},
+			},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "jsonpath-criterion", nil)
+	if err != nil {
+		t.Fatalf("expected jsonpath criterion to pass, got: %v", err)
+	}
+}
+
+func TestExecute_JSONPathCriterionFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"data":{"items":[]}}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "jsonpath-fail",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/data",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{Condition: "$statusCode == 200"},
+				{
+					Type:      "jsonpath",
+					Condition: "data.items.0.id", // empty array → no match
+				},
+			},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "jsonpath-fail", nil)
+	if err == nil {
+		t.Fatal("expected error when jsonpath criterion fails on empty array")
+	}
+}
+
+func TestExecute_MethodFallbackGET(t *testing.T) {
+	var gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:          "s1",
+			OperationPath:   "/health",
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "GET" {
+		t.Fatalf("expected fallback GET, got %s", gotMethod)
+	}
+}
+
+// ── Sub-workflow tests ─────────────────────────────────────────────────
+
+func TestExecute_SubWorkflowStep(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"token":"xyz-789"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(
+		// Parent workflow
+		parser.Workflow{
+			WorkflowID: "parent",
+			Steps: []parser.Step{
+				{
+					StepID:     "call-child",
+					WorkflowID: "child",
+					Outputs: map[string]string{
+						"childToken": "$steps.call-child.outputs.token",
+					},
+				},
+			},
+			Outputs: map[string]string{
+				"token": "$steps.call-child.outputs.token",
+			},
+		},
+		// Child workflow
+		parser.Workflow{
+			WorkflowID: "child",
+			Steps: []parser.Step{
+				{
+					StepID:        "get-token",
+					OperationPath: "/auth",
+					SuccessCriteria: []parser.SuccessCriterion{
+						{Condition: "$statusCode == 200"},
+					},
+					Outputs: map[string]string{
+						"token": "$response.body.token",
+					},
+				},
+			},
+			Outputs: map[string]string{
+				"token": "$steps.get-token.outputs.token",
+			},
+		},
+	)
+
+	engine := newTestEngine(ts, spec)
+	outputs, err := engine.Execute(context.Background(), "parent", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if outputs["token"] != "xyz-789" {
+		t.Fatalf("expected token='xyz-789', got %v", outputs["token"])
+	}
+}
+
+func TestExecute_SubWorkflowWithInputs(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"name":"Alice"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "parent",
+			Steps: []parser.Step{
+				{
+					StepID:     "call-child",
+					WorkflowID: "child",
+					Parameters: []parser.Parameter{
+						{Name: "userId", Value: "$inputs.uid"},
+					},
+				},
+			},
+		},
+		parser.Workflow{
+			WorkflowID: "child",
+			Steps: []parser.Step{
+				{
+					StepID:        "get-user",
+					OperationPath: "/users/{userId}",
+					Parameters: []parser.Parameter{
+						{Name: "userId", In: "path", Value: "$inputs.userId"},
+					},
+					SuccessCriteria: []parser.SuccessCriterion{
+						{Condition: "$statusCode == 200"},
+					},
+				},
+			},
+		},
+	)
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "parent", map[string]any{"uid": "42"})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if gotPath != "/users/42" {
+		t.Fatalf("expected /users/42, got %s", gotPath)
+	}
+}
+
+func TestExecute_SubWorkflowStepFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = io.WriteString(w, `{"error":"fail"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "parent",
+			Steps: []parser.Step{
+				{StepID: "call-child", WorkflowID: "child"},
+			},
+		},
+		parser.Workflow{
+			WorkflowID: "child",
+			Steps: []parser.Step{
+				{
+					StepID:        "s1",
+					OperationPath: "/fail",
+					SuccessCriteria: []parser.SuccessCriterion{
+						{Condition: "$statusCode == 200"},
+					},
+				},
+			},
+		},
+	)
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "parent", nil)
+	if err == nil {
+		t.Fatal("expected error from child workflow failure")
+	}
+	if !strings.Contains(err.Error(), "sub-workflow child") {
+		t.Fatalf("expected sub-workflow error, got: %v", err)
+	}
+}
+
+func TestExecute_GotoWorkflow(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/main":
+			w.WriteHeader(500)
+		case "/fallback":
+			w.WriteHeader(200)
+			_, _ = io.WriteString(w, `{"fallback":true}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "main-wf",
+			Steps: []parser.Step{
+				{
+					StepID:        "s1",
+					OperationPath: "/main",
+					SuccessCriteria: []parser.SuccessCriterion{
+						{Condition: "$statusCode == 200"},
+					},
+					OnFailure: []parser.OnAction{
+						{Type: "goto", WorkflowID: "fallback-wf"},
+					},
+				},
+			},
+		},
+		parser.Workflow{
+			WorkflowID: "fallback-wf",
+			Steps: []parser.Step{
+				{
+					StepID:        "fb",
+					OperationPath: "/fallback",
+					SuccessCriteria: []parser.SuccessCriterion{
+						{Condition: "$statusCode == 200"},
+					},
+					Outputs: map[string]string{
+						"ok": "$response.body.fallback",
+					},
+				},
+			},
+			Outputs: map[string]string{
+				"ok": "$steps.fb.outputs.ok",
+			},
+		},
+	)
+
+	engine := newTestEngine(ts, spec)
+	outputs, err := engine.Execute(context.Background(), "main-wf", nil)
+	if err != nil {
+		t.Fatalf("expected no error from goto workflow, got: %v", err)
+	}
+	if outputs["ok"] != true {
+		t.Fatalf("expected ok=true from fallback workflow, got %v", outputs["ok"])
+	}
+}
+
+func TestExecute_RecursionGuard(t *testing.T) {
+	// Workflow A calls Workflow B, which calls Workflow A → infinite recursion
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "wf-a",
+			Steps: []parser.Step{
+				{StepID: "call-b", WorkflowID: "wf-b"},
+			},
+		},
+		parser.Workflow{
+			WorkflowID: "wf-b",
+			Steps: []parser.Step{
+				{StepID: "call-a", WorkflowID: "wf-a"},
+			},
+		},
+	)
+
+	engine := NewEngine(spec)
+	_, err := engine.Execute(context.Background(), "wf-a", nil)
+	if err == nil {
+		t.Fatal("expected error from recursion guard")
+	}
+	if !strings.Contains(err.Error(), "max call depth") {
+		t.Fatalf("expected max call depth error, got: %v", err)
+	}
+}
+
+// ── Trace hook tests ───────────────────────────────────────────────────
+
+type testTraceHook struct {
+	beforeEvents []StepEvent
+	afterEvents  []StepEvent
+}
+
+func (h *testTraceHook) BeforeStep(_ context.Context, event StepEvent) {
+	h.beforeEvents = append(h.beforeEvents, event)
+}
+
+func (h *testTraceHook) AfterStep(_ context.Context, event StepEvent) {
+	h.afterEvents = append(h.afterEvents, event)
+}
+
+func TestTraceHook_Invoked(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{StepID: "s1", OperationPath: "/a", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			{StepID: "s2", OperationPath: "/b", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	hook := &testTraceHook{}
+	engine := newTestEngine(ts, spec)
+	engine.SetTraceHook(hook)
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(hook.beforeEvents) != 2 {
+		t.Fatalf("expected 2 BeforeStep events, got %d", len(hook.beforeEvents))
+	}
+	if len(hook.afterEvents) != 2 {
+		t.Fatalf("expected 2 AfterStep events, got %d", len(hook.afterEvents))
+	}
+
+	// Verify event ordering and content
+	if hook.beforeEvents[0].StepID != "s1" || hook.beforeEvents[1].StepID != "s2" {
+		t.Fatalf("expected steps [s1, s2], got [%s, %s]", hook.beforeEvents[0].StepID, hook.beforeEvents[1].StepID)
+	}
+	if hook.afterEvents[0].StatusCode != 200 {
+		t.Fatalf("expected status 200, got %d", hook.afterEvents[0].StatusCode)
+	}
+	if hook.afterEvents[0].Duration <= 0 {
+		t.Fatal("expected positive duration")
+	}
+}
+
+func TestTraceHook_WorkflowID(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "my-workflow",
+		Steps: []parser.Step{
+			{StepID: "s1", OperationPath: "/test", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	hook := &testTraceHook{}
+	engine := newTestEngine(ts, spec)
+	engine.SetTraceHook(hook)
+
+	_, _ = engine.Execute(context.Background(), "my-workflow", nil)
+
+	if hook.beforeEvents[0].WorkflowID != "my-workflow" {
+		t.Fatalf("expected workflow ID 'my-workflow', got %q", hook.beforeEvents[0].WorkflowID)
+	}
+}
+
+func TestTraceHook_SubWorkflowStep(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "parent",
+			Steps: []parser.Step{
+				{StepID: "call-child", WorkflowID: "child"},
+			},
+		},
+		parser.Workflow{
+			WorkflowID: "child",
+			Steps: []parser.Step{
+				{StepID: "s1", OperationPath: "/api", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			},
+		},
+	)
+
+	hook := &testTraceHook{}
+	engine := newTestEngine(ts, spec)
+	engine.SetTraceHook(hook)
+
+	_, err := engine.Execute(context.Background(), "parent", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should see: BeforeStep(call-child in parent), BeforeStep(s1 in child), AfterStep(s1 in child), AfterStep(call-child in parent)
+	if len(hook.beforeEvents) != 2 {
+		t.Fatalf("expected 2 before events (parent+child), got %d", len(hook.beforeEvents))
+	}
+	// First event is the sub-workflow call from parent
+	if hook.beforeEvents[0].WorkflowIDRef != "child" {
+		t.Fatalf("expected first before event to reference 'child', got %q", hook.beforeEvents[0].WorkflowIDRef)
+	}
+	// Second event is the HTTP step inside child
+	if hook.beforeEvents[1].OperationPath != "/api" {
+		t.Fatalf("expected second before event with operationPath '/api', got %q", hook.beforeEvents[1].OperationPath)
+	}
+}
+
+func TestTraceHook_NilSafe(t *testing.T) {
+	// Engine without a trace hook should not panic
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{StepID: "s1", OperationPath: "/test", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	// No SetTraceHook call — hook is nil
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error with nil hook: %v", err)
+	}
+}
+
+func TestTraceHook_ErrorCapture(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = io.WriteString(w, `{"error":"fail"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{StepID: "s1", OperationPath: "/fail", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	hook := &testTraceHook{}
+	engine := newTestEngine(ts, spec)
+	engine.SetTraceHook(hook)
+
+	_, _ = engine.Execute(context.Background(), "wf", nil)
+
+	if len(hook.afterEvents) != 1 {
+		t.Fatalf("expected 1 after event, got %d", len(hook.afterEvents))
+	}
+	// Step returned 500, but success criteria failed (not a network error)
+	// So StatusCode should be captured
+	if hook.afterEvents[0].StatusCode != 500 {
+		t.Fatalf("expected status 500, got %d", hook.afterEvents[0].StatusCode)
+	}
+}
+
+// ── operationId resolution tests ────────────────────────────────────────
+
+func TestLoadOpenAPISpec_Basic(t *testing.T) {
+	spec := makeSpec(parser.Workflow{WorkflowID: "wf"})
+	engine := NewEngine(spec)
+
+	openAPISpec := []byte(`
+openapi: "3.0.0"
+paths:
+  /users:
+    get:
+      operationId: listUsers
+    post:
+      operationId: createUser
+  /users/{id}:
+    get:
+      operationId: getUser
+    put:
+      operationId: updateUser
+    delete:
+      operationId: deleteUser
+`)
+	if err := engine.LoadOpenAPISpec(openAPISpec); err != nil {
+		t.Fatalf("failed to load OpenAPI spec: %v", err)
+	}
+
+	// Verify resolution
+	method, path, err := engine.resolveOperationID("listUsers")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if method != "GET" || path != "/users" {
+		t.Fatalf("expected GET /users, got %s %s", method, path)
+	}
+
+	method, path, err = engine.resolveOperationID("createUser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if method != "POST" || path != "/users" {
+		t.Fatalf("expected POST /users, got %s %s", method, path)
+	}
+
+	method, path, err = engine.resolveOperationID("deleteUser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if method != "DELETE" || path != "/users/{id}" {
+		t.Fatalf("expected DELETE /users/{id}, got %s %s", method, path)
+	}
+}
+
+func TestLoadOpenAPISpec_NotFound(t *testing.T) {
+	engine := NewEngine(makeSpec())
+
+	openAPISpec := []byte(`{"openapi":"3.0.0","paths":{"/health":{"get":{"operationId":"healthCheck"}}}}`)
+	if err := engine.LoadOpenAPISpec(openAPISpec); err != nil {
+		t.Fatalf("failed to load: %v", err)
+	}
+
+	_, _, err := engine.resolveOperationID("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown operationId")
+	}
+}
+
+func TestLoadOpenAPISpec_SkipsNonHTTPFields(t *testing.T) {
+	engine := NewEngine(makeSpec())
+
+	// "parameters" and "summary" at path level should not be treated as HTTP methods
+	openAPISpec := []byte(`
+openapi: "3.0.0"
+paths:
+  /items:
+    parameters:
+      - name: format
+    get:
+      operationId: listItems
+`)
+	if err := engine.LoadOpenAPISpec(openAPISpec); err != nil {
+		t.Fatalf("failed to load: %v", err)
+	}
+
+	method, path, err := engine.resolveOperationID("listItems")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if method != "GET" || path != "/items" {
+		t.Fatalf("expected GET /items, got %s %s", method, path)
+	}
+}
+
+func TestExecute_OperationID(t *testing.T) {
+	var gotMethod, gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"users":[]}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:      "s1",
+			OperationID: "listUsers",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{Condition: "$statusCode == 200"},
+			},
+		}},
+	})
+
+	engine := newTestEngine(ts, spec)
+	openAPI := []byte(`{"openapi":"3.0.0","paths":{"/users":{"get":{"operationId":"listUsers"}}}}`)
+	if err := engine.LoadOpenAPISpec(openAPI); err != nil {
+		t.Fatalf("failed to load OpenAPI spec: %v", err)
+	}
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "GET" {
+		t.Fatalf("expected GET, got %s", gotMethod)
+	}
+	if gotPath != "/users" {
+		t.Fatalf("expected /users, got %s", gotPath)
+	}
+}
+
+func TestExecute_OperationIDWithPathParams(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"name":"Alice"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:      "s1",
+			OperationID: "getUser",
+			Parameters: []parser.Parameter{
+				{Name: "id", In: "path", Value: "$inputs.userId"},
+			},
+			SuccessCriteria: []parser.SuccessCriterion{
+				{Condition: "$statusCode == 200"},
+			},
+		}},
+	})
+
+	engine := newTestEngine(ts, spec)
+	openAPI := []byte(`{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"getUser"}}}}`)
+	if err := engine.LoadOpenAPISpec(openAPI); err != nil {
+		t.Fatalf("failed to load: %v", err)
+	}
+
+	_, err := engine.Execute(context.Background(), "wf", map[string]any{"userId": "42"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/users/42" {
+		t.Fatalf("expected /users/42, got %s", gotPath)
+	}
+}
+
+func TestExecute_OperationIDNotLoaded(t *testing.T) {
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:      "s1",
+			OperationID: "listUsers",
+			SuccessCriteria: []parser.SuccessCriterion{
+				{Condition: "$statusCode == 200"},
+			},
+		}},
+	})
+
+	engine := NewEngine(spec)
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err == nil {
+		t.Fatal("expected error for unresolved operationId")
+	}
+	if !strings.Contains(err.Error(), "operationId") {
+		t.Fatalf("expected operationId error, got: %v", err)
+	}
+}
+
+func TestExecute_SubWorkflowNotFound(t *testing.T) {
+	spec := makeSpec(
+		parser.Workflow{
+			WorkflowID: "parent",
+			Steps: []parser.Step{
+				{StepID: "call-missing", WorkflowID: "nonexistent"},
+			},
+		},
+	)
+
+	engine := NewEngine(spec)
+	_, err := engine.Execute(context.Background(), "parent", nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent sub-workflow")
+	}
+	if !strings.Contains(err.Error(), `workflow "nonexistent" not found`) {
+		t.Fatalf("expected workflow not found error, got: %v", err)
 	}
 }
