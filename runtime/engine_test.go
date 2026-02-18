@@ -1103,6 +1103,91 @@ func BenchmarkInterpolateString(b *testing.B) {
 	}
 }
 
+func BenchmarkParseMethod(b *testing.B) {
+	inputs := []string{
+		"PUT /users/{id}",
+		"DELETE /items/{id}",
+		"GET /health",
+		"/no-method/path",
+		"OPTIONS /cors",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, in := range inputs {
+			_, _ = parseMethod(in)
+		}
+	}
+}
+
+func BenchmarkEvaluateCondition(b *testing.B) {
+	vars := NewVarStore()
+	eval := NewExpressionEvaluator(vars)
+	eval.WithResponse(&Response{StatusCode: 200, Body: []byte(`{}`)})
+
+	conditions := []string{
+		"$statusCode == 200",
+		"$statusCode != 404",
+		"$statusCode == 201",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, c := range conditions {
+			_ = eval.EvaluateCondition(c)
+		}
+	}
+}
+
+func BenchmarkEvaluateCriterionRegex(b *testing.B) {
+	vars := NewVarStore()
+	eval := NewExpressionEvaluator(vars)
+	eval.WithResponse(&Response{StatusCode: 200, Body: []byte(`{}`)})
+
+	criterion := parser.SuccessCriterion{
+		Type:      "regex",
+		Context:   "$statusCode",
+		Condition: `^2\d{2}$`,
+	}
+	resp := &Response{StatusCode: 200, Body: []byte(`{}`)}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		evaluateCriterion(criterion, eval, resp)
+	}
+}
+
+func BenchmarkEvaluate(b *testing.B) {
+	vars := NewVarStore()
+	vars.SetInput("name", "Alice")
+	vars.SetStepOutput("s1", "result", "success")
+	eval := NewExpressionEvaluator(vars)
+
+	exprs := []string{
+		"$inputs.name",
+		"$steps.s1.outputs.result",
+		"literal-value",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, expr := range exprs {
+			_ = eval.Evaluate(expr)
+		}
+	}
+}
+
+func BenchmarkToGJSONPath_NoBrackets(b *testing.B) {
+	// Fast path: no array indexing needed
+	inputs := []string{
+		"$response.body.data.name",
+		"$response.body.users.profile.address",
+		"$response.body.simple",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, in := range inputs {
+			_ = toGJSONPath(in)
+		}
+	}
+}
+
 // ── Bug regression tests ───────────────────────────────────────────────
 
 func TestBuildURL_NoDoubleSlash(t *testing.T) {

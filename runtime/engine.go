@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/strefethen/arazzo-cli/parser"
@@ -38,10 +39,15 @@ func withCallDepth(ctx context.Context) context.Context {
 
 // Package-level compiled regex patterns for performance.
 var (
-	pathParamRe    = regexp.MustCompile(`\{([^}]+)\}`)
-	arrayIndexRe   = regexp.MustCompile(`\[(\d+)\]`)
-	methodPrefixRe = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$`)
+	pathParamRe  = regexp.MustCompile(`\{([^}]+)\}`)
+	arrayIndexRe = regexp.MustCompile(`\[(\d+)\]`)
 )
+
+// validMethods is the set of valid HTTP methods for parseMethod.
+var validMethods = map[string]bool{
+	"GET": true, "POST": true, "PUT": true, "PATCH": true,
+	"DELETE": true, "HEAD": true, "OPTIONS": true,
+}
 
 // StepEvent provides information about a step execution for tracing hooks.
 type StepEvent struct {
@@ -282,11 +288,11 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		step.OperationPath = method + " " + path
 	}
 
-	// 1. Build URL from operationPath + parameters
-	url := e.buildURL(step, vars)
+	// 1. Parse method + build URL (single parseMethod call)
+	explicitMethod, opPath := parseMethod(step.OperationPath)
+	url := e.buildURLFromPath(opPath, step, vars)
 
 	// 2. Determine HTTP method
-	explicitMethod, _ := parseMethod(step.OperationPath)
 	method := explicitMethod
 	var body []byte
 	if method == "" {
@@ -297,16 +303,18 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 			method = "GET"
 		}
 	}
+	// Reuse a single evaluator for payload, headers, and criteria
+	eval := NewExpressionEvaluator(vars)
+
 	if step.RequestBody != nil {
 		if payload := step.RequestBody.Payload; payload != nil {
 			// Evaluate expressions in the payload, then marshal to JSON
-			eval := NewExpressionEvaluator(vars)
 			resolved := resolvePayload(payload, eval)
 
 			var err error
 			body, err = json.Marshal(resolved)
 			if err != nil {
-				return stepResult{success: false, response: nil, err: fmt.Errorf("marshaling request body: %w", err)}
+				return stepResult{success: false, err: fmt.Errorf("marshaling request body: %w", err)}
 			}
 		}
 	}
@@ -320,7 +328,6 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		}
 		headers["Content-Type"] = ct
 	}
-	eval := NewExpressionEvaluator(vars)
 	for _, param := range step.Parameters {
 		if param.In == "header" {
 			headers[param.Name] = eval.EvaluateString(param.Value)
@@ -335,14 +342,14 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		Body:    body,
 	})
 	if err != nil {
-		return stepResult{success: false, response: nil, err: err}
+		return stepResult{success: false, err: err}
 	}
 
-	// 5. Evaluate success criteria
-	evalWithResp := NewExpressionEvaluator(vars).WithResponse(resp)
+	// 5. Evaluate success criteria (reuse evaluator, add response context)
+	eval.WithResponse(resp)
 	for _, criterion := range step.SuccessCriteria {
-		if !evaluateCriterion(criterion, evalWithResp, resp) {
-			return stepResult{success: false, response: resp, err: nil}
+		if !evaluateCriterion(criterion, eval, resp) {
+			return stepResult{success: false, response: resp}
 		}
 	}
 
@@ -354,16 +361,16 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 			value = resp.Extract(expr)
 		} else if strings.HasPrefix(expr, "$response.header.") || strings.HasPrefix(expr, "$statusCode") {
 			// Expressions the evaluator handles directly
-			value = evalWithResp.Evaluate(expr)
+			value = eval.Evaluate(expr)
 		} else {
 			// Body extraction — convert Arazzo expression to gjson-compatible path
 			gjsonPath := toGJSONPath(expr)
-			value = evalWithResp.Evaluate("$response.body." + gjsonPath)
+			value = eval.Evaluate("$response.body." + gjsonPath)
 		}
 		vars.SetStepOutput(step.StepID, name, value)
 	}
 
-	return stepResult{success: true, response: resp, err: nil}
+	return stepResult{success: true, response: resp}
 }
 
 // executeSubWorkflowStep runs a sub-workflow as a step, propagating inputs and outputs.
@@ -378,7 +385,7 @@ func (e *Engine) executeSubWorkflowStep(ctx context.Context, step parser.Step, v
 	// Execute sub-workflow recursively with incremented call depth
 	outputs, err := e.Execute(withCallDepth(ctx), step.WorkflowID, subInputs)
 	if err != nil {
-		return stepResult{success: false, response: nil, err: fmt.Errorf("sub-workflow %s: %w", step.WorkflowID, err)}
+		return stepResult{success: false, err: fmt.Errorf("sub-workflow %s: %w", step.WorkflowID, err)}
 	}
 
 	// Store sub-workflow outputs under this step's ID
@@ -390,11 +397,11 @@ func (e *Engine) executeSubWorkflowStep(ctx context.Context, step parser.Step, v
 	evalPost := NewExpressionEvaluator(vars)
 	for _, criterion := range step.SuccessCriteria {
 		if !evaluateCriterion(criterion, evalPost, nil) {
-			return stepResult{success: false, response: nil, err: nil}
+			return stepResult{success: false}
 		}
 	}
 
-	return stepResult{success: true, response: nil, err: nil}
+	return stepResult{success: true}
 }
 
 // handleStepResult processes the outcome of a step and determines what to do next.
@@ -432,7 +439,7 @@ func (e *Engine) handleStepResult(ctx context.Context, wf *parser.Workflow, step
 func (e *Engine) findMatchingAction(actions []parser.OnAction, vars *VarStore, resp *Response) *parser.OnAction {
 	eval := NewExpressionEvaluator(vars)
 	if resp != nil {
-		eval = eval.WithResponse(resp)
+		eval.WithResponse(resp)
 	}
 
 	for i := range actions {
@@ -519,9 +526,12 @@ func (e *Engine) buildOutputs(workflow *parser.Workflow, vars *VarStore) map[str
 
 // buildURL constructs the full URL for a step, resolving path parameters.
 func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
-	// Strip method prefix if present (e.g., "PUT /users/{id}" → "/users/{id}")
 	_, opPath := parseMethod(step.OperationPath)
+	return e.buildURLFromPath(opPath, step, vars)
+}
 
+// buildURLFromPath constructs the full URL using a pre-parsed operation path.
+func (e *Engine) buildURLFromPath(opPath string, step parser.Step, vars *VarStore) string {
 	// Start with base URL + operation path (unless operationPath is absolute)
 	var target string
 	if strings.HasPrefix(opPath, "http://") || strings.HasPrefix(opPath, "https://") {
@@ -530,7 +540,7 @@ func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 		target = strings.TrimRight(e.baseURL, "/") + opPath
 	}
 
-	// Build parameter map
+	// Build parameter maps
 	eval := NewExpressionEvaluator(vars)
 	pathParams := make(map[string]any)
 	queryParams := make(map[string]string)
@@ -547,14 +557,16 @@ func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 		}
 	}
 
-	// Replace {param} placeholders with values
-	target = pathParamRe.ReplaceAllStringFunc(target, func(match string) string {
-		name := match[1 : len(match)-1]
-		if val, ok := pathParams[name]; ok {
-			return fmt.Sprintf("%v", val)
-		}
-		return match
-	})
+	// Replace {param} placeholders — skip regex entirely if no braces
+	if len(pathParams) > 0 && strings.ContainsRune(target, '{') {
+		target = pathParamRe.ReplaceAllStringFunc(target, func(match string) string {
+			name := match[1 : len(match)-1]
+			if val, ok := pathParams[name]; ok {
+				return fmt.Sprintf("%v", val)
+			}
+			return match
+		})
+	}
 
 	// Append query parameters (URL-encoded)
 	if len(queryParams) > 0 {
@@ -594,6 +606,22 @@ func resolvePayload(payload any, eval *ExpressionEvaluator) any {
 	}
 }
 
+// regexCache stores compiled regex patterns to avoid recompilation.
+var regexCache sync.Map // string -> *regexp.Regexp
+
+// getCompiledRegex returns a cached compiled regex, compiling on first access.
+func getCompiledRegex(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := regexCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	regexCache.Store(pattern, re)
+	return re, nil
+}
+
 // evaluateCriterion dispatches criterion evaluation based on its type.
 // Supported types: "simple" (default), "regex", "jsonpath".
 func evaluateCriterion(c parser.SuccessCriterion, eval *ExpressionEvaluator, resp *Response) bool {
@@ -601,8 +629,11 @@ func evaluateCriterion(c parser.SuccessCriterion, eval *ExpressionEvaluator, res
 	case "regex":
 		// Context expression provides the value to match against.
 		contextVal := eval.EvaluateString(c.Context)
-		matched, err := regexp.MatchString(c.Condition, contextVal)
-		return err == nil && matched
+		re, err := getCompiledRegex(c.Condition)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(contextVal)
 
 	case "jsonpath":
 		// Context resolves to the JSON body; condition is a gjson query.
@@ -622,22 +653,30 @@ func evaluateCriterion(c parser.SuccessCriterion, eval *ExpressionEvaluator, res
 // Supports "METHOD /path" format (e.g., "PUT /users/{id}").
 // Returns ("", operationPath) if no method prefix is present.
 func parseMethod(operationPath string) (method, path string) {
-	if m := methodPrefixRe.FindStringSubmatch(operationPath); m != nil {
-		return m[1], m[2]
+	idx := strings.IndexByte(operationPath, ' ')
+	if idx > 0 && idx <= 7 { // longest method is "OPTIONS" (7 chars)
+		candidate := operationPath[:idx]
+		if validMethods[candidate] {
+			return candidate, operationPath[idx+1:]
+		}
 	}
 	return "", operationPath
 }
 
-// toGJSONPath converts Arazzo expression to gjson path.
-// - Strips $response.body prefix if present (with or without trailing dot)
-// - Converts [N] array syntax to .N for gjson
+// toGJSONPath converts an Arazzo expression to a gjson path.
+// Strips $response.body prefix and converts [N] array syntax to .N for gjson.
 func toGJSONPath(expr string) string {
 	// Strip $response.body. or $response.body (for array access like [0])
-	path := strings.TrimPrefix(expr, "$response.body.")
-	if path == expr {
-		// Didn't match with dot, try without dot (for $response.body[0])
-		path = strings.TrimPrefix(expr, "$response.body")
+	path, found := strings.CutPrefix(expr, "$response.body.")
+	if !found {
+		path, _ = strings.CutPrefix(expr, "$response.body")
 	}
+
+	// Fast path: no brackets means no array indexing to convert
+	if !strings.ContainsRune(path, '[') {
+		return path
+	}
+
 	// Convert [N] to .N for gjson
 	result := arrayIndexRe.ReplaceAllString(path, ".$1")
 	// Remove leading dot if present (from array at root like [0].q -> .0.q)

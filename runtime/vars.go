@@ -38,24 +38,19 @@ func (v *VarStore) SetStepOutput(stepID, name string, value any) {
 //   - $inputs.name
 //   - $steps.stepId.outputs.name
 func (v *VarStore) Get(expr string) any {
-	expr = strings.TrimPrefix(expr, "$")
+	rest, _ := strings.CutPrefix(expr, "$")
 
-	if strings.HasPrefix(expr, "inputs.") {
-		name := strings.TrimPrefix(expr, "inputs.")
+	if name, ok := strings.CutPrefix(rest, "inputs."); ok {
 		return v.inputs[name]
 	}
 
-	if strings.HasPrefix(expr, "steps.") {
-		// Format: steps.stepId.outputs.name
-		rest := strings.TrimPrefix(expr, "steps.")
-		parts := strings.SplitN(rest, ".outputs.", 2)
+	if after, ok := strings.CutPrefix(rest, "steps."); ok {
+		parts := strings.SplitN(after, ".outputs.", 2)
 		if len(parts) != 2 {
 			return nil
 		}
-		stepID := parts[0]
-		name := parts[1]
-		if stepOutputs, ok := v.steps[stepID]; ok {
-			return stepOutputs[name]
+		if stepOutputs, ok := v.steps[parts[0]]; ok {
+			return stepOutputs[parts[1]]
 		}
 		return nil
 	}

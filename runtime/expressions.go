@@ -36,55 +36,45 @@ func (e *ExpressionEvaluator) WithResponse(resp *Response) *ExpressionEvaluator 
 //   - $statusCode
 //   - Literal values (strings without $)
 func (e *ExpressionEvaluator) Evaluate(expr string) any {
-	if !strings.HasPrefix(expr, "$") {
+	rest, ok := strings.CutPrefix(expr, "$")
+	if !ok {
 		return expr // literal value
 	}
 
-	expr = strings.TrimPrefix(expr, "$")
-
 	// $env.VAR_NAME
-	if strings.HasPrefix(expr, "env.") {
-		name := strings.TrimPrefix(expr, "env.")
+	if name, ok := strings.CutPrefix(rest, "env."); ok {
 		return os.Getenv(name)
 	}
 
 	// $inputs.name
-	if strings.HasPrefix(expr, "inputs.") {
-		name := strings.TrimPrefix(expr, "inputs.")
+	if name, ok := strings.CutPrefix(rest, "inputs."); ok {
 		return e.vars.inputs[name]
 	}
 
 	// $steps.stepId.outputs.name
-	if strings.HasPrefix(expr, "steps.") {
-		rest := strings.TrimPrefix(expr, "steps.")
-		parts := strings.SplitN(rest, ".outputs.", 2)
+	if after, ok := strings.CutPrefix(rest, "steps."); ok {
+		parts := strings.SplitN(after, ".outputs.", 2)
 		if len(parts) == 2 {
-			stepID := parts[0]
-			name := parts[1]
-			if stepOutputs, ok := e.vars.steps[stepID]; ok {
-				return stepOutputs[name]
+			if stepOutputs, ok := e.vars.steps[parts[0]]; ok {
+				return stepOutputs[parts[1]]
 			}
 		}
 		return nil
 	}
 
 	// $statusCode
-	if expr == "statusCode" && e.response != nil {
+	if rest == "statusCode" && e.response != nil {
 		return e.response.StatusCode
 	}
 
 	// $response.header.Name
-	if strings.HasPrefix(expr, "response.header.") && e.response != nil {
-		name := strings.TrimPrefix(expr, "response.header.")
+	if name, ok := strings.CutPrefix(rest, "response.header."); ok && e.response != nil {
 		return e.response.Headers.Get(name)
 	}
 
 	// $response.body.path
-	if strings.HasPrefix(expr, "response.body.") && e.response != nil {
-		path := strings.TrimPrefix(expr, "response.body.")
-		// Convert Arazzo path to gjson path
-		gjsonPath := convertToGJSONPath(path)
-		return e.response.Extract(gjsonPath)
+	if path, ok := strings.CutPrefix(rest, "response.body."); ok && e.response != nil {
+		return e.response.Extract(path)
 	}
 
 	return nil
@@ -118,46 +108,23 @@ func (e *ExpressionEvaluator) EvaluateString(expr string) string {
 // EvaluateCondition evaluates a simple condition expression.
 // Supports: $statusCode == 200, $statusCode == 201, etc.
 func (e *ExpressionEvaluator) EvaluateCondition(condition string) bool {
-	// Simple pattern: $expr == value or $expr != value
 	condition = strings.TrimSpace(condition)
 
-	// Handle == comparison
-	if strings.Contains(condition, "==") {
-		parts := strings.SplitN(condition, "==", 2)
-		if len(parts) == 2 {
-			left := strings.TrimSpace(parts[0])
-			right := strings.TrimSpace(parts[1])
-
-			leftVal := e.Evaluate(left)
-			rightVal := parseValue(right)
-
-			return compareValues(leftVal, rightVal)
-		}
+	// Check for != first (must come before == check since "!=" contains no "==")
+	if idx := strings.Index(condition, "!="); idx >= 0 {
+		left := strings.TrimSpace(condition[:idx])
+		right := strings.TrimSpace(condition[idx+2:])
+		return !compareValues(e.Evaluate(left), parseValue(right))
 	}
 
-	// Handle != comparison
-	if strings.Contains(condition, "!=") {
-		parts := strings.SplitN(condition, "!=", 2)
-		if len(parts) == 2 {
-			left := strings.TrimSpace(parts[0])
-			right := strings.TrimSpace(parts[1])
-
-			leftVal := e.Evaluate(left)
-			rightVal := parseValue(right)
-
-			return !compareValues(leftVal, rightVal)
-		}
+	// Check for == comparison
+	if idx := strings.Index(condition, "=="); idx >= 0 {
+		left := strings.TrimSpace(condition[:idx])
+		right := strings.TrimSpace(condition[idx+2:])
+		return compareValues(e.Evaluate(left), parseValue(right))
 	}
 
 	return false
-}
-
-// convertToGJSONPath converts an Arazzo path to a gjson path.
-// Arazzo uses periods for object access and [n] for array access.
-// gjson uses the same syntax, but we need to handle some edge cases.
-func convertToGJSONPath(path string) string {
-	// gjson already handles most cases well
-	return path
 }
 
 // parseValue parses a literal value from a condition.
