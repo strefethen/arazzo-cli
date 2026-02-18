@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -769,6 +770,35 @@ func TestExecute_UnknownActionType(t *testing.T) {
 	}
 	if len(paths) != 2 {
 		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
+	}
+}
+
+func TestBuildURL_QueryParamsEncoded(t *testing.T) {
+	engine := &Engine{baseURL: "http://localhost"}
+	vars := NewVarStore()
+	vars.SetInput("q", "hello world&more=stuff")
+
+	step := parser.Step{
+		OperationPath: "/search",
+		Parameters: []parser.Parameter{
+			{Name: "q", In: "query", Value: "$inputs.q"},
+			{Name: "tag", In: "query", Value: "a=b"},
+		},
+	}
+
+	got := engine.buildURL(step, vars)
+
+	// Verify the URL parses cleanly
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("buildURL produced unparseable URL: %v", err)
+	}
+
+	if q := u.Query().Get("q"); q != "hello world&more=stuff" {
+		t.Fatalf("expected q='hello world&more=stuff', got %q", q)
+	}
+	if tag := u.Query().Get("tag"); tag != "a=b" {
+		t.Fatalf("expected tag='a=b', got %q", tag)
 	}
 }
 

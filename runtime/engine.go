@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -308,11 +309,11 @@ func (e *Engine) buildOutputs(workflow *parser.Workflow, vars *VarStore) map[str
 // buildURL constructs the full URL for a step, resolving path parameters.
 func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 	// Start with base URL + operation path (unless operationPath is absolute)
-	var url string
+	var target string
 	if strings.HasPrefix(step.OperationPath, "http://") || strings.HasPrefix(step.OperationPath, "https://") {
-		url = step.OperationPath
+		target = step.OperationPath
 	} else {
-		url = e.baseURL + step.OperationPath
+		target = e.baseURL + step.OperationPath
 	}
 
 	// Build parameter map
@@ -333,7 +334,7 @@ func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 	}
 
 	// Replace {param} placeholders with values
-	url = pathParamRe.ReplaceAllStringFunc(url, func(match string) string {
+	target = pathParamRe.ReplaceAllStringFunc(target, func(match string) string {
 		name := match[1 : len(match)-1]
 		if val, ok := pathParams[name]; ok {
 			return fmt.Sprintf("%v", val)
@@ -341,16 +342,16 @@ func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 		return match
 	})
 
-	// Append query parameters
+	// Append query parameters (URL-encoded)
 	if len(queryParams) > 0 {
-		params := make([]string, 0, len(queryParams))
+		qv := make(url.Values, len(queryParams))
 		for k, v := range queryParams {
-			params = append(params, k+"="+v)
+			qv.Set(k, v)
 		}
-		url += "?" + strings.Join(params, "&")
+		target += "?" + qv.Encode()
 	}
 
-	return url
+	return target
 }
 
 // resolvePayload recursively walks a parsed YAML payload and evaluates
