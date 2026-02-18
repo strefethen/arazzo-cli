@@ -97,11 +97,20 @@ Errors also produce structured JSON when `--json` is set:
 {"error": "workflow \"missing\" not found in ./workflows"}
 ```
 
-Environment variables can be passed as inputs with `$` prefix:
+Environment variables can be referenced directly in specs with `$env.VAR_NAME`, or passed as inputs from the CLI with `$` prefix:
 
 ```bash
+# Via CLI flag (shell expands the variable)
 arazzo run spec.yaml my-workflow -i api_key=$MY_API_KEY
+
+# Via spec (engine reads env at runtime — no CLI flag needed)
+# parameters:
+#   - name: Authorization
+#     in: header
+#     value: $env.API_TOKEN
 ```
+
+A `.env` file in the working directory is loaded automatically.
 
 ## Arazzo Spec Format
 
@@ -129,6 +138,9 @@ workflows:
       - stepId: search
         operationPath: /search
         parameters:
+          - name: Authorization
+            in: header
+            value: $env.API_TOKEN
           - name: q
             in: query
             value: $inputs.query
@@ -136,6 +148,7 @@ workflows:
           - condition: $statusCode == 200
         outputs:
           result: $response.body.data
+          request_id: $response.header.X-Request-Id
     outputs:
       result: $steps.search.outputs.result
 ```
@@ -146,7 +159,9 @@ workflows:
 |---------|-------------|
 | `$inputs.name` | Workflow input value |
 | `$steps.<id>.outputs.<name>` | Output from a previous step |
+| `$env.VAR_NAME` | Environment variable (or `.env` file) |
 | `$statusCode` | HTTP response status code |
+| `$response.header.Name` | HTTP response header value |
 | `$response.body.path.to.field` | JSON response body extraction |
 | `//xpath/expression` | XML/RSS response extraction |
 

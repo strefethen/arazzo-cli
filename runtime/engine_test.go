@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/url"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -770,6 +770,97 @@ func TestExecute_UnknownActionType(t *testing.T) {
 	}
 	if len(paths) != 2 {
 		t.Fatalf("expected 2 paths, got %d: %v", len(paths), paths)
+	}
+}
+
+func TestExecute_ResponseHeaderExpression(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "abc-123")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "header-extract",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/test",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				Outputs: map[string]string{
+					"request_id": "$response.header.X-Request-Id",
+				},
+			},
+		},
+		Outputs: map[string]string{
+			"request_id": "$steps.s1.outputs.request_id",
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	outputs, err := engine.Execute(context.Background(), "header-extract", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if outputs["request_id"] != "abc-123" {
+		t.Fatalf("expected request_id='abc-123', got %v", outputs["request_id"])
+	}
+}
+
+func TestExecute_EnvExpression(t *testing.T) {
+	t.Setenv("ARAZZO_TEST_TOKEN", "secret-42")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"auth":"`+r.Header.Get("Authorization")+`"}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "env-test",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/protected",
+				Parameters: []parser.Parameter{
+					{Name: "Authorization", In: "header", Value: "$env.ARAZZO_TEST_TOKEN"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				Outputs: map[string]string{
+					"auth": "$response.body.auth",
+				},
+			},
+		},
+		Outputs: map[string]string{
+			"auth": "$steps.s1.outputs.auth",
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	outputs, err := engine.Execute(context.Background(), "env-test", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if outputs["auth"] != "secret-42" {
+		t.Fatalf("expected auth='secret-42', got %v", outputs["auth"])
+	}
+}
+
+func TestExecute_EnvExpressionUnset(t *testing.T) {
+	t.Setenv("ARAZZO_TEST_MISSING", "") // set empty, Setenv restores on cleanup
+
+	vars := NewVarStore()
+	eval := NewExpressionEvaluator(vars)
+	val := eval.Evaluate("$env.ARAZZO_TEST_MISSING")
+	if val != "" {
+		t.Fatalf("expected empty string for unset env var, got %v", val)
 	}
 }
 

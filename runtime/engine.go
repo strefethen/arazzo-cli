@@ -187,11 +187,14 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 	// 6. Extract outputs
 	for name, expr := range step.Outputs {
 		var value any
-		// Check if this is an XPath expression (starts with / or //)
 		if strings.HasPrefix(expr, "/") {
+			// XPath expression (starts with / or //)
 			value = resp.Extract(expr)
+		} else if strings.HasPrefix(expr, "$response.header.") || strings.HasPrefix(expr, "$statusCode") {
+			// Expressions the evaluator handles directly
+			value = evalWithResp.Evaluate(expr)
 		} else {
-			// Convert Arazzo expression to gjson-compatible path
+			// Body extraction — convert Arazzo expression to gjson-compatible path
 			gjsonPath := toGJSONPath(expr)
 			value = evalWithResp.Evaluate("$response.body." + gjsonPath)
 		}

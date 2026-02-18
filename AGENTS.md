@@ -54,7 +54,9 @@ Always run all three before committing changes.
 
 - `$inputs.name` → workflow input
 - `$steps.<id>.outputs.<name>` → previous step output
+- `$env.VAR_NAME` → environment variable (or `.env` file)
 - `$statusCode` → HTTP status code
+- `$response.header.Name` → HTTP response header
 - `$response.body.path.to.field` → JSON extraction (gjson syntax)
 - `//xpath/expression` → XML extraction (auto-detected from Content-Type)
 

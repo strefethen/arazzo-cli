@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,6 +42,12 @@ func (e *ExpressionEvaluator) Evaluate(expr string) any {
 
 	expr = strings.TrimPrefix(expr, "$")
 
+	// $env.VAR_NAME
+	if strings.HasPrefix(expr, "env.") {
+		name := strings.TrimPrefix(expr, "env.")
+		return os.Getenv(name)
+	}
+
 	// $inputs.name
 	if strings.HasPrefix(expr, "inputs.") {
 		name := strings.TrimPrefix(expr, "inputs.")
@@ -64,6 +71,12 @@ func (e *ExpressionEvaluator) Evaluate(expr string) any {
 	// $statusCode
 	if expr == "statusCode" && e.response != nil {
 		return e.response.StatusCode
+	}
+
+	// $response.header.Name
+	if strings.HasPrefix(expr, "response.header.") && e.response != nil {
+		name := strings.TrimPrefix(expr, "response.header.")
+		return e.response.Headers.Get(name)
 	}
 
 	// $response.body.path
