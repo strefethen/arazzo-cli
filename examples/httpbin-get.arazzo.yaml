@@ -1,0 +1,68 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin Demo
+  version: 1.0.0
+  description: A simple workflow that fetches data from httpbin.org — useful for testing the arazzo CLI.
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: get-origin
+    summary: Fetch your public IP address via httpbin
+    steps:
+      - stepId: fetch-ip
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          origin: $response.body.origin
+          url: $response.body.url
+    outputs:
+      origin: $steps.fetch-ip.outputs.origin
+      url: $steps.fetch-ip.outputs.url
+
+  - workflowId: echo-headers
+    summary: Echo back request headers
+    steps:
+      - stepId: fetch-headers
+        operationPath: /headers
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          user_agent: $response.body.headers.User-Agent
+          host: $response.body.headers.Host
+    outputs:
+      user_agent: $steps.fetch-headers.outputs.user_agent
+      host: $steps.fetch-headers.outputs.host
+
+  - workflowId: status-check
+    summary: Check HTTP status codes with error handling
+    inputs:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: HTTP status code to test (e.g., 200, 404, 500)
+      required:
+        - code
+    steps:
+      - stepId: check-status
+        operationPath: /status/{code}
+        parameters:
+          - name: code
+            in: path
+            value: $inputs.code
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: handle-error
+            criteria:
+              - condition: $statusCode == 429
+          - type: end
+      - stepId: handle-error
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs: {}

@@ -1,0 +1,97 @@
+arazzo: 1.0.0
+info:
+  title: Error Handling Test
+  version: 1.0.0
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: test-end-on-failure
+    steps:
+      - stepId: check-status
+        operationPath: /status/{code}
+        parameters:
+          - name: code
+            in: path
+            value: $inputs.code
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: end  # any failure = end workflow
+    outputs: {}
+
+  - workflowId: test-goto-on-failure
+    steps:
+      - stepId: might-fail
+        operationPath: /status/{code}
+        parameters:
+          - name: code
+            in: path
+            value: $inputs.code
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: handle-error
+      - stepId: success-path
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: end
+      - stepId: handle-error
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs: {}
+
+  - workflowId: test-end-on-success
+    steps:
+      - stepId: check-and-end
+        operationPath: /status/{code}
+        parameters:
+          - name: code
+            in: path
+            value: $inputs.code
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: end
+      - stepId: should-not-run
+        operationPath: /status/500
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs: {}
+
+  - workflowId: test-criteria-matching
+    steps:
+      - stepId: check-with-criteria
+        operationPath: /status/{code}
+        parameters:
+          - name: code
+            in: path
+            value: $inputs.code
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: rate-limited
+            criteria:
+              - condition: $statusCode == 429
+          - type: goto
+            stepId: server-error
+            criteria:
+              - condition: $statusCode == 500
+          - type: end  # default: end for other errors
+      - stepId: rate-limited
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: end
+      - stepId: server-error
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs: {}
