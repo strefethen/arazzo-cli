@@ -105,6 +105,11 @@ func (e *ExpressionEvaluator) EvaluateString(expr string) string {
 		return strconv.Itoa(t)
 	case int64:
 		return strconv.FormatInt(t, 10)
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
 	default:
 		return ""
 	}
@@ -178,8 +183,8 @@ func parseValue(s string) any {
 	}
 
 	// Remove quotes for string
-	if len(s) >= 2 && (s[0] == '"' && s[len(s)-1] == '"') ||
-		(s[0] == '\'' && s[len(s)-1] == '\'') {
+	if len(s) >= 2 && ((s[0] == '"' && s[len(s)-1] == '"') ||
+		(s[0] == '\'' && s[len(s)-1] == '\'')) {
 		return s[1 : len(s)-1]
 	}
 

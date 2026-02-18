@@ -347,3 +347,28 @@ func TestInterpolateString_NoExpressions(t *testing.T) {
 		t.Fatalf("expected 'plain text', got %q", result)
 	}
 }
+
+// ── Bug regression tests ───────────────────────────────────────────────
+
+func TestParseValue_SingleQuoteNoPanic(t *testing.T) {
+	// Regression: single-char quote previously panicked due to operator
+	// precedence — len(s) >= 2 didn't guard the single-quote branch.
+	v := parseValue("'")
+	if v != "'" {
+		t.Fatalf("expected single quote literal, got %v", v)
+	}
+}
+
+func TestEvaluateString_Bool(t *testing.T) {
+	// Regression: booleans previously returned "" instead of "true"/"false".
+	vars := NewVarStore()
+	vars.SetInput("x", true)
+	vars.SetInput("y", false)
+	eval := NewExpressionEvaluator(vars)
+	if v := eval.EvaluateString("$inputs.x"); v != "true" {
+		t.Fatalf("expected 'true', got %q", v)
+	}
+	if v := eval.EvaluateString("$inputs.y"); v != "false" {
+		t.Fatalf("expected 'false', got %q", v)
+	}
+}

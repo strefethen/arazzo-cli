@@ -530,7 +530,7 @@ func parseInputValue(s string) any {
 	if strings.HasPrefix(s, "$") {
 		varName := strings.TrimPrefix(s, "$")
 		varName = strings.Trim(varName, "{}")
-		if val := os.Getenv(varName); val != "" {
+		if val, ok := os.LookupEnv(varName); ok {
 			s = val
 		}
 	}

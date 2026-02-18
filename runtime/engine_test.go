@@ -948,3 +948,90 @@ func BenchmarkInterpolateString(b *testing.B) {
 		_ = eval.InterpolateString(testString)
 	}
 }
+
+// ── Bug regression tests ───────────────────────────────────────────────
+
+func TestBuildURL_NoDoubleSlash(t *testing.T) {
+	// Regression: baseURL with trailing slash + operationPath with leading
+	// slash previously produced "//".
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps:      []parser.Step{{StepID: "s1", OperationPath: "/users"}},
+	})
+	spec.SourceDescriptions[0].URL = "https://api.example.com/"
+	e := NewEngine(spec)
+	vars := NewVarStore()
+
+	got := e.buildURL(spec.Workflows[0].Steps[0], vars)
+	if strings.Contains(got, "//users") {
+		t.Fatalf("double slash in URL: %s", got)
+	}
+	if got != "https://api.example.com/users" {
+		t.Fatalf("expected https://api.example.com/users, got %s", got)
+	}
+}
+
+func TestExecute_RequestBodyContentType(t *testing.T) {
+	// Regression: RequestBody.ContentType was ignored, always sent application/json.
+	var gotContentType string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/submit",
+			RequestBody: &parser.RequestBody{
+				ContentType: "application/x-www-form-urlencoded",
+				Payload:     map[string]any{"key": "val"},
+			},
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Fatalf("expected Content-Type 'application/x-www-form-urlencoded', got %q", gotContentType)
+	}
+}
+
+func TestExecute_RequestBodyDefaultContentType(t *testing.T) {
+	// When ContentType is empty, should default to application/json.
+	var gotContentType string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{{
+			StepID:        "s1",
+			OperationPath: "/submit",
+			RequestBody: &parser.RequestBody{
+				Payload: map[string]any{"key": "val"},
+			},
+			SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+		}},
+	})
+	e := newTestEngine(ts, spec)
+	_, err := e.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("expected default Content-Type 'application/json', got %q", gotContentType)
+	}
+}

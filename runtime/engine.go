@@ -156,7 +156,11 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 	// 3. Build headers from header parameters
 	headers := make(map[string]string)
 	if body != nil {
-		headers["Content-Type"] = "application/json"
+		ct := "application/json"
+		if step.RequestBody != nil && step.RequestBody.ContentType != "" {
+			ct = step.RequestBody.ContentType
+		}
+		headers["Content-Type"] = ct
 	}
 	eval := NewExpressionEvaluator(vars)
 	for _, param := range step.Parameters {
@@ -316,7 +320,7 @@ func (e *Engine) buildURL(step parser.Step, vars *VarStore) string {
 	if strings.HasPrefix(step.OperationPath, "http://") || strings.HasPrefix(step.OperationPath, "https://") {
 		target = step.OperationPath
 	} else {
-		target = e.baseURL + step.OperationPath
+		target = strings.TrimRight(e.baseURL, "/") + step.OperationPath
 	}
 
 	// Build parameter map
