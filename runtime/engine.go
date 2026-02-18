@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,12 +37,6 @@ func callDepth(ctx context.Context) int {
 func withCallDepth(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ctxKeyCallDepth{}, callDepth(ctx)+1)
 }
-
-// Package-level compiled regex patterns for performance.
-var (
-	pathParamRe  = regexp.MustCompile(`\{([^}]+)\}`)
-	arrayIndexRe = regexp.MustCompile(`\[(\d+)\]`)
-)
 
 // validMethods is the set of valid HTTP methods for parseMethod.
 var validMethods = map[string]bool{
@@ -542,42 +537,91 @@ func (e *Engine) buildURLFromPath(opPath string, step parser.Step, vars *VarStor
 
 	// Build parameter maps
 	eval := NewExpressionEvaluator(vars)
-	pathParams := make(map[string]any)
+	pathParams := make(map[string]string)
 	queryParams := make(map[string]string)
 
 	for _, param := range step.Parameters {
 		value := eval.Evaluate(param.Value)
 		switch param.In {
 		case "path":
-			pathParams[param.Name] = value
+			pathParams[param.Name] = anyToString(value)
 		case "query":
 			if value != nil {
-				queryParams[param.Name] = fmt.Sprintf("%v", value)
+				queryParams[param.Name] = anyToString(value)
 			}
 		}
 	}
 
-	// Replace {param} placeholders — skip regex entirely if no braces
+	// Replace {param} placeholders with a single-pass scan (no regex)
 	if len(pathParams) > 0 && strings.ContainsRune(target, '{') {
-		target = pathParamRe.ReplaceAllStringFunc(target, func(match string) string {
-			name := match[1 : len(match)-1]
-			if val, ok := pathParams[name]; ok {
-				return fmt.Sprintf("%v", val)
-			}
-			return match
-		})
+		target = replacePathParams(target, pathParams)
 	}
 
-	// Append query parameters (URL-encoded)
+	// Append query parameters (manual encoding avoids url.Values key sorting)
 	if len(queryParams) > 0 {
-		qv := make(url.Values, len(queryParams))
+		var b strings.Builder
+		b.WriteString(target)
+		b.WriteByte('?')
+		first := true
 		for k, v := range queryParams {
-			qv.Set(k, v)
+			if !first {
+				b.WriteByte('&')
+			}
+			b.WriteString(url.QueryEscape(k))
+			b.WriteByte('=')
+			b.WriteString(url.QueryEscape(v))
+			first = false
 		}
-		target += "?" + qv.Encode()
+		target = b.String()
 	}
 
 	return target
+}
+
+// replacePathParams replaces {name} placeholders in a URL path using a single-pass scan.
+func replacePathParams(path string, params map[string]string) string {
+	var b strings.Builder
+	b.Grow(len(path))
+	for {
+		open := strings.IndexByte(path, '{')
+		if open < 0 {
+			b.WriteString(path)
+			break
+		}
+		close := strings.IndexByte(path[open+1:], '}')
+		if close < 0 {
+			b.WriteString(path)
+			break
+		}
+		close += open + 1 // absolute index
+		name := path[open+1 : close]
+		b.WriteString(path[:open])
+		if val, ok := params[name]; ok {
+			b.WriteString(val)
+		} else {
+			b.WriteString(path[open : close+1]) // keep {name} as-is
+		}
+		path = path[close+1:]
+	}
+	return b.String()
+}
+
+// anyToString converts a value to string without fmt.Sprintf reflection overhead.
+func anyToString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // resolvePayload recursively walks a parsed YAML payload and evaluates
@@ -677,8 +721,21 @@ func toGJSONPath(expr string) string {
 		return path
 	}
 
-	// Convert [N] to .N for gjson
-	result := arrayIndexRe.ReplaceAllString(path, ".$1")
-	// Remove leading dot if present (from array at root like [0].q -> .0.q)
-	return strings.TrimPrefix(result, ".")
+	// Convert [N] to .N for gjson with a single-pass scan (no regex)
+	var b strings.Builder
+	b.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == '[' {
+			if end := strings.IndexByte(path[i+1:], ']'); end >= 0 {
+				if b.Len() > 0 || i > 0 {
+					b.WriteByte('.')
+				}
+				b.WriteString(path[i+1 : i+1+end])
+				i += end + 1 // skip past ']'
+				continue
+			}
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
