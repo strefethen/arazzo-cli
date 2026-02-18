@@ -96,6 +96,26 @@ func Validate(spec *ArazzoSpec) error {
 					errs = append(errs, fmt.Sprintf("%s.in must be path, query, header, or cookie", paramPath))
 				}
 			}
+
+			// Validate retry fields on actions
+			for k, action := range step.OnFailure {
+				actionPath := fmt.Sprintf("%s.onFailure[%d]", stepPath, k)
+				if action.RetryAfter < 0 {
+					errs = append(errs, fmt.Sprintf("%s.retryAfter must be non-negative", actionPath))
+				}
+				if action.RetryLimit < 0 {
+					errs = append(errs, fmt.Sprintf("%s.retryLimit must be non-negative", actionPath))
+				}
+			}
+			for k, action := range step.OnSuccess {
+				actionPath := fmt.Sprintf("%s.onSuccess[%d]", stepPath, k)
+				if action.RetryAfter < 0 {
+					errs = append(errs, fmt.Sprintf("%s.retryAfter must be non-negative", actionPath))
+				}
+				if action.RetryLimit < 0 {
+					errs = append(errs, fmt.Sprintf("%s.retryLimit must be non-negative", actionPath))
+				}
+			}
 		}
 
 		// Validate output expressions reference valid steps

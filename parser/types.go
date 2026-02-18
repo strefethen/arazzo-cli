@@ -7,6 +7,15 @@ type ArazzoSpec struct {
 	Info               Info                `yaml:"info"`
 	SourceDescriptions []SourceDescription `yaml:"sourceDescriptions"`
 	Workflows          []Workflow          `yaml:"workflows"`
+	Components         *Components         `yaml:"components,omitempty"`
+}
+
+// Components holds reusable definitions that can be referenced via $components.
+type Components struct {
+	Inputs         map[string]*SchemaObject `yaml:"inputs,omitempty"`
+	Parameters     map[string]Parameter     `yaml:"parameters,omitempty"`
+	SuccessActions map[string][]OnAction    `yaml:"successActions,omitempty"`
+	FailureActions map[string][]OnAction    `yaml:"failureActions,omitempty"`
 }
 
 // Info contains metadata about the specification.
@@ -90,5 +99,7 @@ type OnAction struct {
 	Type       string             `yaml:"type"` // "goto", "end", "retry"
 	WorkflowID string             `yaml:"workflowId,omitempty"`
 	StepID     string             `yaml:"stepId,omitempty"`
+	RetryAfter int                `yaml:"retryAfter,omitempty"` // seconds before retry
+	RetryLimit int                `yaml:"retryLimit,omitempty"` // max retry attempts (0 = default)
 	Criteria   []SuccessCriterion `yaml:"criteria,omitempty"`
 }

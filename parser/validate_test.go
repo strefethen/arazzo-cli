@@ -341,6 +341,60 @@ func TestValidate_OutputNonStepExpression(t *testing.T) {
 
 // ── Multiple errors ─────────────────────────────────────────────────────
 
+// ── Retry field validation ──────────────────────────────────────────────
+
+func TestValidate_RetryAfterNegative(t *testing.T) {
+	s := validSpec()
+	s.Workflows[0].Steps[0].OnFailure = []OnAction{
+		{Type: "retry", RetryAfter: -1},
+	}
+	err := Validate(s)
+	if err == nil {
+		t.Fatal("expected error for negative retryAfter")
+	}
+	if !strings.Contains(err.Error(), "retryAfter must be non-negative") {
+		t.Fatalf("expected retryAfter error, got: %v", err)
+	}
+}
+
+func TestValidate_RetryLimitNegative(t *testing.T) {
+	s := validSpec()
+	s.Workflows[0].Steps[0].OnFailure = []OnAction{
+		{Type: "retry", RetryLimit: -5},
+	}
+	err := Validate(s)
+	if err == nil {
+		t.Fatal("expected error for negative retryLimit")
+	}
+	if !strings.Contains(err.Error(), "retryLimit must be non-negative") {
+		t.Fatalf("expected retryLimit error, got: %v", err)
+	}
+}
+
+func TestValidate_RetryFieldsValid(t *testing.T) {
+	s := validSpec()
+	s.Workflows[0].Steps[0].OnFailure = []OnAction{
+		{Type: "retry", RetryAfter: 5, RetryLimit: 10},
+	}
+	if err := Validate(s); err != nil {
+		t.Fatalf("expected no error for valid retry fields, got: %v", err)
+	}
+}
+
+func TestValidate_RetryFieldsOnSuccess(t *testing.T) {
+	s := validSpec()
+	s.Workflows[0].Steps[0].OnSuccess = []OnAction{
+		{Type: "retry", RetryAfter: -1},
+	}
+	err := Validate(s)
+	if err == nil {
+		t.Fatal("expected error for negative retryAfter on onSuccess")
+	}
+	if !strings.Contains(err.Error(), "retryAfter must be non-negative") {
+		t.Fatalf("expected retryAfter error, got: %v", err)
+	}
+}
+
 func TestValidate_MultipleErrors(t *testing.T) {
 	s := &ArazzoSpec{} // everything missing
 	err := Validate(s)
