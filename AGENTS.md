@@ -14,8 +14,6 @@ A standalone CLI and Rust workspace for executing Arazzo 1.0 workflow specificat
 
 ## Build & Verify
 
-From `rust/`:
-
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -28,12 +26,12 @@ Run all three before committing.
 
 | Path | Purpose |
 |------|---------|
-| `rust/crates/arazzo-cli/src/main.rs` | CLI entry point (`run`, `validate`, `list`, `catalog`, `show`) |
-| `rust/crates/arazzo-spec/src/lib.rs` | Arazzo spec model types |
-| `rust/crates/arazzo-validate/src/lib.rs` | YAML parsing + structural validation |
-| `rust/crates/arazzo-expr/src/lib.rs` | Expression parsing/evaluation |
-| `rust/crates/arazzo-runtime/src/lib.rs` | Runtime execution engine |
-| `rust/crates/arazzo-cli/tests/cli_integration.rs` | CLI integration tests |
+| `crates/arazzo-cli/src/main.rs` | CLI entry point (`run`, `validate`, `list`, `catalog`, `show`) |
+| `crates/arazzo-spec/src/lib.rs` | Arazzo spec model types |
+| `crates/arazzo-validate/src/lib.rs` | YAML parsing + structural validation |
+| `crates/arazzo-expr/src/lib.rs` | Expression parsing/evaluation |
+| `crates/arazzo-runtime/src/lib.rs` | Runtime execution engine |
+| `crates/arazzo-cli/tests/cli_integration.rs` | CLI integration tests |
 | `examples/` | Working specs for smoke testing |
 | `testdata/` | Shared fixtures |
 
@@ -65,15 +63,15 @@ Run all three before committing.
 
 ## Adding CLI Behavior
 
-1. Update command definitions in `rust/crates/arazzo-cli/src/main.rs`.
+1. Update command definitions in `crates/arazzo-cli/src/main.rs`.
 2. Ensure `--json` output remains available and stable.
-3. Add/adjust integration tests in `rust/crates/arazzo-cli/tests/cli_integration.rs`.
+3. Add/adjust integration tests in `crates/arazzo-cli/tests/cli_integration.rs`.
 4. Re-run fmt/clippy/tests.
 
 ## Adding Runtime Features
 
-1. Extend types in `rust/crates/arazzo-spec/src/lib.rs` when required.
-2. Enforce structure in `rust/crates/arazzo-validate/src/lib.rs`.
-3. Implement runtime behavior in `rust/crates/arazzo-runtime/src/lib.rs`.
+1. Extend types in `crates/arazzo-spec/src/lib.rs` when required.
+2. Enforce structure in `crates/arazzo-validate/src/lib.rs`.
+3. Implement runtime behavior in `crates/arazzo-runtime/src/lib.rs`.
 4. Add focused tests in the relevant crate.
 5. Re-run fmt/clippy/tests.

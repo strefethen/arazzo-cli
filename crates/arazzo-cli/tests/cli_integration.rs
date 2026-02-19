@@ -41,7 +41,7 @@ fn cli_bin() -> PathBuf {
         Ok(bin) => PathBuf::from(bin),
         Err(_) => {
             let mut path = repo_root();
-            path.push("rust/target/debug/arazzo-cli");
+            path.push("target/debug/arazzo-cli");
             if path.exists() {
                 path
             } else {
@@ -56,7 +56,7 @@ fn cli_bin() -> PathBuf {
 
 fn repo_root() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../..");
+    path.push("../..");
     match fs::canonicalize(&path) {
         Ok(v) => v,
         Err(err) => panic!("canonicalizing repo root {}: {err}", path.display()),

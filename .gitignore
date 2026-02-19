@@ -14,4 +14,4 @@
 .DS_Store
 
 # Rust
-/rust/target/
+/target/

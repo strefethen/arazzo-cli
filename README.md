@@ -6,13 +6,6 @@
 
 A standalone CLI and Rust library workspace for executing [Arazzo 1.0](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation.
 
-## Status
-
-Rust cutover completed on 2026-02-19.
-
-- Rust is the only supported implementation on `main`.
-- Go runtime and CLI were removed as part of migration completion.
-
 ## What It Does
 
 `arazzo-cli` parses Arazzo YAML specs and executes workflows at runtime:
@@ -27,13 +20,12 @@ Rust cutover completed on 2026-02-19.
 
 ```text
 arazzo-cli/
-  rust/
-    crates/
-      arazzo-spec      # Arazzo domain model types
-      arazzo-validate  # parser + structural validation
-      arazzo-expr      # expression parser/evaluator
-      arazzo-runtime   # execution engine
-      arazzo-cli       # command-line binary
+  crates/
+    arazzo-spec      # Arazzo domain model types
+    arazzo-validate  # parser + structural validation
+    arazzo-expr      # expression parser/evaluator
+    arazzo-runtime   # execution engine
+    arazzo-cli       # command-line binary
   examples/            # sample specs
   testdata/            # shared fixtures
 ```
@@ -43,11 +35,9 @@ arazzo-cli/
 - Rust stable toolchain
 - `rustfmt`, `clippy` components
 
-Toolchain is pinned in `rust/rust-toolchain.toml`.
+Toolchain is pinned in `rust-toolchain.toml`.
 
 ## Build And Verify
-
-From `rust/`:
 
 ```bash
 cargo fmt --all -- --check
@@ -57,18 +47,16 @@ cargo test --workspace
 
 ## Run The CLI
 
-From `rust/`:
-
 ```bash
-cargo run -p arazzo-cli -- --json validate ../examples/httpbin-get.arazzo.yaml
-cargo run -p arazzo-cli -- --json list ../examples/httpbin-get.arazzo.yaml
-cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml get-origin
+cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json list examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml get-origin
 ```
 
 Optional install:
 
 ```bash
-cargo install --path ./rust/crates/arazzo-cli --locked
+cargo install --path ./crates/arazzo-cli --locked
 ```
 
 ## CLI Commands
@@ -97,25 +85,25 @@ Global flags:
 Validate a spec:
 
 ```bash
-cargo run -p arazzo-cli -- --json validate ../examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml
 ```
 
 List workflows:
 
 ```bash
-cargo run -p arazzo-cli -- --json list ../examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json list examples/httpbin-get.arazzo.yaml
 ```
 
 Execute workflow with inputs:
 
 ```bash
-cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml status-check --input code=200
+cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --input code=200
 ```
 
 Dry-run request planning (no network calls):
 
 ```bash
-cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
+cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
 ```
 
 ## Expression Language
@@ -139,6 +127,15 @@ Condition operators supported:
 - This project is a generic Arazzo executor; avoid domain-specific behavior.
 - Keep CLI output machine-friendly; every command must continue supporting `--json`.
 - Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
+
+## Contributions
+
+This is a personal project maintained for focus and velocity. External code contributions are not accepted for direct merge.
+
+- Issues and bug reports are welcome.
+- PRs can be opened to demonstrate a fix or approach, but may be closed without merge.
+- The maintainer may independently implement similar changes after review, including AI-assisted review workflows.
+- See `CONTRIBUTING.md` for details.
 
 ## License
 

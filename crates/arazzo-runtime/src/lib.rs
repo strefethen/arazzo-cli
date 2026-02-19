@@ -184,6 +184,13 @@ struct StepResult {
     err: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct StepExecution {
+    result: StepResult,
+    outputs: BTreeMap<String, Value>,
+    dry_run_request: Option<DryRunRequest>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct VarStore {
     inputs: BTreeMap<String, Value>,
@@ -390,14 +397,14 @@ impl Engine {
             vars.set_input(&k, v);
         }
 
-        if self.parallel_mode && !has_control_flow(&workflow) {
-            return self.execute_parallel(workflow_id, &workflow, &mut vars, depth);
-        }
-
         if self.dry_run_mode {
             if let Ok(mut guard) = self.dry_run_reqs.lock() {
                 guard.clear();
             }
+        }
+
+        if self.parallel_mode && can_execute_parallel(&workflow) {
+            return self.execute_parallel(workflow_id, &workflow, &mut vars);
         }
 
         let mut step_index: usize = 0;
@@ -488,6 +495,23 @@ impl Engine {
             return self.execute_subworkflow_step(step, vars, depth);
         }
 
+        let execution = self.execute_http_step(step, vars)?;
+        if let Some(req) = execution.dry_run_request {
+            if let Ok(mut guard) = self.dry_run_reqs.lock() {
+                guard.push(req);
+            }
+        }
+        for (name, value) in execution.outputs {
+            vars.set_step_output(&step.step_id, &name, value);
+        }
+        Ok(execution.result)
+    }
+
+    fn execute_http_step(
+        &self,
+        step: &Step,
+        vars: &VarStore,
+    ) -> Result<StepExecution, RuntimeError> {
         let mut operation_path = step.operation_path.clone();
         if !step.operation_id.is_empty() && operation_path.is_empty() {
             let (method, path) = self.resolve_operation_id(&step.operation_id)?;
@@ -546,9 +570,6 @@ impl Engine {
                 headers,
                 body: body_json,
             };
-            if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                guard.push(req);
-            }
             let fake = Response {
                 status_code: 200,
                 headers: BTreeMap::new(),
@@ -556,10 +577,14 @@ impl Engine {
                 body_json: Some(json!({})),
                 content_type: "json".to_string(),
             };
-            return Ok(StepResult {
-                success: true,
-                response: Some(fake),
-                err: None,
+            return Ok(StepExecution {
+                result: StepResult {
+                    success: true,
+                    response: Some(fake),
+                    err: None,
+                },
+                outputs: BTreeMap::new(),
+                dry_run_request: Some(req),
             });
         }
 
@@ -573,14 +598,19 @@ impl Engine {
         let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
         for criterion in &step.success_criteria {
             if !evaluate_criterion(criterion, &eval) {
-                return Ok(StepResult {
-                    success: false,
-                    response: Some(response),
-                    err: None,
+                return Ok(StepExecution {
+                    result: StepResult {
+                        success: false,
+                        response: Some(response),
+                        err: None,
+                    },
+                    outputs: BTreeMap::new(),
+                    dry_run_request: None,
                 });
             }
         }
 
+        let mut outputs = BTreeMap::new();
         for (name, expr) in &step.outputs {
             let value = if expr.starts_with('/') {
                 Value::Null
@@ -590,13 +620,17 @@ impl Engine {
                 let json_path = to_json_path(expr);
                 eval.evaluate(&format!("$response.body.{json_path}"))
             };
-            vars.set_step_output(&step.step_id, name, value);
+            outputs.insert(name.clone(), value);
         }
 
-        Ok(StepResult {
-            success: true,
-            response: Some(response),
-            err: None,
+        Ok(StepExecution {
+            result: StepResult {
+                success: true,
+                response: Some(response),
+                err: None,
+            },
+            outputs,
+            dry_run_request: None,
         })
     }
 
@@ -828,40 +862,102 @@ impl Engine {
     }
 
     fn execute_parallel(
-        &mut self,
-        _workflow_id: &str,
+        &self,
+        workflow_id: &str,
         workflow: &Workflow,
         vars: &mut VarStore,
-        depth: usize,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let levels = build_levels(workflow)?;
         for level in levels {
-            for idx in level {
-                let step = workflow
-                    .steps
-                    .get(idx)
-                    .cloned()
-                    .ok_or_else(|| RuntimeError("invalid step index".to_string()))?;
-                let result = self.execute_step_with_result(&step, vars, depth)?;
-                if !result.success {
-                    if let Some(err) = result.err {
-                        return Err(RuntimeError(format!("step {}: {err}", step.step_id)));
+            let level_vars = vars.clone();
+            let mut level_results =
+                Vec::<(usize, Step, Result<StepExecution, RuntimeError>)>::new();
+
+            std::thread::scope(|scope| -> Result<(), RuntimeError> {
+                let mut handles = Vec::new();
+
+                for idx in level.iter().copied() {
+                    let step = workflow
+                        .steps
+                        .get(idx)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError("invalid step index".to_string()))?;
+                    let step_vars = level_vars.clone();
+                    let wf_id = workflow_id.to_string();
+                    handles.push(scope.spawn(move || {
+                        let result = self.execute_parallel_step(&wf_id, &step, &step_vars);
+                        (idx, step, result)
+                    }));
+                }
+
+                for handle in handles {
+                    match handle.join() {
+                        Ok(value) => level_results.push(value),
+                        Err(_) => {
+                            return Err(RuntimeError("parallel step thread panicked".to_string()));
+                        }
                     }
-                    if let Some(resp) = result.response {
-                        let body = String::from_utf8_lossy(&resp.body).to_string();
-                        return Err(RuntimeError(format!(
-                            "step {}: success criteria not met (status={}, body={})",
-                            step.step_id, resp.status_code, body
-                        )));
+                }
+                Ok(())
+            })?;
+
+            level_results.sort_by_key(|(idx, _, _)| *idx);
+            for (_idx, step, execution_result) in level_results {
+                let execution = execution_result?;
+                if !execution.result.success {
+                    return Err(step_result_error(&step.step_id, &execution.result));
+                }
+                if let Some(req) = execution.dry_run_request {
+                    if let Ok(mut guard) = self.dry_run_reqs.lock() {
+                        guard.push(req);
                     }
-                    return Err(RuntimeError(format!(
-                        "step {}: success criteria not met",
-                        step.step_id
-                    )));
+                }
+                for (name, value) in execution.outputs {
+                    vars.set_step_output(&step.step_id, &name, value);
                 }
             }
         }
         Ok(self.build_outputs(workflow, vars))
+    }
+
+    fn execute_parallel_step(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        vars: &VarStore,
+    ) -> Result<StepExecution, RuntimeError> {
+        if let Some(hook) = &self.trace_hook {
+            hook.before_step(&StepEvent {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                operation_path: step.operation_path.clone(),
+                workflow_id_ref: step.workflow_id.clone(),
+                ..StepEvent::default()
+            });
+        }
+
+        let start = Instant::now();
+        let execution = self.execute_http_step(step, vars)?;
+        let duration = start.elapsed();
+
+        if let Some(hook) = &self.trace_hook {
+            hook.after_step(&StepEvent {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                operation_path: step.operation_path.clone(),
+                workflow_id_ref: step.workflow_id.clone(),
+                status_code: execution
+                    .result
+                    .response
+                    .as_ref()
+                    .map(|r| r.status_code)
+                    .unwrap_or(0),
+                outputs: execution.outputs.clone(),
+                err: execution.result.err.clone(),
+                duration,
+            });
+        }
+        Ok(execution)
     }
 }
 
@@ -1003,6 +1099,32 @@ fn to_json_path(expr: &str) -> String {
         return path.trim_start_matches('.').to_string();
     }
     expr.to_string()
+}
+
+fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeError {
+    if let Some(err) = &result.err {
+        return RuntimeError(format!("step {step_id}: {err}"));
+    }
+    if let Some(resp) = &result.response {
+        let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
+        if body_preview.len() > 500 {
+            body_preview.truncate(500);
+            body_preview.push_str("...");
+        }
+        return RuntimeError(format!(
+            "step {step_id}: success criteria not met (status={}, body={})",
+            resp.status_code, body_preview
+        ));
+    }
+    RuntimeError(format!("step {step_id}: success criteria not met"))
+}
+
+fn can_execute_parallel(workflow: &Workflow) -> bool {
+    !has_control_flow(workflow)
+        && workflow
+            .steps
+            .iter()
+            .all(|step| step.workflow_id.is_empty())
 }
 
 fn has_control_flow(workflow: &Workflow) -> bool {
@@ -1234,6 +1356,65 @@ mod tests {
                             }
                         }
                         let _ = request.respond(response);
+                    }
+                    Ok(None) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+
+        TestServer {
+            base_url,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn start_server_concurrent<F>(handler: F) -> TestServer
+    where
+        F: Fn(String, String, BTreeMap<String, String>, String) -> MockHttpResponse
+            + Send
+            + Sync
+            + 'static,
+    {
+        let server = match Server::http("127.0.0.1:0") {
+            Ok(server) => server,
+            Err(err) => panic!("binding test server: {err}"),
+        };
+        let base_url = format!("http://{}", server.server_addr());
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let handler = Arc::new(handler);
+        let handle = thread::spawn(move || {
+            while !stop_flag.load(Ordering::Relaxed) {
+                match server.recv_timeout(Duration::from_millis(20)) {
+                    Ok(Some(mut request)) => {
+                        let handler = Arc::clone(&handler);
+                        let _worker = thread::spawn(move || {
+                            let method = request.method().as_str().to_string();
+                            let url = request.url().to_string();
+                            let mut headers = BTreeMap::new();
+                            for header in request.headers() {
+                                headers.insert(
+                                    header.field.as_str().to_string(),
+                                    header.value.as_str().to_string(),
+                                );
+                            }
+                            let mut body = String::new();
+                            let _ = request.as_reader().read_to_string(&mut body);
+
+                            let response_data = handler(method, url, headers, body);
+                            let mut response = TinyResponse::from_string(response_data.body)
+                                .with_status_code(StatusCode(response_data.status));
+                            for (name, value) in response_data.headers {
+                                if let Ok(header) =
+                                    Header::from_bytes(name.as_bytes(), value.as_bytes())
+                                {
+                                    response = response.with_header(header);
+                                }
+                            }
+                            let _ = request.respond(response);
+                        });
                     }
                     Ok(None) => {}
                     Err(_) => break,
@@ -2932,6 +3113,56 @@ paths:
     }
 
     #[test]
+    fn execute_parallel_runs_independent_steps_concurrently() {
+        let delay = Duration::from_millis(300);
+        let server = start_server_concurrent(move |_method, _url, _headers, _body| {
+            std::thread::sleep(delay);
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "parallel-speed".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    operation_path: "/a".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    operation_path: "/b".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }]);
+
+        let mut sequential = new_test_engine(&server.base_url, spec.clone());
+        let seq_started = Instant::now();
+        let seq_result = sequential.execute("parallel-speed", BTreeMap::new());
+        if let Err(err) = seq_result {
+            panic!("expected sequential success, got: {err}");
+        }
+        let seq_elapsed = seq_started.elapsed();
+
+        let mut parallel = new_test_engine(&server.base_url, spec);
+        parallel.set_parallel_mode(true);
+        let par_started = Instant::now();
+        let par_result = parallel.execute("parallel-speed", BTreeMap::new());
+        if let Err(err) = par_result {
+            panic!("expected parallel success, got: {err}");
+        }
+        let par_elapsed = par_started.elapsed();
+
+        assert!(
+            par_elapsed + Duration::from_millis(150) < seq_elapsed,
+            "expected true concurrency, got sequential={seq_elapsed:?}, parallel={par_elapsed:?}"
+        );
+    }
+
+    #[test]
     fn execute_parallel_with_dependencies() {
         let server = start_server(|_method, url, _headers, _body| match url.as_str() {
             "/a" => MockHttpResponse::json(200, r#"{"id":"42"}"#),
@@ -3027,6 +3258,62 @@ paths:
             Err(_) => panic!("reading paths"),
         };
         assert_eq!(observed, vec!["/a".to_string()]);
+    }
+
+    #[test]
+    fn execute_parallel_fallback_on_subworkflow() {
+        let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let paths_ref = Arc::clone(&paths);
+        let server = start_server(move |_method, url, _headers, _body| {
+            match paths_ref.lock() {
+                Ok(mut guard) => guard.push(url.clone()),
+                Err(_) => panic!("capturing path"),
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+
+        let spec = make_spec(vec![
+            Workflow {
+                workflow_id: "parent".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "call-child".to_string(),
+                        workflow_id: "child".to_string(),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "after".to_string(),
+                        operation_path: "/after".to_string(),
+                        success_criteria: success_200(),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "child".to_string(),
+                steps: vec![Step {
+                    step_id: "child-step".to_string(),
+                    operation_path: "/child".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+        ]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_parallel_mode(true);
+        let result = engine.execute("parent", BTreeMap::new());
+        if let Err(err) = result {
+            panic!("expected success, got: {err}");
+        }
+
+        let observed = match paths.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => panic!("reading paths"),
+        };
+        assert_eq!(observed, vec!["/child".to_string(), "/after".to_string()]);
     }
 
     #[test]
