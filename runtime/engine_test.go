@@ -1525,6 +1525,106 @@ func TestExecute_RegexCriterion(t *testing.T) {
 	}
 }
 
+func TestExecute_RichCriteria(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/test",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode >= 200 && $statusCode < 300"},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("expected success with rich criteria: %v", err)
+	}
+}
+
+func TestExecute_RichCriteria_Fails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/test",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode >= 200 && $statusCode < 300"},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err == nil {
+		t.Fatal("expected failure for 404 with range criterion")
+	}
+}
+
+func TestExecute_RichCriteria_ActionRouting(t *testing.T) {
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(429)
+			w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "/test",
+				SuccessCriteria: []parser.SuccessCriterion{
+					{Condition: "$statusCode == 200"},
+				},
+				OnFailure: []parser.OnAction{
+					{
+						Type: "retry",
+						Criteria: []parser.SuccessCriterion{
+							{Condition: "$statusCode in [429, 503]"},
+						},
+					},
+					{Type: "end"},
+				},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("expected success after retries: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("expected 3 calls (2 retries + success), got %d", calls)
+	}
+}
+
 func TestExecute_RegexCriterionFails(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)

@@ -19,6 +19,7 @@ Arazzo is a declarative format for describing multi-step API workflows. This too
 - **Parallel execution** — Opt-in `--parallel` flag runs independent steps concurrently via dependency-aware DAG scheduling
 - **Dry-run mode** — `--dry-run` resolves all expressions and prints exact HTTP requests without sending them
 - **Execution tracing** — `TraceHook` interface for observing step-by-step execution
+- **Rich conditions** — `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in` with operator precedence
 - **Expression language** — `$inputs`, `$steps`, `$env`, `$statusCode`, `$response.header`, `$response.body`
 - **Agent-friendly** — Structured JSON output with `--json` on every command
 
@@ -233,6 +234,23 @@ workflows:
 | `$response.header.Name` | HTTP response header value |
 | `$response.body.path.to.field` | JSON response body extraction |
 | `//xpath/expression` | XML/RSS response extraction |
+
+### Condition Operators
+
+Success criteria and action routing support rich condition expressions:
+
+| Operator | Example | Description |
+|----------|---------|-------------|
+| `==` | `$statusCode == 200` | Equality |
+| `!=` | `$statusCode != 500` | Inequality |
+| `>` `<` `>=` `<=` | `$statusCode >= 200` | Ordered comparison (numeric or string) |
+| `&&` | `$statusCode >= 200 && $statusCode < 300` | Logical AND |
+| `\|\|` | `$statusCode == 200 \|\| $statusCode == 201` | Logical OR |
+| `contains` | `$response.body.name contains "admin"` | Substring match |
+| `matches` | `$response.body.email matches "^[a-z]+@"` | Regex match |
+| `in` | `$statusCode in [200, 201, 204]` | Set membership |
+
+Bare expressions evaluate as truthiness checks: `$response.body.active` is true if non-nil, non-false, non-zero, and non-empty. `&&` binds tighter than `||`. Both sides of a comparison can be expressions (e.g., `$statusCode == $inputs.expected`).
 
 ### Control Flow
 

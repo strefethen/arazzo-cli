@@ -213,8 +213,269 @@ func TestEvaluateCondition_StringComparison(t *testing.T) {
 
 func TestEvaluateCondition_NoOperator(t *testing.T) {
 	eval := NewExpressionEvaluator(NewVarStore())
-	if eval.EvaluateCondition("just a string") {
-		t.Fatal("expected false for condition with no operator")
+	// With truthiness fallback, a non-empty literal string is truthy
+	if !eval.EvaluateCondition("just a string") {
+		t.Fatal("expected true for non-empty bare string (truthiness)")
+	}
+	// Empty string is falsy
+	if eval.EvaluateCondition("") {
+		t.Fatal("expected false for empty condition")
+	}
+}
+
+// ── Rich condition operators ────────────────────────────────────────────
+
+func TestCondition_GreaterThan(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode > 199") {
+		t.Fatal("expected 200 > 199")
+	}
+	if eval.EvaluateCondition("$statusCode > 200") {
+		t.Fatal("expected 200 not > 200")
+	}
+	if eval.EvaluateCondition("$statusCode > 300") {
+		t.Fatal("expected 200 not > 300")
+	}
+}
+
+func TestCondition_LessThan(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode < 300") {
+		t.Fatal("expected 200 < 300")
+	}
+	if eval.EvaluateCondition("$statusCode < 200") {
+		t.Fatal("expected 200 not < 200")
+	}
+	if eval.EvaluateCondition("$statusCode < 100") {
+		t.Fatal("expected 200 not < 100")
+	}
+}
+
+func TestCondition_GreaterEqual(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode >= 200") {
+		t.Fatal("expected 200 >= 200")
+	}
+	if !eval.EvaluateCondition("$statusCode >= 199") {
+		t.Fatal("expected 200 >= 199")
+	}
+	if eval.EvaluateCondition("$statusCode >= 201") {
+		t.Fatal("expected 200 not >= 201")
+	}
+}
+
+func TestCondition_LessEqual(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode <= 200") {
+		t.Fatal("expected 200 <= 200")
+	}
+	if !eval.EvaluateCondition("$statusCode <= 300") {
+		t.Fatal("expected 200 <= 300")
+	}
+	if eval.EvaluateCondition("$statusCode <= 199") {
+		t.Fatal("expected 200 not <= 199")
+	}
+}
+
+func TestCondition_And(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode >= 200 && $statusCode < 300") {
+		t.Fatal("expected true for 200 in [200,300)")
+	}
+	eval2 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 404})
+	if eval2.EvaluateCondition("$statusCode >= 200 && $statusCode < 300") {
+		t.Fatal("expected false for 404 not in [200,300)")
+	}
+}
+
+func TestCondition_Or(t *testing.T) {
+	eval200 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval200.EvaluateCondition("$statusCode == 200 || $statusCode == 201") {
+		t.Fatal("expected true for 200")
+	}
+	eval201 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 201})
+	if !eval201.EvaluateCondition("$statusCode == 200 || $statusCode == 201") {
+		t.Fatal("expected true for 201")
+	}
+	eval404 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 404})
+	if eval404.EvaluateCondition("$statusCode == 200 || $statusCode == 201") {
+		t.Fatal("expected false for 404")
+	}
+}
+
+func TestCondition_AndOr_Precedence(t *testing.T) {
+	// a || b && c should be a || (b && c)
+	// With statusCode=200: (200==200) || (200==404 && 200==500) → true || false → true
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if !eval.EvaluateCondition("$statusCode == 200 || $statusCode == 404 && $statusCode == 500") {
+		t.Fatal("expected true: OR should have lower precedence than AND")
+	}
+	// With statusCode=404: (404==200) || (404==404 && 404==404) → false || true → true
+	eval2 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 404})
+	if !eval2.EvaluateCondition("$statusCode == 200 || $statusCode == 404 && $statusCode == 404") {
+		t.Fatal("expected true: AND group should evaluate true")
+	}
+}
+
+func TestCondition_Contains(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "msg", "hello world")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.msg contains "world"`) {
+		t.Fatal("expected 'hello world' contains 'world'")
+	}
+	if eval.EvaluateCondition(`$steps.s1.outputs.msg contains "xyz"`) {
+		t.Fatal("expected 'hello world' does not contain 'xyz'")
+	}
+}
+
+func TestCondition_Matches(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "email", "alice@example.com")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.email matches "^[a-z]+@"`) {
+		t.Fatal("expected email to match pattern")
+	}
+	if eval.EvaluateCondition(`$steps.s1.outputs.email matches "^[0-9]+"`) {
+		t.Fatal("expected email not to match digits pattern")
+	}
+}
+
+func TestCondition_Matches_InvalidRegex(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "val", "test")
+	eval := NewExpressionEvaluator(vars)
+
+	// Invalid regex should return false, not panic
+	if eval.EvaluateCondition(`$steps.s1.outputs.val matches "[invalid"`) {
+		t.Fatal("expected false for invalid regex")
+	}
+}
+
+func TestCondition_In(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 201})
+	if !eval.EvaluateCondition("$statusCode in [200, 201, 204]") {
+		t.Fatal("expected 201 in [200, 201, 204]")
+	}
+	eval2 := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 404})
+	if eval2.EvaluateCondition("$statusCode in [200, 201, 204]") {
+		t.Fatal("expected 404 not in [200, 201, 204]")
+	}
+}
+
+func TestCondition_In_Strings(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "role", "admin")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.role in ["admin", "superadmin"]`) {
+		t.Fatal("expected 'admin' in list")
+	}
+	vars2 := NewVarStore()
+	vars2.SetStepOutput("s1", "role", "viewer")
+	eval2 := NewExpressionEvaluator(vars2)
+	if eval2.EvaluateCondition(`$steps.s1.outputs.role in ["admin", "superadmin"]`) {
+		t.Fatal("expected 'viewer' not in list")
+	}
+}
+
+func TestCondition_In_CommaInString(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "val", "hello, world")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.val in ["hello, world", "foo"]`) {
+		t.Fatal("expected match with comma inside quoted string")
+	}
+}
+
+func TestCondition_In_Empty(t *testing.T) {
+	eval := NewExpressionEvaluator(NewVarStore()).WithResponse(&Response{StatusCode: 200})
+	if eval.EvaluateCondition("$statusCode in []") {
+		t.Fatal("expected false for empty list")
+	}
+}
+
+func TestCondition_ExpressionBothSides(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetInput("expected", 200)
+	eval := NewExpressionEvaluator(vars).WithResponse(&Response{StatusCode: 200})
+
+	if !eval.EvaluateCondition("$statusCode == $inputs.expected") {
+		t.Fatal("expected true for expression on both sides")
+	}
+	vars2 := NewVarStore()
+	vars2.SetInput("expected", 404)
+	eval2 := NewExpressionEvaluator(vars2).WithResponse(&Response{StatusCode: 200})
+	if eval2.EvaluateCondition("$statusCode == $inputs.expected") {
+		t.Fatal("expected false for mismatched expression values")
+	}
+}
+
+func TestCondition_StringComparison_Ordered(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "val", "b")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.val > "a"`) {
+		t.Fatal("expected 'b' > 'a'")
+	}
+	if eval.EvaluateCondition(`$steps.s1.outputs.val > "c"`) {
+		t.Fatal("expected 'b' not > 'c'")
+	}
+}
+
+func TestCondition_Truthiness(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetInput("flag", true)
+	vars.SetInput("zero", 0)
+	vars.SetInput("empty", "")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition("$inputs.flag") {
+		t.Fatal("expected true for truthy bool")
+	}
+	if eval.EvaluateCondition("$inputs.zero") {
+		t.Fatal("expected false for zero")
+	}
+	if eval.EvaluateCondition("$inputs.empty") {
+		t.Fatal("expected false for empty string")
+	}
+	if eval.EvaluateCondition("$inputs.missing") {
+		t.Fatal("expected false for nil")
+	}
+}
+
+func TestCondition_OperatorInQuotedString(t *testing.T) {
+	vars := NewVarStore()
+	vars.SetStepOutput("s1", "msg", "status >= ok")
+	eval := NewExpressionEvaluator(vars)
+
+	if !eval.EvaluateCondition(`$steps.s1.outputs.msg == "status >= ok"`) {
+		t.Fatal("expected match — operator inside quotes should not be parsed")
+	}
+}
+
+func TestCompareOrdered(t *testing.T) {
+	// Numeric
+	if compareOrdered(100, 200) >= 0 {
+		t.Fatal("expected 100 < 200")
+	}
+	if compareOrdered(200, 200) != 0 {
+		t.Fatal("expected 200 == 200")
+	}
+	if compareOrdered(300, 200) <= 0 {
+		t.Fatal("expected 300 > 200")
+	}
+	// String
+	if compareOrdered("apple", "banana") >= 0 {
+		t.Fatal("expected apple < banana")
+	}
+	// Cross-type numeric
+	if compareOrdered(int(10), float64(10)) != 0 {
+		t.Fatal("expected int(10) == float64(10)")
 	}
 }
 
