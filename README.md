@@ -1,444 +1,144 @@
 # arazzo-cli
 
 [![CI](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A standalone CLI and Go library for executing [Arazzo 1.0](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation. Designed for both human and agent usage.
+A standalone CLI and Rust library workspace for executing [Arazzo 1.0](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation.
 
-Arazzo is a declarative format for describing multi-step API workflows. This tool parses Arazzo YAML specs and executes them at runtime — making HTTP calls, evaluating expressions, extracting outputs, and handling control flow — all driven by the spec alone.
+## Status
 
-### Features
+Rust cutover completed on 2026-02-19.
 
-- **Full HTTP method support** — GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS via `operationPath` (e.g., `PUT /users/{id}`)
-- **operationId resolution** — Reference OpenAPI operations by ID instead of path
-- **Sub-workflow execution** — Call workflows from other workflows with input/output propagation
-- **Components** — Reusable parameters, success actions, and failure actions via `$components.*`
-- **Criterion types** — Simple conditions, regex matching, and JSONPath assertions
-- **Retry policy** — Spec-driven `retryAfter` (delay) and `retryLimit` (max attempts) per action
-- **Parallel execution** — Opt-in `--parallel` flag runs independent steps concurrently via dependency-aware DAG scheduling
-- **Dry-run mode** — `--dry-run` resolves all expressions and prints exact HTTP requests without sending them
-- **Execution tracing** — `TraceHook` interface for observing step-by-step execution
-- **Rich conditions** — `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in` with operator precedence
-- **Expression language** — `$inputs`, `$steps`, `$env`, `$statusCode`, `$response.header`, `$response.body`
-- **Agent-friendly** — Structured JSON output with `--json` on every command
+- Rust is the only supported implementation on `main`.
+- Go runtime and CLI were removed as part of migration completion.
 
-## Install
+## What It Does
+
+`arazzo-cli` parses Arazzo YAML specs and executes workflows at runtime:
+
+- Builds and sends HTTP requests from `operationPath` (or sub-workflow calls via `workflowId`)
+- Resolves expressions (`$inputs`, `$steps`, `$env`, `$statusCode`, `$response.*`)
+- Evaluates success criteria and routes control flow (`onSuccess`, `onFailure`)
+- Extracts step outputs and returns workflow outputs
+- Supports `--json` on all CLI commands for machine-readable output
+
+## Repository Layout
+
+```text
+arazzo-cli/
+  rust/
+    crates/
+      arazzo-spec      # Arazzo domain model types
+      arazzo-validate  # parser + structural validation
+      arazzo-expr      # expression parser/evaluator
+      arazzo-runtime   # execution engine
+      arazzo-cli       # command-line binary
+  examples/            # sample specs
+  testdata/            # shared fixtures
+```
+
+## Prerequisites
+
+- Rust stable toolchain
+- `rustfmt`, `clippy` components
+
+Toolchain is pinned in `rust/rust-toolchain.toml`.
+
+## Build And Verify
+
+From `rust/`:
 
 ```bash
-go install github.com/strefethen/arazzo-cli/cmd/arazzo@latest
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
 ```
 
-Or build from source:
+## Run The CLI
+
+From `rust/`:
 
 ```bash
-git clone https://github.com/strefethen/arazzo-cli.git
-cd arazzo-cli
-go build -o arazzo ./cmd/arazzo
+cargo run -p arazzo-cli -- --json validate ../examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json list ../examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml get-origin
 ```
 
-## Usage
-
-Every command supports `--json` for structured, machine-readable output.
-
-### Execute a workflow
+Optional install:
 
 ```bash
-arazzo run examples/httpbin-get.arazzo.yaml get-origin
+cargo install --path ./rust/crates/arazzo-cli --locked
 ```
 
-```json
-{
-  "origin": "203.0.113.1",
-  "url": "https://httpbin.org/get"
-}
-```
+## CLI Commands
 
-With inputs and custom headers:
+- `run <spec> <workflow-id>`
+- `validate <spec>`
+- `list <spec>`
+- `catalog <dir>`
+- `show <workflow-id> --dir <dir>`
+
+Global flags:
+
+- `--json` for structured output
+- `--verbose` for additional diagnostics
+
+`run` flags:
+
+- `--input key=value` (repeatable)
+- `--header Name=value` (repeatable)
+- `--timeout <seconds>`
+- `--parallel`
+- `--dry-run`
+
+## Examples
+
+Validate a spec:
 
 ```bash
-arazzo run spec.yaml status-check -i code=200 -H "Authorization=Bearer $TOKEN"
+cargo run -p arazzo-cli -- --json validate ../examples/httpbin-get.arazzo.yaml
 ```
 
-With parallel execution (independent steps run concurrently):
+List workflows:
 
 ```bash
-arazzo run --parallel spec.yaml my-workflow
+cargo run -p arazzo-cli -- --json list ../examples/httpbin-get.arazzo.yaml
 ```
 
-Dry-run mode (resolve expressions, print requests without sending):
+Execute workflow with inputs:
 
 ```bash
-arazzo run --dry-run spec.yaml my-workflow -i user_id=42
-
-# GET https://api.example.com/users/42
-#   Authorization: Bearer tok_abc123
-#
-# POST https://api.example.com/users/42/profile
-#   Content-Type: application/json
-#   Body: {"name":"Alice","role":"admin"}
+cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml status-check --input code=200
 ```
 
-With `--json`, dry-run outputs a structured array of request objects:
+Dry-run request planning (no network calls):
 
 ```bash
-arazzo run --dry-run --json spec.yaml my-workflow -i user_id=42
+cargo run -p arazzo-cli -- --json run ../examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
 ```
 
-```json
-[
-  {
-    "stepId": "get-user",
-    "method": "GET",
-    "url": "https://api.example.com/users/42",
-    "headers": {"Authorization": "Bearer tok_abc123"}
-  },
-  {
-    "stepId": "update-profile",
-    "method": "POST",
-    "url": "https://api.example.com/users/42/profile",
-    "headers": {"Content-Type": "application/json"},
-    "body": {"name": "Alice", "role": "admin"}
-  }
-]
-```
-
-### Validate a spec
-
-```bash
-arazzo validate examples/httpbin-get.arazzo.yaml
-# Valid Arazzo 1.0.0 spec: HTTPBin Demo
-
-arazzo validate --json examples/httpbin-get.arazzo.yaml
-# {"valid": true, "file": "...", "title": "HTTPBin Demo", "workflows": 3, ...}
-```
-
-### List workflows in a spec
-
-```bash
-arazzo list examples/httpbin-get.arazzo.yaml
-arazzo list --json examples/httpbin-get.arazzo.yaml
-```
-
-### Catalog all workflows in a directory
-
-```bash
-arazzo catalog examples/
-arazzo catalog --json examples/
-```
-
-### Show workflow details
-
-```bash
-arazzo show get-origin --dir examples
-arazzo show --json get-origin --dir examples
-```
-
-## Agent Usage
-
-All commands emit structured JSON with `--json`. Agents should prefer this mode.
-
-```bash
-# Discover available workflows
-arazzo catalog --json ./workflows/
-
-# Inspect a workflow's inputs/outputs before executing
-arazzo show --json my-workflow --dir ./workflows/
-
-# Execute with inputs, parse JSON output
-arazzo run --json spec.yaml my-workflow -i key=value
-```
-
-Errors also produce structured JSON when `--json` is set:
-
-```json
-{"error": "workflow \"missing\" not found in ./workflows"}
-```
-
-Environment variables can be referenced directly in specs with `$env.VAR_NAME`, or passed as inputs from the CLI with `$` prefix:
-
-```bash
-# Via CLI flag (shell expands the variable)
-arazzo run spec.yaml my-workflow -i api_key=$MY_API_KEY
-
-# Via spec (engine reads env at runtime — no CLI flag needed)
-# parameters:
-#   - name: Authorization
-#     in: header
-#     value: $env.API_TOKEN
-```
-
-A `.env` file in the working directory is loaded automatically.
-
-## Arazzo Spec Format
-
-An Arazzo spec is a YAML file describing multi-step API workflows:
-
-```yaml
-arazzo: 1.0.0
-info:
-  title: My API Workflow
-  version: 1.0.0
-sourceDescriptions:
-  - name: myapi
-    url: https://api.example.com
-    type: openapi
-workflows:
-  - workflowId: create-and-fetch
-    summary: Create a resource then retrieve it
-    inputs:
-      type: object
-      properties:
-        name: { type: string }
-      required: [name]
-    steps:
-      - stepId: create
-        operationPath: POST /resources
-        requestBody:
-          contentType: application/json
-          payload:
-            name: $inputs.name
-        successCriteria:
-          - condition: $statusCode == 201
-        outputs:
-          id: $response.body.id
-
-      - stepId: fetch
-        operationPath: GET /resources/{id}
-        parameters:
-          - name: id
-            in: path
-            value: $steps.create.outputs.id
-          - name: Authorization
-            in: header
-            value: $env.API_TOKEN
-        successCriteria:
-          - condition: $statusCode == 200
-          - type: jsonpath
-            condition: data.name
-        outputs:
-          result: $response.body.data
-          request_id: $response.header.X-Request-Id
-    outputs:
-      result: $steps.fetch.outputs.result
-```
-
-### Expression Language
-
-| Pattern | Resolves To |
-|---------|-------------|
-| `$inputs.name` | Workflow input value |
-| `$steps.<id>.outputs.<name>` | Output from a previous step |
-| `$env.VAR_NAME` | Environment variable (or `.env` file) |
-| `$statusCode` | HTTP response status code |
-| `$response.header.Name` | HTTP response header value |
-| `$response.body.path.to.field` | JSON response body extraction |
-| `//xpath/expression` | XML/RSS response extraction |
-
-### Condition Operators
-
-Success criteria and action routing support rich condition expressions:
-
-| Operator | Example | Description |
-|----------|---------|-------------|
-| `==` | `$statusCode == 200` | Equality |
-| `!=` | `$statusCode != 500` | Inequality |
-| `>` `<` `>=` `<=` | `$statusCode >= 200` | Ordered comparison (numeric or string) |
-| `&&` | `$statusCode >= 200 && $statusCode < 300` | Logical AND |
-| `\|\|` | `$statusCode == 200 \|\| $statusCode == 201` | Logical OR |
-| `contains` | `$response.body.name contains "admin"` | Substring match |
-| `matches` | `$response.body.email matches "^[a-z]+@"` | Regex match |
-| `in` | `$statusCode in [200, 201, 204]` | Set membership |
-
-Bare expressions evaluate as truthiness checks: `$response.body.active` is true if non-nil, non-false, non-zero, and non-empty. `&&` binds tighter than `||`. Both sides of a comparison can be expressions (e.g., `$statusCode == $inputs.expected`).
-
-### Control Flow
-
-Steps execute sequentially. `onSuccess`/`onFailure` actions override flow:
-
-- **end** — terminate workflow immediately
-- **goto** — jump to a named step or transfer to another workflow
-- **retry** — re-execute current step with configurable delay and limit
-
-Actions can have `criteria` for conditional routing (e.g., retry on 429, end on 500):
-
-```yaml
-onFailure:
-  - type: retry
-    retryAfter: 2      # wait 2 seconds between retries
-    retryLimit: 5       # max 5 attempts (default: 3)
-    criteria:
-      - condition: $statusCode == 429
-  - type: goto
-    workflowId: fallback-workflow
-    criteria:
-      - condition: $statusCode == 500
-  - type: end           # catch-all
-```
-
-### Parallel Execution
-
-The `--parallel` flag enables dependency-aware concurrent execution. The engine analyzes `$steps.*` references to build a dependency graph, groups steps into topological levels, and runs independent steps within each level concurrently.
-
-```
-# Given steps A, B, C, D where B and C depend on A, and D depends on B and C:
-# Level 0: [A]        — runs first
-# Level 1: [B, C]     — run concurrently
-# Level 2: [D]        — runs after B and C complete
-```
-
-Workflows with control flow (`goto`, `retry`, `end`) automatically fall back to sequential execution — `--parallel` is always safe to pass.
-
-From Go code:
-
-```go
-engine.SetParallelMode(true)
-```
-
-### Dry-Run Mode
-
-The `--dry-run` flag resolves all expressions and prints the exact HTTP requests (method, URL, headers, body) that would be sent — without sending them. Invaluable for debugging complex workflows with path params, auth headers, and dynamic payloads.
-
-Each step runs through full expression evaluation (resolving `$inputs`, `$env`, `$steps` references) but returns a synthetic 200 response instead of making a network call. This means multi-step workflows execute end-to-end, showing you every request the engine would make.
-
-From Go code:
-
-```go
-engine.SetDryRunMode(true)
-outputs, _ := engine.Execute(ctx, "my-workflow", inputs)
-for _, req := range engine.DryRunRequests() {
-    fmt.Printf("%s %s\n", req.Method, req.URL)
-}
-```
-
-### Success Criteria Types
-
-```yaml
-successCriteria:
-  # Simple (default) — expression comparison
-  - condition: $statusCode == 200
-
-  # Regex — pattern match against a context expression
-  - type: regex
-    context: $statusCode
-    condition: "^2\\d{2}$"    # any 2xx status
-
-  # JSONPath — check existence/truthiness of a path in the response body
-  - type: jsonpath
-    condition: data.items.0.id
-```
-
-### Sub-Workflows
-
-A step can invoke another workflow by setting `workflowId` instead of `operationPath`:
-
-```yaml
-workflows:
-  - workflowId: parent
-    steps:
-      - stepId: authenticate
-        workflowId: auth-workflow
-        parameters:
-          - name: clientId
-            value: $inputs.clientId
-    outputs:
-      token: $steps.authenticate.outputs.token
-
-  - workflowId: auth-workflow
-    steps:
-      - stepId: get-token
-        operationPath: POST /oauth/token
-        # ...
-    outputs:
-      token: $steps.get-token.outputs.token
-```
-
-Sub-workflow outputs are propagated to the calling step. Recursion is guarded (max depth: 10).
-
-### Components
-
-Reusable definitions can be defined in `components` and referenced with `$components.*`:
-
-```yaml
-components:
-  parameters:
-    authHeader:
-      name: Authorization
-      in: header
-      value: $env.API_TOKEN
-  failureActions:
-    retryPolicy:
-      - type: retry
-        retryAfter: 2
-        retryLimit: 5
-
-workflows:
-  - workflowId: my-workflow
-    steps:
-      - stepId: call-api
-        operationPath: /data
-        parameters:
-          - reference: $components.parameters.authHeader
-        onFailure:
-          - name: $components.failureActions.retryPolicy
-```
-
-Step-level values override component defaults.
-
-## Project Structure
-
-```
-cmd/arazzo/         CLI entry point
-parser/             Arazzo spec types, YAML parsing, validation
-runtime/            Execution engine, HTTP client, expressions, variables
-examples/           Working example specs
-testdata/           Test fixtures
-```
-
-## Go Library Usage
-
-The parser and runtime packages can be imported directly:
-
-```go
-import (
-    "github.com/strefethen/arazzo-cli/parser"
-    "github.com/strefethen/arazzo-cli/runtime"
-)
-
-spec, _ := parser.Parse("workflow.arazzo.yaml")
-engine := runtime.NewEngine(spec, runtime.WithTimeout(10*time.Second))
-outputs, _ := engine.Execute(ctx, "my-workflow", map[string]any{"key": "value"})
-```
-
-### operationId Resolution
-
-Load an OpenAPI spec to resolve `operationId` references in steps:
-
-```go
-openAPIData, _ := os.ReadFile("openapi.yaml")
-engine.LoadOpenAPISpec(openAPIData)
-// Steps with operationId: "listUsers" now resolve to GET /users
-```
-
-### Execution Tracing
-
-Implement the `TraceHook` interface to observe workflow execution:
-
-```go
-type myHook struct{}
-
-func (h *myHook) BeforeStep(ctx context.Context, event runtime.StepEvent) {
-    log.Printf("Starting step %s in workflow %s", event.StepID, event.WorkflowID)
-}
-
-func (h *myHook) AfterStep(ctx context.Context, event runtime.StepEvent) {
-    log.Printf("Step %s completed in %v (status=%d)", event.StepID, event.Duration, event.StatusCode)
-}
-
-engine.SetTraceHook(&myHook{})
-```
-
-`TraceHook` implementations must be safe for concurrent use when parallel mode is enabled.
+## Expression Language
+
+- `$inputs.name` -> workflow input
+- `$steps.<id>.outputs.<name>` -> previous step output
+- `$env.VAR_NAME` -> environment variable (`.env` is auto-loaded)
+- `$statusCode` -> response status code
+- `$response.header.Name` -> response header
+- `$response.body.path.to.field` -> JSON body extraction
+- `//xpath/expression` -> XML extraction
+
+Condition operators supported:
+
+- `==`, `!=`, `>`, `<`, `>=`, `<=`
+- `&&`, `||`
+- `contains`, `matches`, `in`
+
+## Development Notes
+
+- This project is a generic Arazzo executor; avoid domain-specific behavior.
+- Keep CLI output machine-friendly; every command must continue supporting `--json`.
+- Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
 
 ## License
 

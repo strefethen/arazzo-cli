@@ -1,0 +1,24 @@
+[workspace]
+members = [
+  "crates/arazzo-spec",
+  "crates/arazzo-validate",
+  "crates/arazzo-expr",
+  "crates/arazzo-runtime",
+  "crates/arazzo-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"

@@ -2,76 +2,78 @@
 
 Instructions for AI coding agents working on this repository.
 
+## Project Status
+
+- Rust cutover completed on 2026-02-19.
+- `main` is Rust-only.
+- Do not reintroduce Go runtime/CLI code.
+
 ## What This Is
 
-A standalone CLI and Go library for executing Arazzo 1.0 workflow specifications. It parses YAML specs describing multi-step API workflows and executes them at runtime — no code generation.
+A standalone CLI and Rust workspace for executing Arazzo 1.0 workflow specifications at runtime (no code generation).
 
 ## Build & Verify
 
+From `rust/`:
+
 ```bash
-go build ./...          # Must pass before any commit
-go test ./...           # 17 tests, all must pass
-go vet ./...            # Must be clean
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
 ```
 
-Always run all three before committing changes.
+Run all three before committing.
 
 ## Project Layout
 
 | Path | Purpose |
 |------|---------|
-| `cmd/arazzo/main.go` | CLI entry point (5 commands: run, validate, list, catalog, show) |
-| `parser/` | Arazzo spec types, YAML parsing, structural validation |
-| `runtime/engine.go` | Execution loop — step routing, retry, onSuccess/onFailure handling |
-| `runtime/client.go` | Rate-limited HTTP client with JSON/XML response extraction |
-| `runtime/expressions.go` | Expression evaluator ($inputs, $steps, $response, $statusCode) |
-| `runtime/vars.go` | Scoped variable store |
-| `runtime/engine_test.go` | Tests — all use httptest (no external network calls) |
+| `rust/crates/arazzo-cli/src/main.rs` | CLI entry point (`run`, `validate`, `list`, `catalog`, `show`) |
+| `rust/crates/arazzo-spec/src/lib.rs` | Arazzo spec model types |
+| `rust/crates/arazzo-validate/src/lib.rs` | YAML parsing + structural validation |
+| `rust/crates/arazzo-expr/src/lib.rs` | Expression parsing/evaluation |
+| `rust/crates/arazzo-runtime/src/lib.rs` | Runtime execution engine |
+| `rust/crates/arazzo-cli/tests/cli_integration.rs` | CLI integration tests |
 | `examples/` | Working specs for smoke testing |
-| `testdata/` | Test fixtures |
+| `testdata/` | Shared fixtures |
 
 ## Rules
 
-- **No domain-specific code.** This is a generic Arazzo executor. Do not add application-specific logic, hardcoded API paths, or vendor-specific payload transformations.
-- **Every CLI command must support `--json`.** Agents are first-class users. All output must be parseable.
-- **Tests use httptest only.** No external API calls in tests. Use `net/http/httptest` servers.
-- **Minimal dependencies.** Do not add dependencies without justification. Current: cobra, gjson, xmlquery, yaml.v3, x/time.
-- **Go conventions.** Standard library style. `go vet` clean. No `any` type where a concrete type works.
+- **No domain-specific logic.** Keep this a generic Arazzo executor.
+- **Every CLI command must support `--json`.** Machine-parseable output is required.
+- **Keep tests hermetic.** No external API/network dependencies in tests.
+- **Prefer strong typing.** Encode invariants in types and validation where possible.
+- **Safe concurrency by default.** Avoid shared mutable state unless synchronization is explicit and justified.
+- **No `unsafe`.** Workspace forbids unsafe code.
 
-## How the Engine Works
+## Runtime Overview
 
-1. `parser.Parse()` loads YAML into `ArazzoSpec` struct
-2. `runtime.NewEngine(spec)` builds O(1) lookup indexes for workflows and steps
-3. `engine.Execute(ctx, workflowID, inputs)` runs the workflow:
-   - Steps execute sequentially by default
-   - Each step: build URL → make HTTP request → evaluate success criteria → extract outputs
-   - `onSuccess`/`onFailure` actions can override flow: `end`, `goto`, `retry`
-   - Actions support `criteria` for conditional routing (e.g., retry on 429, end on 500)
-   - Max 3 retries per step, max `steps * 10` total iterations
-4. Returns `map[string]any` of workflow outputs
+1. `arazzo_validate::parse()` loads YAML into typed spec structures.
+2. `arazzo_runtime::Engine::new()` builds workflow/step indexes.
+3. `engine.execute(workflow_id, inputs)` executes workflow steps, evaluates criteria, applies actions (`end`, `goto`, `retry`), and returns workflow outputs.
+4. Supports dry-run capture and trace hooks.
 
 ## Expression Language
 
-- `$inputs.name` → workflow input
-- `$steps.<id>.outputs.<name>` → previous step output
-- `$env.VAR_NAME` → environment variable (or `.env` file)
-- `$statusCode` → HTTP status code
-- `$response.header.Name` → HTTP response header
-- `$response.body.path.to.field` → JSON extraction (gjson syntax)
-- `//xpath/expression` → XML extraction (auto-detected from Content-Type)
+- `$inputs.name` -> workflow input
+- `$steps.<id>.outputs.<name>` -> previous step output
+- `$env.VAR_NAME` -> environment variable
+- `$statusCode` -> response status
+- `$response.header.Name` -> header extraction
+- `$response.body.path.to.field` -> JSON extraction
+- `//xpath/expression` -> XML extraction
 
-## Adding a New CLI Command
+## Adding CLI Behavior
 
-1. Define `*cobra.Command` in `cmd/arazzo/main.go`
-2. Add to `rootCmd.AddCommand()` in `init()`
-3. Support `--json` flag for structured output
-4. Human-readable text as default, JSON as opt-in
-5. Return structured error JSON when `--json` is set
+1. Update command definitions in `rust/crates/arazzo-cli/src/main.rs`.
+2. Ensure `--json` output remains available and stable.
+3. Add/adjust integration tests in `rust/crates/arazzo-cli/tests/cli_integration.rs`.
+4. Re-run fmt/clippy/tests.
 
-## Adding New Engine Features
+## Adding Runtime Features
 
-1. Add types to `parser/types.go` if new Arazzo spec fields are needed
-2. Update `parser/validate.go` for structural validation
-3. Implement in `runtime/engine.go`
-4. Add tests in `runtime/engine_test.go` using httptest
-5. Run `go test ./... && go vet ./...`
+1. Extend types in `rust/crates/arazzo-spec/src/lib.rs` when required.
+2. Enforce structure in `rust/crates/arazzo-validate/src/lib.rs`.
+3. Implement runtime behavior in `rust/crates/arazzo-runtime/src/lib.rs`.
+4. Add focused tests in the relevant crate.
+5. Re-run fmt/clippy/tests.
