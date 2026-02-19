@@ -17,6 +17,7 @@ Arazzo is a declarative format for describing multi-step API workflows. This too
 - **Criterion types** — Simple conditions, regex matching, and JSONPath assertions
 - **Retry policy** — Spec-driven `retryAfter` (delay) and `retryLimit` (max attempts) per action
 - **Parallel execution** — Opt-in `--parallel` flag runs independent steps concurrently via dependency-aware DAG scheduling
+- **Dry-run mode** — `--dry-run` resolves all expressions and prints exact HTTP requests without sending them
 - **Execution tracing** — `TraceHook` interface for observing step-by-step execution
 - **Expression language** — `$inputs`, `$steps`, `$env`, `$statusCode`, `$response.header`, `$response.body`
 - **Agent-friendly** — Structured JSON output with `--json` on every command
@@ -62,6 +63,43 @@ With parallel execution (independent steps run concurrently):
 
 ```bash
 arazzo run --parallel spec.yaml my-workflow
+```
+
+Dry-run mode (resolve expressions, print requests without sending):
+
+```bash
+arazzo run --dry-run spec.yaml my-workflow -i user_id=42
+
+# GET https://api.example.com/users/42
+#   Authorization: Bearer tok_abc123
+#
+# POST https://api.example.com/users/42/profile
+#   Content-Type: application/json
+#   Body: {"name":"Alice","role":"admin"}
+```
+
+With `--json`, dry-run outputs a structured array of request objects:
+
+```bash
+arazzo run --dry-run --json spec.yaml my-workflow -i user_id=42
+```
+
+```json
+[
+  {
+    "stepId": "get-user",
+    "method": "GET",
+    "url": "https://api.example.com/users/42",
+    "headers": {"Authorization": "Bearer tok_abc123"}
+  },
+  {
+    "stepId": "update-profile",
+    "method": "POST",
+    "url": "https://api.example.com/users/42/profile",
+    "headers": {"Content-Type": "application/json"},
+    "body": {"name": "Alice", "role": "admin"}
+  }
+]
 ```
 
 ### Validate a spec
@@ -237,6 +275,22 @@ From Go code:
 
 ```go
 engine.SetParallelMode(true)
+```
+
+### Dry-Run Mode
+
+The `--dry-run` flag resolves all expressions and prints the exact HTTP requests (method, URL, headers, body) that would be sent — without sending them. Invaluable for debugging complex workflows with path params, auth headers, and dynamic payloads.
+
+Each step runs through full expression evaluation (resolving `$inputs`, `$env`, `$steps` references) but returns a synthetic 200 response instead of making a network call. This means multi-step workflows execute end-to-end, showing you every request the engine would make.
+
+From Go code:
+
+```go
+engine.SetDryRunMode(true)
+outputs, _ := engine.Execute(ctx, "my-workflow", inputs)
+for _, req := range engine.DryRunRequests() {
+    fmt.Printf("%s %s\n", req.Method, req.URL)
+}
 ```
 
 ### Success Criteria Types

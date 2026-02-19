@@ -2272,6 +2272,210 @@ func TestExecute_SubWorkflowNotFound(t *testing.T) {
 	}
 }
 
+// ── Dry-run tests ───────────────────────────────────────────────────────
+
+func TestDryRun_CapturesRequests(t *testing.T) {
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:          "s1",
+				OperationPath:   "GET /users",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+			{
+				StepID:        "s2",
+				OperationPath: "POST /items",
+				RequestBody: &parser.RequestBody{
+					Payload: map[string]any{"name": "test"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := NewEngine(spec)
+	engine.SetDryRunMode(true)
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reqs := engine.DryRunRequests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 captured requests, got %d", len(reqs))
+	}
+
+	if reqs[0].Method != "GET" || !strings.HasSuffix(reqs[0].URL, "/users") {
+		t.Fatalf("expected GET /users, got %s %s", reqs[0].Method, reqs[0].URL)
+	}
+	if reqs[0].StepID != "s1" {
+		t.Fatalf("expected stepId 's1', got %q", reqs[0].StepID)
+	}
+
+	if reqs[1].Method != "POST" || !strings.HasSuffix(reqs[1].URL, "/items") {
+		t.Fatalf("expected POST /items, got %s %s", reqs[1].Method, reqs[1].URL)
+	}
+	if reqs[1].Body == nil {
+		t.Fatal("expected body on POST request")
+	}
+	if !strings.Contains(string(reqs[1].Body), `"name":"test"`) {
+		t.Fatalf("expected body to contain name:test, got %s", string(reqs[1].Body))
+	}
+}
+
+func TestDryRun_ResolvesExpressions(t *testing.T) {
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "GET /users/{id}",
+				Parameters: []parser.Parameter{
+					{Name: "id", In: "path", Value: "$inputs.userId"},
+					{Name: "Authorization", In: "header", Value: "$inputs.token"},
+					{Name: "format", In: "query", Value: "json"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := NewEngine(spec)
+	engine.SetDryRunMode(true)
+
+	_, err := engine.Execute(context.Background(), "wf", map[string]any{
+		"userId": "42",
+		"token":  "Bearer secret",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reqs := engine.DryRunRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+
+	r := reqs[0]
+	if !strings.Contains(r.URL, "/users/42") {
+		t.Fatalf("expected path param resolved to /users/42, got %s", r.URL)
+	}
+	if !strings.Contains(r.URL, "format=json") {
+		t.Fatalf("expected query param format=json in URL, got %s", r.URL)
+	}
+	if r.Headers["Authorization"] != "Bearer secret" {
+		t.Fatalf("expected Authorization header, got %v", r.Headers)
+	}
+}
+
+func TestDryRun_NoHTTPCallsMade(t *testing.T) {
+	// Use a server that would fail if called
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("HTTP server should not be called in dry-run mode")
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:          "s1",
+				OperationPath:   "/should-not-call",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetDryRunMode(true)
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDryRun_MultiStepExpressionChaining(t *testing.T) {
+	// Step 2 references $steps.s1.outputs.id — in dry-run, s1 returns empty body,
+	// so the output resolves to nil. The workflow should still complete without error.
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:          "s1",
+				OperationPath:   "/create",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"id": "$response.body.id"},
+			},
+			{
+				StepID:        "s2",
+				OperationPath: "/get/{id}",
+				Parameters: []parser.Parameter{
+					{Name: "id", In: "path", Value: "$steps.s1.outputs.id"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := NewEngine(spec)
+	engine.SetDryRunMode(true)
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reqs := engine.DryRunRequests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	}
+	if reqs[0].StepID != "s1" || reqs[1].StepID != "s2" {
+		t.Fatalf("expected steps [s1, s2], got [%s, %s]", reqs[0].StepID, reqs[1].StepID)
+	}
+}
+
+func TestDryRun_WithHeaders(t *testing.T) {
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "wf",
+		Steps: []parser.Step{
+			{
+				StepID:        "s1",
+				OperationPath: "PUT /data",
+				Parameters: []parser.Parameter{
+					{Name: "X-Custom", In: "header", Value: "custom-value"},
+				},
+				RequestBody: &parser.RequestBody{
+					ContentType: "application/xml",
+					Payload:     map[string]any{"key": "val"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := NewEngine(spec)
+	engine.SetDryRunMode(true)
+
+	_, err := engine.Execute(context.Background(), "wf", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	r := engine.DryRunRequests()[0]
+	if r.Method != "PUT" {
+		t.Fatalf("expected PUT, got %s", r.Method)
+	}
+	if r.Headers["Content-Type"] != "application/xml" {
+		t.Fatalf("expected Content-Type application/xml, got %q", r.Headers["Content-Type"])
+	}
+	if r.Headers["X-Custom"] != "custom-value" {
+		t.Fatalf("expected X-Custom header, got %q", r.Headers["X-Custom"])
+	}
+}
+
 // ── Parallel execution tests ────────────────────────────────────────────
 
 func TestExtractStepRefs(t *testing.T) {

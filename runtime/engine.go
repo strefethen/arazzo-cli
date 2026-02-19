@@ -76,6 +76,15 @@ type operationEntry struct {
 	Path   string
 }
 
+// DryRunRequest captures a resolved HTTP request without sending it.
+type DryRunRequest struct {
+	StepID  string            `json:"stepId"`
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    json.RawMessage   `json:"body,omitempty"`
+}
+
 // Engine executes Arazzo workflows at runtime without code generation.
 type Engine struct {
 	client        *Client
@@ -86,6 +95,9 @@ type Engine struct {
 	traceHook     TraceHook                 // optional execution observer
 	opIndex       map[string]operationEntry // operationId → {method, path}
 	parallelMode  bool                      // execute independent steps concurrently
+	dryRunMode    bool                      // resolve requests without sending
+	dryRunMu      sync.Mutex                // protects dryRunReqs in parallel mode
+	dryRunReqs    []DryRunRequest           // captured requests during dry run
 }
 
 // SetTraceHook sets an optional hook for observing step execution.
@@ -96,6 +108,23 @@ func (e *Engine) SetTraceHook(hook TraceHook) {
 // SetParallelMode enables or disables parallel execution of independent steps.
 func (e *Engine) SetParallelMode(enabled bool) {
 	e.parallelMode = enabled
+}
+
+// SetDryRunMode enables or disables dry-run mode.
+// In dry-run mode, all expressions are resolved and HTTP requests are captured
+// but never sent. Use DryRunRequests() to retrieve captured requests.
+func (e *Engine) SetDryRunMode(enabled bool) {
+	e.dryRunMode = enabled
+}
+
+// DryRunRequests returns the HTTP requests captured during dry-run execution.
+func (e *Engine) DryRunRequests() []DryRunRequest {
+	e.dryRunMu.Lock()
+	defer e.dryRunMu.Unlock()
+	if e.dryRunReqs == nil {
+		return []DryRunRequest{}
+	}
+	return e.dryRunReqs
 }
 
 // LoadOpenAPISpec parses an OpenAPI 3.x spec (JSON or YAML) and builds
@@ -341,7 +370,24 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		}
 	}
 
-	// 4. Execute HTTP request
+	// 4. Dry-run: capture request without sending
+	if e.dryRunMode {
+		req := DryRunRequest{
+			StepID:  step.StepID,
+			Method:  method,
+			URL:     url,
+			Headers: headers,
+		}
+		if body != nil {
+			req.Body = json.RawMessage(body)
+		}
+		e.dryRunMu.Lock()
+		e.dryRunReqs = append(e.dryRunReqs, req)
+		e.dryRunMu.Unlock()
+		return stepResult{success: true, response: &Response{StatusCode: 200, Body: []byte(`{}`), ContentType: "json"}}
+	}
+
+	// 5. Execute HTTP request
 	resp, err := e.client.Request(ctx, RequestConfig{
 		Method:  method,
 		URL:     url,
@@ -352,7 +398,7 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		return stepResult{success: false, err: err}
 	}
 
-	// 5. Evaluate success criteria (reuse evaluator, add response context)
+	// 6. Evaluate success criteria (reuse evaluator, add response context)
 	eval.WithResponse(resp)
 	for _, criterion := range step.SuccessCriteria {
 		if !evaluateCriterion(criterion, eval, resp) {
@@ -360,7 +406,7 @@ func (e *Engine) executeStepWithResult(ctx context.Context, step parser.Step, va
 		}
 	}
 
-	// 6. Extract outputs
+	// 7. Extract outputs
 	for name, expr := range step.Outputs {
 		var value any
 		if strings.HasPrefix(expr, "/") {

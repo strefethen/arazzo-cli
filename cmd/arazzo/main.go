@@ -90,6 +90,7 @@ var (
 	verboseFlag  bool
 	jsonFlag     bool
 	parallelFlag bool
+	dryRunFlag   bool
 	providersDir string
 	headerFlags  []string
 )
@@ -106,6 +107,7 @@ func init() {
 	runCmd.Flags().BoolVarP(&verboseFlag, "verbose", "v", false, "Verbose output")
 	runCmd.Flags().StringArrayVarP(&headerFlags, "header", "H", nil, "HTTP headers as key=value pairs")
 	runCmd.Flags().BoolVar(&parallelFlag, "parallel", false, "Execute independent steps concurrently")
+	runCmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Resolve expressions and print requests without sending")
 
 	// show
 	showCmd.Flags().StringVar(&providersDir, "dir", ".", "Directory to search for workflow specs")
@@ -203,6 +205,7 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 
 	engine := runtime.NewEngine(spec, opts...)
 	engine.SetParallelMode(parallelFlag)
+	engine.SetDryRunMode(dryRunFlag)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag*10)
 	defer cancel()
@@ -213,6 +216,24 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 			return outputJSON(map[string]any{"error": err.Error()})
 		}
 		return err
+	}
+
+	if dryRunFlag {
+		reqs := engine.DryRunRequests()
+		if jsonFlag {
+			return outputJSON(reqs)
+		}
+		for _, r := range reqs {
+			fmt.Printf("%s %s\n", r.Method, r.URL)
+			for k, v := range r.Headers {
+				fmt.Printf("  %s: %s\n", k, v)
+			}
+			if r.Body != nil {
+				fmt.Printf("  Body: %s\n", string(r.Body))
+			}
+			fmt.Println()
+		}
+		return nil
 	}
 
 	return outputJSON(outputs)
