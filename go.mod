@@ -1,11 +1,12 @@
 module github.com/strefethen/arazzo-cli
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/antchfx/xmlquery v1.5.0
 	github.com/spf13/cobra v1.8.1
 	github.com/tidwall/gjson v1.18.0
+	golang.org/x/sync v0.19.0
 	golang.org/x/time v0.8.0
 	gopkg.in/yaml.v3 v3.0.1
 )

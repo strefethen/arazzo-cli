@@ -16,6 +16,7 @@ Arazzo is a declarative format for describing multi-step API workflows. This too
 - **Components** — Reusable parameters, success actions, and failure actions via `$components.*`
 - **Criterion types** — Simple conditions, regex matching, and JSONPath assertions
 - **Retry policy** — Spec-driven `retryAfter` (delay) and `retryLimit` (max attempts) per action
+- **Parallel execution** — Opt-in `--parallel` flag runs independent steps concurrently via dependency-aware DAG scheduling
 - **Execution tracing** — `TraceHook` interface for observing step-by-step execution
 - **Expression language** — `$inputs`, `$steps`, `$env`, `$statusCode`, `$response.header`, `$response.body`
 - **Agent-friendly** — Structured JSON output with `--json` on every command
@@ -55,6 +56,12 @@ With inputs and custom headers:
 
 ```bash
 arazzo run spec.yaml status-check -i code=200 -H "Authorization=Bearer $TOKEN"
+```
+
+With parallel execution (independent steps run concurrently):
+
+```bash
+arazzo run --parallel spec.yaml my-workflow
 ```
 
 ### Validate a spec
@@ -213,6 +220,25 @@ onFailure:
   - type: end           # catch-all
 ```
 
+### Parallel Execution
+
+The `--parallel` flag enables dependency-aware concurrent execution. The engine analyzes `$steps.*` references to build a dependency graph, groups steps into topological levels, and runs independent steps within each level concurrently.
+
+```
+# Given steps A, B, C, D where B and C depend on A, and D depends on B and C:
+# Level 0: [A]        — runs first
+# Level 1: [B, C]     — run concurrently
+# Level 2: [D]        — runs after B and C complete
+```
+
+Workflows with control flow (`goto`, `retry`, `end`) automatically fall back to sequential execution — `--parallel` is always safe to pass.
+
+From Go code:
+
+```go
+engine.SetParallelMode(true)
+```
+
 ### Success Criteria Types
 
 ```yaml
@@ -339,6 +365,8 @@ func (h *myHook) AfterStep(ctx context.Context, event runtime.StepEvent) {
 
 engine.SetTraceHook(&myHook{})
 ```
+
+`TraceHook` implementations must be safe for concurrent use when parallel mode is enabled.
 
 ## License
 

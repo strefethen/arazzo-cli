@@ -57,6 +57,7 @@ type StepEvent struct {
 }
 
 // TraceHook allows callers to observe workflow execution.
+// Implementations must be safe for concurrent use when parallel mode is enabled.
 type TraceHook interface {
 	BeforeStep(ctx context.Context, event StepEvent)
 	AfterStep(ctx context.Context, event StepEvent)
@@ -84,11 +85,17 @@ type Engine struct {
 	stepIndexes   map[string]map[string]int // workflowID → (stepID → index in Steps)
 	traceHook     TraceHook                 // optional execution observer
 	opIndex       map[string]operationEntry // operationId → {method, path}
+	parallelMode  bool                      // execute independent steps concurrently
 }
 
 // SetTraceHook sets an optional hook for observing step execution.
 func (e *Engine) SetTraceHook(hook TraceHook) {
 	e.traceHook = hook
+}
+
+// SetParallelMode enables or disables parallel execution of independent steps.
+func (e *Engine) SetParallelMode(enabled bool) {
+	e.parallelMode = enabled
 }
 
 // LoadOpenAPISpec parses an OpenAPI 3.x spec (JSON or YAML) and builds
@@ -198,6 +205,11 @@ func (e *Engine) Execute(ctx context.Context, workflowID string, inputs map[stri
 	vars := NewVarStore()
 	for k, v := range inputs {
 		vars.SetInput(k, v)
+	}
+
+	// 2b. Parallel path: run independent steps concurrently when enabled
+	if e.parallelMode && !hasControlFlow(workflow) {
+		return e.executeParallel(ctx, workflowID, workflow, vars)
 	}
 
 	// 3. Execute steps with onSuccess/onFailure handling

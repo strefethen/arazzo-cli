@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // VarStore holds workflow variables including inputs and step outputs.
+// All methods are safe for concurrent use.
 type VarStore struct {
+	mu     sync.RWMutex
 	inputs map[string]any
 	steps  map[string]map[string]any // stepId -> outputName -> value
 }
@@ -22,15 +25,37 @@ func NewVarStore() *VarStore {
 
 // SetInput sets an input variable.
 func (v *VarStore) SetInput(name string, value any) {
+	v.mu.Lock()
 	v.inputs[name] = value
+	v.mu.Unlock()
 }
 
 // SetStepOutput sets an output for a step.
 func (v *VarStore) SetStepOutput(stepID, name string, value any) {
+	v.mu.Lock()
 	if v.steps[stepID] == nil {
 		v.steps[stepID] = make(map[string]any)
 	}
 	v.steps[stepID][name] = value
+	v.mu.Unlock()
+}
+
+// GetInput returns a single input value by name.
+func (v *VarStore) GetInput(name string) any {
+	v.mu.RLock()
+	val := v.inputs[name]
+	v.mu.RUnlock()
+	return val
+}
+
+// GetStepOutput returns a single output value for a step.
+func (v *VarStore) GetStepOutput(stepID, outputName string) any {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if stepOutputs, ok := v.steps[stepID]; ok {
+		return stepOutputs[outputName]
+	}
+	return nil
 }
 
 // Get retrieves a value by expression path.
@@ -41,7 +66,7 @@ func (v *VarStore) Get(expr string) any {
 	rest, _ := strings.CutPrefix(expr, "$")
 
 	if name, ok := strings.CutPrefix(rest, "inputs."); ok {
-		return v.inputs[name]
+		return v.GetInput(name)
 	}
 
 	if after, ok := strings.CutPrefix(rest, "steps."); ok {
@@ -49,10 +74,7 @@ func (v *VarStore) Get(expr string) any {
 		if len(parts) != 2 {
 			return nil
 		}
-		if stepOutputs, ok := v.steps[parts[0]]; ok {
-			return stepOutputs[parts[1]]
-		}
-		return nil
+		return v.GetStepOutput(parts[0], parts[1])
 	}
 
 	return nil
@@ -142,12 +164,28 @@ func (v *VarStore) GetBool(expr string) bool {
 	}
 }
 
-// GetInputs returns all input values.
+// GetInputs returns a shallow copy of all input values.
 func (v *VarStore) GetInputs() map[string]any {
-	return v.inputs
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	cp := make(map[string]any, len(v.inputs))
+	for k, val := range v.inputs {
+		cp[k] = val
+	}
+	return cp
 }
 
-// GetStepOutputs returns all outputs for a step.
+// GetStepOutputs returns a shallow copy of all outputs for a step.
 func (v *VarStore) GetStepOutputs(stepID string) map[string]any {
-	return v.steps[stepID]
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	orig := v.steps[stepID]
+	if orig == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(orig))
+	for k, val := range orig {
+		cp[k] = val
+	}
+	return cp
 }

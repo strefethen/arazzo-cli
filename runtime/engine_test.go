@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1873,16 +1876,21 @@ func TestExecute_RecursionGuard(t *testing.T) {
 // ── Trace hook tests ───────────────────────────────────────────────────
 
 type testTraceHook struct {
+	mu           sync.Mutex
 	beforeEvents []StepEvent
 	afterEvents  []StepEvent
 }
 
 func (h *testTraceHook) BeforeStep(_ context.Context, event StepEvent) {
+	h.mu.Lock()
 	h.beforeEvents = append(h.beforeEvents, event)
+	h.mu.Unlock()
 }
 
 func (h *testTraceHook) AfterStep(_ context.Context, event StepEvent) {
+	h.mu.Lock()
 	h.afterEvents = append(h.afterEvents, event)
+	h.mu.Unlock()
 }
 
 func TestTraceHook_Invoked(t *testing.T) {
@@ -2261,5 +2269,564 @@ func TestExecute_SubWorkflowNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `workflow "nonexistent" not found`) {
 		t.Fatalf("expected workflow not found error, got: %v", err)
+	}
+}
+
+// ── Parallel execution tests ────────────────────────────────────────────
+
+func TestExtractStepRefs(t *testing.T) {
+	step := parser.Step{
+		StepID:        "s3",
+		OperationPath: "/users/{userId}",
+		Parameters: []parser.Parameter{
+			{Name: "userId", In: "path", Value: "$steps.s1.outputs.id"},
+		},
+		RequestBody: &parser.RequestBody{
+			Payload: map[string]any{
+				"token": "$steps.s2.outputs.token",
+			},
+		},
+		SuccessCriteria: []parser.SuccessCriterion{
+			{Condition: "$statusCode == 200"},
+		},
+		Outputs: map[string]string{
+			"name": "$steps.s1.outputs.name",
+		},
+	}
+
+	refs := extractStepRefs(step)
+	refSet := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		refSet[r] = true
+	}
+
+	if !refSet["s1"] {
+		t.Fatal("expected reference to s1 (from parameter and output)")
+	}
+	if !refSet["s2"] {
+		t.Fatal("expected reference to s2 (from payload)")
+	}
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 unique refs, got %d: %v", len(refs), refs)
+	}
+}
+
+func TestExtractStepRefs_OnActions(t *testing.T) {
+	step := parser.Step{
+		StepID:        "s2",
+		OperationPath: "/test",
+		OnSuccess: []parser.OnAction{
+			{Criteria: []parser.SuccessCriterion{
+				{Condition: "$steps.s1.outputs.status == active"},
+			}},
+		},
+		OnFailure: []parser.OnAction{
+			{Criteria: []parser.SuccessCriterion{
+				{Condition: "$steps.s1.outputs.error != nil"},
+			}},
+		},
+	}
+
+	refs := extractStepRefs(step)
+	if len(refs) != 1 || refs[0] != "s1" {
+		t.Fatalf("expected [s1], got %v", refs)
+	}
+}
+
+func TestHasControlFlow(t *testing.T) {
+	tests := []struct {
+		name   string
+		wf     parser.Workflow
+		expect bool
+	}{
+		{
+			name: "no control flow",
+			wf: parser.Workflow{
+				Steps: []parser.Step{
+					{StepID: "s1", OperationPath: "/a"},
+					{StepID: "s2", OperationPath: "/b"},
+				},
+			},
+			expect: false,
+		},
+		{
+			name: "goto in onSuccess",
+			wf: parser.Workflow{
+				Steps: []parser.Step{
+					{StepID: "s1", OnSuccess: []parser.OnAction{{Type: "goto", StepID: "s2"}}},
+					{StepID: "s2"},
+				},
+			},
+			expect: true,
+		},
+		{
+			name: "retry in onFailure",
+			wf: parser.Workflow{
+				Steps: []parser.Step{
+					{StepID: "s1", OnFailure: []parser.OnAction{{Type: "retry"}}},
+				},
+			},
+			expect: true,
+		},
+		{
+			name: "end in onSuccess",
+			wf: parser.Workflow{
+				Steps: []parser.Step{
+					{StepID: "s1", OnSuccess: []parser.OnAction{{Type: "end"}}},
+				},
+			},
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasControlFlow(&tt.wf)
+			if got != tt.expect {
+				t.Fatalf("hasControlFlow() = %v, want %v", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestBuildLevels_Independent(t *testing.T) {
+	wf := &parser.Workflow{
+		WorkflowID: "test",
+		Steps: []parser.Step{
+			{StepID: "a", OperationPath: "/a"},
+			{StepID: "b", OperationPath: "/b"},
+			{StepID: "c", OperationPath: "/c"},
+		},
+	}
+	levels, err := buildLevels(wf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(levels) != 1 {
+		t.Fatalf("expected 1 level for independent steps, got %d", len(levels))
+	}
+	if len(levels[0].Steps) != 3 {
+		t.Fatalf("expected 3 steps in level 0, got %d", len(levels[0].Steps))
+	}
+}
+
+func TestBuildLevels_Chain(t *testing.T) {
+	wf := &parser.Workflow{
+		WorkflowID: "test",
+		Steps: []parser.Step{
+			{StepID: "a", OperationPath: "/a", Outputs: map[string]string{"x": "$response.body.x"}},
+			{StepID: "b", OperationPath: "/b", Parameters: []parser.Parameter{
+				{Name: "x", Value: "$steps.a.outputs.x"},
+			}},
+			{StepID: "c", OperationPath: "/c", Parameters: []parser.Parameter{
+				{Name: "y", Value: "$steps.b.outputs.y"},
+			}},
+		},
+	}
+	levels, err := buildLevels(wf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(levels) != 3 {
+		t.Fatalf("expected 3 levels for linear chain, got %d", len(levels))
+	}
+	for i, level := range levels {
+		if len(level.Steps) != 1 {
+			t.Fatalf("level %d: expected 1 step, got %d", i, len(level.Steps))
+		}
+	}
+}
+
+func TestBuildLevels_Diamond(t *testing.T) {
+	// A → {B, C} → D
+	wf := &parser.Workflow{
+		WorkflowID: "test",
+		Steps: []parser.Step{
+			{StepID: "a", OperationPath: "/a", Outputs: map[string]string{"x": "$response.body.x"}},
+			{StepID: "b", OperationPath: "/b", Parameters: []parser.Parameter{
+				{Name: "x", Value: "$steps.a.outputs.x"},
+			}},
+			{StepID: "c", OperationPath: "/c", Parameters: []parser.Parameter{
+				{Name: "x", Value: "$steps.a.outputs.x"},
+			}},
+			{StepID: "d", OperationPath: "/d", Parameters: []parser.Parameter{
+				{Name: "b", Value: "$steps.b.outputs.y"},
+				{Name: "c", Value: "$steps.c.outputs.z"},
+			}},
+		},
+	}
+	levels, err := buildLevels(wf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(levels) != 3 {
+		t.Fatalf("expected 3 levels (A, {B,C}, D), got %d", len(levels))
+	}
+	if len(levels[0].Steps) != 1 {
+		t.Fatalf("level 0: expected 1 step (A), got %d", len(levels[0].Steps))
+	}
+	if len(levels[1].Steps) != 2 {
+		t.Fatalf("level 1: expected 2 steps (B,C), got %d", len(levels[1].Steps))
+	}
+	if len(levels[2].Steps) != 1 {
+		t.Fatalf("level 2: expected 1 step (D), got %d", len(levels[2].Steps))
+	}
+}
+
+func TestBuildLevels_Cycle(t *testing.T) {
+	// A depends on B, B depends on A → cycle
+	wf := &parser.Workflow{
+		WorkflowID: "cycle",
+		Steps: []parser.Step{
+			{StepID: "a", Parameters: []parser.Parameter{
+				{Name: "x", Value: "$steps.b.outputs.x"},
+			}},
+			{StepID: "b", Parameters: []parser.Parameter{
+				{Name: "x", Value: "$steps.a.outputs.x"},
+			}},
+		},
+	}
+	_, err := buildLevels(wf)
+	if err == nil {
+		t.Fatal("expected cycle detection error")
+	}
+	if !strings.Contains(err.Error(), "dependency cycle") {
+		t.Fatalf("expected cycle error, got: %v", err)
+	}
+}
+
+func TestExecuteParallel_IndependentSteps(t *testing.T) {
+	var hitCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "parallel-ind",
+		Steps: []parser.Step{
+			{StepID: "a", OperationPath: "/a", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			{StepID: "b", OperationPath: "/b", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			{StepID: "c", OperationPath: "/c", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	outputs, err := engine.Execute(context.Background(), "parallel-ind", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if outputs == nil {
+		t.Fatal("expected non-nil outputs")
+	}
+	if hitCount.Load() != 3 {
+		t.Fatalf("expected 3 HTTP requests, got %d", hitCount.Load())
+	}
+}
+
+func TestExecuteParallel_WithDependencies(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		switch r.URL.Path {
+		case "/a":
+			_, _ = io.WriteString(w, `{"id":"42"}`)
+		case "/b":
+			_, _ = io.WriteString(w, `{"name":"Alice"}`)
+		default:
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		}
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "parallel-dep",
+		Steps: []parser.Step{
+			{
+				StepID:          "a",
+				OperationPath:   "/a",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"id": "$response.body.id"},
+			},
+			{
+				StepID:        "b",
+				OperationPath: "/b",
+				Parameters: []parser.Parameter{
+					{Name: "id", In: "query", Value: "$steps.a.outputs.id"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"name": "$response.body.name"},
+			},
+		},
+		Outputs: map[string]string{
+			"name": "$steps.b.outputs.name",
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	outputs, err := engine.Execute(context.Background(), "parallel-dep", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if outputs["name"] != "Alice" {
+		t.Fatalf("expected name='Alice', got %v", outputs["name"])
+	}
+}
+
+func TestExecuteParallel_FallbackOnControlFlow(t *testing.T) {
+	var paths []string
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "cf-fallback",
+		Steps: []parser.Step{
+			{
+				StepID:          "s1",
+				OperationPath:   "/a",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				OnSuccess:       []parser.OnAction{{Type: "end"}}, // control flow!
+			},
+			{
+				StepID:          "s2",
+				OperationPath:   "/b",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	_, err := engine.Execute(context.Background(), "cf-fallback", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// With control flow, s2 should NOT be reached (end action terminates after s1)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 1 || paths[0] != "/a" {
+		t.Fatalf("expected sequential execution stopping at /a, got %v", paths)
+	}
+}
+
+func TestExecuteParallel_StepFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/ok":
+			w.WriteHeader(200)
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case "/fail":
+			w.WriteHeader(500)
+			_, _ = io.WriteString(w, `{"error":"boom"}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "parallel-fail",
+		Steps: []parser.Step{
+			{StepID: "ok", OperationPath: "/ok", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			{StepID: "fail", OperationPath: "/fail", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	_, err := engine.Execute(context.Background(), "parallel-fail", nil)
+	if err == nil {
+		t.Fatal("expected error from failed step")
+	}
+	if !strings.Contains(err.Error(), "step fail") {
+		t.Fatalf("expected error mentioning step 'fail', got: %v", err)
+	}
+}
+
+func TestExecuteParallel_TracingEvents(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "parallel-trace",
+		Steps: []parser.Step{
+			{StepID: "a", OperationPath: "/a", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+			{StepID: "b", OperationPath: "/b", SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}}},
+		},
+	})
+
+	hook := &testTraceHook{}
+	engine := newTestEngine(ts, spec)
+	engine.SetTraceHook(hook)
+	engine.SetParallelMode(true)
+
+	_, err := engine.Execute(context.Background(), "parallel-trace", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hook.mu.Lock()
+	defer hook.mu.Unlock()
+
+	if len(hook.beforeEvents) != 2 {
+		t.Fatalf("expected 2 BeforeStep events, got %d", len(hook.beforeEvents))
+	}
+	if len(hook.afterEvents) != 2 {
+		t.Fatalf("expected 2 AfterStep events, got %d", len(hook.afterEvents))
+	}
+
+	// Both steps should report status 200
+	for i, ev := range hook.afterEvents {
+		if ev.StatusCode != 200 {
+			t.Fatalf("afterEvent[%d]: expected status 200, got %d", i, ev.StatusCode)
+		}
+		if ev.Duration <= 0 {
+			t.Fatalf("afterEvent[%d]: expected positive duration", i)
+		}
+	}
+}
+
+func TestExecuteParallel_OutputsPreserved(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		switch r.URL.Path {
+		case "/a":
+			_, _ = io.WriteString(w, `{"val":"alpha"}`)
+		case "/b":
+			_, _ = io.WriteString(w, `{"val":"beta"}`)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	}))
+	defer ts.Close()
+
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "parallel-outputs",
+		Steps: []parser.Step{
+			{
+				StepID: "a", OperationPath: "/a",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"val": "$response.body.val"},
+			},
+			{
+				StepID: "b", OperationPath: "/b",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"val": "$response.body.val"},
+			},
+		},
+		Outputs: map[string]string{
+			"a_val": "$steps.a.outputs.val",
+			"b_val": "$steps.b.outputs.val",
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	outputs, err := engine.Execute(context.Background(), "parallel-outputs", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outputs["a_val"] != "alpha" {
+		t.Fatalf("expected a_val='alpha', got %v", outputs["a_val"])
+	}
+	if outputs["b_val"] != "beta" {
+		t.Fatalf("expected b_val='beta', got %v", outputs["b_val"])
+	}
+}
+
+func TestExecuteParallel_DiamondDependency(t *testing.T) {
+	var requestOrder []string
+	var mu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestOrder = append(requestOrder, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"val":"ok"}`)
+	}))
+	defer ts.Close()
+
+	// Diamond: A → {B, C} → D
+	spec := makeSpec(parser.Workflow{
+		WorkflowID: "diamond",
+		Steps: []parser.Step{
+			{
+				StepID: "a", OperationPath: "/a",
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"x": "$response.body.val"},
+			},
+			{
+				StepID: "b", OperationPath: "/b",
+				Parameters:      []parser.Parameter{{Name: "x", In: "query", Value: "$steps.a.outputs.x"}},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"y": "$response.body.val"},
+			},
+			{
+				StepID: "c", OperationPath: "/c",
+				Parameters:      []parser.Parameter{{Name: "x", In: "query", Value: "$steps.a.outputs.x"}},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+				Outputs:         map[string]string{"z": "$response.body.val"},
+			},
+			{
+				StepID: "d", OperationPath: "/d",
+				Parameters: []parser.Parameter{
+					{Name: "y", In: "query", Value: "$steps.b.outputs.y"},
+					{Name: "z", In: "query", Value: "$steps.c.outputs.z"},
+				},
+				SuccessCriteria: []parser.SuccessCriterion{{Condition: "$statusCode == 200"}},
+			},
+		},
+	})
+
+	engine := newTestEngine(ts, spec)
+	engine.SetParallelMode(true)
+
+	_, err := engine.Execute(context.Background(), "diamond", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(requestOrder) != 4 {
+		t.Fatalf("expected 4 requests, got %d: %v", len(requestOrder), requestOrder)
+	}
+
+	// A must come first, D must come last. B and C can be in either order.
+	if requestOrder[0] != "/a" {
+		t.Fatalf("expected /a first, got %s", requestOrder[0])
+	}
+	if requestOrder[3] != "/d" {
+		t.Fatalf("expected /d last, got %s", requestOrder[3])
+	}
+	middle := []string{requestOrder[1], requestOrder[2]}
+	sort.Strings(middle)
+	if middle[0] != "/b" || middle[1] != "/c" {
+		t.Fatalf("expected /b and /c in middle, got %v", middle)
 	}
 }

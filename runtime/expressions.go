@@ -48,16 +48,14 @@ func (e *ExpressionEvaluator) Evaluate(expr string) any {
 
 	// $inputs.name
 	if name, ok := strings.CutPrefix(rest, "inputs."); ok {
-		return e.vars.inputs[name]
+		return e.vars.GetInput(name)
 	}
 
 	// $steps.stepId.outputs.name
 	if after, ok := strings.CutPrefix(rest, "steps."); ok {
 		parts := strings.SplitN(after, ".outputs.", 2)
 		if len(parts) == 2 {
-			if stepOutputs, ok := e.vars.steps[parts[0]]; ok {
-				return stepOutputs[parts[1]]
-			}
+			return e.vars.GetStepOutput(parts[0], parts[1])
 		}
 		return nil
 	}

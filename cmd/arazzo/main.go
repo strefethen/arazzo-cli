@@ -89,6 +89,7 @@ var (
 	timeoutFlag  time.Duration
 	verboseFlag  bool
 	jsonFlag     bool
+	parallelFlag bool
 	providersDir string
 	headerFlags  []string
 )
@@ -104,6 +105,7 @@ func init() {
 	runCmd.Flags().DurationVarP(&timeoutFlag, "timeout", "t", 30*time.Second, "Request timeout")
 	runCmd.Flags().BoolVarP(&verboseFlag, "verbose", "v", false, "Verbose output")
 	runCmd.Flags().StringArrayVarP(&headerFlags, "header", "H", nil, "HTTP headers as key=value pairs")
+	runCmd.Flags().BoolVar(&parallelFlag, "parallel", false, "Execute independent steps concurrently")
 
 	// show
 	showCmd.Flags().StringVar(&providersDir, "dir", ".", "Directory to search for workflow specs")
@@ -200,6 +202,7 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	}
 
 	engine := runtime.NewEngine(spec, opts...)
+	engine.SetParallelMode(parallelFlag)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutFlag*10)
 	defer cancel()
