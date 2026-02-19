@@ -1528,7 +1528,7 @@ func TestExecute_RegexCriterion(t *testing.T) {
 func TestExecute_RichCriteria(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer ts.Close()
 
@@ -1555,7 +1555,7 @@ func TestExecute_RichCriteria(t *testing.T) {
 func TestExecute_RichCriteria_Fails(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(404)
-		w.Write([]byte(`{"error":"not found"}`))
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
 	}))
 	defer ts.Close()
 
@@ -1585,11 +1585,11 @@ func TestExecute_RichCriteria_ActionRouting(t *testing.T) {
 		calls++
 		if calls <= 2 {
 			w.WriteHeader(429)
-			w.Write([]byte(`{}`))
+			_, _ = w.Write([]byte(`{}`))
 			return
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer ts.Close()
 
