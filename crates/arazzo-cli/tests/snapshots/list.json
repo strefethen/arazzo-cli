@@ -1,0 +1,28 @@
+[
+  {
+    "id": "get-origin",
+    "summary": "Fetch your public IP address via httpbin",
+    "inputs": [],
+    "outputs": [
+      "origin",
+      "url"
+    ]
+  },
+  {
+    "id": "echo-headers",
+    "summary": "Echo back request headers",
+    "inputs": [],
+    "outputs": [
+      "host",
+      "user_agent"
+    ]
+  },
+  {
+    "id": "status-check",
+    "summary": "Check HTTP status codes with error handling",
+    "inputs": [
+      "code"
+    ],
+    "outputs": []
+  }
+]

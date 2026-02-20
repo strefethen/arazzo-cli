@@ -1,0 +1,8 @@
+{
+  "valid": true,
+  "file": "<SPEC_PATH>",
+  "version": "1.0.0",
+  "title": "HTTPBin Demo",
+  "workflows": 3,
+  "sources": 1
+}

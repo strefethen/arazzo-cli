@@ -42,3 +42,24 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Performance baseline (non-blocking)
+        continue-on-error: true
+        run: bash scripts/ci/perf-baseline.sh "$RUNNER_TEMP/arazzo-perf"
+
+      - name: Upload performance baseline artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arazzo-perf
+          if-no-files-found: warn
+
+      - name: Publish performance summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/arazzo-perf/summary.md" ]; then
+            cat "$RUNNER_TEMP/arazzo-perf/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No performance summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
