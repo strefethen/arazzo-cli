@@ -17,6 +17,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sxd-document = "0.3"
+sxd-xpath = "0.4"
 url = "2"
 
 [dev-dependencies]

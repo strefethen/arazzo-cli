@@ -6,7 +6,7 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::time::Duration;
 
-use arazzo_runtime::{ClientConfig, Engine};
+use arazzo_runtime::{ClientConfig, Engine, ExecutionOptions};
 use arazzo_spec::{ArazzoSpec, Workflow};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -35,8 +35,13 @@ enum Commands {
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
-        #[arg(short = 't', long = "timeout", default_value_t = 30)]
-        timeout_seconds: u64,
+        #[arg(
+            short = 't',
+            long = "timeout",
+            default_value = "30s",
+            value_parser = parse_duration_value
+        )]
+        timeout: Duration,
 
         #[arg(short = 'H', long = "header")]
         header: Vec<String>,
@@ -135,7 +140,7 @@ struct RunOptions {
     spec_path: String,
     workflow_id: String,
     input_flags: Vec<String>,
-    timeout_seconds: u64,
+    timeout: Duration,
     header_flags: Vec<String>,
     parallel: bool,
     dry_run: bool,
@@ -158,7 +163,7 @@ fn run(cli: Cli) -> Result<(), String> {
             spec,
             workflow_id,
             input,
-            timeout_seconds,
+            timeout,
             header,
             parallel,
             dry_run,
@@ -166,7 +171,7 @@ fn run(cli: Cli) -> Result<(), String> {
             spec_path: spec,
             workflow_id,
             input_flags: input,
-            timeout_seconds,
+            timeout,
             header_flags: header,
             parallel,
             dry_run,
@@ -185,7 +190,7 @@ fn run_workflow(opts: RunOptions) -> Result<(), String> {
         spec_path,
         workflow_id,
         input_flags,
-        timeout_seconds,
+        timeout,
         header_flags,
         parallel,
         dry_run,
@@ -218,22 +223,28 @@ fn run_workflow(opts: RunOptions) -> Result<(), String> {
         eprintln!("Inputs: {inputs:?}");
     }
 
-    let mut headers = BTreeMap::<String, String>::new();
+    let mut cfg = ClientConfig {
+        timeout,
+        ..ClientConfig::default()
+    };
     for header in header_flags {
         if let Some((k, v)) = header.split_once('=') {
-            headers.insert(k.to_string(), v.to_string());
+            cfg.default_headers.insert(k.to_string(), v.to_string());
         }
     }
-    let cfg = ClientConfig {
-        timeout: Duration::from_secs(timeout_seconds),
-        default_headers: headers,
-    };
     let mut engine = Engine::with_client_config(spec, cfg)
         .map_err(|err| format!("creating runtime engine: {err}"))?;
     engine.set_parallel_mode(parallel);
     engine.set_dry_run_mode(dry_run);
 
-    let outputs = match engine.execute(&workflow_id, inputs) {
+    let execution_timeout = timeout
+        .checked_mul(10)
+        .unwrap_or_else(|| Duration::from_secs(u64::MAX));
+    let outputs = match engine.execute_with_options(
+        &workflow_id,
+        inputs,
+        ExecutionOptions::with_timeout(execution_timeout),
+    ) {
         Ok(outputs) => outputs,
         Err(err) => {
             if json {
@@ -572,6 +583,13 @@ fn parse_input_value(raw: &str) -> Value {
         return Value::Bool(false);
     }
     Value::String(value)
+}
+
+fn parse_duration_value(raw: &str) -> Result<Duration, String> {
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Ok(Duration::from_secs(seconds));
+    }
+    humantime::parse_duration(raw).map_err(|err| format!("invalid timeout \"{raw}\": {err}"))
 }
 
 fn output_json<T: Serialize>(value: &T) -> Result<(), String> {

@@ -39,6 +39,8 @@ Toolchain is pinned in `rust-toolchain.toml`.
 
 ## Build And Verify
 
+Run from repository root (`/Users/stevetrefethen/github/arazzo-cli`):
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -47,11 +49,15 @@ cargo test --workspace
 
 ## Run The CLI
 
+Run from repository root and use `examples/...` paths (not `../examples/...`):
+
 ```bash
 cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml
 cargo run -p arazzo-cli -- --json list examples/httpbin-get.arazzo.yaml
 cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml get-origin
 ```
+
+If running from `crates/arazzo-cli/`, use `../../examples/...` paths instead.
 
 Optional install:
 
@@ -76,7 +82,7 @@ Global flags:
 
 - `--input key=value` (repeatable)
 - `--header Name=value` (repeatable)
-- `--timeout <seconds>`
+- `--timeout <duration>` (for example `30`, `30s`, `500ms`, `2m`)
 - `--parallel`
 - `--dry-run`
 

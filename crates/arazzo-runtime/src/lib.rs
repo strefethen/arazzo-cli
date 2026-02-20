@@ -3,6 +3,7 @@
 //! Workflow execution runtime for the Rust implementation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,7 @@ use serde_json::{json, Value};
 
 const MAX_RETRIES_PER_STEP: usize = 3;
 const MAX_CALL_DEPTH: usize = 10;
+const SLEEP_CHECK_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Runtime error.
 #[derive(Debug, Clone)]
@@ -27,21 +29,131 @@ impl std::fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
+/// Per-execution controls for deadline and external cancellation.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionOptions {
+    pub deadline: Option<Instant>,
+    pub cancel_flag: Option<Arc<AtomicBool>>,
+}
+
+impl ExecutionOptions {
+    pub fn with_deadline(deadline: Instant) -> Self {
+        Self {
+            deadline: Some(deadline),
+            cancel_flag: None,
+        }
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self::with_deadline(Instant::now() + timeout)
+    }
+
+    pub fn with_cancel_flag(cancel_flag: Arc<AtomicBool>) -> Self {
+        Self {
+            deadline: None,
+            cancel_flag: Some(cancel_flag),
+        }
+    }
+
+    fn check(&self) -> Result<(), RuntimeError> {
+        if let Some(deadline) = self.deadline {
+            if Instant::now() >= deadline {
+                return Err(RuntimeError("execution timeout exceeded".to_string()));
+            }
+        }
+        if let Some(flag) = &self.cancel_flag {
+            if flag.load(Ordering::Relaxed) {
+                return Err(RuntimeError("execution cancelled".to_string()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Runtime rate limiter settings.
+#[derive(Debug, Clone)]
+pub struct RateLimitConfig {
+    pub requests_per_second: f64,
+    pub burst: usize,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_second: 10.0,
+            burst: 20,
+        }
+    }
+}
+
 /// HTTP client settings.
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub timeout: Duration,
     pub default_headers: BTreeMap<String, String>,
+    pub rate_limit: RateLimitConfig,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
         let mut default_headers = BTreeMap::new();
-        default_headers.insert("User-Agent".to_string(), "arazzo-rs/0.1".to_string());
+        default_headers.insert("User-Agent".to_string(), "arazzo-cli/0.1".to_string());
         Self {
             timeout: Duration::from_secs(30),
             default_headers,
+            rate_limit: RateLimitConfig::default(),
         }
+    }
+}
+
+#[derive(Debug)]
+struct RateLimiterState {
+    requests_per_second: f64,
+    burst: f64,
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl RateLimiterState {
+    fn new(cfg: &RateLimitConfig) -> Self {
+        let burst = cfg.burst.max(1) as f64;
+        Self {
+            requests_per_second: cfg.requests_per_second,
+            burst,
+            tokens: burst,
+            last_refill: Instant::now(),
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        if self.requests_per_second <= 0.0 {
+            self.tokens = self.burst;
+            self.last_refill = now;
+            return;
+        }
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
+        if elapsed <= 0.0 {
+            return;
+        }
+        let gained = elapsed * self.requests_per_second;
+        self.tokens = (self.tokens + gained).min(self.burst);
+        self.last_refill = now;
+    }
+
+    fn acquire_wait(&mut self, now: Instant) -> Option<Duration> {
+        self.refill(now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return None;
+        }
+        if self.requests_per_second <= 0.0 {
+            return None;
+        }
+        let missing = 1.0 - self.tokens;
+        let wait = missing / self.requests_per_second;
+        Some(Duration::from_secs_f64(wait.max(0.0)))
     }
 }
 
@@ -49,6 +161,7 @@ impl Default for ClientConfig {
 struct HttpClient {
     inner: reqwest::blocking::Client,
     default_headers: BTreeMap<String, String>,
+    rate_limiter: Arc<Mutex<RateLimiterState>>,
 }
 
 impl HttpClient {
@@ -60,10 +173,16 @@ impl HttpClient {
         Ok(Self {
             inner,
             default_headers: config.default_headers.clone(),
+            rate_limiter: Arc::new(Mutex::new(RateLimiterState::new(&config.rate_limit))),
         })
     }
 
-    fn request(&self, cfg: RequestConfig) -> Result<Response, RuntimeError> {
+    fn request(
+        &self,
+        cfg: RequestConfig,
+        options: &ExecutionOptions,
+    ) -> Result<Response, RuntimeError> {
+        self.wait_for_rate_limit(options)?;
         let method = reqwest::Method::from_bytes(cfg.method.as_bytes())
             .map_err(|err| RuntimeError(format!("invalid HTTP method {}: {err}", cfg.method)))?;
         let mut req = self.inner.request(method, cfg.url);
@@ -117,6 +236,24 @@ impl HttpClient {
                 "json".to_string()
             },
         })
+    }
+
+    fn wait_for_rate_limit(&self, options: &ExecutionOptions) -> Result<(), RuntimeError> {
+        loop {
+            options.check()?;
+            let wait = {
+                let now = Instant::now();
+                let mut limiter = self
+                    .rate_limiter
+                    .lock()
+                    .map_err(|_| RuntimeError("rate limiter lock poisoned".to_string()))?;
+                limiter.acquire_wait(now)
+            };
+            match wait {
+                None => return Ok(()),
+                Some(delay) => sleep_with_checks(delay, options)?,
+            }
+        }
     }
 }
 
@@ -372,7 +509,16 @@ impl Engine {
         workflow_id: &str,
         inputs: BTreeMap<String, Value>,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        self.execute_inner(workflow_id, inputs, 0)
+        self.execute_with_options(workflow_id, inputs, ExecutionOptions::default())
+    }
+
+    pub fn execute_with_options(
+        &mut self,
+        workflow_id: &str,
+        inputs: BTreeMap<String, Value>,
+        options: ExecutionOptions,
+    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        self.execute_inner(workflow_id, inputs, 0, &options)
     }
 
     fn execute_inner(
@@ -380,7 +526,9 @@ impl Engine {
         workflow_id: &str,
         inputs: BTreeMap<String, Value>,
         depth: usize,
+        options: &ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        options.check()?;
         if depth >= MAX_CALL_DEPTH {
             return Err(RuntimeError(format!(
                 "max call depth ({MAX_CALL_DEPTH}) exceeded calling workflow \"{workflow_id}\""
@@ -404,7 +552,7 @@ impl Engine {
         }
 
         if self.parallel_mode && can_execute_parallel(&workflow) {
-            return self.execute_parallel(workflow_id, &workflow, &mut vars);
+            return self.execute_parallel(workflow_id, &workflow, &mut vars, options);
         }
 
         let mut step_index: usize = 0;
@@ -412,6 +560,7 @@ impl Engine {
         let max_iterations = workflow.steps.len().saturating_mul(10);
 
         for _ in 0..max_iterations {
+            options.check()?;
             if step_index >= workflow.steps.len() {
                 break;
             }
@@ -429,7 +578,7 @@ impl Engine {
             }
 
             let start = Instant::now();
-            let result = self.execute_step_with_result(&step, &mut vars, depth)?;
+            let result = self.execute_step_with_result(&step, &mut vars, depth, options)?;
             let duration = start.elapsed();
 
             if let Some(hook) = &self.trace_hook {
@@ -445,8 +594,14 @@ impl Engine {
                 });
             }
 
-            let action =
-                self.handle_step_result(&workflow, step_index, &result, &vars, &mut retry_count)?;
+            let action = self.handle_step_result(
+                &workflow,
+                step_index,
+                &result,
+                &vars,
+                &mut retry_count,
+                options,
+            )?;
 
             match action {
                 StepFlow::Done => break,
@@ -460,7 +615,7 @@ impl Engine {
                     step_index = idx;
                 }
                 StepFlow::GotoWorkflow(next_wf) => {
-                    return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1);
+                    return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1, options);
                 }
             }
         }
@@ -490,12 +645,13 @@ impl Engine {
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
+        options: &ExecutionOptions,
     ) -> Result<StepResult, RuntimeError> {
         if !step.workflow_id.is_empty() {
-            return self.execute_subworkflow_step(step, vars, depth);
+            return self.execute_subworkflow_step(step, vars, depth, options);
         }
 
-        let execution = self.execute_http_step(step, vars)?;
+        let execution = self.execute_http_step(step, vars, options)?;
         if let Some(req) = execution.dry_run_request {
             if let Ok(mut guard) = self.dry_run_reqs.lock() {
                 guard.push(req);
@@ -511,7 +667,9 @@ impl Engine {
         &self,
         step: &Step,
         vars: &VarStore,
+        options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
+        options.check()?;
         let mut operation_path = step.operation_path.clone();
         if !step.operation_id.is_empty() && operation_path.is_empty() {
             let (method, path) = self.resolve_operation_id(&step.operation_id)?;
@@ -588,16 +746,19 @@ impl Engine {
             });
         }
 
-        let response = self.client.request(RequestConfig {
-            method,
-            url,
-            headers,
-            body,
-        })?;
+        let response = self.client.request(
+            RequestConfig {
+                method,
+                url,
+                headers,
+                body,
+            },
+            options,
+        )?;
 
         let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
         for criterion in &step.success_criteria {
-            if !evaluate_criterion(criterion, &eval) {
+            if !evaluate_criterion(criterion, &eval, Some(&response)) {
                 return Ok(StepExecution {
                     result: StepResult {
                         success: false,
@@ -613,7 +774,7 @@ impl Engine {
         let mut outputs = BTreeMap::new();
         for (name, expr) in &step.outputs {
             let value = if expr.starts_with('/') {
-                Value::Null
+                extract_xpath(&response.body, expr)
             } else if expr.starts_with("$response.header.") || expr.starts_with("$statusCode") {
                 eval.evaluate(expr)
             } else {
@@ -639,7 +800,9 @@ impl Engine {
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
+        options: &ExecutionOptions,
     ) -> Result<StepResult, RuntimeError> {
+        options.check()?;
         let eval = ExpressionEvaluator::new(vars.eval_context(None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
@@ -647,7 +810,7 @@ impl Engine {
         }
 
         let outputs = self
-            .execute_inner(&step.workflow_id, sub_inputs, depth + 1)
+            .execute_inner(&step.workflow_id, sub_inputs, depth + 1, options)
             .map_err(|err| RuntimeError(format!("sub-workflow {}: {}", step.workflow_id, err.0)))?;
 
         for (name, value) in outputs {
@@ -656,7 +819,7 @@ impl Engine {
 
         let eval_post = ExpressionEvaluator::new(vars.eval_context(None));
         for criterion in &step.success_criteria {
-            if !evaluate_criterion(criterion, &eval_post) {
+            if !evaluate_criterion(criterion, &eval_post, None) {
                 return Ok(StepResult {
                     success: false,
                     response: None,
@@ -679,6 +842,7 @@ impl Engine {
         result: &StepResult,
         vars: &VarStore,
         retry_count: &mut BTreeMap<usize, usize>,
+        options: &ExecutionOptions,
     ) -> Result<StepFlow, RuntimeError> {
         let step = workflow.steps[step_idx].clone();
 
@@ -686,14 +850,21 @@ impl Engine {
             let action =
                 self.find_matching_action(&step.on_success, vars, result.response.as_ref());
             if let Some(action) = action {
-                return self.execute_action(workflow, action, step_idx, false, retry_count);
+                return self.execute_action(
+                    workflow,
+                    action,
+                    step_idx,
+                    false,
+                    retry_count,
+                    options,
+                );
             }
             return Ok(StepFlow::Next(step_idx + 1));
         }
 
         let action = self.find_matching_action(&step.on_failure, vars, result.response.as_ref());
         if let Some(action) = action {
-            return self.execute_action(workflow, action, step_idx, true, retry_count);
+            return self.execute_action(workflow, action, step_idx, true, retry_count, options);
         }
 
         if let Some(err) = &result.err {
@@ -749,6 +920,7 @@ impl Engine {
         current_idx: usize,
         is_failure_path: bool,
         retry_count: &BTreeMap<usize, usize>,
+        options: &ExecutionOptions,
     ) -> Result<StepFlow, RuntimeError> {
         match action.type_.as_str() {
             "end" => {
@@ -790,9 +962,10 @@ impl Engine {
                     )));
                 }
                 if action.retry_after > 0 {
-                    std::thread::sleep(Duration::from_secs(
-                        u64::try_from(action.retry_after).unwrap_or(0),
-                    ));
+                    sleep_with_checks(
+                        Duration::from_secs(u64::try_from(action.retry_after).unwrap_or(0)),
+                        options,
+                    )?;
                 }
                 Ok(StepFlow::Next(current_idx))
             }
@@ -866,9 +1039,11 @@ impl Engine {
         workflow_id: &str,
         workflow: &Workflow,
         vars: &mut VarStore,
+        options: &ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let levels = build_levels(workflow)?;
         for level in levels {
+            options.check()?;
             let level_vars = vars.clone();
             let mut level_results =
                 Vec::<(usize, Step, Result<StepExecution, RuntimeError>)>::new();
@@ -884,8 +1059,9 @@ impl Engine {
                         .ok_or_else(|| RuntimeError("invalid step index".to_string()))?;
                     let step_vars = level_vars.clone();
                     let wf_id = workflow_id.to_string();
+                    let opts = options.clone();
                     handles.push(scope.spawn(move || {
-                        let result = self.execute_parallel_step(&wf_id, &step, &step_vars);
+                        let result = self.execute_parallel_step(&wf_id, &step, &step_vars, &opts);
                         (idx, step, result)
                     }));
                 }
@@ -925,7 +1101,9 @@ impl Engine {
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
+        options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
+        options.check()?;
         if let Some(hook) = &self.trace_hook {
             hook.before_step(&StepEvent {
                 workflow_id: workflow_id.to_string(),
@@ -937,7 +1115,7 @@ impl Engine {
         }
 
         let start = Instant::now();
-        let execution = self.execute_http_step(step, vars)?;
+        let execution = self.execute_http_step(step, vars, options)?;
         let duration = start.elapsed();
 
         if let Some(hook) = &self.trace_hook {
@@ -968,7 +1146,42 @@ enum StepFlow {
     GotoWorkflow(String),
 }
 
-fn evaluate_criterion(criterion: &SuccessCriterion, eval: &ExpressionEvaluator) -> bool {
+/// Extract a value from XML/RSS body using an XPath expression.
+fn extract_xpath(body: &[u8], expr: &str) -> Value {
+    let text = match std::str::from_utf8(body) {
+        Ok(t) => t,
+        Err(_) => return Value::Null,
+    };
+    // Strip default namespace declarations so simple XPath expressions
+    // work on both RSS 2.0 (no namespace) and Atom (xmlns="...") feeds.
+    // Preserves prefixed namespaces like xmlns:media="...".
+    let Ok(re) = Regex::new(r#"xmlns="[^"]*""#) else {
+        return Value::Null;
+    };
+    let text = re.replace_all(text, "");
+    let package = match sxd_document::parser::parse(&text) {
+        Ok(p) => p,
+        Err(_) => return Value::Null,
+    };
+    let doc = package.as_document();
+    match sxd_xpath::evaluate_xpath(&doc, expr) {
+        Ok(val) => {
+            let s = val.string();
+            if s.is_empty() {
+                Value::Null
+            } else {
+                Value::String(s)
+            }
+        }
+        Err(_) => Value::Null,
+    }
+}
+
+fn evaluate_criterion(
+    criterion: &SuccessCriterion,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+) -> bool {
     match criterion.type_.as_str() {
         "regex" => {
             let context_value = eval.evaluate_string(&criterion.context);
@@ -978,6 +1191,11 @@ fn evaluate_criterion(criterion: &SuccessCriterion, eval: &ExpressionEvaluator) 
             }
         }
         "jsonpath" => {
+            if let Some(resp) = response {
+                if resp.content_type == "xml" {
+                    return is_truthy(&extract_xpath(&resp.body, &criterion.condition));
+                }
+            }
             let value = eval.evaluate(&format!("$response.body.{}", criterion.condition));
             is_truthy(&value)
         }
@@ -1117,6 +1335,23 @@ fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeError {
         ));
     }
     RuntimeError(format!("step {step_id}: success criteria not met"))
+}
+
+fn sleep_with_checks(delay: Duration, options: &ExecutionOptions) -> Result<(), RuntimeError> {
+    if delay.is_zero() {
+        return Ok(());
+    }
+
+    let start = Instant::now();
+    loop {
+        options.check()?;
+        let elapsed = start.elapsed();
+        if elapsed >= delay {
+            return Ok(());
+        }
+        let remaining = delay - elapsed;
+        std::thread::sleep(remaining.min(SLEEP_CHECK_INTERVAL));
+    }
 }
 
 fn can_execute_parallel(workflow: &Workflow) -> bool {
@@ -1259,8 +1494,8 @@ fn scan_payload_refs(value: &serde_yaml::Value, scan: &mut impl FnMut(&str)) {
 mod tests {
     use super::{
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
-        ArazzoSpec, Engine, EvalContext, ExpressionEvaluator, OnAction, RuntimeError, Step,
-        StepEvent, SuccessCriterion, TraceHook, Workflow,
+        ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionOptions, ExpressionEvaluator,
+        OnAction, Response, RuntimeError, Step, StepEvent, SuccessCriterion, TraceHook, Workflow,
     };
     use arazzo_spec::{Info, RequestBody, SourceDescription};
     use serde_json::{json, Value};
@@ -1928,6 +2163,129 @@ mod tests {
             panic!("expected success with retry delay, got: {err}");
         }
         assert!(started.elapsed() >= Duration::from_millis(900));
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn execute_retry_delay_honors_execution_timeout() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_ref = Arc::clone(&calls);
+        let server = start_server(move |_method, _url, _headers, _body| {
+            calls_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::empty(500)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "retry-delay-timeout".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                operation_path: "/flaky".to_string(),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: "retry".to_string(),
+                    retry_after: 2,
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        let started = Instant::now();
+        let result = engine.execute_with_options(
+            "retry-delay-timeout",
+            BTreeMap::new(),
+            ExecutionOptions::with_timeout(Duration::from_millis(120)),
+        );
+        let err = match result {
+            Ok(_) => panic!("expected execution timeout"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, "execution timeout exceeded");
+        assert!(started.elapsed() < Duration::from_millis(900));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn execute_honors_external_cancel_flag() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_ref = Arc::clone(&calls);
+        let server = start_server(move |_method, _url, _headers, _body| {
+            calls_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::empty(200)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "cancelled".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                operation_path: "/ok".to_string(),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        let cancel_flag = Arc::new(AtomicBool::new(true));
+        let result = engine.execute_with_options(
+            "cancelled",
+            BTreeMap::new(),
+            ExecutionOptions::with_cancel_flag(cancel_flag),
+        );
+        let err = match result {
+            Ok(_) => panic!("expected execution cancellation"),
+            Err(err) => err,
+        };
+        assert_eq!(err.0, "execution cancelled");
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn execute_respects_client_rate_limit() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_ref = Arc::clone(&calls);
+        let server = start_server(move |_method, _url, _headers, _body| {
+            calls_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::empty(200)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "rate-limit".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/one".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s2".to_string(),
+                    operation_path: "/two".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }]);
+
+        let mut cfg = ClientConfig::default();
+        cfg.rate_limit.requests_per_second = 1.0;
+        cfg.rate_limit.burst = 1;
+
+        let mut engine = match Engine::with_client_config(spec, cfg) {
+            Ok(engine) => engine,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.base_url = server.base_url.clone();
+
+        let started = Instant::now();
+        let result = engine.execute("rate-limit", BTreeMap::new());
+        if let Err(err) = result {
+            panic!("expected success, got: {err}");
+        }
+        assert!(started.elapsed() >= Duration::from_millis(850));
         assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
@@ -3591,35 +3949,55 @@ paths:
             condition: "$statusCode == 200".to_string(),
             ..SuccessCriterion::default()
         };
-        assert!(evaluate_criterion(&plain, &eval));
+        assert!(evaluate_criterion(&plain, &eval, None));
 
         let regex = SuccessCriterion {
             type_: "regex".to_string(),
             context: "$response.body.name".to_string(),
             condition: "^[a-z]+$".to_string(),
         };
-        assert!(evaluate_criterion(&regex, &eval));
+        assert!(evaluate_criterion(&regex, &eval, None));
 
         let jsonpath = SuccessCriterion {
             type_: "jsonpath".to_string(),
             condition: "ok".to_string(),
             ..SuccessCriterion::default()
         };
-        assert!(evaluate_criterion(&jsonpath, &eval));
+        assert!(evaluate_criterion(&jsonpath, &eval, None));
 
         let regex_fail = SuccessCriterion {
             type_: "regex".to_string(),
             context: "$statusCode".to_string(),
             condition: "^5\\d{2}$".to_string(),
         };
-        assert!(!evaluate_criterion(&regex_fail, &eval));
+        assert!(!evaluate_criterion(&regex_fail, &eval, None));
 
         let jsonpath_fail = SuccessCriterion {
             type_: "jsonpath".to_string(),
             condition: "missing.path".to_string(),
             ..SuccessCriterion::default()
         };
-        assert!(!evaluate_criterion(&jsonpath_fail, &eval));
+        assert!(!evaluate_criterion(&jsonpath_fail, &eval, None));
+    }
+
+    #[test]
+    fn evaluate_criterion_jsonpath_uses_xpath_for_xml_responses() {
+        let criterion = SuccessCriterion {
+            type_: "jsonpath".to_string(),
+            condition: "//item[1]/title".to_string(),
+            ..SuccessCriterion::default()
+        };
+        let response = Response {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: br#"<?xml version="1.0"?><rss><channel><item><title>Hello</title></item></channel></rss>"#
+                .to_vec(),
+            body_json: None,
+            content_type: "xml".to_string(),
+        };
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+
+        assert!(evaluate_criterion(&criterion, &eval, Some(&response)));
     }
 
     #[test]
@@ -3889,5 +4267,87 @@ paths:
     fn runtime_error_is_displayable() {
         let err = RuntimeError("boom".to_string());
         assert_eq!(err.to_string(), "boom".to_string());
+    }
+
+    // --- XPath extraction tests ---
+
+    use super::extract_xpath;
+
+    #[test]
+    fn test_xpath_extraction() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>First Story</title>
+      <link>https://example.com/1</link>
+    </item>
+    <item>
+      <title>Second Story</title>
+      <link>https://example.com/2</link>
+    </item>
+  </channel>
+</rss>"#;
+        assert_eq!(
+            extract_xpath(xml, "//item[1]/title"),
+            Value::String("First Story".to_string())
+        );
+        assert_eq!(
+            extract_xpath(xml, "//item[2]/title"),
+            Value::String("Second Story".to_string())
+        );
+    }
+
+    #[test]
+    fn test_xpath_extraction_cdata() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title><![CDATA[Story with <special> chars]]></title>
+    </item>
+  </channel>
+</rss>"#;
+        assert_eq!(
+            extract_xpath(xml, "//item[1]/title"),
+            Value::String("Story with <special> chars".to_string())
+        );
+    }
+
+    #[test]
+    fn test_xpath_extraction_atom() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>top scoring links : technology</title>
+  <entry>
+    <title>First Reddit Post</title>
+    <link href="https://reddit.com/1"/>
+  </entry>
+  <entry>
+    <title>Second Reddit Post</title>
+    <link href="https://reddit.com/2"/>
+  </entry>
+</feed>"#;
+        assert_eq!(
+            extract_xpath(xml, "//entry[1]/title"),
+            Value::String("First Reddit Post".to_string())
+        );
+        assert_eq!(
+            extract_xpath(xml, "//entry[2]/title"),
+            Value::String("Second Reddit Post".to_string())
+        );
+    }
+
+    #[test]
+    fn test_xpath_extraction_no_match() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel></channel></rss>"#;
+        assert_eq!(extract_xpath(xml, "//item[1]/title"), Value::Null);
+    }
+
+    #[test]
+    fn test_xpath_extraction_invalid_xml() {
+        let body = b"this is not xml at all <broken>";
+        assert_eq!(extract_xpath(body, "//item[1]/title"), Value::Null);
     }
 }

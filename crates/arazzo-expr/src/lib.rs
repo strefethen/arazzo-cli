@@ -95,9 +95,7 @@ impl ExpressionEvaluator {
 
         if let Some(path) = rest.strip_prefix("response.body.") {
             if let Some(body) = &self.ctx.response_body {
-                return extract_json_path(body, path)
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                return extract_json_path(body, path);
             }
             return Value::Null;
         }
@@ -444,25 +442,58 @@ fn is_truthy(value: &Value) -> bool {
     }
 }
 
-fn extract_json_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+fn extract_json_path(root: &Value, path: &str) -> Value {
     if path.is_empty() {
-        return Some(root);
+        return root.clone();
     }
     let tokens = tokenize_path(path);
     let mut current = root;
 
-    for token in tokens {
+    for (idx, token) in tokens.iter().enumerate() {
         match token {
             PathToken::Field(name) => {
-                current = current.get(name)?;
+                if *name == "#" {
+                    let len = match current {
+                        Value::Array(items) => items.len(),
+                        Value::Object(items) => items.len(),
+                        _ => return Value::Null,
+                    };
+                    if idx + 1 == tokens.len() {
+                        return json!(len);
+                    }
+                    return Value::Null;
+                }
+
+                if let Ok(parsed_idx) = name.parse::<usize>() {
+                    if let Some(arr) = current.as_array() {
+                        match arr.get(parsed_idx) {
+                            Some(v) => {
+                                current = v;
+                                continue;
+                            }
+                            None => return Value::Null,
+                        }
+                    }
+                }
+
+                match current.get(*name) {
+                    Some(v) => current = v,
+                    None => return Value::Null,
+                }
             }
             PathToken::Index(idx) => {
-                let arr = current.as_array()?;
-                current = arr.get(idx)?;
+                let arr = match current.as_array() {
+                    Some(v) => v,
+                    None => return Value::Null,
+                };
+                match arr.get(*idx) {
+                    Some(v) => current = v,
+                    None => return Value::Null,
+                }
             }
         }
     }
-    Some(current)
+    current.clone()
 }
 
 #[derive(Debug)]
@@ -569,6 +600,8 @@ mod tests {
         );
         assert_eq!(eval.evaluate("$response.body.user.name"), json!("Bob"));
         assert_eq!(eval.evaluate("$response.body.arr[0].id"), json!(7));
+        assert_eq!(eval.evaluate("$response.body.arr.0.id"), json!(7));
+        assert_eq!(eval.evaluate("$response.body.arr.#"), json!(1));
         assert_eq!(eval.evaluate("$response.body.missing"), Value::Null);
     }
 
