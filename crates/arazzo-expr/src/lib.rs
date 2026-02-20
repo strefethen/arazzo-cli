@@ -447,105 +447,337 @@ fn extract_json_path(root: &Value, path: &str) -> Value {
         return root.clone();
     }
     let tokens = tokenize_path(path);
-    let mut current = root;
+    if tokens.is_empty() {
+        return Value::Null;
+    }
 
-    for (idx, token) in tokens.iter().enumerate() {
-        match token {
-            PathToken::Field(name) => {
-                if *name == "#" {
-                    let len = match current {
-                        Value::Array(items) => items.len(),
-                        Value::Object(items) => items.len(),
-                        _ => return Value::Null,
-                    };
-                    if idx + 1 == tokens.len() {
-                        return json!(len);
+    let mut current = vec![root];
+    for (idx, token) in tokens.iter().copied().enumerate() {
+        let is_last = idx + 1 == tokens.len();
+        if matches!(token, PathToken::Hash) && is_last {
+            return terminal_hash_value(&current);
+        }
+        current = apply_path_token(&current, token);
+        if current.is_empty() {
+            return Value::Null;
+        }
+    }
+
+    if current.len() == 1 {
+        current[0].clone()
+    } else {
+        Value::Array(current.into_iter().cloned().collect())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PathToken<'a> {
+    Field(&'a str),
+    Index(usize),
+    Wildcard,
+    Hash,
+    Filter {
+        expr: FilterExpr<'a>,
+        all_matches: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FilterExpr<'a> {
+    path: &'a str,
+    op: Option<FilterOp>,
+    value_raw: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FilterOp {
+    Eq,
+    Ne,
+    Gt,
+    Lt,
+    Ge,
+    Le,
+}
+
+fn apply_path_token<'a>(nodes: &[&'a Value], token: PathToken<'a>) -> Vec<&'a Value> {
+    let mut out = Vec::new();
+
+    match token {
+        PathToken::Field(name) => {
+            for node in nodes {
+                if let Some(obj) = node.as_object() {
+                    if let Some(value) = obj.get(name) {
+                        out.push(value);
+                        continue;
                     }
-                    return Value::Null;
                 }
 
-                if let Ok(parsed_idx) = name.parse::<usize>() {
-                    if let Some(arr) = current.as_array() {
-                        match arr.get(parsed_idx) {
-                            Some(v) => {
-                                current = v;
-                                continue;
-                            }
-                            None => return Value::Null,
+                if let Ok(idx) = name.parse::<usize>() {
+                    if let Some(arr) = node.as_array() {
+                        if let Some(value) = arr.get(idx) {
+                            out.push(value);
                         }
                     }
                 }
-
-                match current.get(*name) {
-                    Some(v) => current = v,
-                    None => return Value::Null,
+            }
+        }
+        PathToken::Index(idx) => {
+            for node in nodes {
+                if let Some(arr) = node.as_array() {
+                    if let Some(value) = arr.get(idx) {
+                        out.push(value);
+                    }
                 }
             }
-            PathToken::Index(idx) => {
-                let arr = match current.as_array() {
-                    Some(v) => v,
-                    None => return Value::Null,
-                };
-                match arr.get(*idx) {
-                    Some(v) => current = v,
-                    None => return Value::Null,
+        }
+        PathToken::Wildcard => {
+            for node in nodes {
+                if let Some(arr) = node.as_array() {
+                    out.extend(arr.iter());
+                } else if let Some(obj) = node.as_object() {
+                    out.extend(obj.values());
+                }
+            }
+        }
+        PathToken::Hash => {
+            for node in nodes {
+                if let Some(arr) = node.as_array() {
+                    out.extend(arr.iter());
+                }
+            }
+        }
+        PathToken::Filter { expr, all_matches } => {
+            for node in nodes {
+                if let Some(arr) = node.as_array() {
+                    for item in arr {
+                        if filter_matches(item, expr) {
+                            out.push(item);
+                            if !all_matches {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    current.clone()
+
+    out
 }
 
-#[derive(Debug)]
-enum PathToken<'a> {
-    Field(&'a str),
-    Index(usize),
+fn terminal_hash_value(nodes: &[&Value]) -> Value {
+    if nodes.len() == 1 {
+        return node_len(nodes[0]).map_or(Value::Null, |len| json!(len));
+    }
+
+    let values = nodes
+        .iter()
+        .map(|node| node_len(node).map_or(Value::Null, |len| json!(len)))
+        .collect::<Vec<_>>();
+    Value::Array(values)
+}
+
+fn node_len(node: &Value) -> Option<usize> {
+    match node {
+        Value::Array(items) => Some(items.len()),
+        Value::Object(items) => Some(items.len()),
+        _ => None,
+    }
+}
+
+fn filter_matches(item: &Value, expr: FilterExpr<'_>) -> bool {
+    let path = expr.path.strip_prefix("@.").unwrap_or(expr.path);
+    let left = if path.is_empty() || path == "@" || path == "$" {
+        item.clone()
+    } else {
+        extract_json_path(item, path)
+    };
+
+    match expr.op {
+        None => is_truthy(&left),
+        Some(op) => {
+            let right = parse_value(expr.value_raw);
+            match op {
+                FilterOp::Eq => compare_values(&left, &right),
+                FilterOp::Ne => !compare_values(&left, &right),
+                FilterOp::Gt => compare_ordered(&left, &right) > 0,
+                FilterOp::Lt => compare_ordered(&left, &right) < 0,
+                FilterOp::Ge => compare_ordered(&left, &right) >= 0,
+                FilterOp::Le => compare_ordered(&left, &right) <= 0,
+            }
+        }
+    }
 }
 
 fn tokenize_path(path: &str) -> Vec<PathToken<'_>> {
     let mut tokens = Vec::new();
-    let chars = path.as_bytes();
-    let mut start = 0usize;
-    let mut idx = 0usize;
+    for segment in split_path_segments(path) {
+        push_segment_tokens(segment, &mut tokens);
+    }
+    tokens
+}
 
-    while idx < chars.len() {
-        match chars[idx] {
-            b'.' => {
+fn split_path_segments(path: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+
+    for (idx, ch) in path.char_indices() {
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => in_quote = Some(ch),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '.' if paren_depth == 0 && bracket_depth == 0 => {
                 if start < idx {
-                    tokens.push(PathToken::Field(&path[start..idx]));
+                    out.push(&path[start..idx]);
                 }
                 start = idx + 1;
-                idx += 1;
             }
-            b'[' => {
-                if start < idx {
-                    tokens.push(PathToken::Field(&path[start..idx]));
-                }
-                let mut end = idx + 1;
-                while end < chars.len() && chars[end] != b']' {
-                    end += 1;
-                }
-                if end < chars.len() {
-                    if let Ok(n) = path[idx + 1..end].parse::<usize>() {
-                        tokens.push(PathToken::Index(n));
-                    }
-                    idx = end + 1;
-                    if idx < chars.len() && chars[idx] == b'.' {
-                        idx += 1;
-                    }
-                    start = idx;
-                } else {
-                    break;
-                }
-            }
-            _ => idx += 1,
+            _ => {}
         }
     }
 
     if start < path.len() {
-        tokens.push(PathToken::Field(&path[start..]));
+        out.push(&path[start..]);
     }
-    tokens
+
+    out.into_iter()
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
+fn push_segment_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
+    let segment = segment.trim();
+    if segment.is_empty() {
+        return;
+    }
+
+    if segment == "*" {
+        out.push(PathToken::Wildcard);
+        return;
+    }
+    if segment == "#" {
+        out.push(PathToken::Hash);
+        return;
+    }
+
+    if let Some((inner, all_matches)) = parse_filter_segment(segment) {
+        if let Some(expr) = parse_filter_expr(inner) {
+            out.push(PathToken::Filter { expr, all_matches });
+            return;
+        }
+    }
+
+    if segment.contains('[') {
+        push_bracket_tokens(segment, out);
+        return;
+    }
+
+    out.push(PathToken::Field(segment));
+}
+
+fn parse_filter_segment(segment: &str) -> Option<(&str, bool)> {
+    if !segment.starts_with("#(") {
+        return None;
+    }
+    if segment.ends_with(")#") {
+        return Some((&segment[2..segment.len() - 2], true));
+    }
+    if segment.ends_with(')') {
+        return Some((&segment[2..segment.len() - 1], false));
+    }
+    None
+}
+
+fn parse_filter_expr(inner: &str) -> Option<FilterExpr<'_>> {
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return None;
+    }
+
+    for (symbol, op) in [
+        (">=", FilterOp::Ge),
+        ("<=", FilterOp::Le),
+        ("==", FilterOp::Eq),
+        ("!=", FilterOp::Ne),
+        (">", FilterOp::Gt),
+        ("<", FilterOp::Lt),
+    ] {
+        if let Some(idx) = index_outside_quotes(inner, symbol) {
+            let path = inner[..idx].trim();
+            let value_raw = inner[idx + symbol.len()..].trim();
+            if path.is_empty() || value_raw.is_empty() {
+                return None;
+            }
+            return Some(FilterExpr {
+                path,
+                op: Some(op),
+                value_raw,
+            });
+        }
+    }
+
+    Some(FilterExpr {
+        path: inner,
+        op: None,
+        value_raw: "",
+    })
+}
+
+fn push_bracket_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
+    let mut cursor = 0usize;
+
+    while cursor < segment.len() {
+        let Some(open_rel) = segment[cursor..].find('[') else {
+            break;
+        };
+        let open = cursor + open_rel;
+
+        if cursor < open {
+            out.push(PathToken::Field(&segment[cursor..open]));
+        }
+
+        let Some(close_rel) = segment[open + 1..].find(']') else {
+            out.push(PathToken::Field(&segment[open..]));
+            return;
+        };
+        let close = open + 1 + close_rel;
+        let index_expr = segment[open + 1..close].trim();
+
+        if index_expr == "*" {
+            out.push(PathToken::Wildcard);
+        } else if let Ok(idx) = index_expr.parse::<usize>() {
+            out.push(PathToken::Index(idx));
+        } else if !index_expr.is_empty() {
+            out.push(PathToken::Field(index_expr));
+        }
+
+        cursor = close + 1;
+    }
+
+    if cursor < segment.len() {
+        out.push(PathToken::Field(&segment[cursor..]));
+    }
 }
 
 #[cfg(test)]
@@ -582,7 +814,15 @@ mod tests {
     fn evaluate_response_fields() {
         let mut ctx = EvalContext {
             status_code: Some(404),
-            response_body: Some(json!({"user": {"name": "Bob"}, "arr": [{"id": 7}]})),
+            response_body: Some(json!({
+                "user": {"name": "Bob"},
+                "arr": [{"id": 7}],
+                "users": [
+                    {"id": 1, "name": "Alice", "group": "a"},
+                    {"id": 2, "name": "Bob", "group": "b"},
+                    {"id": 3, "name": "Cara", "group": "a"}
+                ]
+            })),
             ..EvalContext::default()
         };
         ctx.response_headers
@@ -602,6 +842,22 @@ mod tests {
         assert_eq!(eval.evaluate("$response.body.arr[0].id"), json!(7));
         assert_eq!(eval.evaluate("$response.body.arr.0.id"), json!(7));
         assert_eq!(eval.evaluate("$response.body.arr.#"), json!(1));
+        assert_eq!(
+            eval.evaluate("$response.body.users.#.name"),
+            json!(["Alice", "Bob", "Cara"])
+        );
+        assert_eq!(
+            eval.evaluate(r#"$response.body.users.#(id==2).name"#),
+            json!("Bob")
+        );
+        assert_eq!(
+            eval.evaluate(r#"$response.body.users.#(group=="a")#.id"#),
+            json!([1, 3])
+        );
+        assert_eq!(
+            eval.evaluate("$response.body.users[*].id"),
+            json!([1, 2, 3])
+        );
         assert_eq!(eval.evaluate("$response.body.missing"), Value::Null);
     }
 
