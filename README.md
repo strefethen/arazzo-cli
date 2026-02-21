@@ -185,10 +185,13 @@ Condition operators supported:
 - This project is a generic Arazzo executor; avoid domain-specific behavior.
 - Keep CLI output machine-friendly; every command must continue supporting `--json`.
 - Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
+- Debugger work is in progress in-repo with a separate debug surface (`arazzo-debug-protocol`, `arazzo-debug-adapter`, and `vscode-arazzo-debug`), so existing CLI command UX remains stable.
 - Architecture and extension docs:
   - `docs/architecture.md`
   - `docs/extension-guide.md`
   - `docs/internal-api-v1.md`
+  - `docs/debugger-architecture.md`
+  - `docs/debugger-protocol-v1.md`
 
 ## Contributions
 

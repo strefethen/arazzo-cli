@@ -1,0 +1,16 @@
+[package]
+name = "arazzo-debug-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arazzo-debug-protocol = { path = "../arazzo-debug-protocol" }
+serde_json = "1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }

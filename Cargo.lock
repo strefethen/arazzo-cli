@@ -76,6 +76,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arazzo-debug-adapter"
+version = "0.1.0"
+dependencies = [
+ "arazzo-debug-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "arazzo-debug-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arazzo-expr"
 version = "0.1.0"
 dependencies = [

@@ -5,6 +5,8 @@ members = [
   "crates/arazzo-expr",
   "crates/arazzo-runtime",
   "crates/arazzo-cli",
+  "crates/arazzo-debug-protocol",
+  "crates/arazzo-debug-adapter",
 ]
 resolver = "2"
 
