@@ -1,7 +1,6 @@
-import * as assert from "assert";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
-suite("Arazzo Debug Extension", () => {
-  test("smoke", () => {
-    assert.strictEqual(true, true);
-  });
+test("Arazzo Debug Extension smoke", () => {
+  assert.equal(true, true);
 });
