@@ -44,11 +44,16 @@ impl Engine {
             execution_event_seq: Arc::new(Mutex::new(0)),
             step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             trace_hook: None,
+            debug_controller: None,
         })
     }
 
     pub fn set_trace_hook(&mut self, hook: Arc<dyn TraceHook>) {
         self.trace_hook = Some(hook);
+    }
+
+    pub fn set_debug_controller(&mut self, controller: Arc<DebugController>) {
+        self.debug_controller = Some(controller);
     }
 
     pub fn set_parallel_mode(&mut self, enabled: bool) {
@@ -201,7 +206,8 @@ impl Engine {
             vars.set_input(&k, v);
         }
 
-        if self.parallel_mode && can_execute_parallel(&workflow) {
+        if self.parallel_mode && self.debug_controller.is_none() && can_execute_parallel(&workflow)
+        {
             return self.execute_parallel(workflow_id, &workflow, &mut vars, options);
         }
 
@@ -216,6 +222,7 @@ impl Engine {
             }
 
             let step = workflow.steps[step_index].clone();
+            self.debug_gate_step(workflow_id, &step, &vars)?;
 
             self.emit_before_step_event(workflow_id, &step);
 
@@ -1072,6 +1079,21 @@ impl Engine {
             err: None,
             duration_ns: 0,
         });
+    }
+
+    fn debug_gate_step(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        vars: &VarStore,
+    ) -> Result<(), RuntimeError> {
+        let Some(controller) = &self.debug_controller else {
+            return Ok(());
+        };
+        let eval_ctx = vars.eval_context(None);
+        controller
+            .gate_step(workflow_id, &step.step_id, &eval_ctx)
+            .map_err(|err| RuntimeError::unspecified(format!("debug controller: {err}")))
     }
 
     fn emit_after_step_event(

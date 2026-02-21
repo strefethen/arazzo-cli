@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod debug;
 mod runtime_core;
 
+pub use debug::*;
 pub use runtime_core::*;
 
 /// Stable internal runtime API baseline for trace/replay/debugger integrations.

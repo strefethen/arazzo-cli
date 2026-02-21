@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::DebugController;
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{ArazzoSpec, OnAction, Step, SuccessCriterion, Workflow};
 use regex::Regex;
@@ -599,6 +600,7 @@ pub struct Engine {
     execution_event_seq: Arc<Mutex<u64>>,
     step_attempts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
     trace_hook: Option<Arc<dyn TraceHook>>,
+    debug_controller: Option<Arc<DebugController>>,
 }
 
 mod engine_impl;
