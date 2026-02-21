@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 const MAX_RETRIES_PER_STEP: usize = 3;
 const MAX_CALL_DEPTH: usize = 10;
 const SLEEP_CHECK_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
 
 /// Runtime error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +376,101 @@ pub struct DryRunRequest {
     pub body: Option<Value>,
 }
 
+/// Trace path chosen after a step attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TraceDecisionPath {
+    #[default]
+    Next,
+    Done,
+    GotoStep,
+    GotoWorkflow,
+    Retry,
+    Error,
+}
+
+/// Trace decision metadata for one step attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceDecision {
+    pub path: TraceDecisionPath,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_type: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_step_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_workflow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_limit: Option<i64>,
+}
+
+/// Trace request payload for one step attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceRequest {
+    pub method: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Value>,
+}
+
+/// Trace response payload for one step attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceResponse {
+    pub status_code: i64,
+    pub content_type: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    pub body_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_preview: Option<String>,
+}
+
+/// Trace result of evaluating one success criterion.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceCriterionResult {
+    pub index: usize,
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
+    pub type_: String,
+    pub condition: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub context: String,
+    pub result: bool,
+}
+
+/// Runtime trace record for one step attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceStepRecord {
+    pub seq: u64,
+    pub workflow_id: String,
+    pub step_id: String,
+    pub attempt: u32,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub operation_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workflow_id_ref: String,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<TraceRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<TraceResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub criteria: Vec<TraceCriterionResult>,
+    pub decision: TraceDecision,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Trace payload for step lifecycle events.
 #[derive(Debug, Clone, Default)]
 pub struct StepEvent {
@@ -412,6 +508,14 @@ struct StepExecution {
     result: StepResult,
     outputs: BTreeMap<String, Value>,
     dry_run_request: Option<DryRunRequest>,
+    trace: StepTraceData,
+}
+
+#[derive(Debug, Clone, Default)]
+struct StepTraceData {
+    request: Option<TraceRequest>,
+    response: Option<TraceResponse>,
+    criteria: Vec<TraceCriterionResult>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -461,7 +565,11 @@ pub struct Engine {
     op_index: BTreeMap<String, OperationEntry>,
     parallel_mode: bool,
     dry_run_mode: bool,
+    trace_enabled: bool,
     dry_run_reqs: Arc<Mutex<Vec<DryRunRequest>>>,
+    trace_steps: Arc<Mutex<Vec<TraceStepRecord>>>,
+    trace_seq: Arc<Mutex<u64>>,
+    step_attempts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
     trace_hook: Option<Arc<dyn TraceHook>>,
 }
 

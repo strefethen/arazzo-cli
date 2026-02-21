@@ -20,7 +20,7 @@ mod tests {
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
         ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionOptions, ExpressionEvaluator,
         OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent, SuccessCriterion,
-        TraceHook, Workflow,
+        TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{Info, RequestBody, SourceDescription};
     use serde_json::{json, Value};
@@ -2458,6 +2458,195 @@ paths:
         assert_eq!(before[0].workflow_id_ref, "child".to_string());
         assert!(before.iter().any(|ev| ev.operation_path == "/api"));
         assert!(after.iter().any(|ev| ev.status_code == 500));
+    }
+
+    #[test]
+    fn trace_records_sequential_include_request_response_criteria_decision() {
+        let server = start_server(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true,"value":7}"#)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                operation_path: "/ok".to_string(),
+                success_criteria: success_200(),
+                outputs: BTreeMap::from([(
+                    "value".to_string(),
+                    "$response.body.value".to_string(),
+                )]),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([("value".to_string(), "$steps.s1.outputs.value".to_string())]),
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_trace_enabled(true);
+        let outputs = match engine.execute("wf", BTreeMap::new()) {
+            Ok(outputs) => outputs,
+            Err(err) => panic!("expected success, got: {err}"),
+        };
+        assert_eq!(outputs.get("value"), Some(&json!(7)));
+
+        let trace = engine.trace_steps();
+        assert_eq!(trace.len(), 1);
+        let record = &trace[0];
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.workflow_id, "wf");
+        assert_eq!(record.step_id, "s1");
+        assert_eq!(record.attempt, 1);
+        assert_eq!(record.kind, "http");
+        assert_eq!(record.operation_path, "/ok");
+        assert_eq!(record.decision.path, TraceDecisionPath::Next);
+        assert_eq!(
+            record
+                .request
+                .as_ref()
+                .map(|request| request.method.as_str()),
+            Some("GET")
+        );
+        assert!(record
+            .request
+            .as_ref()
+            .map(|request| request.url.contains("/ok"))
+            .unwrap_or(false));
+        assert_eq!(
+            record
+                .response
+                .as_ref()
+                .map(|response| response.status_code),
+            Some(200)
+        );
+        assert_eq!(record.criteria.len(), 1);
+        assert!(record.criteria[0].result);
+        assert_eq!(record.outputs.get("value"), Some(&json!(7)));
+        assert_eq!(record.error, None);
+    }
+
+    #[test]
+    fn trace_records_retry_attempts_increment() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+        let server = start_server(move |_method, _url, _headers, _body| {
+            let attempt = calls_clone.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                MockHttpResponse::empty(429)
+            } else {
+                MockHttpResponse::json(200, r#"{"ok":true}"#)
+            }
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "retry-step".to_string(),
+                operation_path: "/retry".to_string(),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: "retry".to_string(),
+                    retry_limit: 2,
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_trace_enabled(true);
+        if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+            panic!("expected success, got: {err}");
+        }
+
+        let trace = engine.trace_steps();
+        assert_eq!(trace.len(), 2);
+        assert_eq!(trace[0].seq, 1);
+        assert_eq!(trace[1].seq, 2);
+        assert_eq!(trace[0].attempt, 1);
+        assert_eq!(trace[1].attempt, 2);
+        assert_eq!(trace[0].decision.path, TraceDecisionPath::Retry);
+        assert_eq!(
+            trace[0]
+                .response
+                .as_ref()
+                .map(|response| response.status_code),
+            Some(429)
+        );
+        assert_eq!(trace[1].decision.path, TraceDecisionPath::Next);
+        assert_eq!(
+            trace[1]
+                .response
+                .as_ref()
+                .map(|response| response.status_code),
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn trace_records_subworkflow_parent_and_child_workflow_ids() {
+        let server = start_server(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+
+        let spec = make_spec(vec![
+            Workflow {
+                workflow_id: "parent".to_string(),
+                steps: vec![Step {
+                    step_id: "call-child".to_string(),
+                    workflow_id: "child".to_string(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "child".to_string(),
+                steps: vec![Step {
+                    step_id: "child-step".to_string(),
+                    operation_path: "/child".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+        ]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_trace_enabled(true);
+        if let Err(err) = engine.execute("parent", BTreeMap::new()) {
+            panic!("expected success, got: {err}");
+        }
+
+        let trace = engine.trace_steps();
+        assert_eq!(trace.len(), 2);
+
+        let parent_record = match trace.iter().find(|record| record.step_id == "call-child") {
+            Some(record) => record,
+            None => panic!("missing parent trace record"),
+        };
+        assert_eq!(parent_record.workflow_id, "parent");
+        assert_eq!(parent_record.kind, "workflow");
+        assert_eq!(parent_record.workflow_id_ref, "child");
+        assert_eq!(parent_record.request, None);
+        assert_eq!(parent_record.response, None);
+        assert_eq!(parent_record.decision.path, TraceDecisionPath::Next);
+
+        let child_record = match trace.iter().find(|record| record.step_id == "child-step") {
+            Some(record) => record,
+            None => panic!("missing child trace record"),
+        };
+        assert_eq!(child_record.workflow_id, "child");
+        assert_eq!(child_record.kind, "http");
+        assert_eq!(child_record.attempt, 1);
+        assert_eq!(child_record.decision.path, TraceDecisionPath::Next);
+        assert_eq!(
+            child_record
+                .response
+                .as_ref()
+                .map(|response| response.status_code),
+            Some(200)
+        );
     }
 
     #[test]

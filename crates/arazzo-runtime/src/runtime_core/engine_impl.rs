@@ -36,7 +36,11 @@ impl Engine {
             op_index: BTreeMap::new(),
             parallel_mode: false,
             dry_run_mode: false,
+            trace_enabled: false,
             dry_run_reqs: Arc::new(Mutex::new(Vec::new())),
+            trace_steps: Arc::new(Mutex::new(Vec::new())),
+            trace_seq: Arc::new(Mutex::new(0)),
+            step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             trace_hook: None,
         })
     }
@@ -53,8 +57,19 @@ impl Engine {
         self.dry_run_mode = enabled;
     }
 
+    pub fn set_trace_enabled(&mut self, enabled: bool) {
+        self.trace_enabled = enabled;
+    }
+
     pub fn dry_run_requests(&self) -> Vec<DryRunRequest> {
         match self.dry_run_reqs.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn trace_steps(&self) -> Vec<TraceStepRecord> {
+        match self.trace_steps.lock() {
             Ok(guard) => guard.clone(),
             Err(_) => Vec::new(),
         }
@@ -139,6 +154,12 @@ impl Engine {
         inputs: BTreeMap<String, Value>,
         options: ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        if self.dry_run_mode {
+            if let Ok(mut guard) = self.dry_run_reqs.lock() {
+                guard.clear();
+            }
+        }
+        self.clear_trace_state();
         self.execute_inner(workflow_id, inputs, 0, &options)
     }
 
@@ -171,12 +192,6 @@ impl Engine {
             vars.set_input(&k, v);
         }
 
-        if self.dry_run_mode {
-            if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                guard.clear();
-            }
-        }
-
         if self.parallel_mode && can_execute_parallel(&workflow) {
             return self.execute_parallel(workflow_id, &workflow, &mut vars, options);
         }
@@ -203,9 +218,43 @@ impl Engine {
                 });
             }
 
+            let attempt = if self.trace_enabled {
+                self.next_attempt(workflow_id, &step.step_id)
+            } else {
+                0
+            };
+
             let start = Instant::now();
-            let result = self.execute_step_with_result(&step, &mut vars, depth, options)?;
+            let execution = match self.execute_step_with_result(&step, &mut vars, depth, options) {
+                Ok(execution) => execution,
+                Err(err) => {
+                    let duration = start.elapsed();
+                    if self.trace_enabled {
+                        self.push_trace_record(TraceStepRecord {
+                            seq: self.next_trace_seq(),
+                            workflow_id: workflow_id.to_string(),
+                            step_id: step.step_id.clone(),
+                            attempt,
+                            kind: step_kind(&step),
+                            operation_path: step.operation_path.clone(),
+                            workflow_id_ref: step.workflow_id.clone(),
+                            duration_ms: duration_ms_u64(duration),
+                            request: None,
+                            response: None,
+                            criteria: Vec::new(),
+                            decision: TraceDecision {
+                                path: TraceDecisionPath::Error,
+                                ..TraceDecision::default()
+                            },
+                            outputs: BTreeMap::new(),
+                            error: Some(err.message.clone()),
+                        });
+                    }
+                    return Err(err);
+                }
+            };
             let duration = start.elapsed();
+            let step_outputs = vars.step_outputs(&step.step_id);
 
             if let Some(hook) = &self.trace_hook {
                 hook.after_step(&StepEvent {
@@ -213,9 +262,14 @@ impl Engine {
                     step_id: step.step_id.clone(),
                     operation_path: step.operation_path.clone(),
                     workflow_id_ref: step.workflow_id.clone(),
-                    status_code: result.response.as_ref().map(|r| r.status_code).unwrap_or(0),
-                    outputs: vars.step_outputs(&step.step_id),
-                    err: result.err.clone(),
+                    status_code: execution
+                        .result
+                        .response
+                        .as_ref()
+                        .map(|r| r.status_code)
+                        .unwrap_or(0),
+                    outputs: step_outputs.clone(),
+                    err: execution.result.err.clone(),
                     duration,
                 });
             }
@@ -223,13 +277,36 @@ impl Engine {
             let action = self.handle_step_result(
                 &workflow,
                 step_index,
-                &result,
+                &execution.result,
                 &vars,
-                &mut retry_count,
+                &retry_count,
                 options,
-            )?;
+            );
 
-            match action {
+            let trace_err = match &action.flow {
+                FlowDecision::Error(err) => Some(err.message.clone()),
+                _ => execution.result.err.clone(),
+            };
+            if self.trace_enabled {
+                self.push_trace_record(TraceStepRecord {
+                    seq: self.next_trace_seq(),
+                    workflow_id: workflow_id.to_string(),
+                    step_id: step.step_id.clone(),
+                    attempt,
+                    kind: step_kind(&step),
+                    operation_path: step.operation_path.clone(),
+                    workflow_id_ref: step.workflow_id.clone(),
+                    duration_ms: duration_ms_u64(duration),
+                    request: execution.trace.request.clone(),
+                    response: execution.trace.response.clone(),
+                    criteria: execution.trace.criteria.clone(),
+                    decision: action.trace.clone(),
+                    outputs: step_outputs,
+                    error: trace_err,
+                });
+            }
+
+            match action.flow {
                 FlowDecision::Done => break,
                 FlowDecision::Next(idx) => {
                     if idx == step_index {
@@ -248,6 +325,7 @@ impl Engine {
                 FlowDecision::GotoWorkflow(next_wf) => {
                     return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1, options);
                 }
+                FlowDecision::Error(err) => return Err(err),
             }
         }
 
@@ -281,21 +359,27 @@ impl Engine {
         vars: &mut VarStore,
         depth: usize,
         options: &ExecutionOptions,
-    ) -> Result<StepResult, RuntimeError> {
+    ) -> Result<StepExecution, RuntimeError> {
         if !step.workflow_id.is_empty() {
-            return self.execute_subworkflow_step(step, vars, depth, options);
+            let result = self.execute_subworkflow_step(step, vars, depth, options)?;
+            return Ok(StepExecution {
+                result,
+                outputs: vars.step_outputs(&step.step_id),
+                dry_run_request: None,
+                trace: StepTraceData::default(),
+            });
         }
 
         let execution = self.execute_http_step(step, vars, options)?;
-        if let Some(req) = execution.dry_run_request {
+        if let Some(req) = execution.dry_run_request.clone() {
             if let Ok(mut guard) = self.dry_run_reqs.lock() {
                 guard.push(req);
             }
         }
-        for (name, value) in execution.outputs {
-            vars.set_step_output(&step.step_id, &name, value);
+        for (name, value) in &execution.outputs {
+            vars.set_step_output(&step.step_id, name, value.clone());
         }
-        Ok(execution.result)
+        Ok(execution)
     }
 
     fn execute_http_step(
@@ -355,13 +439,20 @@ impl Engine {
             }
         }
 
+        let trace_request = TraceRequest {
+            method: method.clone(),
+            url: url.clone(),
+            headers: headers.clone(),
+            body: body_json.clone(),
+        };
+
         if self.dry_run_mode {
             let req = DryRunRequest {
                 step_id: step.step_id.clone(),
-                method,
-                url,
-                headers,
-                body: body_json,
+                method: method.clone(),
+                url: url.clone(),
+                headers: headers.clone(),
+                body: body_json.clone(),
             };
             let fake = Response {
                 status_code: 200,
@@ -378,6 +469,17 @@ impl Engine {
                 },
                 outputs: BTreeMap::new(),
                 dry_run_request: Some(req),
+                trace: StepTraceData {
+                    request: Some(trace_request),
+                    response: Some(TraceResponse {
+                        status_code: 200,
+                        content_type: "json".to_string(),
+                        headers: BTreeMap::new(),
+                        body_bytes: 2,
+                        body_preview: Some("{}".to_string()),
+                    }),
+                    criteria: Vec::new(),
+                },
             });
         }
 
@@ -392,8 +494,18 @@ impl Engine {
         )?;
 
         let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
-        for criterion in &step.success_criteria {
-            if !evaluate_criterion(criterion, &eval, Some(&response)) {
+        let mut criteria = Vec::new();
+        for (index, criterion) in step.success_criteria.iter().enumerate() {
+            let matches = evaluate_criterion(criterion, &eval, Some(&response));
+            criteria.push(TraceCriterionResult {
+                index,
+                type_: criterion.type_.clone(),
+                condition: criterion.condition.clone(),
+                context: criterion.context.clone(),
+                result: matches,
+            });
+            if !matches {
+                let trace_response = build_trace_response(&response);
                 return Ok(StepExecution {
                     result: StepResult {
                         success: false,
@@ -402,6 +514,11 @@ impl Engine {
                     },
                     outputs: BTreeMap::new(),
                     dry_run_request: None,
+                    trace: StepTraceData {
+                        request: Some(trace_request),
+                        response: Some(trace_response),
+                        criteria,
+                    },
                 });
             }
         }
@@ -419,6 +536,7 @@ impl Engine {
             outputs.insert(name.clone(), value);
         }
 
+        let trace_response = build_trace_response(&response);
         Ok(StepExecution {
             result: StepResult {
                 success: true,
@@ -427,6 +545,11 @@ impl Engine {
             },
             outputs,
             dry_run_request: None,
+            trace: StepTraceData {
+                request: Some(trace_request),
+                response: Some(trace_response),
+                criteria,
+            },
         })
     }
 
@@ -481,9 +604,9 @@ impl Engine {
         step_idx: usize,
         result: &StepResult,
         vars: &VarStore,
-        retry_count: &mut BTreeMap<usize, usize>,
+        retry_count: &BTreeMap<usize, usize>,
         options: &ExecutionOptions,
-    ) -> Result<FlowDecision, RuntimeError> {
+    ) -> RoutedDecision {
         let step = workflow.steps[step_idx].clone();
 
         if result.success {
@@ -499,7 +622,13 @@ impl Engine {
                     options,
                 );
             }
-            return Ok(FlowDecision::Next(step_idx + 1));
+            return RoutedDecision {
+                flow: FlowDecision::Next(step_idx + 1),
+                trace: TraceDecision {
+                    path: TraceDecisionPath::Next,
+                    ..TraceDecision::default()
+                },
+            };
         }
 
         let action = self.find_matching_action(&step.on_failure, vars, result.response.as_ref());
@@ -507,28 +636,7 @@ impl Engine {
             return self.execute_action(workflow, action, step_idx, true, retry_count, options);
         }
 
-        if let Some(err) = &result.err {
-            return Err(RuntimeError::unspecified(format!(
-                "step {}: {err}",
-                step.step_id
-            )));
-        }
-        if let Some(resp) = &result.response {
-            let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
-            if body_preview.len() > 500 {
-                body_preview.truncate(500);
-                body_preview.push_str("...");
-            }
-            return Err(RuntimeError::unspecified(format!(
-                "step {}: success criteria not met (status={}, body={})",
-                step.step_id, resp.status_code, body_preview
-            )));
-        }
-
-        Err(RuntimeError::unspecified(format!(
-            "step {}: success criteria not met",
-            step.step_id
-        )))
+        RoutedDecision::error(step_result_error(&step.step_id, result))
     }
 
     pub(crate) fn find_matching_action<'a>(
@@ -564,37 +672,80 @@ impl Engine {
         is_failure_path: bool,
         retry_count: &BTreeMap<usize, usize>,
         options: &ExecutionOptions,
-    ) -> Result<FlowDecision, RuntimeError> {
+    ) -> RoutedDecision {
         match action.type_.as_str() {
             "end" => {
                 if is_failure_path {
-                    Err(RuntimeError::unspecified(format!(
-                        "step {}: workflow ended by onFailure action",
-                        workflow.steps[current_idx].step_id
-                    )))
+                    RoutedDecision {
+                        flow: FlowDecision::Error(RuntimeError::unspecified(format!(
+                            "step {}: workflow ended by onFailure action",
+                            workflow.steps[current_idx].step_id
+                        ))),
+                        trace: TraceDecision {
+                            path: TraceDecisionPath::Done,
+                            action_type: "end".to_string(),
+                            ..TraceDecision::default()
+                        },
+                    }
                 } else {
-                    Ok(FlowDecision::Done)
+                    RoutedDecision {
+                        flow: FlowDecision::Done,
+                        trace: TraceDecision {
+                            path: TraceDecisionPath::Done,
+                            action_type: "end".to_string(),
+                            ..TraceDecision::default()
+                        },
+                    }
                 }
             }
             "goto" => {
                 if !action.step_id.is_empty() {
-                    let idx = self
-                        .find_step_index(workflow, &action.step_id)
-                        .ok_or_else(|| {
-                            RuntimeError::new(
-                                RuntimeErrorKind::GotoTargetNotFound,
-                                format!("goto: step \"{}\" not found", action.step_id),
-                            )
-                        })?;
-                    return Ok(FlowDecision::Next(idx));
+                    if let Some(idx) = self.find_step_index(workflow, &action.step_id) {
+                        return RoutedDecision {
+                            flow: FlowDecision::Next(idx),
+                            trace: TraceDecision {
+                                path: TraceDecisionPath::GotoStep,
+                                action_type: "goto".to_string(),
+                                target_step_id: action.step_id.clone(),
+                                ..TraceDecision::default()
+                            },
+                        };
+                    }
+                    return RoutedDecision {
+                        flow: FlowDecision::Error(RuntimeError::new(
+                            RuntimeErrorKind::GotoTargetNotFound,
+                            format!("goto: step \"{}\" not found", action.step_id),
+                        )),
+                        trace: TraceDecision {
+                            path: TraceDecisionPath::Error,
+                            action_type: "goto".to_string(),
+                            target_step_id: action.step_id.clone(),
+                            ..TraceDecision::default()
+                        },
+                    };
                 }
                 if !action.workflow_id.is_empty() {
-                    return Ok(FlowDecision::GotoWorkflow(action.workflow_id.clone()));
+                    return RoutedDecision {
+                        flow: FlowDecision::GotoWorkflow(action.workflow_id.clone()),
+                        trace: TraceDecision {
+                            path: TraceDecisionPath::GotoWorkflow,
+                            action_type: "goto".to_string(),
+                            target_workflow_id: action.workflow_id.clone(),
+                            ..TraceDecision::default()
+                        },
+                    };
                 }
-                Err(RuntimeError::new(
-                    RuntimeErrorKind::GotoTargetMissing,
-                    "goto: no stepId or workflowId specified",
-                ))
+                RoutedDecision {
+                    flow: FlowDecision::Error(RuntimeError::new(
+                        RuntimeErrorKind::GotoTargetMissing,
+                        "goto: no stepId or workflowId specified",
+                    )),
+                    trace: TraceDecision {
+                        path: TraceDecisionPath::Error,
+                        action_type: "goto".to_string(),
+                        ..TraceDecision::default()
+                    },
+                }
             }
             "retry" => {
                 let mut limit = MAX_RETRIES_PER_STEP;
@@ -603,23 +754,59 @@ impl Engine {
                 }
                 let current = retry_count.get(&current_idx).copied().unwrap_or(0);
                 if current >= limit {
-                    return Err(RuntimeError::new(
-                        RuntimeErrorKind::RetryLimitExceeded,
-                        format!(
-                            "step {}: max retries ({limit}) exceeded",
-                            workflow.steps[current_idx].step_id
-                        ),
-                    ));
+                    return RoutedDecision {
+                        flow: FlowDecision::Error(RuntimeError::new(
+                            RuntimeErrorKind::RetryLimitExceeded,
+                            format!(
+                                "step {}: max retries ({limit}) exceeded",
+                                workflow.steps[current_idx].step_id
+                            ),
+                        )),
+                        trace: TraceDecision {
+                            path: TraceDecisionPath::Error,
+                            action_type: "retry".to_string(),
+                            retry_after_seconds: Some(action.retry_after),
+                            retry_limit: Some(action.retry_limit),
+                            ..TraceDecision::default()
+                        },
+                    };
                 }
                 if action.retry_after > 0 {
-                    sleep_with_checks(
+                    if let Err(err) = sleep_with_checks(
                         Duration::from_secs(u64::try_from(action.retry_after).unwrap_or(0)),
                         options,
-                    )?;
+                    ) {
+                        return RoutedDecision {
+                            flow: FlowDecision::Error(err),
+                            trace: TraceDecision {
+                                path: TraceDecisionPath::Error,
+                                action_type: "retry".to_string(),
+                                retry_after_seconds: Some(action.retry_after),
+                                retry_limit: Some(action.retry_limit),
+                                ..TraceDecision::default()
+                            },
+                        };
+                    }
                 }
-                Ok(FlowDecision::Retry(current_idx))
+                RoutedDecision {
+                    flow: FlowDecision::Retry(current_idx),
+                    trace: TraceDecision {
+                        path: TraceDecisionPath::Retry,
+                        action_type: "retry".to_string(),
+                        retry_after_seconds: Some(action.retry_after),
+                        retry_limit: Some(action.retry_limit),
+                        ..TraceDecision::default()
+                    },
+                }
             }
-            _ => Ok(FlowDecision::Next(current_idx + 1)),
+            _ => RoutedDecision {
+                flow: FlowDecision::Next(current_idx + 1),
+                trace: TraceDecision {
+                    path: TraceDecisionPath::Next,
+                    action_type: action.type_.clone(),
+                    ..TraceDecision::default()
+                },
+            },
         }
     }
 
@@ -797,6 +984,46 @@ impl Engine {
         }
         Ok(execution)
     }
+
+    fn clear_trace_state(&mut self) {
+        if let Ok(mut guard) = self.trace_steps.lock() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = self.trace_seq.lock() {
+            *guard = 0;
+        }
+        if let Ok(mut guard) = self.step_attempts.lock() {
+            guard.clear();
+        }
+    }
+
+    fn next_trace_seq(&self) -> u64 {
+        match self.trace_seq.lock() {
+            Ok(mut guard) => {
+                *guard = guard.saturating_add(1);
+                *guard
+            }
+            Err(_) => 0,
+        }
+    }
+
+    fn next_attempt(&self, workflow_id: &str, step_id: &str) -> u32 {
+        match self.step_attempts.lock() {
+            Ok(mut guard) => {
+                let key = (workflow_id.to_string(), step_id.to_string());
+                let next = guard.get(&key).copied().unwrap_or(0).saturating_add(1);
+                guard.insert(key, next);
+                next
+            }
+            Err(_) => 0,
+        }
+    }
+
+    fn push_trace_record(&self, record: TraceStepRecord) {
+        if let Ok(mut guard) = self.trace_steps.lock() {
+            guard.push(record);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -805,4 +1032,56 @@ enum FlowDecision {
     Retry(usize),
     Done,
     GotoWorkflow(String),
+    Error(RuntimeError),
+}
+
+#[derive(Debug, Clone)]
+struct RoutedDecision {
+    flow: FlowDecision,
+    trace: TraceDecision,
+}
+
+impl RoutedDecision {
+    fn error(err: RuntimeError) -> Self {
+        Self {
+            flow: FlowDecision::Error(err),
+            trace: TraceDecision {
+                path: TraceDecisionPath::Error,
+                ..TraceDecision::default()
+            },
+        }
+    }
+}
+
+fn duration_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn step_kind(step: &Step) -> String {
+    if step.workflow_id.is_empty() {
+        "http".to_string()
+    } else {
+        "workflow".to_string()
+    }
+}
+
+fn build_trace_response(response: &Response) -> TraceResponse {
+    let body_preview = if response.body.is_empty() {
+        None
+    } else {
+        let max = TRACE_BODY_PREVIEW_MAX_BYTES.min(response.body.len());
+        let mut preview = String::from_utf8_lossy(&response.body[..max]).to_string();
+        if response.body.len() > max {
+            preview.push_str("...");
+        }
+        Some(preview)
+    };
+
+    TraceResponse {
+        status_code: response.status_code,
+        content_type: response.content_type.clone(),
+        headers: response.headers.clone(),
+        body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
+        body_preview,
+    }
 }
