@@ -85,6 +85,8 @@ Global flags:
 - `--timeout <duration>` (for example `30`, `30s`, `500ms`, `2m`)
 - `--parallel`
 - `--dry-run`
+- `--trace <path>` (write a `trace.v1` execution artifact)
+- `--trace-max-body-bytes <n>` (default `2048`)
 
 ## Examples
 
@@ -110,6 +112,50 @@ Dry-run request planning (no network calls):
 
 ```bash
 cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
+```
+
+Write a trace file while executing:
+
+```bash
+cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./tmp/run-trace.json
+```
+
+## Execution Traces
+
+`run --trace <path>` writes a `trace.v1` JSON artifact for both successful and failed runs.
+
+- Normal stdout behavior is unchanged (`--json` output contract remains the same).
+- Sensitive values are redacted as `"[REDACTED]"`.
+- Redaction applies to:
+  - headers such as `Authorization`, `Cookie`, `X-API-Key`
+  - URL query params with sensitive names (for example `token`, `password`, `session`)
+  - JSON fields in inputs/request bodies/outputs with sensitive keys
+
+Minimal trace example:
+
+```json
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "0.1.0"
+  },
+  "run": {
+    "workflowId": "status-check",
+    "status": "success",
+    "durationMs": 12
+  },
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "status-check",
+      "stepId": "check-status",
+      "decision": {
+        "path": "next"
+      }
+    }
+  ]
+}
 ```
 
 ## Expression Language
