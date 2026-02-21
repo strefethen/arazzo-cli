@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::DebugController;
+use crate::{DebugController, DebugScopes};
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{ArazzoSpec, OnAction, Step, SuccessCriterion, Workflow};
 use regex::Regex;
@@ -565,6 +565,13 @@ impl VarStore {
 
     pub(crate) fn step_outputs(&self, step_id: &str) -> BTreeMap<String, Value> {
         self.steps.get(step_id).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn debug_scopes(&self) -> DebugScopes {
+        DebugScopes {
+            inputs: self.inputs.clone(),
+            steps: self.steps.clone(),
+        }
     }
 
     pub(crate) fn eval_context(&self, response: Option<&Response>) -> EvalContext {

@@ -222,7 +222,7 @@ impl Engine {
             }
 
             let step = workflow.steps[step_index].clone();
-            self.debug_gate_step(workflow_id, &step, &vars)?;
+            self.debug_gate_step(workflow_id, &step, &vars, depth)?;
 
             self.emit_before_step_event(workflow_id, &step);
 
@@ -1086,13 +1086,15 @@ impl Engine {
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
+        depth: usize,
     ) -> Result<(), RuntimeError> {
         let Some(controller) = &self.debug_controller else {
             return Ok(());
         };
         let eval_ctx = vars.eval_context(None);
+        let scopes = vars.debug_scopes();
         controller
-            .gate_step(workflow_id, &step.step_id, &eval_ctx)
+            .gate_step(workflow_id, &step.step_id, depth, &eval_ctx, scopes)
             .map_err(|err| RuntimeError::unspecified(format!("debug controller: {err}")))
     }
 
