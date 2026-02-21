@@ -16,12 +16,75 @@ const MAX_CALL_DEPTH: usize = 10;
 const SLEEP_CHECK_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Runtime error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeErrorKind {
+    Unspecified,
+    ExecutionTimeout,
+    ExecutionCancelled,
+    WorkflowNotFound,
+    OperationIdNotFound,
+    MaxCallDepthExceeded,
+    RetryLimitExceeded,
+    DependencyCycle,
+    GotoTargetNotFound,
+    GotoTargetMissing,
+    InvalidHttpMethod,
+    HttpClientBuild,
+    HttpRequest,
+    HttpResponseRead,
+    RateLimiterLockPoisoned,
+    ParallelThreadPanic,
+}
+
+impl RuntimeErrorKind {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unspecified => "RUNTIME_UNSPECIFIED",
+            Self::ExecutionTimeout => "RUNTIME_EXECUTION_TIMEOUT",
+            Self::ExecutionCancelled => "RUNTIME_EXECUTION_CANCELLED",
+            Self::WorkflowNotFound => "RUNTIME_WORKFLOW_NOT_FOUND",
+            Self::OperationIdNotFound => "RUNTIME_OPERATION_ID_NOT_FOUND",
+            Self::MaxCallDepthExceeded => "RUNTIME_MAX_CALL_DEPTH_EXCEEDED",
+            Self::RetryLimitExceeded => "RUNTIME_RETRY_LIMIT_EXCEEDED",
+            Self::DependencyCycle => "RUNTIME_DEPENDENCY_CYCLE",
+            Self::GotoTargetNotFound => "RUNTIME_GOTO_TARGET_NOT_FOUND",
+            Self::GotoTargetMissing => "RUNTIME_GOTO_TARGET_MISSING",
+            Self::InvalidHttpMethod => "RUNTIME_INVALID_HTTP_METHOD",
+            Self::HttpClientBuild => "RUNTIME_HTTP_CLIENT_BUILD",
+            Self::HttpRequest => "RUNTIME_HTTP_REQUEST",
+            Self::HttpResponseRead => "RUNTIME_HTTP_RESPONSE_READ",
+            Self::RateLimiterLockPoisoned => "RUNTIME_RATE_LIMITER_LOCK_POISONED",
+            Self::ParallelThreadPanic => "RUNTIME_PARALLEL_THREAD_PANIC",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct RuntimeError(pub String);
+pub struct RuntimeError {
+    pub kind: RuntimeErrorKind,
+    pub message: String,
+}
+
+impl RuntimeError {
+    pub fn new(kind: RuntimeErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn unspecified(message: impl Into<String>) -> Self {
+        Self::new(RuntimeErrorKind::Unspecified, message)
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.kind.code()
+    }
+}
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -56,12 +119,18 @@ impl ExecutionOptions {
     fn check(&self) -> Result<(), RuntimeError> {
         if let Some(deadline) = self.deadline {
             if Instant::now() >= deadline {
-                return Err(RuntimeError("execution timeout exceeded".to_string()));
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionTimeout,
+                    "execution timeout exceeded",
+                ));
             }
         }
         if let Some(flag) = &self.cancel_flag {
             if flag.load(Ordering::Relaxed) {
-                return Err(RuntimeError("execution cancelled".to_string()));
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionCancelled,
+                    "execution cancelled",
+                ));
             }
         }
         Ok(())
@@ -167,7 +236,12 @@ impl HttpClient {
         let inner = reqwest::blocking::Client::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(|err| RuntimeError(format!("building HTTP client: {err}")))?;
+            .map_err(|err| {
+                RuntimeError::new(
+                    RuntimeErrorKind::HttpClientBuild,
+                    format!("building HTTP client: {err}"),
+                )
+            })?;
         Ok(Self {
             inner,
             default_headers: config.default_headers.clone(),
@@ -181,8 +255,12 @@ impl HttpClient {
         options: &ExecutionOptions,
     ) -> Result<Response, RuntimeError> {
         self.wait_for_rate_limit(options)?;
-        let method = reqwest::Method::from_bytes(cfg.method.as_bytes())
-            .map_err(|err| RuntimeError(format!("invalid HTTP method {}: {err}", cfg.method)))?;
+        let method = reqwest::Method::from_bytes(cfg.method.as_bytes()).map_err(|err| {
+            RuntimeError::new(
+                RuntimeErrorKind::InvalidHttpMethod,
+                format!("invalid HTTP method {}: {err}", cfg.method),
+            )
+        })?;
         let mut req = self.inner.request(method, cfg.url);
 
         for (k, v) in &self.default_headers {
@@ -195,9 +273,12 @@ impl HttpClient {
             req = req.body(body);
         }
 
-        let resp = req
-            .send()
-            .map_err(|err| RuntimeError(format!("executing request: {err}")))?;
+        let resp = req.send().map_err(|err| {
+            RuntimeError::new(
+                RuntimeErrorKind::HttpRequest,
+                format!("executing request: {err}"),
+            )
+        })?;
 
         let status_code = i64::from(resp.status().as_u16());
         let mut headers = BTreeMap::new();
@@ -207,7 +288,12 @@ impl HttpClient {
         }
         let body = resp
             .bytes()
-            .map_err(|err| RuntimeError(format!("reading response body: {err}")))?
+            .map_err(|err| {
+                RuntimeError::new(
+                    RuntimeErrorKind::HttpResponseRead,
+                    format!("reading response body: {err}"),
+                )
+            })?
             .to_vec();
 
         let content_type = headers
@@ -241,10 +327,12 @@ impl HttpClient {
             options.check()?;
             let wait = {
                 let now = Instant::now();
-                let mut limiter = self
-                    .rate_limiter
-                    .lock()
-                    .map_err(|_| RuntimeError("rate limiter lock poisoned".to_string()))?;
+                let mut limiter = self.rate_limiter.lock().map_err(|_| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::RateLimiterLockPoisoned,
+                        "rate limiter lock poisoned",
+                    )
+                })?;
                 limiter.acquire_wait(now)
             };
             match wait {

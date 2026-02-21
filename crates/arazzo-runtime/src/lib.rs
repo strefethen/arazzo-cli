@@ -19,7 +19,8 @@ mod tests {
     use super::{
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
         ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionOptions, ExpressionEvaluator,
-        OnAction, Response, RuntimeError, Step, StepEvent, SuccessCriterion, TraceHook, Workflow,
+        OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent, SuccessCriterion,
+        TraceHook, Workflow,
     };
     use arazzo_spec::{Info, RequestBody, SourceDescription};
     use serde_json::{json, Value};
@@ -320,7 +321,7 @@ mod tests {
             Err(err) => err,
         };
         assert!(
-            err.0
+            err.message
                 .contains("step s1: success criteria not met (status=500"),
             "unexpected error: {err}"
         );
@@ -358,7 +359,7 @@ mod tests {
             Ok(_) => panic!("expected error from onFailure end action"),
             Err(err) => err,
         };
-        assert_eq!(err.0, "step s1: workflow ended by onFailure action");
+        assert_eq!(err.message, "step s1: workflow ended by onFailure action");
     }
 
     #[test]
@@ -584,7 +585,7 @@ mod tests {
             Ok(_) => panic!("expected max-retries error"),
             Err(err) => err,
         };
-        assert_eq!(err.0, "step s1: max retries (3) exceeded");
+        assert_eq!(err.message, "step s1: max retries (3) exceeded");
     }
 
     #[test]
@@ -649,7 +650,7 @@ mod tests {
             Ok(_) => panic!("expected retry limit exceeded error"),
             Err(err) => err,
         };
-        assert_eq!(err.0, "step s1: max retries (2) exceeded");
+        assert_eq!(err.message, "step s1: max retries (2) exceeded");
     }
 
     #[test]
@@ -726,7 +727,8 @@ mod tests {
             Ok(_) => panic!("expected execution timeout"),
             Err(err) => err,
         };
-        assert_eq!(err.0, "execution timeout exceeded");
+        assert_eq!(err.message, "execution timeout exceeded");
+        assert_eq!(err.kind, RuntimeErrorKind::ExecutionTimeout);
         assert!(started.elapsed() < Duration::from_millis(900));
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
@@ -762,7 +764,8 @@ mod tests {
             Ok(_) => panic!("expected execution cancellation"),
             Err(err) => err,
         };
-        assert_eq!(err.0, "execution cancelled");
+        assert_eq!(err.message, "execution cancelled");
+        assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
@@ -932,7 +935,7 @@ mod tests {
             Err(err) => err,
         };
         assert!(err
-            .0
+            .message
             .contains("step s1: success criteria not met (status=418"));
     }
 
@@ -961,7 +964,11 @@ mod tests {
             Ok(_) => panic!("expected error for goto to missing step"),
             Err(err) => err,
         };
-        assert_eq!(bad_goto_err.0, r#"goto: step "nonexistent" not found"#);
+        assert_eq!(
+            bad_goto_err.message,
+            r#"goto: step "nonexistent" not found"#
+        );
+        assert_eq!(bad_goto_err.kind, RuntimeErrorKind::GotoTargetNotFound);
 
         let empty_goto_spec = make_spec(vec![Workflow {
             workflow_id: "goto-no-target".to_string(),
@@ -983,7 +990,11 @@ mod tests {
             Ok(_) => panic!("expected error for goto without step/workflow target"),
             Err(err) => err,
         };
-        assert_eq!(empty_goto_err.0, "goto: no stepId or workflowId specified");
+        assert_eq!(
+            empty_goto_err.message,
+            "goto: no stepId or workflowId specified"
+        );
+        assert_eq!(empty_goto_err.kind, RuntimeErrorKind::GotoTargetMissing);
     }
 
     #[test]
@@ -995,7 +1006,8 @@ mod tests {
             Ok(_) => panic!("expected workflow-not-found error"),
             Err(err) => err,
         };
-        assert_eq!(err.0, r#"workflow "nonexistent" not found"#);
+        assert_eq!(err.message, r#"workflow "nonexistent" not found"#);
+        assert_eq!(err.kind, RuntimeErrorKind::WorkflowNotFound);
     }
 
     #[test]
@@ -1517,7 +1529,7 @@ mod tests {
             Ok(_) => panic!("expected child workflow failure"),
             Err(err) => err,
         };
-        assert!(err.0.contains("sub-workflow child"));
+        assert!(err.message.contains("sub-workflow child"));
     }
 
     #[test]
@@ -1599,7 +1611,7 @@ mod tests {
             Ok(_) => panic!("expected recursion guard error"),
             Err(err) => err,
         };
-        assert!(err.0.contains("max call depth"));
+        assert!(err.message.contains("max call depth"));
     }
 
     #[test]
@@ -1620,7 +1632,7 @@ mod tests {
             Ok(_) => panic!("expected missing sub-workflow error"),
             Err(err) => err,
         };
-        assert!(err.0.contains(r#"workflow "nonexistent" not found"#));
+        assert!(err.message.contains(r#"workflow "nonexistent" not found"#));
     }
 
     #[test]
@@ -1774,7 +1786,7 @@ paths:
             Ok(_) => panic!("expected unresolved operationId error"),
             Err(err) => err,
         };
-        assert!(err.0.contains("operationId"));
+        assert!(err.message.contains("operationId"));
     }
 
     #[test]
@@ -2232,7 +2244,7 @@ paths:
             Ok(_) => panic!("expected failure"),
             Err(err) => err,
         };
-        assert!(err.0.contains("step fail"));
+        assert!(err.message.contains("step fail"));
     }
 
     #[test]
@@ -2740,7 +2752,8 @@ paths:
             Ok(_) => panic!("expected cycle detection error"),
             Err(err) => err,
         };
-        assert!(cycle_err.0.contains("dependency cycle detected"));
+        assert!(cycle_err.message.contains("dependency cycle detected"));
+        assert_eq!(cycle_err.kind, RuntimeErrorKind::DependencyCycle);
     }
 
     #[test]
@@ -2789,8 +2802,14 @@ paths:
 
     #[test]
     fn runtime_error_is_displayable() {
-        let err = RuntimeError("boom".to_string());
+        let err = RuntimeError::unspecified("boom".to_string());
         assert_eq!(err.to_string(), "boom".to_string());
+    }
+
+    #[test]
+    fn runtime_error_kind_has_stable_code() {
+        let err = RuntimeError::new(RuntimeErrorKind::WorkflowNotFound, "workflow missing");
+        assert_eq!(err.code(), "RUNTIME_WORKFLOW_NOT_FOUND");
     }
 
     // --- XPath extraction tests ---

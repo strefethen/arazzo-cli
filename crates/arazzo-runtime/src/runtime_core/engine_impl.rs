@@ -74,7 +74,7 @@ impl Engine {
 
     pub fn load_openapi_spec(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
         let root: serde_yaml::Value = serde_yaml::from_slice(data)
-            .map_err(|err| RuntimeError(format!("parsing OpenAPI spec: {err}")))?;
+            .map_err(|err| RuntimeError::unspecified(format!("parsing OpenAPI spec: {err}")))?;
         let Some(paths) = root.get("paths") else {
             return Ok(());
         };
@@ -151,15 +151,20 @@ impl Engine {
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         options.check()?;
         if depth >= MAX_CALL_DEPTH {
-            return Err(RuntimeError(format!(
-                "max call depth ({MAX_CALL_DEPTH}) exceeded calling workflow \"{workflow_id}\""
-            )));
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::MaxCallDepthExceeded,
+                format!(
+                    "max call depth ({MAX_CALL_DEPTH}) exceeded calling workflow \"{workflow_id}\""
+                ),
+            ));
         }
 
-        let workflow = self
-            .get_workflow(workflow_id)
-            .cloned()
-            .ok_or_else(|| RuntimeError(format!("workflow \"{workflow_id}\" not found")))?;
+        let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
+            RuntimeError::new(
+                RuntimeErrorKind::WorkflowNotFound,
+                format!("workflow \"{workflow_id}\" not found"),
+            )
+        })?;
 
         let mut vars = VarStore::default();
         for (k, v) in inputs {
@@ -225,8 +230,8 @@ impl Engine {
             )?;
 
             match action {
-                StepFlow::Done => break,
-                StepFlow::Next(idx) => {
+                FlowDecision::Done => break,
+                FlowDecision::Next(idx) => {
                     if idx == step_index {
                         let value = retry_count.entry(step_index).or_insert(0);
                         *value += 1;
@@ -235,7 +240,12 @@ impl Engine {
                     }
                     step_index = idx;
                 }
-                StepFlow::GotoWorkflow(next_wf) => {
+                FlowDecision::Retry(idx) => {
+                    let value = retry_count.entry(idx).or_insert(0);
+                    *value += 1;
+                    step_index = idx;
+                }
+                FlowDecision::GotoWorkflow(next_wf) => {
                     return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1, options);
                 }
             }
@@ -258,9 +268,10 @@ impl Engine {
             .get(operation_id)
             .map(|entry| (entry.method.clone(), entry.path.clone()))
             .ok_or_else(|| {
-                RuntimeError(format!(
-                    "operationId \"{operation_id}\" not found in loaded OpenAPI specs"
-                ))
+                RuntimeError::new(
+                    RuntimeErrorKind::OperationIdNotFound,
+                    format!("operationId \"{operation_id}\" not found in loaded OpenAPI specs"),
+                )
             })
     }
 
@@ -435,7 +446,12 @@ impl Engine {
 
         let outputs = self
             .execute_inner(&step.workflow_id, sub_inputs, depth + 1, options)
-            .map_err(|err| RuntimeError(format!("sub-workflow {}: {}", step.workflow_id, err.0)))?;
+            .map_err(|err| {
+                RuntimeError::unspecified(format!(
+                    "sub-workflow {}: {}",
+                    step.workflow_id, err.message
+                ))
+            })?;
 
         for (name, value) in outputs {
             vars.set_step_output(&step.step_id, &name, value);
@@ -467,7 +483,7 @@ impl Engine {
         vars: &VarStore,
         retry_count: &mut BTreeMap<usize, usize>,
         options: &ExecutionOptions,
-    ) -> Result<StepFlow, RuntimeError> {
+    ) -> Result<FlowDecision, RuntimeError> {
         let step = workflow.steps[step_idx].clone();
 
         if result.success {
@@ -483,7 +499,7 @@ impl Engine {
                     options,
                 );
             }
-            return Ok(StepFlow::Next(step_idx + 1));
+            return Ok(FlowDecision::Next(step_idx + 1));
         }
 
         let action = self.find_matching_action(&step.on_failure, vars, result.response.as_ref());
@@ -492,7 +508,10 @@ impl Engine {
         }
 
         if let Some(err) = &result.err {
-            return Err(RuntimeError(format!("step {}: {err}", step.step_id)));
+            return Err(RuntimeError::unspecified(format!(
+                "step {}: {err}",
+                step.step_id
+            )));
         }
         if let Some(resp) = &result.response {
             let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
@@ -500,13 +519,13 @@ impl Engine {
                 body_preview.truncate(500);
                 body_preview.push_str("...");
             }
-            return Err(RuntimeError(format!(
+            return Err(RuntimeError::unspecified(format!(
                 "step {}: success criteria not met (status={}, body={})",
                 step.step_id, resp.status_code, body_preview
             )));
         }
 
-        Err(RuntimeError(format!(
+        Err(RuntimeError::unspecified(format!(
             "step {}: success criteria not met",
             step.step_id
         )))
@@ -545,16 +564,16 @@ impl Engine {
         is_failure_path: bool,
         retry_count: &BTreeMap<usize, usize>,
         options: &ExecutionOptions,
-    ) -> Result<StepFlow, RuntimeError> {
+    ) -> Result<FlowDecision, RuntimeError> {
         match action.type_.as_str() {
             "end" => {
                 if is_failure_path {
-                    Err(RuntimeError(format!(
+                    Err(RuntimeError::unspecified(format!(
                         "step {}: workflow ended by onFailure action",
                         workflow.steps[current_idx].step_id
                     )))
                 } else {
-                    Ok(StepFlow::Done)
+                    Ok(FlowDecision::Done)
                 }
             }
             "goto" => {
@@ -562,15 +581,19 @@ impl Engine {
                     let idx = self
                         .find_step_index(workflow, &action.step_id)
                         .ok_or_else(|| {
-                            RuntimeError(format!("goto: step \"{}\" not found", action.step_id))
+                            RuntimeError::new(
+                                RuntimeErrorKind::GotoTargetNotFound,
+                                format!("goto: step \"{}\" not found", action.step_id),
+                            )
                         })?;
-                    return Ok(StepFlow::Next(idx));
+                    return Ok(FlowDecision::Next(idx));
                 }
                 if !action.workflow_id.is_empty() {
-                    return Ok(StepFlow::GotoWorkflow(action.workflow_id.clone()));
+                    return Ok(FlowDecision::GotoWorkflow(action.workflow_id.clone()));
                 }
-                Err(RuntimeError(
-                    "goto: no stepId or workflowId specified".to_string(),
+                Err(RuntimeError::new(
+                    RuntimeErrorKind::GotoTargetMissing,
+                    "goto: no stepId or workflowId specified",
                 ))
             }
             "retry" => {
@@ -580,10 +603,13 @@ impl Engine {
                 }
                 let current = retry_count.get(&current_idx).copied().unwrap_or(0);
                 if current >= limit {
-                    return Err(RuntimeError(format!(
-                        "step {}: max retries ({limit}) exceeded",
-                        workflow.steps[current_idx].step_id
-                    )));
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RetryLimitExceeded,
+                        format!(
+                            "step {}: max retries ({limit}) exceeded",
+                            workflow.steps[current_idx].step_id
+                        ),
+                    ));
                 }
                 if action.retry_after > 0 {
                     sleep_with_checks(
@@ -591,9 +617,9 @@ impl Engine {
                         options,
                     )?;
                 }
-                Ok(StepFlow::Next(current_idx))
+                Ok(FlowDecision::Retry(current_idx))
             }
-            _ => Ok(StepFlow::Next(current_idx + 1)),
+            _ => Ok(FlowDecision::Next(current_idx + 1)),
         }
     }
 
@@ -685,11 +711,9 @@ impl Engine {
                 let mut handles = Vec::new();
 
                 for idx in level.iter().copied() {
-                    let step = workflow
-                        .steps
-                        .get(idx)
-                        .cloned()
-                        .ok_or_else(|| RuntimeError("invalid step index".to_string()))?;
+                    let step = workflow.steps.get(idx).cloned().ok_or_else(|| {
+                        RuntimeError::unspecified("invalid step index".to_string())
+                    })?;
                     let step_vars = level_vars.clone();
                     let wf_id = workflow_id.to_string();
                     let opts = options.clone();
@@ -703,7 +727,10 @@ impl Engine {
                     match handle.join() {
                         Ok(value) => level_results.push(value),
                         Err(_) => {
-                            return Err(RuntimeError("parallel step thread panicked".to_string()));
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::ParallelThreadPanic,
+                                "parallel step thread panicked",
+                            ));
                         }
                     }
                 }
@@ -773,8 +800,9 @@ impl Engine {
 }
 
 #[derive(Debug, Clone)]
-enum StepFlow {
+enum FlowDecision {
     Next(usize),
+    Retry(usize),
     Done,
     GotoWorkflow(String),
 }
