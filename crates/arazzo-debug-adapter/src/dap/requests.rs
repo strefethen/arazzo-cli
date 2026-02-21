@@ -16,4 +16,5 @@ pub struct DapRequest {
 #[derive(Debug, Clone)]
 pub struct DapBreakpoint {
     pub line: u32,
+    pub condition: Option<String>,
 }

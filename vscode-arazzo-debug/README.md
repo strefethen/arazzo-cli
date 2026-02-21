@@ -17,4 +17,10 @@ npm install
 npm run build
 ```
 
-Use VSCode "Run Extension" to start an extension development host.
+In VS Code:
+
+1. Open `/Users/stevetrefethen/github/arazzo-cli/vscode-arazzo-debug`
+2. Select launch config `Run Arazzo Debug Extension`
+3. Press `F5` to start an Extension Development Host
+
+Do not run `dist/extension.js` directly with Node. The `vscode` module is provided by the Extension Host runtime.

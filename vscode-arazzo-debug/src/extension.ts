@@ -4,7 +4,7 @@ import { ArazzoDebugConfigurationProvider } from "./debugConfigProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new ArazzoDebugConfigurationProvider();
-  const factory = new ArazzoAdapterDescriptorFactory();
+  const factory = new ArazzoAdapterDescriptorFactory(context.extensionPath);
 
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("arazzo", provider),

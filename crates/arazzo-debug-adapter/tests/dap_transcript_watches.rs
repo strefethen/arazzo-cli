@@ -38,7 +38,7 @@ fn dap_evaluate_watch_expression_returns_body() {
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 5);
 
     let evaluate = &messages[2];
     assert_eq!(
@@ -60,5 +60,9 @@ fn dap_evaluate_watch_expression_returns_body() {
             .pointer("/body/variablesReference")
             .and_then(|v| v.as_u64()),
         Some(0)
+    );
+    assert_eq!(
+        messages[4].get("event").and_then(|v| v.as_str()),
+        Some("terminated")
     );
 }

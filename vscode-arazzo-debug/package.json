@@ -21,6 +21,14 @@
       {
         "type": "arazzo",
         "label": "Arazzo",
+        "breakpoints": [
+          {
+            "language": "yaml"
+          },
+          {
+            "language": "yml"
+          }
+        ],
         "languages": [
           "yaml"
         ],
@@ -46,22 +54,18 @@
               },
               "runtimeExecutable": {
                 "type": "string",
-                "description": "Command used to launch the Rust debug adapter.",
-                "default": "cargo"
+                "description": "Command used to launch the Rust debug adapter."
               },
               "runtimeArgs": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "Args used to launch the Rust debug adapter.",
-                "default": [
-                  "run",
-                  "-p",
-                  "arazzo-debug-adapter",
-                  "--quiet",
-                  "--"
-                ]
+                "description": "Args used to launch the Rust debug adapter."
+              },
+              "runtimeCwd": {
+                "type": "string",
+                "description": "Working directory used to launch the Rust debug adapter."
               }
             }
           }

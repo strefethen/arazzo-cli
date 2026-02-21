@@ -42,7 +42,7 @@ fn dap_set_breakpoints_returns_verified_locations() {
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 5);
 
     let set_breakpoints = &messages[2];
     assert_eq!(
@@ -71,5 +71,9 @@ fn dap_set_breakpoints_returns_verified_locations() {
     assert_eq!(
         breakpoints[1].get("verified").and_then(|v| v.as_bool()),
         Some(true)
+    );
+    assert_eq!(
+        messages[4].get("event").and_then(|v| v.as_str()),
+        Some("terminated")
     );
 }

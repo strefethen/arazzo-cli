@@ -23,18 +23,6 @@ export class ArazzoDebugConfigurationProvider
     if (!resolved.inputs) {
       resolved.inputs = {};
     }
-    if (!resolved.runtimeExecutable) {
-      resolved.runtimeExecutable = "cargo";
-    }
-    if (!resolved.runtimeArgs) {
-      resolved.runtimeArgs = [
-        "run",
-        "-p",
-        "arazzo-debug-adapter",
-        "--quiet",
-        "--"
-      ];
-    }
 
     if (!resolved.spec || !resolved.workflowId) {
       void vscode.window.showErrorMessage(

@@ -30,7 +30,7 @@ fn dap_initialize_and_disconnect_round_trip() {
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
-    assert_eq!(messages.len(), 3);
+    assert_eq!(messages.len(), 4);
 
     assert_eq!(
         messages[0].get("type").and_then(|v| v.as_str()),
@@ -71,5 +71,9 @@ fn dap_initialize_and_disconnect_round_trip() {
     assert_eq!(
         messages[2].get("success").and_then(|v| v.as_bool()),
         Some(true)
+    );
+    assert_eq!(
+        messages[3].get("event").and_then(|v| v.as_str()),
+        Some("terminated")
     );
 }

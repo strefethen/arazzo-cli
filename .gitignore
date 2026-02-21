@@ -6,6 +6,9 @@
 .idea/
 .vscode/
 *.swp
+!/vscode-arazzo-debug/.vscode/
+!/vscode-arazzo-debug/.vscode/launch.json
+!/vscode-arazzo-debug/.vscode/tasks.json
 
 # Claude Code
 .claude/
