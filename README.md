@@ -72,6 +72,7 @@ cargo install --path ./crates/arazzo-cli --locked
 - `list <spec>`
 - `catalog <dir>`
 - `show <workflow-id> --dir <dir>`
+- `debug-stdio` (debug adapter backend transport; experimental)
 
 Global flags:
 
@@ -118,6 +119,12 @@ Write a trace file while executing:
 
 ```bash
 cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./tmp/run-trace.json
+
+Run the experimental debug stdio backend:
+
+```bash
+cargo run -p arazzo-cli -- debug-stdio
+```
 ```
 
 ## Execution Traces

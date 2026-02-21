@@ -68,6 +68,7 @@ pub enum Commands {
         #[arg(long = "dir", default_value = ".")]
         dir: String,
     },
+    DebugStdio {},
 }
 
 pub fn parse_duration_value(raw: &str) -> Result<Duration, String> {

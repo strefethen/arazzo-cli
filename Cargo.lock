@@ -65,6 +65,8 @@ dependencies = [
 name = "arazzo-cli"
 version = "0.1.0"
 dependencies = [
+ "arazzo-debug-adapter",
+ "arazzo-debug-protocol",
  "arazzo-runtime",
  "arazzo-spec",
  "arazzo-validate",
