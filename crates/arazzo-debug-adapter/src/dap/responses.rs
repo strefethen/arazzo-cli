@@ -57,3 +57,10 @@ pub fn continue_body() -> Value {
 pub fn empty_body() -> Value {
     json!({})
 }
+
+pub fn evaluate_body(result: String) -> Value {
+    json!({
+        "result": result,
+        "variablesReference": 0
+    })
+}

@@ -12,8 +12,8 @@ mod responses;
 use events::initialized_event;
 use requests::{DapBreakpoint, DapRequest};
 use responses::{
-    continue_body, empty_body, error_response, initialize_capabilities, response_with_body,
-    set_breakpoints_body,
+    continue_body, empty_body, error_response, evaluate_body, initialize_capabilities,
+    response_with_body, set_breakpoints_body,
 };
 
 /// Runs a minimal DAP loop over stdio using Content-Length framing.
@@ -50,6 +50,13 @@ where
             "continue" => {
                 let response =
                     response_with_body(request.seq, &command, continue_body(), request.seq);
+                write_dap_message(writer, &response)?;
+            }
+            "evaluate" => {
+                let expression =
+                    parse_string_argument(&request.arguments, "expression").unwrap_or_default();
+                let body = evaluate_body(format!("evaluation not connected yet: {expression}"));
+                let response = response_with_body(request.seq, &command, body, request.seq);
                 write_dap_message(writer, &response)?;
             }
             "next" | "stepIn" | "stepOut" | "pause" => {
@@ -151,6 +158,13 @@ fn parse_breakpoints(arguments: &Value) -> Vec<DapBreakpoint> {
         lines.push(DapBreakpoint { line });
     }
     lines
+}
+
+fn parse_string_argument(arguments: &Value, key: &str) -> Option<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

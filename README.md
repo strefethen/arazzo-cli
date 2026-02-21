@@ -200,6 +200,8 @@ Condition operators supported:
   - `docs/internal-api-v1.md`
   - `docs/debugger-architecture.md`
   - `docs/debugger-protocol-v1.md`
+  - `docs/debugger-user-guide.md`
+  - `docs/debugger-troubleshooting.md`
 
 ## Contributions
 

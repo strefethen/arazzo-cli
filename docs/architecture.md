@@ -10,8 +10,11 @@ This document captures the current runtime and CLI architecture after the Week 5
 4. Output formatters (`crates/arazzo-cli/src/output.rs`)
 5. Trace artifact plumbing (`crates/arazzo-cli/src/trace.rs`)
 6. Execution runtime (`crates/arazzo-runtime`)
-7. Spec model + validation (`crates/arazzo-spec`, `crates/arazzo-validate`)
-8. Expression evaluator (`crates/arazzo-expr`)
+7. Debug protocol models (`crates/arazzo-debug-protocol`)
+8. Debug adapters (`crates/arazzo-debug-adapter`)
+9. Spec model + validation (`crates/arazzo-spec`, `crates/arazzo-validate`)
+10. Expression evaluator (`crates/arazzo-expr`)
+11. VSCode extension scaffold (`vscode-arazzo-debug`)
 
 ## CLI Command Flow
 
@@ -46,6 +49,15 @@ Parallel execution guarantees deterministic ordering for both:
 - Level ordering from dependency graph
 - Stable per-level step index ordering
 - No ordering dependence on thread completion timing
+
+## Debugger Surfaces
+
+1. `arazzo-runtime` exposes debug controller APIs for breakpoints, stepping, and paused scopes.
+2. `arazzo-debug-adapter` exposes:
+   - newline protocol loop (`run_stdio`)
+   - DAP loop (`run_dap_stdio`)
+3. `arazzo-cli debug-stdio` keeps a stable internal adapter bootstrap path.
+4. `vscode-arazzo-debug/` is the editor integration scaffold.
 
 ## Stability Notes
 

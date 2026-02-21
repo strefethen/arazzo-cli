@@ -63,3 +63,27 @@ jobs:
           else
             echo "No performance summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  vscode-extension:
+    name: VSCode Extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install extension dependencies
+        run: npm install
+        working-directory: vscode-arazzo-debug
+
+      - name: Typecheck extension
+        run: npm run lint
+        working-directory: vscode-arazzo-debug
+
+      - name: Build extension
+        run: npm run build
+        working-directory: vscode-arazzo-debug
