@@ -1,0 +1,93 @@
+{
+  "name": "arazzo-debug",
+  "displayName": "Arazzo Debugger",
+  "description": "Debug Arazzo workflow files with breakpoints and step controls.",
+  "version": "0.0.1",
+  "publisher": "strefethen",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebug",
+    "onDebugResolve:arazzo"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "arazzo",
+        "label": "Arazzo",
+        "languages": [
+          "yaml"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "spec",
+              "workflowId"
+            ],
+            "properties": {
+              "spec": {
+                "type": "string",
+                "description": "Path to the .arazzo.yaml file."
+              },
+              "workflowId": {
+                "type": "string",
+                "description": "Workflow id to execute."
+              },
+              "inputs": {
+                "type": "object",
+                "description": "Input key/value map passed to workflow execution.",
+                "default": {}
+              },
+              "runtimeExecutable": {
+                "type": "string",
+                "description": "Command used to launch the Rust debug adapter.",
+                "default": "cargo"
+              },
+              "runtimeArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Args used to launch the Rust debug adapter.",
+                "default": [
+                  "run",
+                  "-p",
+                  "arazzo-debug-adapter",
+                  "--quiet",
+                  "--"
+                ]
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "arazzo",
+            "request": "launch",
+            "name": "Debug Arazzo Workflow",
+            "spec": "${file}",
+            "workflowId": "status-check",
+            "inputs": {}
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p .",
+    "watch": "tsc -w -p .",
+    "lint": "tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

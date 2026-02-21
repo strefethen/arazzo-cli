@@ -193,6 +193,7 @@ Condition operators supported:
 - Keep CLI output machine-friendly; every command must continue supporting `--json`.
 - Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
 - Debugger work is in progress in-repo with a separate debug surface (`arazzo-debug-protocol`, `arazzo-debug-adapter`, and `vscode-arazzo-debug`), so existing CLI command UX remains stable.
+- VSCode extension scaffold lives in `vscode-arazzo-debug/`.
 - Architecture and extension docs:
   - `docs/architecture.md`
   - `docs/extension-guide.md`

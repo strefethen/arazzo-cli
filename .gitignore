@@ -15,3 +15,8 @@
 
 # Rust
 /target/
+
+# VSCode extension build artifacts
+/vscode-arazzo-debug/node_modules/
+/vscode-arazzo-debug/dist/
+/vscode-arazzo-debug/.vscode-test/
