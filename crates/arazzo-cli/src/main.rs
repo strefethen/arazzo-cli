@@ -3,14 +3,40 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead};
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-use arazzo_runtime::{ClientConfig, Engine, ExecutionOptions};
+use arazzo_runtime::{ClientConfig, Engine, ExecutionOptions, TraceStepRecord};
 use arazzo_spec::{ArazzoSpec, Workflow};
 use clap::{Parser, Subcommand};
+use humantime::format_rfc3339;
 use serde::Serialize;
 use serde_json::Value;
+
+const TRACE_SCHEMA_VERSION: &str = "trace.v1";
+const TRACE_REDACTED: &str = "[REDACTED]";
+const TRACE_BODY_PREVIEW_DEFAULT_BYTES: usize = 2048;
+const TRACE_MAX_BODY_BYTES_LIMIT: usize = 1024 * 1024;
+const TRACE_SENSITIVE_KEYS: [&str; 18] = [
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "api-key",
+    "apikey",
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "secret",
+    "client_secret",
+    "password",
+    "passwd",
+    "pwd",
+    "session",
+    "sessionid",
+];
 
 #[derive(Parser, Debug)]
 #[command(name = "arazzo")]
@@ -51,6 +77,16 @@ enum Commands {
 
         #[arg(long = "dry-run")]
         dry_run: bool,
+
+        #[arg(long = "trace")]
+        trace: Option<String>,
+
+        #[arg(
+            long = "trace-max-body-bytes",
+            default_value_t = TRACE_BODY_PREVIEW_DEFAULT_BYTES,
+            value_parser = parse_trace_max_body_bytes
+        )]
+        trace_max_body_bytes: usize,
     },
     Validate {
         spec: String,
@@ -144,8 +180,42 @@ struct RunOptions {
     header_flags: Vec<String>,
     parallel: bool,
     dry_run: bool,
+    trace: Option<String>,
+    trace_max_body_bytes: usize,
     verbose: bool,
     json: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TraceFile {
+    schema_version: String,
+    tool: TraceTool,
+    run: TraceRun,
+    inputs: BTreeMap<String, Value>,
+    steps: Vec<TraceStepRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct TraceTool {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TraceRun {
+    spec_path: String,
+    workflow_id: String,
+    parallel: bool,
+    dry_run: bool,
+    timeout_ms: u64,
+    started_at: String,
+    finished_at: String,
+    duration_ms: u64,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 fn main() {
@@ -167,6 +237,8 @@ fn run(cli: Cli) -> Result<(), String> {
             header,
             parallel,
             dry_run,
+            trace,
+            trace_max_body_bytes,
         } => run_workflow(RunOptions {
             spec_path: spec,
             workflow_id,
@@ -175,6 +247,8 @@ fn run(cli: Cli) -> Result<(), String> {
             header_flags: header,
             parallel,
             dry_run,
+            trace,
+            trace_max_body_bytes,
             verbose: cli.verbose,
             json: cli.json,
         }),
@@ -194,6 +268,8 @@ fn run_workflow(opts: RunOptions) -> Result<(), String> {
         header_flags,
         parallel,
         dry_run,
+        trace,
+        trace_max_body_bytes,
         verbose,
         json,
     } = opts;
@@ -236,23 +312,72 @@ fn run_workflow(opts: RunOptions) -> Result<(), String> {
         .map_err(|err| format!("creating runtime engine: {err}"))?;
     engine.set_parallel_mode(parallel);
     engine.set_dry_run_mode(dry_run);
+    engine.set_trace_enabled(trace.is_some());
 
     let execution_timeout = timeout
         .checked_mul(10)
         .unwrap_or_else(|| Duration::from_secs(u64::MAX));
-    let outputs = match engine.execute_with_options(
+
+    let run_started_at = SystemTime::now();
+    let run_started_inst = std::time::Instant::now();
+    let outputs_result = engine.execute_with_options(
         &workflow_id,
-        inputs,
+        inputs.clone(),
         ExecutionOptions::with_timeout(execution_timeout),
-    ) {
-        Ok(outputs) => outputs,
-        Err(err) => {
-            if json {
-                return output_json(&serde_json::json!({ "error": err.to_string() }));
-            }
-            return Err(err.to_string());
+    );
+    let run_finished_at = SystemTime::now();
+    let run_duration = run_started_inst.elapsed();
+
+    let run_error_text = outputs_result.as_ref().err().map(ToString::to_string);
+    let mut trace_write_error: Option<String> = None;
+    if let Some(trace_path) = trace {
+        let mut trace_file = TraceFile {
+            schema_version: TRACE_SCHEMA_VERSION.to_string(),
+            tool: TraceTool {
+                name: "arazzo".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+            run: TraceRun {
+                spec_path: spec_path.clone(),
+                workflow_id: workflow_id.clone(),
+                parallel,
+                dry_run,
+                timeout_ms: u64::try_from(execution_timeout.as_millis()).unwrap_or(u64::MAX),
+                started_at: format_rfc3339(run_started_at).to_string(),
+                finished_at: format_rfc3339(run_finished_at).to_string(),
+                duration_ms: u64::try_from(run_duration.as_millis()).unwrap_or(u64::MAX),
+                status: if run_error_text.is_some() {
+                    "failure".to_string()
+                } else {
+                    "success".to_string()
+                },
+                error: run_error_text.clone(),
+            },
+            inputs,
+            steps: engine.trace_steps(),
+        };
+
+        redact_trace_file(&mut trace_file, trace_max_body_bytes);
+        if let Err(err) = write_trace_file_atomic(Path::new(&trace_path), &trace_file) {
+            trace_write_error = Some(err);
         }
-    };
+    }
+
+    if let Some(run_error) = run_error_text {
+        if let Some(trace_error) = trace_write_error {
+            return Err(format!("{run_error}; writing trace: {trace_error}"));
+        }
+        if json {
+            return output_json(&serde_json::json!({ "error": run_error }));
+        }
+        return Err(run_error);
+    }
+
+    if let Some(trace_error) = trace_write_error {
+        return Err(format!("writing trace: {trace_error}"));
+    }
+
+    let outputs = outputs_result.unwrap_or_default();
 
     if dry_run {
         let reqs = engine.dry_run_requests();
@@ -590,6 +715,169 @@ fn parse_duration_value(raw: &str) -> Result<Duration, String> {
         return Ok(Duration::from_secs(seconds));
     }
     humantime::parse_duration(raw).map_err(|err| format!("invalid timeout \"{raw}\": {err}"))
+}
+
+fn parse_trace_max_body_bytes(raw: &str) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|err| format!("invalid trace max body bytes \"{raw}\": {err}"))?;
+    if value > TRACE_MAX_BODY_BYTES_LIMIT {
+        return Err(format!(
+            "trace max body bytes must be <= {TRACE_MAX_BODY_BYTES_LIMIT}"
+        ));
+    }
+    Ok(value)
+}
+
+fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
+    redact_json_object(&mut trace.inputs);
+    for step in &mut trace.steps {
+        if let Some(request) = &mut step.request {
+            redact_headers(&mut request.headers);
+            redact_url_query(&mut request.url);
+            if let Some(body) = &mut request.body {
+                redact_json_value(body);
+            }
+        }
+
+        if let Some(response) = &mut step.response {
+            redact_headers(&mut response.headers);
+            if response.content_type == "json" {
+                if let Some(preview) = &mut response.body_preview {
+                    if let Ok(mut value) = serde_json::from_str::<Value>(preview) {
+                        redact_json_value(&mut value);
+                        if let Ok(serialized) = serde_json::to_string(&value) {
+                            *preview = serialized;
+                        }
+                    }
+                }
+            }
+            if let Some(preview) = &mut response.body_preview {
+                let mut bytes = preview.as_bytes().to_vec();
+                if bytes.len() > max_body_bytes {
+                    bytes.truncate(max_body_bytes);
+                    let mut text = String::from_utf8_lossy(&bytes).to_string();
+                    text.push_str("...");
+                    *preview = text;
+                }
+            }
+        }
+
+        redact_json_object(&mut step.outputs);
+    }
+}
+
+fn redact_headers(headers: &mut BTreeMap<String, String>) {
+    for (name, value) in headers {
+        if is_sensitive_key(name) {
+            *value = TRACE_REDACTED.to_string();
+        }
+    }
+}
+
+fn redact_url_query(url: &mut String) {
+    let mut parsed = match url::Url::parse(url) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+
+    let mut pairs = Vec::<(String, String)>::new();
+    for (key, value) in parsed.query_pairs() {
+        if is_sensitive_key(&key) {
+            pairs.push((key.to_string(), TRACE_REDACTED.to_string()));
+        } else {
+            pairs.push((key.to_string(), value.to_string()));
+        }
+    }
+    if pairs.is_empty() {
+        return;
+    }
+
+    parsed
+        .query_pairs_mut()
+        .clear()
+        .extend_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    *url = parsed.to_string();
+}
+
+fn redact_json_object(map: &mut BTreeMap<String, Value>) {
+    for (key, value) in map {
+        if is_sensitive_key(key) {
+            *value = Value::String(TRACE_REDACTED.to_string());
+        } else {
+            redact_json_value(value);
+        }
+    }
+}
+
+fn redact_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                if is_sensitive_key(key) {
+                    *nested = Value::String(TRACE_REDACTED.to_string());
+                } else {
+                    redact_json_value(nested);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    TRACE_SENSITIVE_KEYS.iter().any(|key| lower == *key)
+}
+
+fn write_trace_file_atomic(path: &Path, trace: &TraceFile) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent)
+        .map_err(|err| format!("creating trace directory {}: {err}", parent.display()))?;
+
+    let stamp = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(delta) => delta.as_nanos(),
+        Err(_) => 0,
+    };
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("trace.json");
+    let tmp_name = format!(".{file_name}.tmp-{}-{stamp}", std::process::id());
+    let tmp_path = parent.join(tmp_name);
+
+    {
+        let mut file = fs::File::create(&tmp_path)
+            .map_err(|err| format!("creating temp trace file {}: {err}", tmp_path.display()))?;
+        serde_json::to_writer_pretty(&mut file, trace).map_err(|err| {
+            format!(
+                "serializing trace JSON to temp file {}: {err}",
+                tmp_path.display()
+            )
+        })?;
+        use std::io::Write;
+        writeln!(file)
+            .map_err(|err| format!("writing trace newline to {}: {err}", tmp_path.display()))?;
+        file.sync_all()
+            .map_err(|err| format!("syncing temp trace file {}: {err}", tmp_path.display()))?;
+    }
+
+    fs::rename(&tmp_path, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp_path);
+        format!(
+            "renaming temp trace file {} to {}: {err}",
+            tmp_path.display(),
+            path.display()
+        )
+    })
 }
 
 fn output_json<T: Serialize>(value: &T) -> Result<(), String> {

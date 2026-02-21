@@ -91,6 +91,23 @@ fn stdout_json(output: &std::process::Output) -> Value {
     }
 }
 
+fn read_json_file(path: &Path) -> Value {
+    let raw = match fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(err) => panic!("reading JSON file {}: {err}", path.display()),
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(value) => value,
+        Err(err) => panic!("parsing JSON file {}: {err}", path.display()),
+    }
+}
+
+fn write_file(path: &Path, contents: &str) {
+    if let Err(err) = fs::write(path, contents) {
+        panic!("writing {}: {err}", path.display());
+    }
+}
+
 #[test]
 fn validate_json_reports_valid_metadata() {
     let spec = fixture_spec();
@@ -415,4 +432,280 @@ fn run_dry_run_expands_env_input_values() {
     let first = &rows[0];
     let url = first.get("url").and_then(Value::as_str).unwrap_or_default();
     assert!(url.contains("/status/204"));
+}
+
+#[test]
+fn run_trace_writes_file_and_preserves_json_stdout() {
+    let temp = TempDir::new("arazzo-trace-success");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=429",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let rows = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected dry-run array, got: {body}"),
+    };
+    assert_eq!(rows.len(), 2);
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.get("schemaVersion"),
+        Some(&Value::String("trace.v1".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/run/status"),
+        Some(&Value::String("success".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/run/workflowId"),
+        Some(&Value::String("status-check".to_string()))
+    );
+    let trace_steps = trace
+        .get("steps")
+        .and_then(Value::as_array)
+        .unwrap_or(&Vec::new())
+        .clone();
+    assert!(!trace_steps.is_empty());
+}
+
+#[test]
+fn run_trace_writes_on_failure() {
+    let temp = TempDir::new("arazzo-trace-failure");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "missing-workflow",
+            "--dry-run",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert!(body.get("error").is_some());
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/run/status"),
+        Some(&Value::String("failure".to_string()))
+    );
+    let run_error = trace
+        .pointer("/run/error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(run_error.contains("missing-workflow"));
+}
+
+#[test]
+fn run_trace_redacts_sensitive_headers_and_query_values() {
+    let temp = TempDir::new("arazzo-trace-redact-headers");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("trace.yaml");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Trace Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        parameters:
+          - name: token
+            in: query
+            value: $inputs.token
+          - name: page
+            in: query
+            value: "1"
+          - name: Authorization
+            in: header
+            value: $inputs.auth
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--input",
+            "token=super-secret",
+            "--input",
+            "auth=Bearer top-secret",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+    let auth = trace
+        .pointer("/steps/0/request/headers/Authorization")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(auth, "[REDACTED]");
+
+    let url = trace
+        .pointer("/steps/0/request/url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(url.contains("token=%5BREDACTED%5D") || url.contains("token=[REDACTED]"));
+    assert!(url.contains("page=1"));
+}
+
+#[test]
+fn run_trace_redacts_sensitive_json_fields() {
+    let temp = TempDir::new("arazzo-trace-redact-json");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("trace.yaml");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Trace JSON Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: /submit
+        requestBody:
+          contentType: application/json
+          payload:
+            username: alice
+            password: $inputs.password
+            nested:
+              client_secret: abc123
+              token: $inputs.token
+              safe: ok
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--input",
+            "password=p4ss",
+            "--input",
+            "token=tok123",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/inputs/password"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/inputs/token"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/password"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/nested/client_secret"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/nested/token"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/nested/safe"),
+        Some(&Value::String("ok".to_string()))
+    );
+}
+
+#[test]
+fn run_trace_write_failure_returns_error() {
+    let temp = TempDir::new("arazzo-trace-write-fail");
+    let trace_dir = temp.path().to_string_lossy().to_string();
+
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        [
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=200",
+            "--trace",
+            &trace_dir,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("writing trace"));
 }
