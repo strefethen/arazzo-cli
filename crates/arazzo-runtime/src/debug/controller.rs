@@ -5,7 +5,9 @@ use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::breakpoints::{first_matching_breakpoint, StepBreakpoint};
+use crate::runtime_core::{evaluate_output_expression, extract_xpath};
+
+use super::breakpoints::{first_matching_breakpoint, StepBreakpoint, StepCheckpoint};
 use super::{DebugScopes, DebugStackFrame, WatchEvaluation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,6 +44,8 @@ pub struct DebugStopEvent {
     pub workflow_id: String,
     pub step_id: String,
     pub depth: usize,
+    #[serde(default)]
+    pub checkpoint: StepCheckpoint,
     pub reason: DebugStopReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breakpoint_condition: Option<String>,
@@ -160,6 +164,14 @@ impl DebugController {
         Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(expression))
     }
 
+    pub fn evaluate_watch_expression(&self, expression: &str) -> Result<Value, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(evaluate_watch_expression_from_state(&guard, expression))
+    }
+
     pub fn evaluate_condition(&self, condition: &str) -> Result<bool, String> {
         let guard = self
             .state
@@ -173,12 +185,11 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
         Ok(expressions
             .iter()
             .map(|expression| WatchEvaluation {
                 expression: expression.clone(),
-                value: evaluator.evaluate(expression),
+                value: evaluate_watch_expression_from_state(&guard, expression),
             })
             .collect())
     }
@@ -214,6 +225,7 @@ impl DebugController {
         &self,
         workflow_id: &str,
         step_id: &str,
+        checkpoint: StepCheckpoint,
         depth: usize,
         eval_ctx: &EvalContext,
         scopes: DebugScopes,
@@ -226,8 +238,13 @@ impl DebugController {
         guard.current_eval_ctx = eval_ctx.clone();
         upsert_stack_frame(&mut guard.current_stack, workflow_id, step_id, depth);
 
-        let matched_breakpoint =
-            first_matching_breakpoint(&guard.breakpoints, workflow_id, step_id, eval_ctx);
+        let matched_breakpoint = first_matching_breakpoint(
+            &guard.breakpoints,
+            workflow_id,
+            step_id,
+            &checkpoint,
+            eval_ctx,
+        );
         let candidate_seq = guard.next_seq.saturating_add(1);
         let step_mode_stop = should_stop_for_step_mode(guard.run_mode, candidate_seq, depth);
 
@@ -260,6 +277,7 @@ impl DebugController {
             workflow_id: workflow_id.to_string(),
             step_id: step_id.to_string(),
             depth,
+            checkpoint,
             reason,
             breakpoint_condition,
         });
@@ -315,6 +333,38 @@ impl DebugController {
         self.condvar.notify_all();
         Ok(())
     }
+}
+
+fn evaluate_watch_expression_from_state(guard: &ControllerState, expression: &str) -> Value {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() {
+        return Value::Null;
+    }
+
+    if !trimmed.starts_with('$') {
+        if trimmed.starts_with('/') {
+            if let Some(Value::String(body)) = guard.current_scopes.locals.get("responseBodyRaw") {
+                return extract_xpath(body.as_bytes(), trimmed);
+            }
+            return Value::Null;
+        }
+
+        if let Some(value) = guard.current_scopes.locals.get(trimmed) {
+            return value.clone();
+        }
+        if let Some(frame) = guard.current_stack.last() {
+            if let Some(outputs) = guard.current_scopes.steps.get(&frame.step_id) {
+                if let Some(value) = outputs.get(trimmed) {
+                    return value.clone();
+                }
+            }
+        }
+
+        let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
+        return evaluate_output_expression(trimmed, &evaluator, None);
+    }
+
+    ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(trimmed)
 }
 
 fn should_stop_for_step_mode(run_mode: RunMode, candidate_seq: u64, depth: usize) -> bool {

@@ -164,8 +164,52 @@ pub struct SuccessCriterion {
     pub condition: String,
     #[serde(default)]
     pub context: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<CriterionType>,
+}
+
+/// Criterion expression type selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CriterionType {
+    Name(String),
+    ExpressionType(CriterionExpressionType),
+}
+
+/// Object form of criterion expression type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CriterionExpressionType {
     #[serde(rename = "type", default)]
     pub type_: String,
+    #[serde(default)]
+    pub version: String,
+}
+
+impl SuccessCriterion {
+    /// Returns the effective criterion type name (`simple` when omitted).
+    pub fn resolved_type_name(&self) -> String {
+        match &self.type_ {
+            None => "simple".to_string(),
+            Some(CriterionType::Name(name)) => name.trim().to_lowercase(),
+            Some(CriterionType::ExpressionType(expr)) => expr.type_.trim().to_lowercase(),
+        }
+    }
+
+    /// Returns the declared criterion type version when object form is used.
+    pub fn declared_type_version(&self) -> Option<&str> {
+        match &self.type_ {
+            Some(CriterionType::ExpressionType(expr)) if !expr.version.is_empty() => {
+                Some(expr.version.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns whether `type` was explicitly declared in the specification.
+    pub fn has_declared_type(&self) -> bool {
+        self.type_.is_some()
+    }
 }
 
 /// Action for `onSuccess` / `onFailure`.

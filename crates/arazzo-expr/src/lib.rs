@@ -93,6 +93,10 @@ impl ExpressionEvaluator {
             return Value::Null;
         }
 
+        if rest == "response.body" {
+            return self.ctx.response_body.clone().unwrap_or(Value::Null);
+        }
+
         if let Some(path) = rest.strip_prefix("response.body.") {
             if let Some(body) = &self.ctx.response_body {
                 return extract_json_path(body, path);
@@ -837,6 +841,18 @@ mod tests {
         assert_eq!(
             eval.evaluate("$response.header.x-request-id"),
             json!("req-1")
+        );
+        assert_eq!(
+            eval.evaluate("$response.body"),
+            json!({
+                "user": {"name": "Bob"},
+                "arr": [{"id": 7}],
+                "users": [
+                    {"id": 1, "name": "Alice", "group": "a"},
+                    {"id": 2, "name": "Bob", "group": "b"},
+                    {"id": 3, "name": "Cara", "group": "a"}
+                ]
+            })
         );
         assert_eq!(eval.evaluate("$response.body.user.name"), json!("Bob"));
         assert_eq!(eval.evaluate("$response.body.arr[0].id"), json!(7));

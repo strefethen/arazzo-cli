@@ -35,7 +35,9 @@ mod tests {
         ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent,
         SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
-    use arazzo_spec::{Info, RequestBody, SourceDescription};
+    use arazzo_spec::{
+        CriterionExpressionType, CriterionType, Info, RequestBody, SourceDescription,
+    };
     use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -2849,7 +2851,15 @@ paths:
     fn evaluate_criterion_modes() {
         let eval = ExpressionEvaluator::new(EvalContext {
             status_code: Some(200),
-            response_body: Some(json!({"name":"alice","ok":true})),
+            response_body: Some(json!({
+                "name":"alice",
+                "ok":true,
+                "pets":[{"id":1}],
+                "items":[
+                    {"id":1,"ok":false,"pets":[]},
+                    {"id":2,"ok":true,"pets":[{"id":"a"}]}
+                ]
+            })),
             ..EvalContext::default()
         });
 
@@ -2860,40 +2870,71 @@ paths:
         assert!(evaluate_criterion(&plain, &eval, None));
 
         let regex = SuccessCriterion {
-            type_: "regex".to_string(),
+            type_: Some(CriterionType::Name("regex".to_string())),
             context: "$response.body.name".to_string(),
             condition: "^[a-z]+$".to_string(),
         };
         assert!(evaluate_criterion(&regex, &eval, None));
 
         let jsonpath = SuccessCriterion {
-            type_: "jsonpath".to_string(),
-            condition: "ok".to_string(),
-            ..SuccessCriterion::default()
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body".to_string(),
+            condition: "$.ok".to_string(),
         };
         assert!(evaluate_criterion(&jsonpath, &eval, None));
 
+        let jsonpath_filter = SuccessCriterion {
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body".to_string(),
+            condition: "$[?count(@.pets) > 0]".to_string(),
+        };
+        assert!(evaluate_criterion(&jsonpath_filter, &eval, None));
+
+        let jsonpath_filter_and = SuccessCriterion {
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body.items".to_string(),
+            condition: "$[?(@.id == 2 && @.ok == true)]".to_string(),
+        };
+        assert!(evaluate_criterion(&jsonpath_filter_and, &eval, None));
+
+        let jsonpath_filter_or = SuccessCriterion {
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body.items".to_string(),
+            condition: "$[?(@.id == 999 || @.ok == true)]".to_string(),
+        };
+        assert!(evaluate_criterion(&jsonpath_filter_or, &eval, None));
+
         let regex_fail = SuccessCriterion {
-            type_: "regex".to_string(),
+            type_: Some(CriterionType::Name("regex".to_string())),
             context: "$statusCode".to_string(),
             condition: "^5\\d{2}$".to_string(),
         };
         assert!(!evaluate_criterion(&regex_fail, &eval, None));
 
         let jsonpath_fail = SuccessCriterion {
-            type_: "jsonpath".to_string(),
-            condition: "missing.path".to_string(),
-            ..SuccessCriterion::default()
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body".to_string(),
+            condition: "$.missing.path".to_string(),
         };
         assert!(!evaluate_criterion(&jsonpath_fail, &eval, None));
+
+        let jsonpath_filter_fail = SuccessCriterion {
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            context: "$response.body.items".to_string(),
+            condition: "$[?(@.id == 2 && (@.ok == false || @.id == 9))]".to_string(),
+        };
+        assert!(!evaluate_criterion(&jsonpath_filter_fail, &eval, None));
     }
 
     #[test]
-    fn evaluate_criterion_jsonpath_uses_xpath_for_xml_responses() {
+    fn evaluate_criterion_xpath_uses_context_and_condition() {
         let criterion = SuccessCriterion {
-            type_: "jsonpath".to_string(),
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "xpath".to_string(),
+                version: "xpath-10".to_string(),
+            })),
+            context: "$response.body".to_string(),
             condition: "//item[1]/title".to_string(),
-            ..SuccessCriterion::default()
         };
         let response = Response {
             status_code: 200,
@@ -2961,6 +3002,33 @@ paths:
         assert!(matched.is_some());
         if let Some(action) = matched {
             assert_eq!(action.name, "first".to_string());
+        }
+
+        let response_with_json = super::Response {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: br#"{"pets":[{"id":1}]}"#.to_vec(),
+            body_json: Some(json!({"pets":[{"id":1}]})),
+            content_type: "json".to_string(),
+        };
+        let typed = vec![OnAction {
+            name: "typed".to_string(),
+            type_: "goto".to_string(),
+            step_id: "next".to_string(),
+            criteria: vec![SuccessCriterion {
+                context: "$response.body".to_string(),
+                condition: "$.pets[0]".to_string(),
+                type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                    type_: "jsonpath".to_string(),
+                    version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+                })),
+            }],
+            ..OnAction::default()
+        }];
+        let typed_match = engine.find_matching_action(&typed, &vars, Some(&response_with_json));
+        assert!(typed_match.is_some());
+        if let Some(action) = typed_match {
+            assert_eq!(action.name, "typed".to_string());
         }
     }
 

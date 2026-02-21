@@ -8,6 +8,8 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase")]
 pub struct DebugScopes {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub locals: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inputs: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steps: BTreeMap<String, BTreeMap<String, Value>>,

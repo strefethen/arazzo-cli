@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::{DebugController, DebugScopes};
+use crate::{DebugController, DebugScopes, StepCheckpoint};
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{ArazzoSpec, OnAction, Step, SuccessCriterion, Workflow};
 use regex::Regex;
@@ -569,6 +569,7 @@ impl VarStore {
 
     pub(crate) fn debug_scopes(&self) -> DebugScopes {
         DebugScopes {
+            locals: BTreeMap::new(),
             inputs: self.inputs.clone(),
             steps: self.steps.clone(),
         }
@@ -615,9 +616,12 @@ mod helpers;
 
 use helpers::{
     can_execute_parallel, replace_path_params, resolve_payload, sleep_with_checks,
-    step_result_error, to_json_path, value_to_string,
+    step_result_error, value_to_string,
 };
 
-pub(crate) use helpers::{build_levels, evaluate_criterion, extract_xpath, parse_method};
+pub(crate) use helpers::{
+    build_levels, evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
+    extract_xpath, parse_method, CriterionEvaluation,
+};
 #[cfg(test)]
 pub(crate) use helpers::{extract_step_refs, has_control_flow};

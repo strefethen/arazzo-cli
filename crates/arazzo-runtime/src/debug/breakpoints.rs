@@ -1,12 +1,28 @@
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use serde::{Deserialize, Serialize};
 
+/// One executable checkpoint within a workflow step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StepCheckpoint {
+    #[default]
+    Step,
+    SuccessCriterion {
+        index: usize,
+    },
+    Output {
+        name: String,
+    },
+}
+
 /// Canonical runtime step breakpoint identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StepBreakpoint {
     pub workflow_id: String,
     pub step_id: String,
+    #[serde(default, skip_serializing_if = "is_step_checkpoint")]
+    pub checkpoint: StepCheckpoint,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
 }
@@ -16,8 +32,19 @@ impl StepBreakpoint {
         Self {
             workflow_id: workflow_id.into(),
             step_id: step_id.into(),
+            checkpoint: StepCheckpoint::Step,
             condition: None,
         }
+    }
+
+    pub fn at_success_criterion(mut self, index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::SuccessCriterion { index };
+        self
+    }
+
+    pub fn at_output(mut self, name: impl Into<String>) -> Self {
+        self.checkpoint = StepCheckpoint::Output { name: name.into() };
+        self
     }
 
     pub fn with_condition(mut self, condition: impl Into<String>) -> Self {
@@ -25,8 +52,13 @@ impl StepBreakpoint {
         self
     }
 
-    fn matches_identity(&self, workflow_id: &str, step_id: &str) -> bool {
-        self.workflow_id == workflow_id && self.step_id == step_id
+    fn matches_identity(
+        &self,
+        workflow_id: &str,
+        step_id: &str,
+        checkpoint: &StepCheckpoint,
+    ) -> bool {
+        self.workflow_id == workflow_id && self.step_id == step_id && self.checkpoint == *checkpoint
     }
 }
 
@@ -34,10 +66,11 @@ pub(crate) fn first_matching_breakpoint(
     breakpoints: &[StepBreakpoint],
     workflow_id: &str,
     step_id: &str,
+    checkpoint: &StepCheckpoint,
     eval_ctx: &EvalContext,
 ) -> Option<StepBreakpoint> {
     for breakpoint in breakpoints {
-        if !breakpoint.matches_identity(workflow_id, step_id) {
+        if !breakpoint.matches_identity(workflow_id, step_id, checkpoint) {
             continue;
         }
         if breakpoint_condition_matches(breakpoint, eval_ctx) {
@@ -56,4 +89,8 @@ fn breakpoint_condition_matches(breakpoint: &StepBreakpoint, eval_ctx: &EvalCont
         return true;
     }
     ExpressionEvaluator::new(eval_ctx.clone()).evaluate_condition(trimmed)
+}
+
+fn is_step_checkpoint(checkpoint: &StepCheckpoint) -> bool {
+    matches!(checkpoint, StepCheckpoint::Step)
 }

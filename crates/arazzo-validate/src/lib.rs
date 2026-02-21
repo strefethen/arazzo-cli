@@ -7,7 +7,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec};
+use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec, CriterionType, SuccessCriterion};
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
@@ -147,6 +147,14 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 }
             }
 
+            for (criterion_idx, criterion) in step.success_criteria.iter().enumerate() {
+                validate_criterion(
+                    &format!("{step_path}.successCriteria[{criterion_idx}]"),
+                    criterion,
+                    &mut errs,
+                );
+            }
+
             for (action_idx, action) in step.on_failure.iter().enumerate() {
                 let action_path = format!("{step_path}.onFailure[{action_idx}]");
                 if action.retry_after < 0 {
@@ -154,6 +162,13 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 }
                 if action.retry_limit < 0 {
                     errs.push(format!("{action_path}.retryLimit must be non-negative"));
+                }
+                for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
+                    validate_criterion(
+                        &format!("{action_path}.criteria[{criterion_idx}]"),
+                        criterion,
+                        &mut errs,
+                    );
                 }
             }
             for (action_idx, action) in step.on_success.iter().enumerate() {
@@ -163,6 +178,13 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 }
                 if action.retry_limit < 0 {
                     errs.push(format!("{action_path}.retryLimit must be non-negative"));
+                }
+                for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
+                    validate_criterion(
+                        &format!("{action_path}.criteria[{criterion_idx}]"),
+                        criterion,
+                        &mut errs,
+                    );
                 }
             }
         }
@@ -183,6 +205,61 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
         return Ok(());
     }
     Err(format!("validation errors:\n  - {}", errs.join("\n  - ")))
+}
+
+fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<String>) {
+    if criterion.condition.trim().is_empty() {
+        errs.push(format!("{path}.condition is required"));
+    }
+
+    if criterion.has_declared_type() && criterion.context.trim().is_empty() {
+        errs.push(format!("{path}.context is required when type is specified"));
+    }
+
+    let Some(type_) = &criterion.type_ else {
+        return;
+    };
+
+    match type_ {
+        CriterionType::Name(name) => {
+            let normalized = name.trim().to_lowercase();
+            if !matches!(
+                normalized.as_str(),
+                "simple" | "regex" | "jsonpath" | "xpath"
+            ) {
+                errs.push(format!(
+                    "{path}.type must be one of simple, regex, jsonpath, xpath"
+                ));
+            }
+        }
+        CriterionType::ExpressionType(expr) => {
+            let normalized = expr.type_.trim().to_lowercase();
+            if !matches!(normalized.as_str(), "jsonpath" | "xpath") {
+                errs.push(format!("{path}.type.type must be one of jsonpath or xpath"));
+                return;
+            }
+
+            let version = expr.version.trim().to_lowercase();
+            if version.is_empty() {
+                errs.push(format!("{path}.type.version is required"));
+                return;
+            }
+
+            if normalized == "jsonpath" && version != "draft-goessner-dispatch-jsonpath-00" {
+                errs.push(format!(
+                    "{path}.type.version must be draft-goessner-dispatch-jsonpath-00 for jsonpath"
+                ));
+            }
+
+            if normalized == "xpath"
+                && !matches!(version.as_str(), "xpath-10" | "xpath-20" | "xpath-30")
+            {
+                errs.push(format!(
+                    "{path}.type.version must be one of xpath-10, xpath-20, xpath-30 for xpath"
+                ));
+            }
+        }
+    }
 }
 
 /// Resolves `$components.*` references to inline step definitions.
@@ -271,7 +348,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use arazzo_spec::{Info, SourceDescription, Step, Workflow};
+    use arazzo_spec::{
+        CriterionExpressionType, CriterionType, Info, OnAction, SourceDescription, Step,
+        SuccessCriterion, Workflow,
+    };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec};
 
@@ -769,6 +849,94 @@ workflows:
             Ok(_) => panic!("expected error"),
             Err(err) => {
                 if !err.contains("retryAfter must be non-negative") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_criterion_type_requires_context() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].success_criteria = vec![SuccessCriterion {
+            condition: "$.pets[0]".to_string(),
+            type_: Some(CriterionType::Name("jsonpath".to_string())),
+            ..SuccessCriterion::default()
+        }];
+
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains("context is required when type is specified") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_criterion_type_object_is_accepted() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].success_criteria = vec![SuccessCriterion {
+            context: "$response.body".to_string(),
+            condition: "$.pets[0]".to_string(),
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+            })),
+        }];
+
+        let result = validate(&spec);
+        if let Err(err) = result {
+            panic!("expected no error, got: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_criterion_type_object_rejects_invalid_version() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].success_criteria = vec![SuccessCriterion {
+            context: "$response.body".to_string(),
+            condition: "$.pets[0]".to_string(),
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "invalid-version".to_string(),
+            })),
+        }];
+
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains("type.version must be draft-goessner-dispatch-jsonpath-00") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_action_criteria_follow_criterion_rules() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: "retry".to_string(),
+            criteria: vec![SuccessCriterion {
+                condition: "//item[1]".to_string(),
+                type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                    type_: "xpath".to_string(),
+                    version: "xpath-10".to_string(),
+                })),
+                ..SuccessCriterion::default()
+            }],
+            ..OnAction::default()
+        }];
+
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains(".onFailure[0].criteria[0].context is required") {
                     panic!("unexpected error: {err}");
                 }
             }

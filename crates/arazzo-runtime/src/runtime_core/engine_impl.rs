@@ -233,7 +233,13 @@ impl Engine {
             };
 
             let start = Instant::now();
-            let execution = match self.execute_step_with_result(&step, &mut vars, depth, options) {
+            let execution = match self.execute_step_with_result(
+                workflow_id,
+                &step,
+                &mut vars,
+                depth,
+                options,
+            ) {
                 Ok(execution) => execution,
                 Err(err) => {
                     let duration = start.elapsed();
@@ -359,6 +365,7 @@ impl Engine {
 
     fn execute_step_with_result(
         &mut self,
+        workflow_id: &str,
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
@@ -374,7 +381,7 @@ impl Engine {
             });
         }
 
-        let execution = self.execute_http_step(step, vars, options)?;
+        let execution = self.execute_http_step(workflow_id, step, vars, depth, options)?;
         if let Some(req) = execution.dry_run_request.clone() {
             if let Ok(mut guard) = self.dry_run_reqs.lock() {
                 guard.push(req);
@@ -388,8 +395,10 @@ impl Engine {
 
     fn execute_http_step(
         &self,
+        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
+        depth: usize,
         options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
         options.check()?;
@@ -498,17 +507,28 @@ impl Engine {
         )?;
 
         let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
+        let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
-            let matches = evaluate_criterion(criterion, &eval, Some(&response));
+            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(&response));
             criteria.push(TraceCriterionResult {
                 index,
-                type_: criterion.type_.clone(),
-                condition: criterion.condition.clone(),
-                context: criterion.context.clone(),
-                result: matches,
+                type_: evaluation.type_name.clone(),
+                condition: evaluation.condition.clone(),
+                context: evaluation.context_expr.clone(),
+                result: evaluation.matched,
             });
-            if !matches {
+            let gate = DebugGateContext {
+                workflow_id,
+                step_id: &step.step_id,
+                vars,
+                response: Some(&response),
+                request: Some(&trace_request),
+                current_outputs: &checkpoint_outputs,
+                depth,
+            };
+            self.debug_gate_success_criterion(&gate, index, &evaluation)?;
+            if !evaluation.matched {
                 let trace_response = build_trace_response(&response);
                 return Ok(StepExecution {
                     result: StepResult {
@@ -529,15 +549,19 @@ impl Engine {
 
         let mut outputs = BTreeMap::new();
         for (name, expr) in &step.outputs {
-            let value = if expr.starts_with('/') {
-                extract_xpath(&response.body, expr)
-            } else if expr.starts_with("$response.header.") || expr.starts_with("$statusCode") {
-                eval.evaluate(expr)
-            } else {
-                let json_path = to_json_path(expr);
-                eval.evaluate(&format!("$response.body.{json_path}"))
+            let value = evaluate_output_expression(expr, &eval, Some(&response));
+            outputs.insert(name.clone(), value.clone());
+            checkpoint_outputs.insert(name.clone(), value);
+            let gate = DebugGateContext {
+                workflow_id,
+                step_id: &step.step_id,
+                vars,
+                response: Some(&response),
+                request: Some(&trace_request),
+                current_outputs: &checkpoint_outputs,
+                depth,
             };
-            outputs.insert(name.clone(), value);
+            self.debug_gate_output(&gate, name, expr)?;
         }
 
         let trace_response = build_trace_response(&response);
@@ -656,7 +680,7 @@ impl Engine {
             }
             let mut all_match = true;
             for criterion in &action.criteria {
-                if !eval.evaluate_condition(&criterion.condition) {
+                if !evaluate_criterion(criterion, &eval, response) {
                     all_match = false;
                     break;
                 }
@@ -917,7 +941,8 @@ impl Engine {
                     let step_vars = level_vars.clone();
                     let opts = options.clone();
                     handles.push(scope.spawn(move || {
-                        let result = self.execute_parallel_step(&step, &step_vars, &opts);
+                        let result =
+                            self.execute_parallel_step(workflow_id, &step, &step_vars, &opts);
                         (idx, step, result)
                     }));
                 }
@@ -1050,6 +1075,7 @@ impl Engine {
 
     fn execute_parallel_step(
         &self,
+        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
         options: &ExecutionOptions,
@@ -1057,7 +1083,7 @@ impl Engine {
         options.check()?;
 
         let start = Instant::now();
-        let execution = self.execute_http_step(step, vars, options)?;
+        let execution = self.execute_http_step(workflow_id, step, vars, 0, options)?;
         let duration = start.elapsed();
 
         Ok(ParallelStepExecution {
@@ -1088,13 +1114,151 @@ impl Engine {
         vars: &VarStore,
         depth: usize,
     ) -> Result<(), RuntimeError> {
+        let empty_outputs = BTreeMap::new();
+        let gate = DebugGateContext {
+            workflow_id,
+            step_id: &step.step_id,
+            vars,
+            response: None,
+            request: None,
+            current_outputs: &empty_outputs,
+            depth,
+        };
+        self.debug_gate_checkpoint(&gate, StepCheckpoint::Step, BTreeMap::new())
+    }
+
+    fn debug_gate_success_criterion(
+        &self,
+        gate: &DebugGateContext<'_>,
+        index: usize,
+        evaluation: &CriterionEvaluation,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = gate
+            .response
+            .map(|response| response.status_code)
+            .unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert("criterionIndex".to_string(), json!(index));
+        locals.insert(
+            "criterionCondition".to_string(),
+            Value::String(evaluation.condition.clone()),
+        );
+        locals.insert(
+            "criterionConditionResult".to_string(),
+            json!(evaluation.condition_result),
+        );
+        locals.insert("criterionMatched".to_string(), json!(evaluation.matched));
+        if !evaluation.context_expr.is_empty() {
+            locals.insert(
+                "criterionContext".to_string(),
+                Value::String(evaluation.context_expr.clone()),
+            );
+        }
+        if !evaluation.type_name.is_empty() {
+            locals.insert(
+                "criterionType".to_string(),
+                Value::String(evaluation.type_name.clone()),
+            );
+        }
+        if let Some(version) = &evaluation.type_version {
+            locals.insert(
+                "criterionTypeVersion".to_string(),
+                Value::String(version.clone()),
+            );
+        }
+        locals.insert(
+            "criterionContextValue".to_string(),
+            evaluation.context_value.clone(),
+        );
+        if let Some(error) = &evaluation.error {
+            locals.insert("criterionError".to_string(), Value::String(error.clone()));
+        }
+        if let Some(request) = gate.request {
+            insert_request_locals(&mut locals, request);
+        }
+        if let Some(response) = gate.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        self.debug_gate_checkpoint(gate, StepCheckpoint::SuccessCriterion { index }, locals)
+    }
+
+    fn debug_gate_output(
+        &self,
+        gate: &DebugGateContext<'_>,
+        output_name: &str,
+        output_expr: &str,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = gate
+            .response
+            .map(|response| response.status_code)
+            .unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert(
+            "outputName".to_string(),
+            Value::String(output_name.to_string()),
+        );
+        locals.insert(
+            "outputExpression".to_string(),
+            Value::String(output_expr.to_string()),
+        );
+        for (name, value) in gate.current_outputs {
+            locals.insert(name.clone(), value.clone());
+        }
+        if let Some(request) = gate.request {
+            insert_request_locals(&mut locals, request);
+        }
+        if let Some(response) = gate.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        self.debug_gate_checkpoint(
+            gate,
+            StepCheckpoint::Output {
+                name: output_name.to_string(),
+            },
+            locals,
+        )
+    }
+
+    fn debug_gate_checkpoint(
+        &self,
+        gate: &DebugGateContext<'_>,
+        checkpoint: StepCheckpoint,
+        locals: BTreeMap<String, Value>,
+    ) -> Result<(), RuntimeError> {
         let Some(controller) = &self.debug_controller else {
             return Ok(());
         };
-        let eval_ctx = vars.eval_context(None);
-        let scopes = vars.debug_scopes();
+
+        let mut eval_ctx = gate.vars.eval_context(gate.response);
+        if !gate.current_outputs.is_empty() {
+            let scoped_outputs = eval_ctx.steps.entry(gate.step_id.to_string()).or_default();
+            for (name, value) in gate.current_outputs {
+                scoped_outputs.insert(name.clone(), value.clone());
+            }
+        }
+
+        let mut scopes = gate.vars.debug_scopes();
+        if !gate.current_outputs.is_empty() {
+            let scoped_outputs = scopes.steps.entry(gate.step_id.to_string()).or_default();
+            for (name, value) in gate.current_outputs {
+                scoped_outputs.insert(name.clone(), value.clone());
+            }
+        }
+        scopes.locals = locals;
+
         controller
-            .gate_step(workflow_id, &step.step_id, depth, &eval_ctx, scopes)
+            .gate_step(
+                gate.workflow_id,
+                gate.step_id,
+                checkpoint,
+                gate.depth,
+                &eval_ctx,
+                scopes,
+            )
             .map_err(|err| RuntimeError::unspecified(format!("debug controller: {err}")))
     }
 
@@ -1221,6 +1385,16 @@ struct ParallelStepExecution {
     duration: Duration,
 }
 
+struct DebugGateContext<'a> {
+    workflow_id: &'a str,
+    step_id: &'a str,
+    vars: &'a VarStore,
+    response: Option<&'a Response>,
+    request: Option<&'a TraceRequest>,
+    current_outputs: &'a BTreeMap<String, Value>,
+    depth: usize,
+}
+
 impl RoutedDecision {
     fn error(err: RuntimeError) -> Self {
         Self {
@@ -1267,5 +1441,41 @@ fn build_trace_response(response: &Response) -> TraceResponse {
         headers: response.headers.clone(),
         body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
         body_preview,
+    }
+}
+
+fn insert_request_locals(locals: &mut BTreeMap<String, Value>, request: &TraceRequest) {
+    locals.insert(
+        "requestMethod".to_string(),
+        Value::String(request.method.clone()),
+    );
+    locals.insert("requestUrl".to_string(), Value::String(request.url.clone()));
+    locals.insert("requestHeaders".to_string(), json!(request.headers));
+    if let Some(body) = &request.body {
+        locals.insert("requestBody".to_string(), body.clone());
+    }
+}
+
+fn insert_response_locals(locals: &mut BTreeMap<String, Value>, response: &Response) {
+    locals.insert(
+        "responseStatusCode".to_string(),
+        Value::Number(response.status_code.into()),
+    );
+    locals.insert(
+        "responseContentType".to_string(),
+        Value::String(response.content_type.clone()),
+    );
+    locals.insert("responseHeaders".to_string(), json!(response.headers));
+
+    if !response.body.is_empty() {
+        let raw = String::from_utf8_lossy(&response.body).to_string();
+        locals.insert("responseBodyRaw".to_string(), Value::String(raw.clone()));
+
+        let max = TRACE_BODY_PREVIEW_MAX_BYTES.min(response.body.len());
+        let mut preview = String::from_utf8_lossy(&response.body[..max]).to_string();
+        if response.body.len() > max {
+            preview.push_str("...");
+        }
+        locals.insert("responseBodyPreview".to_string(), Value::String(preview));
     }
 }
