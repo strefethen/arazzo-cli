@@ -2585,6 +2585,33 @@ paths:
     }
 
     #[test]
+    fn trace_records_capture_step_error() {
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "broken".to_string(),
+                operation_path: "http://[::1".to_string(),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine("http://localhost", spec);
+        engine.set_trace_enabled(true);
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_err());
+
+        let trace = engine.trace_steps();
+        assert_eq!(trace.len(), 1);
+        assert_eq!(trace[0].step_id, "broken");
+        assert_eq!(trace[0].decision.path, TraceDecisionPath::Error);
+        assert!(trace[0].error.is_some());
+        assert_eq!(trace[0].request, None);
+        assert_eq!(trace[0].response, None);
+    }
+
+    #[test]
     fn trace_records_subworkflow_parent_and_child_workflow_ids() {
         let server = start_server(|_method, _url, _headers, _body| {
             MockHttpResponse::json(200, r#"{"ok":true}"#)
