@@ -2,9 +2,11 @@
 
 //! Stdio adapter loop for the internal debugger protocol.
 
+mod dap;
 mod session;
 mod stdio;
 
+pub use dap::run_dap_stdio;
 pub use session::Session;
 pub use stdio::run_stdio;
 
