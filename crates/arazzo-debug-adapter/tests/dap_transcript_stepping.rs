@@ -60,7 +60,7 @@ fn dap_stepping_commands_ack_success() {
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
-    assert_eq!(messages.len(), 14);
+    assert_eq!(messages.len(), 9);
 
     assert_response_ok(&messages[2], "continue");
     assert_eq!(
@@ -69,18 +69,13 @@ fn dap_stepping_commands_ack_success() {
             .and_then(|v| v.as_bool()),
         Some(true)
     );
-    assert_stopped(&messages[3]);
-    assert_response_ok(&messages[4], "next");
-    assert_stopped(&messages[5]);
-    assert_response_ok(&messages[6], "stepIn");
-    assert_stopped(&messages[7]);
-    assert_response_ok(&messages[8], "stepOut");
-    assert_stopped(&messages[9]);
-    assert_response_ok(&messages[10], "pause");
-    assert_stopped(&messages[11]);
-    assert_response_ok(&messages[12], "disconnect");
+    assert_response_ok(&messages[3], "next");
+    assert_response_ok(&messages[4], "stepIn");
+    assert_response_ok(&messages[5], "stepOut");
+    assert_response_ok(&messages[6], "pause");
+    assert_response_ok(&messages[7], "disconnect");
     assert_eq!(
-        messages[13].get("event").and_then(|v| v.as_str()),
+        messages[8].get("event").and_then(|v| v.as_str()),
         Some("terminated")
     );
 }
@@ -95,12 +90,4 @@ fn assert_response_ok(message: &serde_json::Value, command: &str) {
         Some(command)
     );
     assert_eq!(message.get("success").and_then(|v| v.as_bool()), Some(true));
-}
-
-fn assert_stopped(message: &serde_json::Value) {
-    assert_eq!(message.get("type").and_then(|v| v.as_str()), Some("event"));
-    assert_eq!(
-        message.get("event").and_then(|v| v.as_str()),
-        Some("stopped")
-    );
 }

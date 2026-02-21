@@ -82,8 +82,11 @@ name = "arazzo-debug-adapter"
 version = "0.1.0"
 dependencies = [
  "arazzo-debug-protocol",
+ "arazzo-runtime",
+ "arazzo-validate",
  "serde",
  "serde_json",
+ "tiny_http",
 ]
 
 [[package]]

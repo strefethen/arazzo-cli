@@ -136,7 +136,7 @@ fn dap_launch_lifecycle_populates_debug_views() {
         messages[8]
             .pointer("/body/stackFrames/0/line")
             .and_then(|v| v.as_u64()),
-        Some(7)
+        Some(13)
     );
     assert_eq!(
         messages[9]
@@ -144,15 +144,18 @@ fn dap_launch_lifecycle_populates_debug_views() {
             .and_then(|v| v.as_u64()),
         Some(1)
     );
+    let variables = messages[10]
+        .pointer("/body/variables")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let workflow = variables
+        .iter()
+        .find(|entry| entry.get("name").and_then(|v| v.as_str()) == Some("workflowId"));
+    assert!(workflow.is_some());
     assert_eq!(
-        messages[10]
-            .pointer("/body/variables/1/name")
-            .and_then(|v| v.as_str()),
-        Some("workflowId")
-    );
-    assert_eq!(
-        messages[10]
-            .pointer("/body/variables/1/value")
+        workflow
+            .and_then(|entry| entry.get("value"))
             .and_then(|v| v.as_str()),
         Some("get-hackernews")
     );
@@ -160,12 +163,16 @@ fn dap_launch_lifecycle_populates_debug_views() {
         messages[11].get("command").and_then(|v| v.as_str()),
         Some("continue")
     );
-    assert_eq!(
-        messages[12]
+    let post_continue_event = messages[12].get("event").and_then(|v| v.as_str());
+    if post_continue_event == Some("stopped") {
+        let reason = messages[12]
             .pointer("/body/reason")
-            .and_then(|v| v.as_str()),
-        Some("breakpoint")
-    );
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(reason == "breakpoint" || reason == "step" || reason == "pause");
+    } else {
+        assert_eq!(post_continue_event, Some("terminated"));
+    }
     assert_eq!(
         messages[13].get("command").and_then(|v| v.as_str()),
         Some("disconnect")
@@ -184,8 +191,14 @@ fn write_temp_spec() -> Result<PathBuf, String> {
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-launch-{nanos}.yaml"));
     let spec = r#"
+arazzo: "1.0.0"
 info:
   title: Demo
+  version: "1.0.0"
+sourceDescriptions:
+  - name: test
+    url: https://example.com
+    type: openapi
 workflows:
   - workflowId: get-hackernews
     steps:

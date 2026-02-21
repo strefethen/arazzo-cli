@@ -54,7 +54,7 @@ fn dap_evaluate_watch_expression_returns_body() {
         Some(true)
     );
     let result = evaluate.pointer("/body/result").and_then(|v| v.as_str());
-    assert_eq!(result, Some("evaluation not connected yet: $inputs.code"));
+    assert_eq!(result, Some("runtime not started"));
     assert_eq!(
         evaluate
             .pointer("/body/variablesReference")
