@@ -18,9 +18,9 @@ use runtime_core::{
 mod tests {
     use super::{
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
-        ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionOptions, ExpressionEvaluator,
-        OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent, SuccessCriterion,
-        TraceDecisionPath, TraceHook, Workflow,
+        ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionEventKind, ExecutionOptions,
+        ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent,
+        SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{Info, RequestBody, SourceDescription};
     use serde_json::{json, Value};
@@ -2400,6 +2400,19 @@ paths:
         assert_eq!(before[1].step_id, "s2".to_string());
         assert_eq!(after[0].status_code, 200);
         assert!(after[0].duration > Duration::from_nanos(0));
+
+        let events = engine.execution_events();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert_eq!(events[2].seq, 3);
+        assert_eq!(events[3].seq, 4);
+        assert_eq!(events[0].kind, ExecutionEventKind::BeforeStep);
+        assert_eq!(events[1].kind, ExecutionEventKind::AfterStep);
+        assert_eq!(events[2].kind, ExecutionEventKind::BeforeStep);
+        assert_eq!(events[3].kind, ExecutionEventKind::AfterStep);
+        assert_eq!(events[0].step_id, "s1".to_string());
+        assert_eq!(events[3].step_id, "s2".to_string());
     }
 
     #[test]
@@ -2458,6 +2471,75 @@ paths:
         assert_eq!(before[0].workflow_id_ref, "child".to_string());
         assert!(before.iter().any(|ev| ev.operation_path == "/api"));
         assert!(after.iter().any(|ev| ev.status_code == 500));
+    }
+
+    #[test]
+    fn trace_hook_parallel_events_are_deterministic() {
+        let server = start_server_concurrent(|_method, url, _headers, _body| {
+            match url.as_str() {
+                "/slow" => thread::sleep(Duration::from_millis(60)),
+                "/fast" => thread::sleep(Duration::from_millis(5)),
+                "/mid" => thread::sleep(Duration::from_millis(20)),
+                _ => {}
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/slow".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s2".to_string(),
+                    operation_path: "/fast".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s3".to_string(),
+                    operation_path: "/mid".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }]);
+
+        let hook = Arc::new(TestTraceHook::default());
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_parallel_mode(true);
+        engine.set_trace_hook(hook.clone());
+        if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+            panic!("expected success, got: {err}");
+        }
+
+        let before = match hook.before_events.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => panic!("reading before events"),
+        };
+        let after = match hook.after_events.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => panic!("reading after events"),
+        };
+        assert_eq!(
+            before
+                .iter()
+                .map(|ev| ev.step_id.clone())
+                .collect::<Vec<_>>(),
+            vec!["s1".to_string(), "s2".to_string(), "s3".to_string()]
+        );
+        assert_eq!(
+            after
+                .iter()
+                .map(|ev| ev.step_id.clone())
+                .collect::<Vec<_>>(),
+            vec!["s1".to_string(), "s2".to_string(), "s3".to_string()]
+        );
     }
 
     #[test]

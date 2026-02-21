@@ -40,6 +40,8 @@ impl Engine {
             dry_run_reqs: Arc::new(Mutex::new(Vec::new())),
             trace_steps: Arc::new(Mutex::new(Vec::new())),
             trace_seq: Arc::new(Mutex::new(0)),
+            execution_events: Arc::new(Mutex::new(Vec::new())),
+            execution_event_seq: Arc::new(Mutex::new(0)),
             step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             trace_hook: None,
         })
@@ -70,6 +72,13 @@ impl Engine {
 
     pub fn trace_steps(&self) -> Vec<TraceStepRecord> {
         match self.trace_steps.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn execution_events(&self) -> Vec<ExecutionEvent> {
+        match self.execution_events.lock() {
             Ok(guard) => guard.clone(),
             Err(_) => Vec::new(),
         }
@@ -208,15 +217,7 @@ impl Engine {
 
             let step = workflow.steps[step_index].clone();
 
-            if let Some(hook) = &self.trace_hook {
-                hook.before_step(&StepEvent {
-                    workflow_id: workflow_id.to_string(),
-                    step_id: step.step_id.clone(),
-                    operation_path: step.operation_path.clone(),
-                    workflow_id_ref: step.workflow_id.clone(),
-                    ..StepEvent::default()
-                });
-            }
+            self.emit_before_step_event(workflow_id, &step);
 
             let attempt = if self.trace_enabled {
                 self.next_attempt(workflow_id, &step.step_id)
@@ -256,23 +257,19 @@ impl Engine {
             let duration = start.elapsed();
             let step_outputs = vars.step_outputs(&step.step_id);
 
-            if let Some(hook) = &self.trace_hook {
-                hook.after_step(&StepEvent {
-                    workflow_id: workflow_id.to_string(),
-                    step_id: step.step_id.clone(),
-                    operation_path: step.operation_path.clone(),
-                    workflow_id_ref: step.workflow_id.clone(),
-                    status_code: execution
-                        .result
-                        .response
-                        .as_ref()
-                        .map(|r| r.status_code)
-                        .unwrap_or(0),
-                    outputs: step_outputs.clone(),
-                    err: execution.result.err.clone(),
-                    duration,
-                });
-            }
+            self.emit_after_step_event(
+                workflow_id,
+                &step,
+                execution
+                    .result
+                    .response
+                    .as_ref()
+                    .map(|r| r.status_code)
+                    .unwrap_or(0),
+                step_outputs.clone(),
+                execution.result.err.clone(),
+                duration,
+            );
 
             let action = self.handle_step_result(
                 &workflow,
@@ -888,11 +885,20 @@ impl Engine {
         options: &ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let levels = build_levels(workflow)?;
-        for level in levels {
+        for mut level in levels {
             options.check()?;
+            level.sort_unstable();
             let level_vars = vars.clone();
             let mut level_results =
-                Vec::<(usize, Step, Result<StepExecution, RuntimeError>)>::new();
+                Vec::<(usize, Step, Result<ParallelStepExecution, RuntimeError>)>::new();
+
+            for idx in level.iter().copied() {
+                let step =
+                    workflow.steps.get(idx).cloned().ok_or_else(|| {
+                        RuntimeError::unspecified("invalid step index".to_string())
+                    })?;
+                self.emit_before_step_event(workflow_id, &step);
+            }
 
             std::thread::scope(|scope| -> Result<(), RuntimeError> {
                 let mut handles = Vec::new();
@@ -902,10 +908,9 @@ impl Engine {
                         RuntimeError::unspecified("invalid step index".to_string())
                     })?;
                     let step_vars = level_vars.clone();
-                    let wf_id = workflow_id.to_string();
                     let opts = options.clone();
                     handles.push(scope.spawn(move || {
-                        let result = self.execute_parallel_step(&wf_id, &step, &step_vars, &opts);
+                        let result = self.execute_parallel_step(&step, &step_vars, &opts);
                         (idx, step, result)
                     }));
                 }
@@ -959,8 +964,24 @@ impl Engine {
                         return Err(err);
                     }
                 };
+                let duration = execution.duration;
+                let execution = execution.execution;
 
                 let outputs_for_trace = execution.outputs.clone();
+                self.emit_after_step_event(
+                    workflow_id,
+                    &step,
+                    execution
+                        .result
+                        .response
+                        .as_ref()
+                        .map(|r| r.status_code)
+                        .unwrap_or(0),
+                    outputs_for_trace.clone(),
+                    execution.result.err.clone(),
+                    duration,
+                );
+
                 if !execution.result.success {
                     let err = step_result_error(&step.step_id, &execution.result);
                     if self.trace_enabled {
@@ -972,7 +993,7 @@ impl Engine {
                             kind: step_kind(&step),
                             operation_path: step.operation_path.clone(),
                             workflow_id_ref: step.workflow_id.clone(),
-                            duration_ms: 0,
+                            duration_ms: duration_ms_u64(duration),
                             request: execution.trace.request.clone(),
                             response: execution.trace.response.clone(),
                             criteria: execution.trace.criteria.clone(),
@@ -986,13 +1007,13 @@ impl Engine {
                     }
                     return Err(err);
                 }
-                if let Some(req) = execution.dry_run_request {
+                if let Some(req) = execution.dry_run_request.clone() {
                     if let Ok(mut guard) = self.dry_run_reqs.lock() {
                         guard.push(req);
                     }
                 }
-                for (name, value) in execution.outputs {
-                    vars.set_step_output(&step.step_id, &name, value);
+                for (name, value) in &execution.outputs {
+                    vars.set_step_output(&step.step_id, name, value.clone());
                 }
                 if self.trace_enabled {
                     self.push_trace_record(TraceStepRecord {
@@ -1003,7 +1024,7 @@ impl Engine {
                         kind: step_kind(&step),
                         operation_path: step.operation_path.clone(),
                         workflow_id_ref: step.workflow_id.clone(),
-                        duration_ms: 0,
+                        duration_ms: duration_ms_u64(duration),
                         request: execution.trace.request.clone(),
                         response: execution.trace.response.clone(),
                         criteria: execution.trace.criteria.clone(),
@@ -1022,44 +1043,80 @@ impl Engine {
 
     fn execute_parallel_step(
         &self,
-        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
         options: &ExecutionOptions,
-    ) -> Result<StepExecution, RuntimeError> {
+    ) -> Result<ParallelStepExecution, RuntimeError> {
         options.check()?;
-        if let Some(hook) = &self.trace_hook {
-            hook.before_step(&StepEvent {
-                workflow_id: workflow_id.to_string(),
-                step_id: step.step_id.clone(),
-                operation_path: step.operation_path.clone(),
-                workflow_id_ref: step.workflow_id.clone(),
-                ..StepEvent::default()
-            });
-        }
 
         let start = Instant::now();
         let execution = self.execute_http_step(step, vars, options)?;
         let duration = start.elapsed();
 
-        if let Some(hook) = &self.trace_hook {
-            hook.after_step(&StepEvent {
-                workflow_id: workflow_id.to_string(),
-                step_id: step.step_id.clone(),
-                operation_path: step.operation_path.clone(),
-                workflow_id_ref: step.workflow_id.clone(),
-                status_code: execution
-                    .result
-                    .response
-                    .as_ref()
-                    .map(|r| r.status_code)
-                    .unwrap_or(0),
-                outputs: execution.outputs.clone(),
-                err: execution.result.err.clone(),
-                duration,
-            });
+        Ok(ParallelStepExecution {
+            execution,
+            duration,
+        })
+    }
+
+    fn emit_before_step_event(&self, workflow_id: &str, step: &Step) {
+        self.emit_execution_event(ExecutionEvent {
+            seq: self.next_execution_event_seq(),
+            kind: ExecutionEventKind::BeforeStep,
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            operation_path: step.operation_path.clone(),
+            workflow_id_ref: step.workflow_id.clone(),
+            status_code: 0,
+            outputs: BTreeMap::new(),
+            err: None,
+            duration_ns: 0,
+        });
+    }
+
+    fn emit_after_step_event(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        status_code: i64,
+        outputs: BTreeMap<String, Value>,
+        err: Option<String>,
+        duration: Duration,
+    ) {
+        self.emit_execution_event(ExecutionEvent {
+            seq: self.next_execution_event_seq(),
+            kind: ExecutionEventKind::AfterStep,
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            operation_path: step.operation_path.clone(),
+            workflow_id_ref: step.workflow_id.clone(),
+            status_code,
+            outputs,
+            err,
+            duration_ns: duration_ns_u64(duration),
+        });
+    }
+
+    fn emit_execution_event(&self, event: ExecutionEvent) {
+        if let Ok(mut guard) = self.execution_events.lock() {
+            guard.push(event.clone());
         }
-        Ok(execution)
+        if let Some(hook) = &self.trace_hook {
+            let step_event = StepEvent {
+                workflow_id: event.workflow_id.clone(),
+                step_id: event.step_id.clone(),
+                operation_path: event.operation_path.clone(),
+                workflow_id_ref: event.workflow_id_ref.clone(),
+                status_code: event.status_code,
+                outputs: event.outputs.clone(),
+                err: event.err.clone(),
+                duration: Duration::from_nanos(event.duration_ns),
+            };
+            match event.kind {
+                ExecutionEventKind::BeforeStep => hook.before_step(&step_event),
+                ExecutionEventKind::AfterStep => hook.after_step(&step_event),
+            }
+        }
     }
 
     fn clear_trace_state(&mut self) {
@@ -1069,6 +1126,12 @@ impl Engine {
         if let Ok(mut guard) = self.trace_seq.lock() {
             *guard = 0;
         }
+        if let Ok(mut guard) = self.execution_events.lock() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = self.execution_event_seq.lock() {
+            *guard = 0;
+        }
         if let Ok(mut guard) = self.step_attempts.lock() {
             guard.clear();
         }
@@ -1076,6 +1139,16 @@ impl Engine {
 
     fn next_trace_seq(&self) -> u64 {
         match self.trace_seq.lock() {
+            Ok(mut guard) => {
+                *guard = guard.saturating_add(1);
+                *guard
+            }
+            Err(_) => 0,
+        }
+    }
+
+    fn next_execution_event_seq(&self) -> u64 {
+        match self.execution_event_seq.lock() {
             Ok(mut guard) => {
                 *guard = guard.saturating_add(1);
                 *guard
@@ -1118,6 +1191,12 @@ struct RoutedDecision {
     trace: TraceDecision,
 }
 
+#[derive(Debug, Clone)]
+struct ParallelStepExecution {
+    execution: StepExecution,
+    duration: Duration,
+}
+
 impl RoutedDecision {
     fn error(err: RuntimeError) -> Self {
         Self {
@@ -1132,6 +1211,10 @@ impl RoutedDecision {
 
 fn duration_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn duration_ns_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 fn step_kind(step: &Step) -> String {

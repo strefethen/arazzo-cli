@@ -484,6 +484,32 @@ pub struct StepEvent {
     pub duration: Duration,
 }
 
+/// Canonical runtime execution event kind.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutionEventKind {
+    BeforeStep,
+    AfterStep,
+}
+
+/// Canonical runtime execution event emitted for every step lifecycle transition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionEvent {
+    pub seq: u64,
+    pub kind: ExecutionEventKind,
+    pub workflow_id: String,
+    pub step_id: String,
+    pub operation_path: String,
+    pub workflow_id_ref: String,
+    pub status_code: i64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub err: Option<String>,
+    pub duration_ns: u64,
+}
+
 /// Hook for step-level tracing.
 pub trait TraceHook: Send + Sync {
     fn before_step(&self, event: &StepEvent);
@@ -569,6 +595,8 @@ pub struct Engine {
     dry_run_reqs: Arc<Mutex<Vec<DryRunRequest>>>,
     trace_steps: Arc<Mutex<Vec<TraceStepRecord>>>,
     trace_seq: Arc<Mutex<u64>>,
+    execution_events: Arc<Mutex<Vec<ExecutionEvent>>>,
+    execution_event_seq: Arc<Mutex<u64>>,
     step_attempts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
     trace_hook: Option<Arc<dyn TraceHook>>,
 }
