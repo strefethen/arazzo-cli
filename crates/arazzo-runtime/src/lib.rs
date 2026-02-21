@@ -2650,6 +2650,66 @@ paths:
     }
 
     #[test]
+    fn trace_records_parallel_order_is_deterministic_by_seq() {
+        let server = start_server_concurrent(|_method, url, _headers, _body| {
+            match url.as_str() {
+                "/slow" => thread::sleep(Duration::from_millis(60)),
+                "/fast" => thread::sleep(Duration::from_millis(5)),
+                "/mid" => thread::sleep(Duration::from_millis(20)),
+                _ => {}
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/slow".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s2".to_string(),
+                    operation_path: "/fast".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s3".to_string(),
+                    operation_path: "/mid".to_string(),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }]);
+
+        let mut engine = new_test_engine(&server.base_url, spec);
+        engine.set_parallel_mode(true);
+        engine.set_trace_enabled(true);
+        if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+            panic!("expected success, got: {err}");
+        }
+
+        let trace = engine.trace_steps();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(trace[0].seq, 1);
+        assert_eq!(trace[1].seq, 2);
+        assert_eq!(trace[2].seq, 3);
+        assert_eq!(trace[0].step_id, "s1");
+        assert_eq!(trace[1].step_id, "s2");
+        assert_eq!(trace[2].step_id, "s3");
+        assert_eq!(trace[0].decision.path, TraceDecisionPath::Next);
+        assert_eq!(trace[1].decision.path, TraceDecisionPath::Next);
+        assert_eq!(trace[2].decision.path, TraceDecisionPath::Next);
+        assert_eq!(trace[0].attempt, 1);
+        assert_eq!(trace[1].attempt, 1);
+        assert_eq!(trace[2].attempt, 1);
+    }
+
+    #[test]
     fn parse_method_supports_known_verbs() {
         assert_eq!(parse_method("GET /items"), ("GET", "/items"));
         assert_eq!(parse_method("POST /items"), ("POST", "/items"));

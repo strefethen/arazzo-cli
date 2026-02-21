@@ -926,9 +926,65 @@ impl Engine {
 
             level_results.sort_by_key(|(idx, _, _)| *idx);
             for (_idx, step, execution_result) in level_results {
-                let execution = execution_result?;
+                let attempt = if self.trace_enabled {
+                    self.next_attempt(workflow_id, &step.step_id)
+                } else {
+                    0
+                };
+
+                let execution = match execution_result {
+                    Ok(execution) => execution,
+                    Err(err) => {
+                        if self.trace_enabled {
+                            self.push_trace_record(TraceStepRecord {
+                                seq: self.next_trace_seq(),
+                                workflow_id: workflow_id.to_string(),
+                                step_id: step.step_id.clone(),
+                                attempt,
+                                kind: step_kind(&step),
+                                operation_path: step.operation_path.clone(),
+                                workflow_id_ref: step.workflow_id.clone(),
+                                duration_ms: 0,
+                                request: None,
+                                response: None,
+                                criteria: Vec::new(),
+                                decision: TraceDecision {
+                                    path: TraceDecisionPath::Error,
+                                    ..TraceDecision::default()
+                                },
+                                outputs: BTreeMap::new(),
+                                error: Some(err.message.clone()),
+                            });
+                        }
+                        return Err(err);
+                    }
+                };
+
+                let outputs_for_trace = execution.outputs.clone();
                 if !execution.result.success {
-                    return Err(step_result_error(&step.step_id, &execution.result));
+                    let err = step_result_error(&step.step_id, &execution.result);
+                    if self.trace_enabled {
+                        self.push_trace_record(TraceStepRecord {
+                            seq: self.next_trace_seq(),
+                            workflow_id: workflow_id.to_string(),
+                            step_id: step.step_id.clone(),
+                            attempt,
+                            kind: step_kind(&step),
+                            operation_path: step.operation_path.clone(),
+                            workflow_id_ref: step.workflow_id.clone(),
+                            duration_ms: 0,
+                            request: execution.trace.request.clone(),
+                            response: execution.trace.response.clone(),
+                            criteria: execution.trace.criteria.clone(),
+                            decision: TraceDecision {
+                                path: TraceDecisionPath::Error,
+                                ..TraceDecision::default()
+                            },
+                            outputs: outputs_for_trace,
+                            error: Some(err.message.clone()),
+                        });
+                    }
+                    return Err(err);
                 }
                 if let Some(req) = execution.dry_run_request {
                     if let Ok(mut guard) = self.dry_run_reqs.lock() {
@@ -937,6 +993,27 @@ impl Engine {
                 }
                 for (name, value) in execution.outputs {
                     vars.set_step_output(&step.step_id, &name, value);
+                }
+                if self.trace_enabled {
+                    self.push_trace_record(TraceStepRecord {
+                        seq: self.next_trace_seq(),
+                        workflow_id: workflow_id.to_string(),
+                        step_id: step.step_id.clone(),
+                        attempt,
+                        kind: step_kind(&step),
+                        operation_path: step.operation_path.clone(),
+                        workflow_id_ref: step.workflow_id.clone(),
+                        duration_ms: 0,
+                        request: execution.trace.request.clone(),
+                        response: execution.trace.response.clone(),
+                        criteria: execution.trace.criteria.clone(),
+                        decision: TraceDecision {
+                            path: TraceDecisionPath::Next,
+                            ..TraceDecision::default()
+                        },
+                        outputs: outputs_for_trace,
+                        error: execution.result.err.clone(),
+                    });
                 }
             }
         }
