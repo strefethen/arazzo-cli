@@ -1,11 +1,12 @@
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use arazzo_expr::EvalContext;
+use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::breakpoints::{first_matching_breakpoint, StepBreakpoint};
-use super::{DebugScopes, DebugStackFrame};
+use super::{DebugScopes, DebugStackFrame, WatchEvaluation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum RunMode {
@@ -57,6 +58,7 @@ struct ControllerState {
     next_seq: u64,
     current_stack: Vec<DebugStackFrame>,
     current_scopes: DebugScopes,
+    current_eval_ctx: EvalContext,
 }
 
 /// Thread-safe runtime debug gate controller for pause/resume and breakpoints.
@@ -150,6 +152,37 @@ impl DebugController {
         Ok(guard.current_scopes.clone())
     }
 
+    pub fn evaluate_expression(&self, expression: &str) -> Result<Value, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(expression))
+    }
+
+    pub fn evaluate_condition(&self, condition: &str) -> Result<bool, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate_condition(condition))
+    }
+
+    pub fn evaluate_watches(&self, expressions: &[String]) -> Result<Vec<WatchEvaluation>, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
+        Ok(expressions
+            .iter()
+            .map(|expression| WatchEvaluation {
+                expression: expression.clone(),
+                value: evaluator.evaluate(expression),
+            })
+            .collect())
+    }
+
     pub fn wait_for_stop_count(&self, expected: usize, timeout: Duration) -> Result<bool, String> {
         let deadline = Instant::now() + timeout;
         let mut guard = self
@@ -190,6 +223,7 @@ impl DebugController {
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
         guard.current_scopes = scopes;
+        guard.current_eval_ctx = eval_ctx.clone();
         upsert_stack_frame(&mut guard.current_stack, workflow_id, step_id, depth);
 
         let matched_breakpoint =
