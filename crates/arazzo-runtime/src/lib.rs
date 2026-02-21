@@ -4,6 +4,17 @@ mod runtime_core;
 
 pub use runtime_core::*;
 
+/// Stable internal runtime API baseline for trace/replay/debugger integrations.
+pub const INTERNAL_RUNTIME_API_VERSION: &str = "v1";
+
+/// Frozen v1 runtime-facing models used by CLI trace/replay/debugger plumbing.
+pub mod api_v1 {
+    pub use crate::{
+        ExecutionEvent, ExecutionEventKind, RuntimeError, RuntimeErrorKind, TraceCriterionResult,
+        TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, TraceStepRecord,
+    };
+}
+
 #[cfg(test)]
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 #[cfg(test)]
@@ -23,6 +34,7 @@ mod tests {
         SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{Info, RequestBody, SourceDescription};
+    use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3168,6 +3180,102 @@ paths:
     fn runtime_error_kind_has_stable_code() {
         let err = RuntimeError::new(RuntimeErrorKind::WorkflowNotFound, "workflow missing");
         assert_eq!(err.code(), "RUNTIME_WORKFLOW_NOT_FOUND");
+    }
+
+    #[test]
+    fn internal_runtime_api_version_is_v1() {
+        assert_eq!(super::INTERNAL_RUNTIME_API_VERSION, "v1");
+    }
+
+    proptest! {
+        #[test]
+        fn parse_method_round_trips_known_verbs(
+            method in prop_oneof![
+                Just("GET"),
+                Just("POST"),
+                Just("PUT"),
+                Just("PATCH"),
+                Just("DELETE"),
+                Just("HEAD"),
+                Just("OPTIONS"),
+            ],
+            path in "[a-zA-Z0-9/_\\-\\?=&]{0,32}",
+        ) {
+            let operation_path = format!("{method} /{path}");
+            let (parsed_method, parsed_path) = parse_method(&operation_path);
+            prop_assert_eq!(parsed_method, method);
+            prop_assert_eq!(parsed_path, format!("/{path}"));
+        }
+
+        #[test]
+        fn build_levels_respects_dependency_order_for_generated_dags(
+            size in 1usize..8usize,
+            mask in any::<u64>(),
+        ) {
+            let mut bit_index = 0u32;
+            let mut steps = Vec::<Step>::new();
+            for idx in 0..size {
+                let mut parameters = Vec::new();
+                for dep in 0..idx {
+                    let has_edge = ((mask >> bit_index) & 1) == 1;
+                    bit_index = bit_index.saturating_add(1);
+                    if has_edge {
+                        parameters.push(arazzo_spec::Parameter {
+                            name: format!("p{dep}"),
+                            in_: "query".to_string(),
+                            value: format!("$steps.s{dep}.outputs.value"),
+                            ..arazzo_spec::Parameter::default()
+                        });
+                    }
+                }
+
+                steps.push(Step {
+                    step_id: format!("s{idx}"),
+                    operation_path: format!("/s{idx}"),
+                    parameters,
+                    ..Step::default()
+                });
+            }
+
+            let workflow = Workflow {
+                workflow_id: "wf".to_string(),
+                steps,
+                ..Workflow::default()
+            };
+
+            let levels = build_levels(&workflow).unwrap_or_else(|err| {
+                panic!("expected DAG levels, got error: {err}");
+            });
+
+            let mut flattened = Vec::<usize>::new();
+            for level in &levels {
+                for step_idx in level {
+                    flattened.push(*step_idx);
+                }
+            }
+            let mut sorted = flattened.clone();
+            sorted.sort_unstable();
+            prop_assert_eq!(sorted, (0..size).collect::<Vec<_>>());
+
+            let mut rank = vec![usize::MAX; size];
+            for (level_idx, level) in levels.iter().enumerate() {
+                for step_idx in level {
+                    rank[*step_idx] = level_idx;
+                }
+            }
+
+            for step_idx in 0..size {
+                let refs = extract_step_refs(&workflow.steps[step_idx]);
+                for dep in refs {
+                    let dep_idx = dep
+                        .trim_start_matches('s')
+                        .parse::<usize>()
+                        .unwrap_or(usize::MAX);
+                    prop_assert!(dep_idx < size);
+                    prop_assert!(rank[dep_idx] < rank[step_idx]);
+                }
+            }
+        }
     }
 
     // --- XPath extraction tests ---

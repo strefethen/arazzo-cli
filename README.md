@@ -179,6 +179,10 @@ Condition operators supported:
 - This project is a generic Arazzo executor; avoid domain-specific behavior.
 - Keep CLI output machine-friendly; every command must continue supporting `--json`.
 - Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
+- Architecture and extension docs:
+  - `docs/architecture.md`
+  - `docs/extension-guide.md`
+  - `docs/internal-api-v1.md`
 
 ## Contributions
 

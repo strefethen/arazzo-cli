@@ -244,35 +244,34 @@ fn find_operator(input: &str) -> (String, usize) {
     }
 
     let mut in_quote: Option<char> = None;
-    let bytes = input.as_bytes();
-    let mut idx = 0usize;
-
-    while idx < bytes.len() {
-        let ch = bytes[idx] as char;
+    for (idx, ch) in input.char_indices() {
         if let Some(q) = in_quote {
             if ch == q {
                 in_quote = None;
             }
-            idx += 1;
             continue;
         }
         if ch == '"' || ch == '\'' {
             in_quote = Some(ch);
-            idx += 1;
             continue;
         }
 
-        if idx + 1 < bytes.len() {
-            match &input[idx..idx + 2] {
-                "!=" | ">=" | "<=" | "==" => return (input[idx..idx + 2].to_string(), idx),
-                _ => {}
-            }
+        if input[idx..].starts_with("!=") {
+            return ("!=".to_string(), idx);
+        }
+        if input[idx..].starts_with(">=") {
+            return (">=".to_string(), idx);
+        }
+        if input[idx..].starts_with("<=") {
+            return ("<=".to_string(), idx);
+        }
+        if input[idx..].starts_with("==") {
+            return ("==".to_string(), idx);
         }
 
         if ch == '>' || ch == '<' {
-            return (input[idx..idx + 1].to_string(), idx);
+            return (ch.to_string(), idx);
         }
-        idx += 1;
     }
 
     (String::new(), usize::MAX)
@@ -783,6 +782,7 @@ fn push_bracket_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
 #[cfg(test)]
 mod tests {
     use super::{compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator};
+    use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
 
@@ -1045,5 +1045,49 @@ mod tests {
             "X-Y"
         );
         assert_eq!(eval.interpolate_string("plain text"), "plain text");
+    }
+
+    proptest! {
+        #[test]
+        fn interpolate_string_preserves_prefix_and_suffix(
+            prefix in "[^$]{0,24}",
+            value in "[a-zA-Z0-9 _\\-]{0,24}",
+            suffix in "[^$]{0,24}",
+        ) {
+            let mut ctx = EvalContext::default();
+            ctx.inputs.insert("token".to_string(), json!(value.clone()));
+            let eval = ExpressionEvaluator::new(ctx);
+
+            let expr = format!("{prefix}${{inputs.token}}{suffix}");
+            let rendered = eval.interpolate_string(&expr);
+            prop_assert_eq!(rendered, format!("{prefix}{value}{suffix}"));
+        }
+
+        #[test]
+        fn response_array_len_and_index_extraction_are_consistent(
+            values in proptest::collection::vec(any::<i64>(), 0..20),
+            idx in 0usize..25usize,
+        ) {
+            let eval = ExpressionEvaluator::new(EvalContext {
+                response_body: Some(json!({"arr": values.clone()})),
+                ..EvalContext::default()
+            });
+
+            let len_value = eval.evaluate("$response.body.arr.#");
+            prop_assert_eq!(len_value, json!(values.len()));
+
+            let at_value = eval.evaluate(&format!("$response.body.arr[{idx}]"));
+            if idx < values.len() {
+                prop_assert_eq!(at_value, json!(values[idx]));
+            } else {
+                prop_assert_eq!(at_value, Value::Null);
+            }
+        }
+
+        #[test]
+        fn evaluate_condition_fuzz_input_does_not_panic(condition in ".{0,96}") {
+            let eval = ExpressionEvaluator::new(EvalContext::default());
+            let _ = eval.evaluate_condition(&condition);
+        }
     }
 }

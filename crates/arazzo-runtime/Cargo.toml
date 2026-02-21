@@ -22,4 +22,5 @@ sxd-xpath = "0.4"
 url = "2"
 
 [dev-dependencies]
+proptest = "1"
 tiny_http = "0.12"
