@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "<TOOL_VERSION>"
+  },
+  "run": {
+    "specPath": "examples/httpbin-get.arazzo.yaml",
+    "workflowId": "status-check",
+    "parallel": false,
+    "dryRun": true,
+    "timeoutMs": 300000,
+    "startedAt": "<TIMESTAMP>",
+    "finishedAt": "<TIMESTAMP>",
+    "durationMs": 0,
+    "status": "success"
+  },
+  "inputs": {
+    "code": 429.0
+  },
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "status-check",
+      "stepId": "check-status",
+      "attempt": 1,
+      "kind": "http",
+      "operationPath": "/status/{code}",
+      "durationMs": 0,
+      "request": {
+        "method": "GET",
+        "url": "https://httpbin.org/status/429.0"
+      },
+      "response": {
+        "statusCode": 200,
+        "contentType": "json",
+        "bodyBytes": 2,
+        "bodyPreview": "{}"
+      },
+      "decision": {
+        "path": "next"
+      }
+    },
+    {
+      "seq": 2,
+      "workflowId": "status-check",
+      "stepId": "handle-error",
+      "attempt": 1,
+      "kind": "http",
+      "operationPath": "/get",
+      "durationMs": 0,
+      "request": {
+        "method": "GET",
+        "url": "https://httpbin.org/get"
+      },
+      "response": {
+        "statusCode": 200,
+        "contentType": "json",
+        "bodyBytes": 2,
+        "bodyPreview": "{}"
+      },
+      "decision": {
+        "path": "next"
+      }
+    }
+  ]
+}

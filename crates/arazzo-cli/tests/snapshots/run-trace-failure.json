@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "<TOOL_VERSION>"
+  },
+  "run": {
+    "specPath": "examples/httpbin-get.arazzo.yaml",
+    "workflowId": "missing-workflow",
+    "parallel": false,
+    "dryRun": true,
+    "timeoutMs": 300000,
+    "startedAt": "<TIMESTAMP>",
+    "finishedAt": "<TIMESTAMP>",
+    "durationMs": 0,
+    "status": "failure",
+    "error": "workflow \"missing-workflow\" not found"
+  },
+  "inputs": {},
+  "steps": []
+}

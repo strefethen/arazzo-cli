@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/strefethen/arazzo-cli/docs/schemas/trace-v1.schema.json",
+  "title": "arazzo trace.v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "tool",
+    "run",
+    "inputs",
+    "steps"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "trace.v1"
+    },
+    "tool": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "specPath",
+        "workflowId",
+        "parallel",
+        "dryRun",
+        "timeoutMs",
+        "startedAt",
+        "finishedAt",
+        "durationMs",
+        "status"
+      ],
+      "properties": {
+        "specPath": {
+          "type": "string"
+        },
+        "workflowId": {
+          "type": "string"
+        },
+        "parallel": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "failure"
+          ]
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "seq",
+          "workflowId",
+          "stepId",
+          "attempt",
+          "kind",
+          "durationMs",
+          "decision"
+        ],
+        "properties": {
+          "seq": {
+            "type": "number"
+          },
+          "workflowId": {
+            "type": "string"
+          },
+          "stepId": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "operationPath": {
+            "type": "string"
+          },
+          "workflowIdRef": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "request": {
+            "type": "object"
+          },
+          "response": {
+            "type": "object"
+          },
+          "criteria": {
+            "type": "array"
+          },
+          "decision": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          },
+          "outputs": {
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

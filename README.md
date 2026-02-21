@@ -131,6 +131,12 @@ cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-ch
   - URL query params with sensitive names (for example `token`, `password`, `session`)
   - JSON fields in inputs/request bodies/outputs with sensitive keys
 
+Reference docs:
+
+- `docs/trace-schema-v1.md`
+- `docs/trace-schema-changelog.md`
+- `docs/schemas/trace-v1.schema.json`
+
 Minimal trace example:
 
 ```json

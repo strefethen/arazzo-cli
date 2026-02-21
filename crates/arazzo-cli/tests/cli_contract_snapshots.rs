@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -84,6 +85,57 @@ fn assert_snapshot(name: &str, actual: &Value) {
     }
 }
 
+fn read_json_file(path: &Path) -> Value {
+    let raw = match fs::read_to_string(path) {
+        Ok(v) => v,
+        Err(err) => panic!("reading json file {}: {err}", path.display()),
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(v) => v,
+        Err(err) => panic!("parsing json file {}: {err}", path.display()),
+    }
+}
+
+fn temp_dir(prefix: &str) -> PathBuf {
+    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(delta) => delta.as_nanos(),
+        Err(_) => 0,
+    };
+    let mut path = std::env::temp_dir();
+    path.push(format!("{}-{}-{}", prefix, std::process::id(), nanos));
+    if let Err(err) = fs::create_dir_all(&path) {
+        panic!("creating temp dir {}: {err}", path.display());
+    }
+    path
+}
+
+fn normalize_trace_snapshot(trace: &mut Value) {
+    if let Some(tool) = trace.get_mut("tool").and_then(Value::as_object_mut) {
+        tool.insert(
+            "version".to_string(),
+            Value::String("<TOOL_VERSION>".to_string()),
+        );
+    }
+    if let Some(run) = trace.get_mut("run").and_then(Value::as_object_mut) {
+        run.insert(
+            "startedAt".to_string(),
+            Value::String("<TIMESTAMP>".to_string()),
+        );
+        run.insert(
+            "finishedAt".to_string(),
+            Value::String("<TIMESTAMP>".to_string()),
+        );
+        run.insert("durationMs".to_string(), Value::Number(0.into()));
+    }
+    if let Some(steps) = trace.get_mut("steps").and_then(Value::as_array_mut) {
+        for step in steps {
+            if let Some(step_obj) = step.as_object_mut() {
+                step_obj.insert("durationMs".to_string(), Value::Number(0.into()));
+            }
+        }
+    }
+}
+
 #[test]
 fn snapshot_validate_json_contract() {
     let output = run(["--json", "validate", "examples/httpbin-get.arazzo.yaml"].as_slice());
@@ -133,4 +185,56 @@ fn snapshot_run_missing_workflow_json_contract() {
     assert!(output.status.success());
     let body = stdout_json(&output);
     assert_snapshot("run-missing-workflow.json", &body);
+}
+
+#[test]
+fn snapshot_run_trace_dry_run_contract() {
+    let temp_dir = temp_dir("arazzo-trace-snapshot");
+    let trace_path = temp_dir.join("trace.json");
+    let trace_path_str = trace_path.to_string_lossy().to_string();
+
+    let output = run([
+        "--json",
+        "run",
+        "examples/httpbin-get.arazzo.yaml",
+        "status-check",
+        "--dry-run",
+        "--input",
+        "code=429",
+        "--trace",
+        &trace_path_str,
+    ]
+    .as_slice());
+    assert!(output.status.success());
+
+    let mut trace = read_json_file(&trace_path);
+    normalize_trace_snapshot(&mut trace);
+    assert_snapshot("run-trace-dry-run.json", &trace);
+
+    let _ = fs::remove_dir_all(temp_dir);
+}
+
+#[test]
+fn snapshot_run_trace_failure_contract() {
+    let temp_dir = temp_dir("arazzo-trace-failure-snapshot");
+    let trace_path = temp_dir.join("trace.json");
+    let trace_path_str = trace_path.to_string_lossy().to_string();
+
+    let output = run([
+        "--json",
+        "run",
+        "examples/httpbin-get.arazzo.yaml",
+        "missing-workflow",
+        "--dry-run",
+        "--trace",
+        &trace_path_str,
+    ]
+    .as_slice());
+    assert!(output.status.success());
+
+    let mut trace = read_json_file(&trace_path);
+    normalize_trace_snapshot(&mut trace);
+    assert_snapshot("run-trace-failure.json", &trace);
+
+    let _ = fs::remove_dir_all(temp_dir);
 }
