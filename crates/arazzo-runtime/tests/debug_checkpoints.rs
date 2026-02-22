@@ -5,7 +5,9 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint, StepCheckpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, Step, SuccessCriterion, Workflow};
+use arazzo_spec::{
+    ArazzoSpec, Info, OnAction, SourceDescription, Step, SuccessCriterion, Workflow,
+};
 use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
@@ -105,6 +107,139 @@ fn step_over_enters_success_criteria_and_outputs_with_locals() {
     join_success(handle);
 }
 
+#[test]
+fn on_failure_action_breakpoint_hits_with_failure_locals() {
+    let server = start_server_with_status(502);
+    let mut engine = build_failure_engine(server.base_url.clone());
+    let controller = Arc::new(DebugController::new());
+    if let Err(err) = controller.set_breakpoints(vec![
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_action(0)
+    ]) {
+        panic!("setting breakpoints: {err}");
+    }
+    engine.set_debug_controller(Arc::clone(&controller));
+
+    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+
+    wait_for_stop(&controller, 1, &handle);
+    let events = read_stop_events(&controller);
+    assert_eq!(
+        events[0].checkpoint,
+        StepCheckpoint::OnFailureAction { index: 0 }
+    );
+    assert_eq!(events[0].reason, DebugStopReason::Breakpoint);
+
+    let scopes = match controller.current_scopes() {
+        Ok(scopes) => scopes,
+        Err(err) => panic!("reading scopes at onFailure action: {err}"),
+    };
+    assert_eq!(scopes.locals.get("actionBranch"), Some(&json!("onFailure")));
+    assert_eq!(scopes.locals.get("actionType"), Some(&json!("end")));
+    assert_eq!(scopes.locals.get("statusCode"), Some(&json!(502)));
+
+    if let Err(err) = controller.continue_execution() {
+        panic!("continue execution: {err}");
+    }
+    let joined = match handle.join() {
+        Ok(result) => result,
+        Err(_) => panic!("execution thread panicked"),
+    };
+    match joined {
+        Ok(_) => panic!("expected workflow execution to fail"),
+        Err(err) => {
+            assert!(
+                err.message.contains("workflow ended by onFailure action"),
+                "unexpected error message: {}",
+                err.message
+            );
+        }
+    }
+}
+
+#[test]
+fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
+    let server = start_server_with_status(503);
+    let mut engine = build_retry_engine(server.base_url.clone(), 1, 1);
+    let controller = Arc::new(DebugController::new());
+    if let Err(err) = controller.set_breakpoints(vec![
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_selected(0),
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_delay(0),
+    ]) {
+        panic!("setting breakpoints: {err}");
+    }
+    engine.set_debug_controller(Arc::clone(&controller));
+
+    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+
+    wait_for_stop(&controller, 1, &handle);
+    let events = read_stop_events(&controller);
+    assert_eq!(
+        events[0].checkpoint,
+        StepCheckpoint::OnFailureRetrySelected { action_index: 0 }
+    );
+    let scopes_selected = match controller.current_scopes() {
+        Ok(scopes) => scopes,
+        Err(err) => panic!("reading scopes at retry selected: {err}"),
+    };
+    assert_eq!(
+        scopes_selected.locals.get("actionBranch"),
+        Some(&json!("onFailure"))
+    );
+    assert_eq!(
+        scopes_selected.locals.get("retryStage"),
+        Some(&json!("selected"))
+    );
+    assert_eq!(
+        scopes_selected.locals.get("retryWillExecute"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        scopes_selected.locals.get("retryAfterSeconds"),
+        Some(&json!(1))
+    );
+
+    if let Err(err) = controller.continue_execution() {
+        panic!("continuing after retry selected: {err}");
+    }
+
+    wait_for_stop(&controller, 2, &handle);
+    let events = read_stop_events(&controller);
+    assert_eq!(
+        events[1].checkpoint,
+        StepCheckpoint::OnFailureRetryDelay { action_index: 0 }
+    );
+    let scopes_delay = match controller.current_scopes() {
+        Ok(scopes) => scopes,
+        Err(err) => panic!("reading scopes at retry delay: {err}"),
+    };
+    assert_eq!(scopes_delay.locals.get("retryStage"), Some(&json!("delay")));
+    assert_eq!(
+        scopes_delay.locals.get("retryAfterSeconds"),
+        Some(&json!(1))
+    );
+
+    if let Err(err) = controller.set_breakpoints(Vec::new()) {
+        panic!("clearing breakpoints after retry delay: {err}");
+    }
+    if let Err(err) = controller.continue_execution() {
+        panic!("continuing after retry delay: {err}");
+    }
+    let joined = match handle.join() {
+        Ok(result) => result,
+        Err(_) => panic!("execution thread panicked"),
+    };
+    match joined {
+        Ok(_) => panic!("expected workflow execution to fail after retry limit"),
+        Err(err) => {
+            assert!(
+                err.message.contains("max retries (1) exceeded"),
+                "unexpected error message: {}",
+                err.message
+            );
+        }
+    }
+}
+
 fn build_engine(base_url: String) -> Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
@@ -144,6 +279,110 @@ fn build_engine(base_url: String) -> Engine {
     }
 }
 
+fn build_failure_engine(base_url: String) -> Engine {
+    let spec = ArazzoSpec {
+        arazzo: "1.0.0".to_string(),
+        info: Info {
+            title: "debug-checkpoints-failure".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+        },
+        source_descriptions: vec![SourceDescription {
+            name: "test".to_string(),
+            url: base_url,
+            type_: "openapi".to_string(),
+        }],
+        workflows: vec![Workflow {
+            workflow_id: "wf".to_string(),
+            summary: String::new(),
+            description: String::new(),
+            inputs: None,
+            steps: vec![Step {
+                step_id: "fetch-rss".to_string(),
+                operation_path: "/rss".to_string(),
+                success_criteria: vec![SuccessCriterion {
+                    condition: "$statusCode == 200".to_string(),
+                    ..SuccessCriterion::default()
+                }],
+                on_failure: vec![
+                    OnAction {
+                        type_: "end".to_string(),
+                        criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 502".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..OnAction::default()
+                    },
+                    OnAction {
+                        type_: "retry".to_string(),
+                        criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 503".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..OnAction::default()
+                    },
+                ],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::new(),
+        }],
+        components: None,
+    };
+
+    match Engine::new(spec) {
+        Ok(engine) => engine,
+        Err(err) => panic!("creating engine: {err}"),
+    }
+}
+
+fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> Engine {
+    let spec = ArazzoSpec {
+        arazzo: "1.0.0".to_string(),
+        info: Info {
+            title: "debug-checkpoints-retry".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+        },
+        source_descriptions: vec![SourceDescription {
+            name: "test".to_string(),
+            url: base_url,
+            type_: "openapi".to_string(),
+        }],
+        workflows: vec![Workflow {
+            workflow_id: "wf".to_string(),
+            summary: String::new(),
+            description: String::new(),
+            inputs: None,
+            steps: vec![Step {
+                step_id: "fetch-rss".to_string(),
+                operation_path: "/rss".to_string(),
+                success_criteria: vec![SuccessCriterion {
+                    condition: "$statusCode == 200".to_string(),
+                    ..SuccessCriterion::default()
+                }],
+                on_failure: vec![OnAction {
+                    type_: "retry".to_string(),
+                    retry_after,
+                    retry_limit,
+                    criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 503".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::new(),
+        }],
+        components: None,
+    };
+
+    match Engine::new(spec) {
+        Ok(engine) => engine,
+        Err(err) => panic!("creating engine: {err}"),
+    }
+}
+
 #[derive(Debug)]
 struct TestServer {
     base_url: String,
@@ -161,6 +400,10 @@ impl Drop for TestServer {
 }
 
 fn start_server() -> TestServer {
+    start_server_with_status(200)
+}
+
+fn start_server_with_status(status: u16) -> TestServer {
     let server = match Server::http("127.0.0.1:0") {
         Ok(server) => server,
         Err(err) => panic!("binding checkpoint debug server: {err}"),
@@ -182,7 +425,7 @@ fn start_server() -> TestServer {
   </channel>
 </rss>"#;
                     let mut response =
-                        TinyResponse::from_string(body).with_status_code(StatusCode(200));
+                        TinyResponse::from_string(body).with_status_code(StatusCode(status));
                     if let Ok(header) =
                         Header::from_bytes(b"Content-Type".as_slice(), b"application/rss+xml")
                     {

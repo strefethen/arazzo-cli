@@ -284,14 +284,16 @@ impl Engine {
                 duration,
             );
 
-            let action = self.handle_step_result(
-                &workflow,
-                step_index,
-                &execution.result,
-                &vars,
-                &retry_count,
+            let action = self.handle_step_result(StepDecisionContext {
+                workflow_id,
+                workflow: &workflow,
+                step_idx: step_index,
+                result: &execution.result,
+                vars: &vars,
+                depth,
+                retry_count: &retry_count,
                 options,
-            );
+            });
 
             let trace_err = match &action.flow {
                 FlowDecision::Error(err) => Some(err.message.clone()),
@@ -626,32 +628,47 @@ impl Engine {
         })
     }
 
-    fn handle_step_result(
-        &self,
-        workflow: &Workflow,
-        step_idx: usize,
-        result: &StepResult,
-        vars: &VarStore,
-        retry_count: &BTreeMap<usize, usize>,
-        options: &ExecutionOptions,
-    ) -> RoutedDecision {
-        let step = workflow.steps[step_idx].clone();
+    fn handle_step_result(&self, ctx: StepDecisionContext<'_>) -> RoutedDecision {
+        let step = &ctx.workflow.steps[ctx.step_idx];
 
-        if result.success {
-            let action =
-                self.find_matching_action(&step.on_success, vars, result.response.as_ref());
+        if ctx.result.success {
+            let action = match self.find_matching_action_with_debug(
+                ActionSelectionContext {
+                    workflow_id: ctx.workflow_id,
+                    step,
+                    branch: ActionBranch::Success,
+                    vars: ctx.vars,
+                    response: ctx.result.response.as_ref(),
+                    depth: ctx.depth,
+                },
+                &step.on_success,
+            ) {
+                Ok(action) => action,
+                Err(err) => return RoutedDecision::error(err),
+            };
             if let Some(action) = action {
                 return self.execute_action(
-                    workflow,
-                    action,
-                    step_idx,
-                    false,
-                    retry_count,
-                    options,
+                    ExecuteActionContext {
+                        workflow: ctx.workflow,
+                        current_idx: ctx.step_idx,
+                        is_failure_path: false,
+                        retry_count: ctx.retry_count,
+                        options: ctx.options,
+                    },
+                    action.action,
+                    Some(SelectedActionDebugContext {
+                        workflow_id: ctx.workflow_id,
+                        step,
+                        vars: ctx.vars,
+                        response: ctx.result.response.as_ref(),
+                        depth: ctx.depth,
+                        branch: ActionBranch::Success,
+                        action_index: action.index,
+                    }),
                 );
             }
             return RoutedDecision {
-                flow: FlowDecision::Next(step_idx + 1),
+                flow: FlowDecision::Next(ctx.step_idx + 1),
                 trace: TraceDecision {
                     path: TraceDecisionPath::Next,
                     ..TraceDecision::default()
@@ -659,14 +676,46 @@ impl Engine {
             };
         }
 
-        let action = self.find_matching_action(&step.on_failure, vars, result.response.as_ref());
+        let action = match self.find_matching_action_with_debug(
+            ActionSelectionContext {
+                workflow_id: ctx.workflow_id,
+                step,
+                branch: ActionBranch::Failure,
+                vars: ctx.vars,
+                response: ctx.result.response.as_ref(),
+                depth: ctx.depth,
+            },
+            &step.on_failure,
+        ) {
+            Ok(action) => action,
+            Err(err) => return RoutedDecision::error(err),
+        };
         if let Some(action) = action {
-            return self.execute_action(workflow, action, step_idx, true, retry_count, options);
+            return self.execute_action(
+                ExecuteActionContext {
+                    workflow: ctx.workflow,
+                    current_idx: ctx.step_idx,
+                    is_failure_path: true,
+                    retry_count: ctx.retry_count,
+                    options: ctx.options,
+                },
+                action.action,
+                Some(SelectedActionDebugContext {
+                    workflow_id: ctx.workflow_id,
+                    step,
+                    vars: ctx.vars,
+                    response: ctx.result.response.as_ref(),
+                    depth: ctx.depth,
+                    branch: ActionBranch::Failure,
+                    action_index: action.index,
+                }),
+            );
         }
 
-        RoutedDecision::error(step_result_error(&step.step_id, result))
+        RoutedDecision::error(step_result_error(&step.step_id, ctx.result))
     }
 
+    #[cfg(test)]
     pub(crate) fn find_matching_action<'a>(
         &self,
         actions: &'a [OnAction],
@@ -692,22 +741,70 @@ impl Engine {
         None
     }
 
+    fn find_matching_action_with_debug<'a>(
+        &self,
+        ctx: ActionSelectionContext<'_>,
+        actions: &'a [OnAction],
+    ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
+        let eval = ExpressionEvaluator::new(ctx.vars.eval_context(ctx.response));
+        let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
+        let gate = DebugGateContext {
+            workflow_id: ctx.workflow_id,
+            step_id: &ctx.step.step_id,
+            vars: ctx.vars,
+            response: ctx.response,
+            request: None,
+            current_outputs: &current_outputs,
+            depth: ctx.depth,
+        };
+
+        for (action_index, action) in actions.iter().enumerate() {
+            self.debug_gate_action(&gate, ctx.branch, action_index, action)?;
+            if action.criteria.is_empty() {
+                return Ok(Some(MatchedActionRef {
+                    index: action_index,
+                    action,
+                }));
+            }
+
+            let mut all_match = true;
+            for (criterion_index, criterion) in action.criteria.iter().enumerate() {
+                let evaluation = evaluate_criterion_detailed(criterion, &eval, ctx.response);
+                self.debug_gate_action_criterion(
+                    &gate,
+                    ctx.branch,
+                    action_index,
+                    criterion_index,
+                    &evaluation,
+                )?;
+                if !evaluation.matched {
+                    all_match = false;
+                    break;
+                }
+            }
+            if all_match {
+                return Ok(Some(MatchedActionRef {
+                    index: action_index,
+                    action,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
     fn execute_action(
         &self,
-        workflow: &Workflow,
+        ctx: ExecuteActionContext<'_>,
         action: &OnAction,
-        current_idx: usize,
-        is_failure_path: bool,
-        retry_count: &BTreeMap<usize, usize>,
-        options: &ExecutionOptions,
+        debug_ctx: Option<SelectedActionDebugContext<'_>>,
     ) -> RoutedDecision {
         match action.type_.as_str() {
             "end" => {
-                if is_failure_path {
+                if ctx.is_failure_path {
                     RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::unspecified(format!(
                             "step {}: workflow ended by onFailure action",
-                            workflow.steps[current_idx].step_id
+                            ctx.workflow.steps[ctx.current_idx].step_id
                         ))),
                         trace: TraceDecision {
                             path: TraceDecisionPath::Done,
@@ -728,7 +825,7 @@ impl Engine {
             }
             "goto" => {
                 if !action.step_id.is_empty() {
-                    if let Some(idx) = self.find_step_index(workflow, &action.step_id) {
+                    if let Some(idx) = self.find_step_index(ctx.workflow, &action.step_id) {
                         return RoutedDecision {
                             flow: FlowDecision::Next(idx),
                             trace: TraceDecision {
@@ -780,14 +877,26 @@ impl Engine {
                 if action.retry_limit > 0 {
                     limit = usize::try_from(action.retry_limit).unwrap_or(MAX_RETRIES_PER_STEP);
                 }
-                let current = retry_count.get(&current_idx).copied().unwrap_or(0);
+                let current = ctx.retry_count.get(&ctx.current_idx).copied().unwrap_or(0);
+                let will_execute_retry = current < limit;
+                if let Some(debug) = debug_ctx {
+                    if let Err(err) = self.debug_gate_retry_selected(
+                        debug,
+                        action,
+                        current,
+                        limit,
+                        will_execute_retry,
+                    ) {
+                        return RoutedDecision::error(err);
+                    }
+                }
                 if current >= limit {
                     return RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::new(
                             RuntimeErrorKind::RetryLimitExceeded,
                             format!(
                                 "step {}: max retries ({limit}) exceeded",
-                                workflow.steps[current_idx].step_id
+                                ctx.workflow.steps[ctx.current_idx].step_id
                             ),
                         )),
                         trace: TraceDecision {
@@ -800,9 +909,15 @@ impl Engine {
                     };
                 }
                 if action.retry_after > 0 {
+                    if let Some(debug) = debug_ctx {
+                        if let Err(err) = self.debug_gate_retry_delay(debug, action, current, limit)
+                        {
+                            return RoutedDecision::error(err);
+                        }
+                    }
                     if let Err(err) = sleep_with_checks(
                         Duration::from_secs(u64::try_from(action.retry_after).unwrap_or(0)),
-                        options,
+                        ctx.options,
                     ) {
                         return RoutedDecision {
                             flow: FlowDecision::Error(err),
@@ -817,7 +932,7 @@ impl Engine {
                     }
                 }
                 RoutedDecision {
-                    flow: FlowDecision::Retry(current_idx),
+                    flow: FlowDecision::Retry(ctx.current_idx),
                     trace: TraceDecision {
                         path: TraceDecisionPath::Retry,
                         action_type: "retry".to_string(),
@@ -828,7 +943,7 @@ impl Engine {
                 }
             }
             _ => RoutedDecision {
-                flow: FlowDecision::Next(current_idx + 1),
+                flow: FlowDecision::Next(ctx.current_idx + 1),
                 trace: TraceDecision {
                     path: TraceDecisionPath::Next,
                     action_type: action.type_.clone(),
@@ -1223,6 +1338,222 @@ impl Engine {
         )
     }
 
+    fn debug_gate_action(
+        &self,
+        gate: &DebugGateContext<'_>,
+        branch: ActionBranch,
+        action_index: usize,
+        action: &OnAction,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = gate
+            .response
+            .map(|response| response.status_code)
+            .unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert(
+            "actionBranch".to_string(),
+            Value::String(branch.label().to_string()),
+        );
+        locals.insert("actionIndex".to_string(), json!(action_index));
+        locals.insert(
+            "actionType".to_string(),
+            Value::String(action.type_.clone()),
+        );
+        if !action.name.is_empty() {
+            locals.insert("actionName".to_string(), Value::String(action.name.clone()));
+        }
+        if !action.step_id.is_empty() {
+            locals.insert(
+                "actionStepId".to_string(),
+                Value::String(action.step_id.clone()),
+            );
+        }
+        if !action.workflow_id.is_empty() {
+            locals.insert(
+                "actionWorkflowId".to_string(),
+                Value::String(action.workflow_id.clone()),
+            );
+        }
+        if action.retry_after != 0 {
+            locals.insert("actionRetryAfter".to_string(), json!(action.retry_after));
+        }
+        if action.retry_limit != 0 {
+            locals.insert("actionRetryLimit".to_string(), json!(action.retry_limit));
+        }
+        if let Some(response) = gate.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        self.debug_gate_checkpoint(gate, branch.action_checkpoint(action_index), locals)
+    }
+
+    fn debug_gate_action_criterion(
+        &self,
+        gate: &DebugGateContext<'_>,
+        branch: ActionBranch,
+        action_index: usize,
+        criterion_index: usize,
+        evaluation: &CriterionEvaluation,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = gate
+            .response
+            .map(|response| response.status_code)
+            .unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert(
+            "actionBranch".to_string(),
+            Value::String(branch.label().to_string()),
+        );
+        locals.insert("actionIndex".to_string(), json!(action_index));
+        locals.insert("criterionIndex".to_string(), json!(criterion_index));
+        locals.insert(
+            "criterionCondition".to_string(),
+            Value::String(evaluation.condition.clone()),
+        );
+        locals.insert(
+            "criterionConditionResult".to_string(),
+            json!(evaluation.condition_result),
+        );
+        locals.insert("criterionMatched".to_string(), json!(evaluation.matched));
+        if !evaluation.context_expr.is_empty() {
+            locals.insert(
+                "criterionContext".to_string(),
+                Value::String(evaluation.context_expr.clone()),
+            );
+        }
+        if !evaluation.type_name.is_empty() {
+            locals.insert(
+                "criterionType".to_string(),
+                Value::String(evaluation.type_name.clone()),
+            );
+        }
+        if let Some(version) = &evaluation.type_version {
+            locals.insert(
+                "criterionTypeVersion".to_string(),
+                Value::String(version.clone()),
+            );
+        }
+        locals.insert(
+            "criterionContextValue".to_string(),
+            evaluation.context_value.clone(),
+        );
+        if let Some(error) = &evaluation.error {
+            locals.insert("criterionError".to_string(), Value::String(error.clone()));
+        }
+        if let Some(response) = gate.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        self.debug_gate_checkpoint(
+            gate,
+            branch.criterion_checkpoint(action_index, criterion_index),
+            locals,
+        )
+    }
+
+    fn debug_gate_retry_selected(
+        &self,
+        debug: SelectedActionDebugContext<'_>,
+        action: &OnAction,
+        current_retry_count: usize,
+        retry_limit_resolved: usize,
+        will_execute_retry: bool,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert(
+            "actionBranch".to_string(),
+            Value::String(debug.branch.label().to_string()),
+        );
+        locals.insert("actionIndex".to_string(), json!(debug.action_index));
+        locals.insert("actionType".to_string(), Value::String("retry".to_string()));
+        locals.insert(
+            "retryStage".to_string(),
+            Value::String("selected".to_string()),
+        );
+        locals.insert("retryCountCurrent".to_string(), json!(current_retry_count));
+        locals.insert(
+            "retryCountNext".to_string(),
+            json!(current_retry_count.saturating_add(1)),
+        );
+        locals.insert(
+            "retryLimitResolved".to_string(),
+            json!(retry_limit_resolved),
+        );
+        locals.insert("retryWillExecute".to_string(), json!(will_execute_retry));
+        locals.insert("retryAfterSeconds".to_string(), json!(action.retry_after));
+        if let Some(response) = debug.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        let current_outputs = debug.vars.step_outputs(&debug.step.step_id);
+        let gate = DebugGateContext {
+            workflow_id: debug.workflow_id,
+            step_id: &debug.step.step_id,
+            vars: debug.vars,
+            response: debug.response,
+            request: None,
+            current_outputs: &current_outputs,
+            depth: debug.depth,
+        };
+        self.debug_gate_checkpoint(
+            &gate,
+            debug.branch.retry_selected_checkpoint(debug.action_index),
+            locals,
+        )
+    }
+
+    fn debug_gate_retry_delay(
+        &self,
+        debug: SelectedActionDebugContext<'_>,
+        action: &OnAction,
+        current_retry_count: usize,
+        retry_limit_resolved: usize,
+    ) -> Result<(), RuntimeError> {
+        let mut locals = BTreeMap::new();
+        let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
+        locals.insert("statusCode".to_string(), json!(status_code));
+        locals.insert(
+            "actionBranch".to_string(),
+            Value::String(debug.branch.label().to_string()),
+        );
+        locals.insert("actionIndex".to_string(), json!(debug.action_index));
+        locals.insert("actionType".to_string(), Value::String("retry".to_string()));
+        locals.insert("retryStage".to_string(), Value::String("delay".to_string()));
+        locals.insert("retryCountCurrent".to_string(), json!(current_retry_count));
+        locals.insert(
+            "retryCountNext".to_string(),
+            json!(current_retry_count.saturating_add(1)),
+        );
+        locals.insert(
+            "retryLimitResolved".to_string(),
+            json!(retry_limit_resolved),
+        );
+        locals.insert("retryAfterSeconds".to_string(), json!(action.retry_after));
+        if let Some(response) = debug.response {
+            insert_response_locals(&mut locals, response);
+        }
+
+        let current_outputs = debug.vars.step_outputs(&debug.step.step_id);
+        let gate = DebugGateContext {
+            workflow_id: debug.workflow_id,
+            step_id: &debug.step.step_id,
+            vars: debug.vars,
+            response: debug.response,
+            request: None,
+            current_outputs: &current_outputs,
+            depth: debug.depth,
+        };
+        self.debug_gate_checkpoint(
+            &gate,
+            debug.branch.retry_delay_checkpoint(debug.action_index),
+            locals,
+        )
+    }
+
     fn debug_gate_checkpoint(
         &self,
         gate: &DebugGateContext<'_>,
@@ -1393,6 +1724,107 @@ struct DebugGateContext<'a> {
     request: Option<&'a TraceRequest>,
     current_outputs: &'a BTreeMap<String, Value>,
     depth: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MatchedActionRef<'a> {
+    index: usize,
+    action: &'a OnAction,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SelectedActionDebugContext<'a> {
+    workflow_id: &'a str,
+    step: &'a Step,
+    vars: &'a VarStore,
+    response: Option<&'a Response>,
+    depth: usize,
+    branch: ActionBranch,
+    action_index: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActionSelectionContext<'a> {
+    workflow_id: &'a str,
+    step: &'a Step,
+    branch: ActionBranch,
+    vars: &'a VarStore,
+    response: Option<&'a Response>,
+    depth: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StepDecisionContext<'a> {
+    workflow_id: &'a str,
+    workflow: &'a Workflow,
+    step_idx: usize,
+    result: &'a StepResult,
+    vars: &'a VarStore,
+    depth: usize,
+    retry_count: &'a BTreeMap<usize, usize>,
+    options: &'a ExecutionOptions,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExecuteActionContext<'a> {
+    workflow: &'a Workflow,
+    current_idx: usize,
+    is_failure_path: bool,
+    retry_count: &'a BTreeMap<usize, usize>,
+    options: &'a ExecutionOptions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionBranch {
+    Success,
+    Failure,
+}
+
+impl ActionBranch {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Success => "onSuccess",
+            Self::Failure => "onFailure",
+        }
+    }
+
+    fn action_checkpoint(self, action_index: usize) -> StepCheckpoint {
+        match self {
+            Self::Success => StepCheckpoint::OnSuccessAction {
+                index: action_index,
+            },
+            Self::Failure => StepCheckpoint::OnFailureAction {
+                index: action_index,
+            },
+        }
+    }
+
+    fn criterion_checkpoint(self, action_index: usize, criterion_index: usize) -> StepCheckpoint {
+        match self {
+            Self::Success => StepCheckpoint::OnSuccessCriterion {
+                action_index,
+                criterion_index,
+            },
+            Self::Failure => StepCheckpoint::OnFailureCriterion {
+                action_index,
+                criterion_index,
+            },
+        }
+    }
+
+    fn retry_selected_checkpoint(self, action_index: usize) -> StepCheckpoint {
+        match self {
+            Self::Success => StepCheckpoint::OnSuccessRetrySelected { action_index },
+            Self::Failure => StepCheckpoint::OnFailureRetrySelected { action_index },
+        }
+    }
+
+    fn retry_delay_checkpoint(self, action_index: usize) -> StepCheckpoint {
+        match self {
+            Self::Success => StepCheckpoint::OnSuccessRetryDelay { action_index },
+            Self::Failure => StepCheckpoint::OnFailureRetryDelay { action_index },
+        }
+    }
 }
 
 impl RoutedDecision {

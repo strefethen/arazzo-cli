@@ -10,6 +10,32 @@ pub enum StepCheckpoint {
     SuccessCriterion {
         index: usize,
     },
+    OnSuccessAction {
+        index: usize,
+    },
+    OnSuccessCriterion {
+        action_index: usize,
+        criterion_index: usize,
+    },
+    OnFailureAction {
+        index: usize,
+    },
+    OnFailureCriterion {
+        action_index: usize,
+        criterion_index: usize,
+    },
+    OnSuccessRetrySelected {
+        action_index: usize,
+    },
+    OnSuccessRetryDelay {
+        action_index: usize,
+    },
+    OnFailureRetrySelected {
+        action_index: usize,
+    },
+    OnFailureRetryDelay {
+        action_index: usize,
+    },
     Output {
         name: String,
     },
@@ -44,6 +70,52 @@ impl StepBreakpoint {
 
     pub fn at_output(mut self, name: impl Into<String>) -> Self {
         self.checkpoint = StepCheckpoint::Output { name: name.into() };
+        self
+    }
+
+    pub fn at_on_success_action(mut self, index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnSuccessAction { index };
+        self
+    }
+
+    pub fn at_on_success_criterion(mut self, action_index: usize, criterion_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnSuccessCriterion {
+            action_index,
+            criterion_index,
+        };
+        self
+    }
+
+    pub fn at_on_failure_action(mut self, index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnFailureAction { index };
+        self
+    }
+
+    pub fn at_on_failure_criterion(mut self, action_index: usize, criterion_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnFailureCriterion {
+            action_index,
+            criterion_index,
+        };
+        self
+    }
+
+    pub fn at_on_success_retry_selected(mut self, action_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnSuccessRetrySelected { action_index };
+        self
+    }
+
+    pub fn at_on_success_retry_delay(mut self, action_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnSuccessRetryDelay { action_index };
+        self
+    }
+
+    pub fn at_on_failure_retry_selected(mut self, action_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnFailureRetrySelected { action_index };
+        self
+    }
+
+    pub fn at_on_failure_retry_delay(mut self, action_index: usize) -> Self {
+        self.checkpoint = StepCheckpoint::OnFailureRetryDelay { action_index };
         self
     }
 
