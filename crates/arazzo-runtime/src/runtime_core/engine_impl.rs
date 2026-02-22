@@ -1255,40 +1255,7 @@ impl Engine {
             .unwrap_or(0);
         locals.insert("statusCode".to_string(), json!(status_code));
         locals.insert("criterionIndex".to_string(), json!(index));
-        locals.insert(
-            "criterionCondition".to_string(),
-            Value::String(evaluation.condition.clone()),
-        );
-        locals.insert(
-            "criterionConditionResult".to_string(),
-            json!(evaluation.condition_result),
-        );
-        locals.insert("criterionMatched".to_string(), json!(evaluation.matched));
-        if !evaluation.context_expr.is_empty() {
-            locals.insert(
-                "criterionContext".to_string(),
-                Value::String(evaluation.context_expr.clone()),
-            );
-        }
-        if !evaluation.type_name.is_empty() {
-            locals.insert(
-                "criterionType".to_string(),
-                Value::String(evaluation.type_name.clone()),
-            );
-        }
-        if let Some(version) = &evaluation.type_version {
-            locals.insert(
-                "criterionTypeVersion".to_string(),
-                Value::String(version.clone()),
-            );
-        }
-        locals.insert(
-            "criterionContextValue".to_string(),
-            evaluation.context_value.clone(),
-        );
-        if let Some(error) = &evaluation.error {
-            locals.insert("criterionError".to_string(), Value::String(error.clone()));
-        }
+        insert_criterion_locals(&mut locals, evaluation);
         if let Some(request) = gate.request {
             insert_request_locals(&mut locals, request);
         }
@@ -1351,11 +1318,7 @@ impl Engine {
             .map(|response| response.status_code)
             .unwrap_or(0);
         locals.insert("statusCode".to_string(), json!(status_code));
-        locals.insert(
-            "actionBranch".to_string(),
-            Value::String(branch.label().to_string()),
-        );
-        locals.insert("actionIndex".to_string(), json!(action_index));
+        insert_action_branch_locals(&mut locals, branch, action_index);
         locals.insert(
             "actionType".to_string(),
             Value::String(action.type_.clone()),
@@ -1402,46 +1365,9 @@ impl Engine {
             .map(|response| response.status_code)
             .unwrap_or(0);
         locals.insert("statusCode".to_string(), json!(status_code));
-        locals.insert(
-            "actionBranch".to_string(),
-            Value::String(branch.label().to_string()),
-        );
-        locals.insert("actionIndex".to_string(), json!(action_index));
+        insert_action_branch_locals(&mut locals, branch, action_index);
         locals.insert("criterionIndex".to_string(), json!(criterion_index));
-        locals.insert(
-            "criterionCondition".to_string(),
-            Value::String(evaluation.condition.clone()),
-        );
-        locals.insert(
-            "criterionConditionResult".to_string(),
-            json!(evaluation.condition_result),
-        );
-        locals.insert("criterionMatched".to_string(), json!(evaluation.matched));
-        if !evaluation.context_expr.is_empty() {
-            locals.insert(
-                "criterionContext".to_string(),
-                Value::String(evaluation.context_expr.clone()),
-            );
-        }
-        if !evaluation.type_name.is_empty() {
-            locals.insert(
-                "criterionType".to_string(),
-                Value::String(evaluation.type_name.clone()),
-            );
-        }
-        if let Some(version) = &evaluation.type_version {
-            locals.insert(
-                "criterionTypeVersion".to_string(),
-                Value::String(version.clone()),
-            );
-        }
-        locals.insert(
-            "criterionContextValue".to_string(),
-            evaluation.context_value.clone(),
-        );
-        if let Some(error) = &evaluation.error {
-            locals.insert("criterionError".to_string(), Value::String(error.clone()));
-        }
+        insert_criterion_locals(&mut locals, evaluation);
         if let Some(response) = gate.response {
             insert_response_locals(&mut locals, response);
         }
@@ -1464,27 +1390,15 @@ impl Engine {
         let mut locals = BTreeMap::new();
         let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
         locals.insert("statusCode".to_string(), json!(status_code));
-        locals.insert(
-            "actionBranch".to_string(),
-            Value::String(debug.branch.label().to_string()),
-        );
-        locals.insert("actionIndex".to_string(), json!(debug.action_index));
-        locals.insert("actionType".to_string(), Value::String("retry".to_string()));
-        locals.insert(
-            "retryStage".to_string(),
-            Value::String("selected".to_string()),
-        );
-        locals.insert("retryCountCurrent".to_string(), json!(current_retry_count));
-        locals.insert(
-            "retryCountNext".to_string(),
-            json!(current_retry_count.saturating_add(1)),
-        );
-        locals.insert(
-            "retryLimitResolved".to_string(),
-            json!(retry_limit_resolved),
+        insert_action_branch_locals(&mut locals, debug.branch, debug.action_index);
+        insert_retry_locals(
+            &mut locals,
+            "selected",
+            current_retry_count,
+            retry_limit_resolved,
+            action.retry_after,
         );
         locals.insert("retryWillExecute".to_string(), json!(will_execute_retry));
-        locals.insert("retryAfterSeconds".to_string(), json!(action.retry_after));
         if let Some(response) = debug.response {
             insert_response_locals(&mut locals, response);
         }
@@ -1516,23 +1430,14 @@ impl Engine {
         let mut locals = BTreeMap::new();
         let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
         locals.insert("statusCode".to_string(), json!(status_code));
-        locals.insert(
-            "actionBranch".to_string(),
-            Value::String(debug.branch.label().to_string()),
+        insert_action_branch_locals(&mut locals, debug.branch, debug.action_index);
+        insert_retry_locals(
+            &mut locals,
+            "delay",
+            current_retry_count,
+            retry_limit_resolved,
+            action.retry_after,
         );
-        locals.insert("actionIndex".to_string(), json!(debug.action_index));
-        locals.insert("actionType".to_string(), Value::String("retry".to_string()));
-        locals.insert("retryStage".to_string(), Value::String("delay".to_string()));
-        locals.insert("retryCountCurrent".to_string(), json!(current_retry_count));
-        locals.insert(
-            "retryCountNext".to_string(),
-            json!(current_retry_count.saturating_add(1)),
-        );
-        locals.insert(
-            "retryLimitResolved".to_string(),
-            json!(retry_limit_resolved),
-        );
-        locals.insert("retryAfterSeconds".to_string(), json!(action.retry_after));
         if let Some(response) = debug.response {
             insert_response_locals(&mut locals, response);
         }
@@ -1874,6 +1779,76 @@ fn build_trace_response(response: &Response) -> TraceResponse {
         body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
         body_preview,
     }
+}
+
+fn insert_criterion_locals(locals: &mut BTreeMap<String, Value>, evaluation: &CriterionEvaluation) {
+    locals.insert(
+        "criterionCondition".to_string(),
+        Value::String(evaluation.condition.clone()),
+    );
+    locals.insert(
+        "criterionConditionResult".to_string(),
+        json!(evaluation.condition_result),
+    );
+    locals.insert("criterionMatched".to_string(), json!(evaluation.matched));
+    if !evaluation.context_expr.is_empty() {
+        locals.insert(
+            "criterionContext".to_string(),
+            Value::String(evaluation.context_expr.clone()),
+        );
+    }
+    if !evaluation.type_name.is_empty() {
+        locals.insert(
+            "criterionType".to_string(),
+            Value::String(evaluation.type_name.clone()),
+        );
+    }
+    if let Some(version) = &evaluation.type_version {
+        locals.insert(
+            "criterionTypeVersion".to_string(),
+            Value::String(version.clone()),
+        );
+    }
+    locals.insert(
+        "criterionContextValue".to_string(),
+        evaluation.context_value.clone(),
+    );
+    if let Some(error) = &evaluation.error {
+        locals.insert("criterionError".to_string(), Value::String(error.clone()));
+    }
+}
+
+fn insert_action_branch_locals(
+    locals: &mut BTreeMap<String, Value>,
+    branch: ActionBranch,
+    action_index: usize,
+) {
+    locals.insert(
+        "actionBranch".to_string(),
+        Value::String(branch.label().to_string()),
+    );
+    locals.insert("actionIndex".to_string(), json!(action_index));
+}
+
+fn insert_retry_locals(
+    locals: &mut BTreeMap<String, Value>,
+    stage: &str,
+    current_retry_count: usize,
+    retry_limit_resolved: usize,
+    retry_after: i64,
+) {
+    locals.insert("actionType".to_string(), Value::String("retry".to_string()));
+    locals.insert("retryStage".to_string(), Value::String(stage.to_string()));
+    locals.insert("retryCountCurrent".to_string(), json!(current_retry_count));
+    locals.insert(
+        "retryCountNext".to_string(),
+        json!(current_retry_count.saturating_add(1)),
+    );
+    locals.insert(
+        "retryLimitResolved".to_string(),
+        json!(retry_limit_resolved),
+    );
+    locals.insert("retryAfterSeconds".to_string(), json!(retry_after));
 }
 
 fn insert_request_locals(locals: &mut BTreeMap<String, Value>, request: &TraceRequest) {
