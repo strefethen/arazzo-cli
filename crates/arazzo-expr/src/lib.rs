@@ -215,6 +215,9 @@ fn split_outside_quotes<'a>(input: &'a str, delim: &'a str) -> Option<Vec<&'a st
     let mut found = false;
 
     for (idx, ch) in input.char_indices() {
+        if idx < start {
+            continue;
+        }
         if let Some(q) = in_quote {
             if ch == q {
                 in_quote = None;

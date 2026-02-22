@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 16fcd5a20976d9531e7b8ac409e58dcf3d7f7eeca642b93fd8ad3288000427aa # shrinks to prefix = "", value = "", suffix = "a"
 cc 9cd95269fb5719ca95dd845fc174b18b74aa77791912c41011988771e8f954fc # shrinks to condition = "¡¡"
+cc de747cb01dcee018ca72dac8b5e908c3be4478670d8ea2d47d607e9d2a5e955a # shrinks to condition = "&&&"
