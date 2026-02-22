@@ -9,6 +9,25 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{json, Number, Value};
 
+/// Error produced when evaluating an Arazzo dot-notation path against a JSON value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathError {
+    /// The path string could not be tokenized (e.g. unclosed bracket, empty filter).
+    InvalidSyntax { path: String, detail: String },
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSyntax { path, detail } => {
+                write!(f, "invalid path syntax \"{path}\": {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PathError {}
+
 static INTERPOLATE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_\.]*(?:\[[0-9]+\])*)")
         .unwrap_or_else(|err| panic!("failed to compile interpolate regex: {err}"))
@@ -99,7 +118,7 @@ impl ExpressionEvaluator {
 
         if let Some(path) = rest.strip_prefix("response.body.") {
             if let Some(body) = &self.ctx.response_body {
-                return extract_json_path(body, path);
+                return resolve_dot_path(body, path).unwrap_or(Value::Null);
             }
             return Value::Null;
         }
@@ -448,31 +467,31 @@ fn is_truthy(value: &Value) -> bool {
     }
 }
 
-fn extract_json_path(root: &Value, path: &str) -> Value {
+fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
     if path.is_empty() {
-        return root.clone();
+        return Ok(root.clone());
     }
     let tokens = tokenize_path(path);
     if tokens.is_empty() {
-        return Value::Null;
+        return Ok(Value::Null);
     }
 
     let mut current = vec![root];
     for (idx, token) in tokens.iter().copied().enumerate() {
         let is_last = idx + 1 == tokens.len();
         if matches!(token, PathToken::Hash) && is_last {
-            return terminal_hash_value(&current);
+            return Ok(terminal_hash_value(&current));
         }
         current = apply_path_token(&current, token);
         if current.is_empty() {
-            return Value::Null;
+            return Ok(Value::Null);
         }
     }
 
     if current.len() == 1 {
-        current[0].clone()
+        Ok(current[0].clone())
     } else {
-        Value::Array(current.into_iter().cloned().collect())
+        Ok(Value::Array(current.into_iter().cloned().collect()))
     }
 }
 
@@ -596,7 +615,7 @@ fn filter_matches(item: &Value, expr: FilterExpr<'_>) -> bool {
     let left = if path.is_empty() || path == "@" || path == "$" {
         item.clone()
     } else {
-        extract_json_path(item, path)
+        resolve_dot_path(item, path).unwrap_or(Value::Null)
     };
 
     match expr.op {
