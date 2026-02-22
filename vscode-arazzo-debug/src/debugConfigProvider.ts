@@ -23,6 +23,9 @@ export class ArazzoDebugConfigurationProvider
     if (!resolved.inputs) {
       resolved.inputs = {};
     }
+    if (typeof resolved.stopOnEntry !== "boolean") {
+      resolved.stopOnEntry = false;
+    }
 
     if (!resolved.spec || !resolved.workflowId) {
       void vscode.window.showErrorMessage(

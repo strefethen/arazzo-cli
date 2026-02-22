@@ -17,18 +17,15 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "breakpoints": [
+      {
+        "language": "yaml"
+      }
+    ],
     "debuggers": [
       {
         "type": "arazzo",
         "label": "Arazzo",
-        "breakpoints": [
-          {
-            "language": "yaml"
-          },
-          {
-            "language": "yml"
-          }
-        ],
         "languages": [
           "yaml"
         ],
@@ -51,6 +48,11 @@
                 "type": "object",
                 "description": "Input key/value map passed to workflow execution.",
                 "default": {}
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause immediately at workflow entry before the first step.",
+                "default": false
               },
               "runtimeExecutable": {
                 "type": "string",
