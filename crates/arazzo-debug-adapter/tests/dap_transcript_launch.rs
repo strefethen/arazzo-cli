@@ -5,14 +5,19 @@ mod dap_test_support;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arazzo_debug_adapter::run_dap_stdio;
 use serde_json::json;
+use tiny_http::{Response as TinyResponse, Server, StatusCode};
 
 #[test]
 fn dap_launch_lifecycle_populates_debug_views() {
-    let spec_path = match write_temp_spec() {
+    let server = start_server();
+    let spec_path = match write_temp_spec(&server.base_url) {
         Ok(path) => path,
         Err(err) => panic!("creating launch transcript temp spec: {err}"),
     };
@@ -31,7 +36,8 @@ fn dap_launch_lifecycle_populates_debug_views() {
             "command": "launch",
             "arguments": {
                 "spec": spec_path_str,
-                "workflowId": "get-hackernews"
+                "workflowId": "get-hackernews",
+                "stopOnEntry": true
             }
         }),
         json!({
@@ -95,10 +101,10 @@ fn dap_launch_lifecycle_populates_debug_views() {
             "arguments": {}
         }),
     ]);
-    let mut reader = Cursor::new(input);
+    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
 
-    let run = run_dap_stdio(&mut reader, &mut output);
+    let run = run_dap_stdio(reader, &mut output);
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
@@ -185,28 +191,75 @@ fn dap_launch_lifecycle_populates_debug_views() {
     let _ = fs::remove_file(spec_path);
 }
 
-fn write_temp_spec() -> Result<PathBuf, String> {
+fn write_temp_spec(base_url: &str) -> Result<PathBuf, String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-launch-{nanos}.yaml"));
-    let spec = r#"
+    let spec = format!(
+        r#"
 arazzo: "1.0.0"
 info:
   title: Demo
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: https://example.com
+    url: {base_url}
     type: openapi
 workflows:
   - workflowId: get-hackernews
     steps:
       - stepId: fetch-rss
-        operationPath: https://example.com/rss
+        operationPath: {base_url}/rss
       - stepId: parse-rss
-        operationPath: https://example.com/parse
-"#;
+        operationPath: {base_url}/parse
+"#
+    );
     fs::write(&path, spec).map_err(|err| format!("writing temp spec: {err}"))?;
     Ok(path)
+}
+
+#[derive(Debug)]
+struct TestServer {
+    base_url: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start_server() -> TestServer {
+    let server = match Server::http("127.0.0.1:0") {
+        Ok(server) => server,
+        Err(err) => panic!("binding launch test server: {err}"),
+    };
+    let base_url = format!("http://{}", server.server_addr());
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match server.recv_timeout(Duration::from_millis(20)) {
+                Ok(Some(request)) => {
+                    let response =
+                        TinyResponse::from_string("ok").with_status_code(StatusCode(200));
+                    let _ = request.respond(response);
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    TestServer {
+        base_url,
+        stop,
+        handle: Some(handle),
+    }
 }

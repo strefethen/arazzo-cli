@@ -319,6 +319,21 @@ impl DebugController {
         Ok(())
     }
 
+    pub fn force_resume(&self) -> Result<(), String> {
+        let mut guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        if !guard.waiting {
+            return Ok(());
+        }
+        guard.run_mode = RunMode::Continue;
+        guard.pause_requested = false;
+        guard.continue_permit = true;
+        self.condvar.notify_all();
+        Ok(())
+    }
+
     fn arm_run_mode(&self, mode: RunMode) -> Result<(), String> {
         let mut guard = self
             .state

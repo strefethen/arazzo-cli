@@ -31,7 +31,8 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
             "command": "launch",
             "arguments": {
                 "spec": spec_path.to_string_lossy(),
-                "workflowId": "get-hackernews"
+                "workflowId": "get-hackernews",
+                "stopOnEntry": true
             }
         }),
         json!({
@@ -73,26 +74,38 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         json!({
             "seq": 9,
             "type": "request",
+            "command": "variables",
+            "arguments": { "variablesReference": 2 }
+        }),
+        json!({
+            "seq": 10,
+            "type": "request",
+            "command": "variables",
+            "arguments": { "variablesReference": 3 }
+        }),
+        json!({
+            "seq": 11,
+            "type": "request",
             "command": "evaluate",
             "arguments": { "expression": "//item[1]/link" }
         }),
         json!({
-            "seq": 10,
+            "seq": 12,
             "type": "request",
             "command": "continue",
             "arguments": {}
         }),
         json!({
-            "seq": 11,
+            "seq": 13,
             "type": "request",
             "command": "disconnect",
             "arguments": {}
         }),
     ]);
 
-    let mut reader = Cursor::new(input);
+    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
-    let run = run_dap_stdio(&mut reader, &mut output);
+    let run = run_dap_stdio(reader, &mut output);
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
@@ -133,6 +146,70 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         Some("https://example.com/one")
     );
 
+    let scopes_response = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("scopes")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(7)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let scopes = scopes_response
+        .pointer("/body/scopes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(scopes
+        .iter()
+        .any(|scope| { scope.get("name").and_then(|v| v.as_str()) == Some("Request") }));
+    assert!(scopes
+        .iter()
+        .any(|scope| { scope.get("name").and_then(|v| v.as_str()) == Some("Response") }));
+
+    let request_variables = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("variables")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(9)
+        })
+        .and_then(|message| message.pointer("/body/variables"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(request_variables.iter().any(|entry| {
+        entry.get("name").and_then(|v| v.as_str()) == Some("method")
+            && entry.get("value").and_then(|v| v.as_str()) == Some("GET")
+    }));
+    assert!(request_variables.iter().any(|entry| {
+        entry.get("name").and_then(|v| v.as_str()) == Some("url")
+            && entry
+                .get("value")
+                .and_then(|v| v.as_str())
+                .is_some_and(|value| value.contains("/rss"))
+    }));
+
+    let response_variables = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("variables")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(10)
+        })
+        .and_then(|message| message.pointer("/body/variables"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(response_variables.iter().any(|entry| {
+        entry.get("name").and_then(|v| v.as_str()) == Some("statusCode")
+            && entry.get("value").and_then(|v| v.as_str()) == Some("200")
+    }));
+    assert!(response_variables.iter().any(|entry| {
+        entry.get("name").and_then(|v| v.as_str()) == Some("bodyPreview")
+            && entry
+                .get("value")
+                .and_then(|v| v.as_str())
+                .is_some_and(|value| value.contains("<rss"))
+    }));
+
     let evaluate_title = messages
         .iter()
         .find(|message| {
@@ -152,7 +229,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(9)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(11)
         })
         .cloned()
         .unwrap_or_else(|| json!({}));

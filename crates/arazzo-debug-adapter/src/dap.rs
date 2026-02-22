@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{BufRead, Read, Write};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use arazzo_runtime::{
-    DebugController, DebugScopes, DebugStopEvent, DebugStopReason, Engine, RuntimeError,
-    StepBreakpoint, StepCheckpoint,
+    DebugController, DebugScopes, DebugStopEvent, DebugStopReason, Engine, ExecutionOptions,
+    RuntimeError, StepBreakpoint, StepCheckpoint,
 };
 use serde_json::{json, Value};
 
@@ -28,8 +29,20 @@ use responses::{
 const MAIN_THREAD_ID: u64 = 1;
 const FRAME_ID_BASE: u64 = 100;
 const BREAKPOINT_NEAREST_LINE_THRESHOLD: u32 = 10;
-const STOP_WAIT_SLICE: Duration = Duration::from_millis(40);
-const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const INLINE_EVENT_TIMEOUT: Duration = Duration::from_millis(100);
+const ENGINE_MONITOR_POLL: Duration = Duration::from_millis(25);
+
+enum DapCommand {
+    Request(DapRequest),
+    Eof,
+    ReadError(String),
+}
+
+enum EngineEvent {
+    Stopped(DebugStopEvent),
+    Terminated,
+    Panicked,
+}
 
 #[derive(Debug, Clone)]
 struct LaunchConfig {
@@ -37,6 +50,7 @@ struct LaunchConfig {
     workflow_id: String,
     inputs: BTreeMap<String, Value>,
     dry_run: bool,
+    stop_on_entry: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -51,33 +65,47 @@ struct IndexedCheckpoint {
 struct SourceIndex {
     path: String,
     checkpoints: Vec<IndexedCheckpoint>,
+    line_contexts: BTreeMap<u32, SourceLineContext>,
     output_expressions: BTreeMap<(String, String, String), String>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceLineContext {
+    workflow_id: String,
+    step_id: String,
+    area: BreakpointArea,
+    prefer_forward_snap: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BreakpointArea {
+    Step,
+    SuccessCriteria,
+    OnSuccess,
+    OnFailure,
+    Outputs,
+}
+
+impl BreakpointArea {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Step => "step",
+            Self::SuccessCriteria => "successCriteria",
+            Self::OnSuccess => "onSuccess",
+            Self::OnFailure => "onFailure",
+            Self::Outputs => "outputs",
+        }
+    }
 }
 
 #[derive(Debug)]
 struct RuntimeSession {
     controller: Arc<DebugController>,
-    handle: Option<thread::JoinHandle<Result<BTreeMap<String, Value>, RuntimeError>>>,
-    delivered_stop_events: usize,
+    cancel_flag: Arc<AtomicBool>,
+    monitor_handle: Option<thread::JoinHandle<()>>,
     last_stop: Option<DebugStopEvent>,
     terminated: bool,
     variable_store: VariableStore,
-}
-
-impl RuntimeSession {
-    fn new(
-        controller: Arc<DebugController>,
-        handle: thread::JoinHandle<Result<BTreeMap<String, Value>, RuntimeError>>,
-    ) -> Self {
-        Self {
-            controller,
-            handle: Some(handle),
-            delivered_stop_events: 0,
-            last_stop: None,
-            terminated: false,
-            variable_store: VariableStore::default(),
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -145,197 +173,338 @@ impl OutboundSequence {
 }
 
 /// Runs a runtime-backed DAP loop over stdio using Content-Length framing.
-pub fn run_dap_stdio<R, W>(reader: &mut R, writer: &mut W) -> Result<(), String>
+///
+/// Decouples stdin reading, engine event monitoring, and command processing
+/// across three threads to prevent deadlocks when HTTP requests exceed any
+/// single polling timeout.
+pub fn run_dap_stdio<R, W>(reader: R, writer: &mut W) -> Result<(), String>
 where
-    R: BufRead + Read,
+    R: BufRead + Read + Send + 'static,
     W: Write,
 {
     let mut state = SessionState::default();
     let mut outbound = OutboundSequence::new();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<DapCommand>();
+    let (event_tx, event_rx) = mpsc::channel::<EngineEvent>();
 
+    // Thread A: reads DAP commands from stdin and sends them to the coordinator.
+    thread::spawn(move || {
+        let mut reader = reader;
+        loop {
+            match read_dap_message(&mut reader) {
+                Ok(Some(payload)) => match serde_json::from_str::<DapRequest>(&payload) {
+                    Ok(request) => {
+                        if cmd_tx.send(DapCommand::Request(request)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = cmd_tx.send(DapCommand::ReadError(format!(
+                            "parsing DAP request JSON: {err}"
+                        )));
+                        break;
+                    }
+                },
+                Ok(None) => {
+                    let _ = cmd_tx.send(DapCommand::Eof);
+                    break;
+                }
+                Err(err) => {
+                    let _ = cmd_tx.send(DapCommand::ReadError(err));
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut stdin_closed = false;
+
+    // Coordinator loop (Thread B / main thread): multiplexes commands and engine
+    // events. Neither channel blocks the other—engine events arrive via Thread C
+    // regardless of whether stdin is readable.
     loop {
-        let Some(payload) = read_dap_message(reader)? else {
-            break;
+        // Drain any pending engine events first.
+        while let Ok(event) = event_rx.try_recv() {
+            handle_engine_event(event, &mut state, writer, &mut outbound)?;
+        }
+
+        // Check for the next command.
+        let cmd = if stdin_closed {
+            None
+        } else {
+            match cmd_rx.try_recv() {
+                Ok(cmd) => Some(cmd),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    stdin_closed = true;
+                    None
+                }
+            }
         };
-        let request: DapRequest = serde_json::from_str(&payload)
-            .map_err(|err| format!("parsing DAP request JSON: {err}"))?;
 
-        let command = request.command.clone();
-        match command.as_str() {
-            "initialize" => {
-                let response = response_with_body(
-                    outbound.alloc(),
-                    &command,
-                    initialize_capabilities(),
-                    request.seq,
-                );
-                write_dap_message(writer, &response)?;
-                write_dap_message(writer, &initialized_event(outbound.alloc()))?;
-            }
-            "launch" => {
-                let launch = parse_launch_config(&request.arguments)?;
-                state.launch = Some(launch.clone());
-                state.source_index = build_source_index(&launch.spec).ok();
-                rebuild_runtime_breakpoints(&mut state);
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "setBreakpoints" => {
-                let (source_path, breakpoints) = parse_breakpoints(&request.arguments);
-                let source_path =
-                    source_path.or_else(|| state.launch.as_ref().map(|l| l.spec.clone()));
-                let Some(source_path) = source_path else {
-                    let response = error_response(
-                        outbound.alloc(),
-                        &command,
-                        request.seq,
-                        "setBreakpoints requires source.path".to_string(),
-                    );
-                    write_dap_message(writer, &response)?;
-                    continue;
-                };
-
-                state
-                    .pending_breakpoints
-                    .insert(source_path.clone(), breakpoints.clone());
-                if state
-                    .source_index
+        let Some(cmd) = cmd else {
+            // No command available — check exit conditions.
+            if stdin_closed {
+                let engine_done = state
+                    .runtime
                     .as_ref()
-                    .is_none_or(|index| index.path != source_path)
-                {
-                    state.source_index = build_source_index(&source_path).ok();
+                    .is_none_or(|runtime| runtime.terminated);
+                if engine_done {
+                    break;
                 }
+            }
+            thread::sleep(Duration::from_millis(5));
+            continue;
+        };
 
-                let resolved =
-                    resolve_source_breakpoints(&source_path, &breakpoints, &state).resolved;
-                rebuild_runtime_breakpoints(&mut state);
-                sync_runtime_breakpoints(&mut state)?;
+        match cmd {
+            DapCommand::Eof => {
+                stdin_closed = true;
+                let engine_done = state
+                    .runtime
+                    .as_ref()
+                    .is_none_or(|runtime| runtime.terminated);
+                if engine_done {
+                    break;
+                }
+            }
+            DapCommand::ReadError(err) => {
+                return Err(err);
+            }
+            DapCommand::Request(request) => {
+                let command = request.command.clone();
+                match command.as_str() {
+                    "initialize" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            initialize_capabilities(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        write_dap_message(writer, &initialized_event(outbound.alloc()))?;
+                    }
+                    "launch" => {
+                        let launch = parse_launch_config(&request.arguments)?;
+                        state.launch = Some(launch.clone());
+                        state.source_index = build_source_index(&launch.spec).ok();
+                        rebuild_runtime_breakpoints(&mut state);
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                    }
+                    "setBreakpoints" => {
+                        let (source_path, breakpoints) = parse_breakpoints(&request.arguments);
+                        let source_path =
+                            source_path.or_else(|| state.launch.as_ref().map(|l| l.spec.clone()));
+                        let Some(source_path) = source_path else {
+                            let response = error_response(
+                                outbound.alloc(),
+                                &command,
+                                request.seq,
+                                "setBreakpoints requires source.path".to_string(),
+                            );
+                            write_dap_message(writer, &response)?;
+                            continue;
+                        };
 
-                let body = set_breakpoints_body(&resolved);
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "setExceptionBreakpoints" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "configurationDone" => {
-                if let Err(err) = ensure_runtime_started(&mut state) {
-                    let response = error_response(outbound.alloc(), &command, request.seq, err);
-                    write_dap_message(writer, &response)?;
-                    continue;
+                        state
+                            .pending_breakpoints
+                            .insert(source_path.clone(), breakpoints.clone());
+                        if state
+                            .source_index
+                            .as_ref()
+                            .is_none_or(|index| index.path != source_path)
+                        {
+                            state.source_index = build_source_index(&source_path).ok();
+                        }
+
+                        let resolved =
+                            resolve_source_breakpoints(&source_path, &breakpoints, &state).resolved;
+                        rebuild_runtime_breakpoints(&mut state);
+                        sync_runtime_breakpoints(&mut state)?;
+
+                        let body = set_breakpoints_body(&resolved);
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "setExceptionBreakpoints" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                    }
+                    "configurationDone" => {
+                        if let Err(err) = ensure_runtime_started(&mut state, &event_tx) {
+                            let response =
+                                error_response(outbound.alloc(), &command, request.seq, err);
+                            write_dap_message(writer, &response)?;
+                            continue;
+                        }
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                    }
+                    "threads" => {
+                        let body = threads_body(MAIN_THREAD_ID, "main");
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "stackTrace" => {
+                        let body = stack_trace_body(&state);
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "scopes" => {
+                        let body = scopes_body(&mut state);
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "variables" => {
+                        let reference =
+                            parse_u64_argument(&request.arguments, "variablesReference")
+                                .unwrap_or(0);
+                        let body = variables_body(&mut state, reference);
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "evaluate" => {
+                        let expression = parse_string_argument(&request.arguments, "expression")
+                            .unwrap_or_default();
+                        let body = evaluate_body_for_expression(&mut state, &expression);
+                        let response =
+                            response_with_body(outbound.alloc(), &command, body, request.seq);
+                        write_dap_message(writer, &response)?;
+                    }
+                    "continue" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            continue_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        if let Some(runtime) = state.runtime.as_ref() {
+                            runtime
+                                .controller
+                                .continue_execution()
+                                .map_err(|err| format!("continuing runtime: {err}"))?;
+                        }
+                        if state.runtime.is_some() {
+                            inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                        }
+                    }
+                    "next" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        if let Some(runtime) = state.runtime.as_ref() {
+                            runtime
+                                .controller
+                                .step_over()
+                                .map_err(|err| format!("step over: {err}"))?;
+                        }
+                        if state.runtime.is_some() {
+                            inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                        }
+                    }
+                    "stepIn" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        if let Some(runtime) = state.runtime.as_ref() {
+                            runtime
+                                .controller
+                                .step_in()
+                                .map_err(|err| format!("step in: {err}"))?;
+                        }
+                        if state.runtime.is_some() {
+                            inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                        }
+                    }
+                    "stepOut" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        if let Some(runtime) = state.runtime.as_ref() {
+                            runtime
+                                .controller
+                                .step_out()
+                                .map_err(|err| format!("step out: {err}"))?;
+                        }
+                        if state.runtime.is_some() {
+                            inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                        }
+                    }
+                    "pause" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        if let Some(runtime) = state.runtime.as_ref() {
+                            runtime
+                                .controller
+                                .request_pause()
+                                .map_err(|err| format!("request pause: {err}"))?;
+                        }
+                        if state.runtime.is_some() {
+                            inline_event_check(&event_rx, &mut state, writer, &mut outbound)?;
+                        }
+                    }
+                    "disconnect" => {
+                        let response = response_with_body(
+                            outbound.alloc(),
+                            &command,
+                            empty_body(),
+                            request.seq,
+                        );
+                        write_dap_message(writer, &response)?;
+                        write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+                        cleanup_runtime(&mut state);
+                        break;
+                    }
+                    _ => {
+                        let response = error_response(
+                            outbound.alloc(),
+                            &command,
+                            request.seq,
+                            format!("unsupported DAP command: {command}"),
+                        );
+                        write_dap_message(writer, &response)?;
+                    }
                 }
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-            }
-            "threads" => {
-                let body = threads_body(MAIN_THREAD_ID, "main");
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "stackTrace" => {
-                let body = stack_trace_body(&state);
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "scopes" => {
-                let body = scopes_body(&mut state);
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "variables" => {
-                let reference =
-                    parse_u64_argument(&request.arguments, "variablesReference").unwrap_or(0);
-                let body = variables_body(&mut state, reference);
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "evaluate" => {
-                let expression =
-                    parse_string_argument(&request.arguments, "expression").unwrap_or_default();
-                let body = evaluate_body_for_expression(&mut state, &expression);
-                let response = response_with_body(outbound.alloc(), &command, body, request.seq);
-                write_dap_message(writer, &response)?;
-            }
-            "continue" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, continue_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                if let Some(runtime) = state.runtime.as_ref() {
-                    runtime
-                        .controller
-                        .continue_execution()
-                        .map_err(|err| format!("continuing runtime: {err}"))?;
-                    emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-                }
-            }
-            "next" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                if let Some(runtime) = state.runtime.as_ref() {
-                    runtime
-                        .controller
-                        .step_over()
-                        .map_err(|err| format!("step over: {err}"))?;
-                    emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-                }
-            }
-            "stepIn" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                if let Some(runtime) = state.runtime.as_ref() {
-                    runtime
-                        .controller
-                        .step_in()
-                        .map_err(|err| format!("step in: {err}"))?;
-                    emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-                }
-            }
-            "stepOut" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                if let Some(runtime) = state.runtime.as_ref() {
-                    runtime
-                        .controller
-                        .step_out()
-                        .map_err(|err| format!("step out: {err}"))?;
-                    emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-                }
-            }
-            "pause" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                if let Some(runtime) = state.runtime.as_ref() {
-                    runtime
-                        .controller
-                        .request_pause()
-                        .map_err(|err| format!("request pause: {err}"))?;
-                    emit_next_runtime_event(&mut state, writer, &mut outbound, STOP_WAIT_TIMEOUT)?;
-                }
-            }
-            "disconnect" => {
-                let response =
-                    response_with_body(outbound.alloc(), &command, empty_body(), request.seq);
-                write_dap_message(writer, &response)?;
-                write_dap_message(writer, &terminated_event(outbound.alloc()))?;
-                break;
-            }
-            _ => {
-                let response = error_response(
-                    outbound.alloc(),
-                    &command,
-                    request.seq,
-                    format!("unsupported DAP command: {command}"),
-                );
-                write_dap_message(writer, &response)?;
             }
         }
     }
@@ -343,7 +512,10 @@ where
     Ok(())
 }
 
-fn ensure_runtime_started(state: &mut SessionState) -> Result<(), String> {
+fn ensure_runtime_started(
+    state: &mut SessionState,
+    event_tx: &mpsc::Sender<EngineEvent>,
+) -> Result<(), String> {
     if state.runtime.is_some() {
         return Ok(());
     }
@@ -361,17 +533,48 @@ fn ensure_runtime_started(state: &mut SessionState) -> Result<(), String> {
             .set_breakpoints(state.runtime_breakpoints.clone())
             .map_err(|err| format!("applying breakpoints: {err}"))?;
     }
-    controller
-        .request_pause()
-        .map_err(|err| format!("requesting initial pause: {err}"))?;
+    if launch.stop_on_entry {
+        controller
+            .request_pause()
+            .map_err(|err| format!("requesting initial pause: {err}"))?;
+    }
 
+    let cancel_flag = Arc::new(AtomicBool::new(false));
     let mut engine = Engine::new(spec).map_err(|err| format!("creating runtime engine: {err}"))?;
     engine.set_debug_controller(Arc::clone(&controller));
     engine.set_dry_run_mode(launch.dry_run);
     let workflow_id = launch.workflow_id.clone();
     let inputs = launch.inputs.clone();
-    let handle = thread::spawn(move || engine.execute(&workflow_id, inputs));
-    state.runtime = Some(RuntimeSession::new(controller, handle));
+    let engine_cancel = Arc::clone(&cancel_flag);
+    let engine_handle = thread::spawn(move || {
+        engine.execute_with_options(
+            &workflow_id,
+            inputs,
+            ExecutionOptions::with_cancel_flag(engine_cancel),
+        )
+    });
+
+    // Thread C: monitors engine stop events and thread completion.
+    let monitor_controller = Arc::clone(&controller);
+    let monitor_cancel = Arc::clone(&cancel_flag);
+    let monitor_event_tx = event_tx.clone();
+    let monitor_handle = thread::spawn(move || {
+        engine_event_monitor(
+            monitor_controller,
+            monitor_event_tx,
+            monitor_cancel,
+            engine_handle,
+        )
+    });
+
+    state.runtime = Some(RuntimeSession {
+        controller,
+        cancel_flag,
+        monitor_handle: Some(monitor_handle),
+        last_stop: None,
+        terminated: false,
+        variable_store: VariableStore::default(),
+    });
     Ok(())
 }
 
@@ -409,30 +612,89 @@ fn rebuild_runtime_breakpoints(state: &mut SessionState) {
     state.runtime_breakpoints = runtime_breakpoints;
 }
 
-fn emit_next_runtime_event<W>(
+/// Thread C: monitors the engine's debug controller for stop events and thread
+/// completion, forwarding them to the coordinator via the `event_tx` channel.
+/// Owns the engine `JoinHandle` exclusively—joins it when the engine finishes
+/// or when the cancel flag is set.
+fn engine_event_monitor(
+    controller: Arc<DebugController>,
+    event_tx: mpsc::Sender<EngineEvent>,
+    cancel_flag: Arc<AtomicBool>,
+    engine_handle: thread::JoinHandle<Result<BTreeMap<String, Value>, RuntimeError>>,
+) {
+    let mut delivered = 0usize;
+    let mut handle = Some(engine_handle);
+
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            if let Some(h) = handle.take() {
+                let _ = h.join();
+            }
+            return;
+        }
+
+        // Drain any new stop events from the controller.
+        if let Ok(stop_events) = controller.stop_events() {
+            while delivered < stop_events.len() {
+                let stop = stop_events[delivered].clone();
+                delivered += 1;
+                if event_tx.send(EngineEvent::Stopped(stop)).is_err() {
+                    return;
+                }
+            }
+        }
+
+        // Check if the engine thread has finished.
+        if let Some(ref h) = handle {
+            if h.is_finished() {
+                // Final drain—engine wrote all stop events before exiting.
+                if let Ok(stop_events) = controller.stop_events() {
+                    while delivered < stop_events.len() {
+                        let stop = stop_events[delivered].clone();
+                        delivered += 1;
+                        if event_tx.send(EngineEvent::Stopped(stop)).is_err() {
+                            return;
+                        }
+                    }
+                }
+                let Some(h) = handle.take() else {
+                    return;
+                };
+                match h.join() {
+                    Ok(_) => {
+                        let _ = event_tx.send(EngineEvent::Terminated);
+                    }
+                    Err(_) => {
+                        let _ = event_tx.send(EngineEvent::Panicked);
+                    }
+                }
+                return;
+            }
+        } else {
+            return;
+        }
+
+        // Condvar-driven sleep—wakes instantly when a stop event is posted.
+        let expected = delivered.saturating_add(1);
+        let _ = controller.wait_for_stop_count(expected, ENGINE_MONITOR_POLL);
+    }
+}
+
+fn handle_engine_event<W>(
+    event: EngineEvent,
     state: &mut SessionState,
     writer: &mut W,
     outbound: &mut OutboundSequence,
-    timeout: Duration,
 ) -> Result<(), String>
 where
     W: Write,
 {
-    let Some(runtime) = state.runtime.as_mut() else {
-        return Ok(());
-    };
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        let stop_events = runtime
-            .controller
-            .stop_events()
-            .map_err(|err| format!("reading stop events: {err}"))?;
-        if stop_events.len() > runtime.delivered_stop_events {
-            let stop = stop_events[runtime.delivered_stop_events].clone();
-            runtime.delivered_stop_events = runtime.delivered_stop_events.saturating_add(1);
-            runtime.last_stop = Some(stop.clone());
-            runtime.variable_store.reset();
+    match event {
+        EngineEvent::Stopped(stop) => {
+            if let Some(runtime) = state.runtime.as_mut() {
+                runtime.last_stop = Some(stop.clone());
+                runtime.variable_store.reset();
+            }
             write_dap_message(
                 writer,
                 &stopped_event(
@@ -441,39 +703,40 @@ where
                     stop_reason_name(stop.reason.clone()),
                 ),
             )?;
-            return Ok(());
         }
-
-        if !runtime.terminated {
-            let finished = runtime
-                .handle
-                .as_ref()
-                .map(|handle| handle.is_finished())
-                .unwrap_or(true);
-            if finished {
-                let Some(handle) = runtime.handle.take() else {
-                    runtime.terminated = true;
-                    return Ok(());
-                };
-                let _ = handle
-                    .join()
-                    .map_err(|_| "runtime execution thread panicked".to_string())?;
+        EngineEvent::Terminated | EngineEvent::Panicked => {
+            if let Some(runtime) = state.runtime.as_mut() {
                 runtime.terminated = true;
-                write_dap_message(writer, &terminated_event(outbound.alloc()))?;
-                return Ok(());
             }
+            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
         }
+    }
+    Ok(())
+}
 
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(());
+fn inline_event_check<W>(
+    event_rx: &mpsc::Receiver<EngineEvent>,
+    state: &mut SessionState,
+    writer: &mut W,
+    outbound: &mut OutboundSequence,
+) -> Result<(), String>
+where
+    W: Write,
+{
+    if let Ok(event) = event_rx.recv_timeout(INLINE_EVENT_TIMEOUT) {
+        handle_engine_event(event, state, writer, outbound)?;
+    }
+    Ok(())
+}
+
+fn cleanup_runtime(state: &mut SessionState) {
+    if let Some(runtime) = state.runtime.as_mut() {
+        runtime.cancel_flag.store(true, Ordering::Relaxed);
+        let _ = runtime.controller.force_resume();
+        if let Some(monitor) = runtime.monitor_handle.take() {
+            let _ = monitor.join();
         }
-        let wait = deadline.saturating_duration_since(now).min(STOP_WAIT_SLICE);
-        let expected = runtime.delivered_stop_events.saturating_add(1);
-        let _ = runtime
-            .controller
-            .wait_for_stop_count(expected, wait)
-            .map_err(|err| format!("waiting for stop events: {err}"))?;
+        runtime.terminated = true;
     }
 }
 
@@ -555,6 +818,7 @@ fn scopes_body(state: &mut SessionState) -> Value {
     runtime.variable_store.reset();
 
     let mut locals = scopes.locals.clone();
+    let http_scopes = http_scopes_from_locals(&locals);
     locals
         .entry("workflowId".to_string())
         .or_insert(Value::String(stop.workflow_id.clone()));
@@ -566,33 +830,84 @@ fn scopes_body(state: &mut SessionState) -> Value {
         .or_insert(Value::String(checkpoint_display_name(&stop.checkpoint)));
 
     let locals_ref = runtime.variable_store.insert_map(locals);
+    let mut scope_entries = vec![json!({
+        "name": "Locals",
+        "presentationHint": "locals",
+        "variablesReference": locals_ref,
+        "expensive": false
+    })];
+
+    if let Some(request_scope) = http_scopes.request {
+        let request_ref = runtime.variable_store.insert_map(request_scope);
+        scope_entries.push(json!({
+            "name": "Request",
+            "presentationHint": "registers",
+            "variablesReference": request_ref,
+            "expensive": false
+        }));
+    }
+    if let Some(response_scope) = http_scopes.response {
+        let response_ref = runtime.variable_store.insert_map(response_scope);
+        scope_entries.push(json!({
+            "name": "Response",
+            "presentationHint": "registers",
+            "variablesReference": response_ref,
+            "expensive": false
+        }));
+    }
+
     let inputs_ref = runtime.variable_store.insert_map(scopes.inputs.clone());
+    scope_entries.push(json!({
+        "name": "Inputs",
+        "presentationHint": "registers",
+        "variablesReference": inputs_ref,
+        "expensive": false
+    }));
+
     let steps_ref = runtime
         .variable_store
         .insert_map(step_scopes_to_value_map(&scopes));
+    scope_entries.push(json!({
+        "name": "Steps",
+        "presentationHint": "registers",
+        "variablesReference": steps_ref,
+        "expensive": false
+    }));
 
-    json!({
-        "scopes": [
-            {
-                "name": "Locals",
-                "presentationHint": "locals",
-                "variablesReference": locals_ref,
-                "expensive": false
-            },
-            {
-                "name": "Inputs",
-                "presentationHint": "registers",
-                "variablesReference": inputs_ref,
-                "expensive": false
-            },
-            {
-                "name": "Steps",
-                "presentationHint": "registers",
-                "variablesReference": steps_ref,
-                "expensive": false
-            }
-        ]
-    })
+    json!({ "scopes": scope_entries })
+}
+
+fn http_scopes_from_locals(locals: &BTreeMap<String, Value>) -> HttpScopeMaps {
+    let mut request = BTreeMap::<String, Value>::new();
+    insert_scope_value(&mut request, "method", locals, "requestMethod");
+    insert_scope_value(&mut request, "url", locals, "requestUrl");
+    insert_scope_value(&mut request, "headers", locals, "requestHeaders");
+    insert_scope_value(&mut request, "body", locals, "requestBody");
+
+    let mut response = BTreeMap::<String, Value>::new();
+    insert_scope_value(&mut response, "statusCode", locals, "responseStatusCode");
+    insert_scope_value(&mut response, "contentType", locals, "responseContentType");
+    insert_scope_value(&mut response, "headers", locals, "responseHeaders");
+    insert_scope_value(&mut response, "bodyPreview", locals, "responseBodyPreview");
+    if locals.contains_key("responseBodyRaw") {
+        response.insert("bodyRawAvailable".to_string(), Value::Bool(true));
+    }
+
+    HttpScopeMaps {
+        request: (!request.is_empty()).then_some(request),
+        response: (!response.is_empty()).then_some(response),
+    }
+}
+
+fn insert_scope_value(
+    target: &mut BTreeMap<String, Value>,
+    target_key: &str,
+    source: &BTreeMap<String, Value>,
+    source_key: &str,
+) {
+    if let Some(value) = source.get(source_key) {
+        target.insert(target_key.to_string(), value.clone());
+    }
 }
 
 fn variables_body(state: &mut SessionState, reference: u64) -> Value {
@@ -645,6 +960,12 @@ struct ResolvedSourceBreakpoints {
     runtime: Vec<StepBreakpoint>,
 }
 
+#[derive(Debug, Default)]
+struct HttpScopeMaps {
+    request: Option<BTreeMap<String, Value>>,
+    response: Option<BTreeMap<String, Value>>,
+}
+
 fn resolve_source_breakpoints(
     source_path: &str,
     requested: &[DapBreakpoint],
@@ -680,14 +1001,14 @@ fn resolve_source_breakpoints(
     let mut resolved = Vec::<ResolvedBreakpoint>::new();
     let mut runtime_breakpoints = Vec::<StepBreakpoint>::new();
     for bp in requested {
+        let line_context = resolve_line_context(bp.line, &index, launch_workflow);
         let Some(checkpoint) = resolve_breakpoint_checkpoint(bp.line, &index, launch_workflow)
         else {
+            let message = invalid_breakpoint_message(line_context.as_ref());
             resolved.push(ResolvedBreakpoint {
                 line: bp.line,
                 verified: false,
-                message: Some(
-                    "breakpoint must be on or near step, successCriteria, or outputs".to_string(),
-                ),
+                message: Some(message),
             });
             continue;
         };
@@ -704,18 +1025,27 @@ fn resolve_source_breakpoints(
         }
         runtime_breakpoints.push(runtime_bp);
 
-        let mut message = if checkpoint.line != bp.line {
-            Some(format!("mapped to executable line {}", checkpoint.line))
-        } else {
-            None
-        };
+        let mut parts = Vec::<String>::new();
+        if checkpoint.line != bp.line {
+            parts.push(format!(
+                "mapped line {} to {} on line {}",
+                bp.line,
+                checkpoint_display_name(&checkpoint.checkpoint),
+                checkpoint.line
+            ));
+        }
         if let Some(condition) = bp
             .condition
             .as_ref()
             .filter(|value| !value.trim().is_empty())
         {
-            message = Some(format!("condition: {condition}"));
+            parts.push(format!(
+                "condition on {}: {}",
+                checkpoint_display_name(&checkpoint.checkpoint),
+                condition
+            ));
         }
+        let message = (!parts.is_empty()).then(|| parts.join("; "));
         resolved.push(ResolvedBreakpoint {
             line: checkpoint.line,
             verified: true,
@@ -748,14 +1078,40 @@ fn resolve_breakpoint_checkpoint(
         return Some(exact.clone());
     }
 
+    let line_context = resolve_line_context(line, index, workflow_filter);
+    if let Some(ctx) = line_context.as_ref() {
+        let same_step = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.workflow_id == ctx.workflow_id && candidate.step_id == ctx.step_id
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let same_area = same_step
+            .iter()
+            .filter(|candidate| checkpoint_area(&candidate.checkpoint) == ctx.area)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !same_area.is_empty() {
+            candidates = same_area;
+        } else if !same_step.is_empty() {
+            candidates = same_step;
+        }
+    }
+
+    let prefer_forward = line_context
+        .as_ref()
+        .map(|ctx| ctx.prefer_forward_snap)
+        .unwrap_or(false);
+
     let mut best: Option<IndexedCheckpoint> = None;
     let mut best_distance = u32::MAX;
     for candidate in candidates {
-        if candidate.line > line {
-            continue;
-        }
-        let distance = line.saturating_sub(candidate.line);
-        if distance < best_distance {
+        let distance = candidate.line.abs_diff(line);
+        if distance < best_distance
+            || (distance == best_distance
+                && is_better_direction_tiebreak(best.as_ref(), &candidate, line, prefer_forward))
+        {
             best = Some(candidate);
             best_distance = distance;
         }
@@ -767,6 +1123,95 @@ fn resolve_breakpoint_checkpoint(
     }
 }
 
+fn resolve_line_context(
+    line: u32,
+    index: &SourceIndex,
+    workflow_filter: Option<&str>,
+) -> Option<SourceLineContext> {
+    if let Some(exact) = index
+        .line_contexts
+        .get(&line)
+        .filter(|ctx| workflow_filter.is_none_or(|workflow_id| ctx.workflow_id == workflow_id))
+    {
+        return Some(exact.clone());
+    }
+
+    let mut best: Option<&SourceLineContext> = None;
+    let mut best_line = 0u32;
+    let mut best_distance = u32::MAX;
+    for (&ctx_line, ctx) in &index.line_contexts {
+        if workflow_filter.is_some_and(|workflow_id| ctx.workflow_id != workflow_id) {
+            continue;
+        }
+        let distance = ctx_line.abs_diff(line);
+        if distance > BREAKPOINT_NEAREST_LINE_THRESHOLD {
+            continue;
+        }
+        if distance < best_distance
+            || (distance == best_distance
+                && is_better_line_tiebreak(best_line, ctx_line, line, false))
+        {
+            best = Some(ctx);
+            best_line = ctx_line;
+            best_distance = distance;
+        }
+    }
+    best.cloned()
+}
+
+fn checkpoint_area(checkpoint: &StepCheckpoint) -> BreakpointArea {
+    match checkpoint {
+        StepCheckpoint::Step => BreakpointArea::Step,
+        StepCheckpoint::SuccessCriterion { .. } => BreakpointArea::SuccessCriteria,
+        StepCheckpoint::OnSuccessAction { .. }
+        | StepCheckpoint::OnSuccessCriterion { .. }
+        | StepCheckpoint::OnSuccessRetrySelected { .. }
+        | StepCheckpoint::OnSuccessRetryDelay { .. } => BreakpointArea::OnSuccess,
+        StepCheckpoint::OnFailureAction { .. }
+        | StepCheckpoint::OnFailureCriterion { .. }
+        | StepCheckpoint::OnFailureRetrySelected { .. }
+        | StepCheckpoint::OnFailureRetryDelay { .. } => BreakpointArea::OnFailure,
+        StepCheckpoint::Output { .. } => BreakpointArea::Outputs,
+    }
+}
+
+fn is_better_direction_tiebreak(
+    current_best: Option<&IndexedCheckpoint>,
+    candidate: &IndexedCheckpoint,
+    line: u32,
+    prefer_forward: bool,
+) -> bool {
+    let Some(best) = current_best else {
+        return true;
+    };
+    is_better_line_tiebreak(best.line, candidate.line, line, prefer_forward)
+}
+
+fn is_better_line_tiebreak(
+    current_best_line: u32,
+    candidate_line: u32,
+    target_line: u32,
+    prefer_forward: bool,
+) -> bool {
+    let current_best_is_forward = current_best_line >= target_line;
+    let candidate_is_forward = candidate_line >= target_line;
+    if current_best_is_forward != candidate_is_forward {
+        return candidate_is_forward == prefer_forward;
+    }
+    candidate_line < current_best_line
+}
+
+fn invalid_breakpoint_message(line_context: Option<&SourceLineContext>) -> String {
+    if let Some(ctx) = line_context {
+        return format!(
+            "no executable checkpoint near this line in {} block; use step, criteria item, action item, or output entry lines",
+            ctx.area.label()
+        );
+    }
+    "breakpoint must be on or near step, successCriteria, onSuccess, onFailure, or outputs"
+        .to_string()
+}
+
 fn build_source_index(path: &str) -> Result<SourceIndex, String> {
     let text =
         fs::read_to_string(path).map_err(|err| format!("reading source index file: {err}"))?;
@@ -774,6 +1219,7 @@ fn build_source_index(path: &str) -> Result<SourceIndex, String> {
     Ok(SourceIndex {
         path: path.to_string(),
         checkpoints: metadata.checkpoints,
+        line_contexts: metadata.line_contexts,
         output_expressions: metadata.output_expressions,
     })
 }
@@ -786,11 +1232,19 @@ fn extract_checkpoints_from_text(text: &str) -> Vec<IndexedCheckpoint> {
 #[derive(Debug, Default)]
 struct SourceMetadata {
     checkpoints: Vec<IndexedCheckpoint>,
+    line_contexts: BTreeMap<u32, SourceLineContext>,
     output_expressions: BTreeMap<(String, String, String), String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionSection {
+    OnSuccess,
+    OnFailure,
 }
 
 fn extract_source_metadata(text: &str) -> SourceMetadata {
     let mut checkpoints = Vec::<IndexedCheckpoint>::new();
+    let mut line_contexts = BTreeMap::<u32, SourceLineContext>::new();
     let mut output_expressions = BTreeMap::<(String, String, String), String>::new();
 
     let mut in_workflows = false;
@@ -808,6 +1262,23 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
     let mut in_success_criteria = false;
     let mut success_criteria_indent = 0usize;
     let mut criterion_index = 0usize;
+
+    let mut in_on_success = false;
+    let mut on_success_indent = 0usize;
+    let mut on_success_action_index = 0usize;
+
+    let mut in_on_failure = false;
+    let mut on_failure_indent = 0usize;
+    let mut on_failure_action_index = 0usize;
+
+    let mut current_action_section: Option<ActionSection> = None;
+    let mut current_action_index: Option<usize> = None;
+
+    let mut in_action_criteria = false;
+    let mut action_criteria_indent = 0usize;
+    let mut action_criteria_index = 0usize;
+    let mut action_criteria_section: Option<ActionSection> = None;
+    let mut action_criteria_action_index = 0usize;
 
     let mut in_outputs = false;
     let mut outputs_indent = 0usize;
@@ -835,6 +1306,12 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             current_workflow_id.clear();
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
             continue;
         }
@@ -847,6 +1324,12 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             in_steps = false;
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
             continue;
         }
@@ -860,6 +1343,12 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             steps_indent = indent;
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
             continue;
         }
@@ -868,6 +1357,12 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             in_steps = false;
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
         }
 
@@ -875,14 +1370,26 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             continue;
         }
 
-        if let Some(step_id) = parse_yaml_inline_value(trimmed, "- stepId:")
-            .or_else(|| parse_yaml_inline_value(trimmed, "stepId:"))
-        {
+        if let Some(step_id) = parse_yaml_inline_value(trimmed, "- stepId:").or_else(|| {
+            if in_on_success || in_on_failure {
+                None
+            } else {
+                parse_yaml_inline_value(trimmed, "stepId:")
+            }
+        }) {
             current_step_id = step_id;
             step_indent = indent;
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
             criterion_index = 0;
+            on_success_action_index = 0;
+            on_failure_action_index = 0;
             checkpoints.push(IndexedCheckpoint {
                 line,
                 workflow_id: current_workflow_id.clone(),
@@ -899,14 +1406,34 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
         if indent <= step_indent && trimmed.starts_with("- ") {
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
             continue;
         }
 
         if trimmed == "successCriteria:" {
+            record_line_context(
+                &mut line_contexts,
+                line,
+                &current_workflow_id,
+                &current_step_id,
+                BreakpointArea::SuccessCriteria,
+                true,
+            );
             in_success_criteria = true;
             success_criteria_indent = indent;
             criterion_index = 0;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             continue;
         }
 
@@ -927,7 +1454,167 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             }
         }
 
+        if trimmed == "onSuccess:" {
+            record_line_context(
+                &mut line_contexts,
+                line,
+                &current_workflow_id,
+                &current_step_id,
+                BreakpointArea::OnSuccess,
+                true,
+            );
+            in_on_success = true;
+            on_success_indent = indent;
+            on_success_action_index = 0;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
+            continue;
+        }
+
+        if trimmed == "onFailure:" {
+            record_line_context(
+                &mut line_contexts,
+                line,
+                &current_workflow_id,
+                &current_step_id,
+                BreakpointArea::OnFailure,
+                true,
+            );
+            in_on_failure = true;
+            on_failure_indent = indent;
+            on_failure_action_index = 0;
+            in_on_success = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
+            continue;
+        }
+
+        if in_on_success && indent <= on_success_indent {
+            in_on_success = false;
+            if action_criteria_section == Some(ActionSection::OnSuccess) {
+                in_action_criteria = false;
+                action_criteria_section = None;
+            }
+            if current_action_section == Some(ActionSection::OnSuccess) {
+                current_action_section = None;
+                current_action_index = None;
+            }
+        }
+
+        if in_on_failure && indent <= on_failure_indent {
+            in_on_failure = false;
+            if action_criteria_section == Some(ActionSection::OnFailure) {
+                in_action_criteria = false;
+                action_criteria_section = None;
+            }
+            if current_action_section == Some(ActionSection::OnFailure) {
+                current_action_section = None;
+                current_action_index = None;
+            }
+        }
+
+        if trimmed == "criteria:" {
+            if let (Some(section), Some(action_index)) =
+                (current_action_section, current_action_index)
+            {
+                let area = match section {
+                    ActionSection::OnSuccess => BreakpointArea::OnSuccess,
+                    ActionSection::OnFailure => BreakpointArea::OnFailure,
+                };
+                record_line_context(
+                    &mut line_contexts,
+                    line,
+                    &current_workflow_id,
+                    &current_step_id,
+                    area,
+                    true,
+                );
+                in_action_criteria = true;
+                action_criteria_indent = indent;
+                action_criteria_index = 0;
+                action_criteria_section = Some(section);
+                action_criteria_action_index = action_index;
+                continue;
+            }
+        }
+
+        if in_action_criteria && indent <= action_criteria_indent {
+            in_action_criteria = false;
+            action_criteria_section = None;
+        }
+
+        if in_on_success && !in_action_criteria && trimmed.starts_with("- ") {
+            let action_index = on_success_action_index;
+            on_success_action_index = on_success_action_index.saturating_add(1);
+            current_action_section = Some(ActionSection::OnSuccess);
+            current_action_index = Some(action_index);
+            in_action_criteria = false;
+            action_criteria_section = None;
+            checkpoints.push(IndexedCheckpoint {
+                line,
+                workflow_id: current_workflow_id.clone(),
+                step_id: current_step_id.clone(),
+                checkpoint: StepCheckpoint::OnSuccessAction {
+                    index: action_index,
+                },
+            });
+            continue;
+        }
+
+        if in_on_failure && !in_action_criteria && trimmed.starts_with("- ") {
+            let action_index = on_failure_action_index;
+            on_failure_action_index = on_failure_action_index.saturating_add(1);
+            current_action_section = Some(ActionSection::OnFailure);
+            current_action_index = Some(action_index);
+            in_action_criteria = false;
+            action_criteria_section = None;
+            checkpoints.push(IndexedCheckpoint {
+                line,
+                workflow_id: current_workflow_id.clone(),
+                step_id: current_step_id.clone(),
+                checkpoint: StepCheckpoint::OnFailureAction {
+                    index: action_index,
+                },
+            });
+            continue;
+        }
+
+        if in_action_criteria && trimmed.starts_with("- ") {
+            let checkpoint = match action_criteria_section {
+                Some(ActionSection::OnSuccess) => StepCheckpoint::OnSuccessCriterion {
+                    action_index: action_criteria_action_index,
+                    criterion_index: action_criteria_index,
+                },
+                Some(ActionSection::OnFailure) => StepCheckpoint::OnFailureCriterion {
+                    action_index: action_criteria_action_index,
+                    criterion_index: action_criteria_index,
+                },
+                None => StepCheckpoint::Step,
+            };
+            checkpoints.push(IndexedCheckpoint {
+                line,
+                workflow_id: current_workflow_id.clone(),
+                step_id: current_step_id.clone(),
+                checkpoint,
+            });
+            action_criteria_index = action_criteria_index.saturating_add(1);
+            continue;
+        }
+
         if trimmed == "outputs:" {
+            record_line_context(
+                &mut line_contexts,
+                line,
+                &current_workflow_id,
+                &current_step_id,
+                BreakpointArea::Outputs,
+                true,
+            );
             in_outputs = true;
             outputs_indent = indent;
             continue;
@@ -951,17 +1638,92 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             }
         }
 
+        record_line_context(
+            &mut line_contexts,
+            line,
+            &current_workflow_id,
+            &current_step_id,
+            current_breakpoint_area(
+                in_success_criteria,
+                in_on_success,
+                in_on_failure,
+                in_action_criteria,
+                action_criteria_section,
+                in_outputs,
+            ),
+            false,
+        );
+
         if indent <= workflow_indent && trimmed.starts_with("- ") {
             current_step_id.clear();
             in_success_criteria = false;
+            in_on_success = false;
+            in_on_failure = false;
+            current_action_section = None;
+            current_action_index = None;
+            in_action_criteria = false;
+            action_criteria_section = None;
             in_outputs = false;
         }
     }
 
     SourceMetadata {
         checkpoints,
+        line_contexts,
         output_expressions,
     }
+}
+
+fn record_line_context(
+    line_contexts: &mut BTreeMap<u32, SourceLineContext>,
+    line: u32,
+    workflow_id: &str,
+    step_id: &str,
+    area: BreakpointArea,
+    prefer_forward_snap: bool,
+) {
+    if workflow_id.is_empty() || step_id.is_empty() {
+        return;
+    }
+    line_contexts.insert(
+        line,
+        SourceLineContext {
+            workflow_id: workflow_id.to_string(),
+            step_id: step_id.to_string(),
+            area,
+            prefer_forward_snap,
+        },
+    );
+}
+
+fn current_breakpoint_area(
+    in_success_criteria: bool,
+    in_on_success: bool,
+    in_on_failure: bool,
+    in_action_criteria: bool,
+    action_criteria_section: Option<ActionSection>,
+    in_outputs: bool,
+) -> BreakpointArea {
+    if in_outputs {
+        return BreakpointArea::Outputs;
+    }
+    if in_action_criteria {
+        return match action_criteria_section {
+            Some(ActionSection::OnSuccess) => BreakpointArea::OnSuccess,
+            Some(ActionSection::OnFailure) => BreakpointArea::OnFailure,
+            None => BreakpointArea::Step,
+        };
+    }
+    if in_on_success {
+        return BreakpointArea::OnSuccess;
+    }
+    if in_on_failure {
+        return BreakpointArea::OnFailure;
+    }
+    if in_success_criteria {
+        return BreakpointArea::SuccessCriteria;
+    }
+    BreakpointArea::Step
 }
 
 fn parse_output_entry(line: &str) -> Option<(String, String)> {
@@ -1009,11 +1771,23 @@ fn lookup_line_for_checkpoint(
     checkpoint: &StepCheckpoint,
 ) -> Option<u32> {
     let index = source_index?;
-    let exact = index.checkpoints.iter().find(|candidate| {
-        candidate.workflow_id == workflow_id
-            && candidate.step_id == step_id
-            && candidate.checkpoint == *checkpoint
-    });
+    let exact = index
+        .checkpoints
+        .iter()
+        .find(|candidate| {
+            candidate.workflow_id == workflow_id
+                && candidate.step_id == step_id
+                && candidate.checkpoint == *checkpoint
+        })
+        .or_else(|| {
+            retry_lifecycle_action_checkpoint(checkpoint).and_then(|action_checkpoint| {
+                index.checkpoints.iter().find(|candidate| {
+                    candidate.workflow_id == workflow_id
+                        && candidate.step_id == step_id
+                        && candidate.checkpoint == action_checkpoint
+                })
+            })
+        });
     if let Some(value) = exact {
         return Some(value.line);
     }
@@ -1063,12 +1837,17 @@ fn parse_launch_config(arguments: &Value) -> Result<LaunchConfig, String> {
         .get("dryRun")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let stop_on_entry = arguments
+        .get("stopOnEntry")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     Ok(LaunchConfig {
         spec,
         workflow_id,
         inputs,
         dry_run,
+        stop_on_entry,
     })
 }
 
@@ -1131,6 +1910,28 @@ fn checkpoint_display_name(checkpoint: &StepCheckpoint) -> String {
     match checkpoint {
         StepCheckpoint::Step => "step".to_string(),
         StepCheckpoint::SuccessCriterion { index } => format!("successCriteria[{index}]"),
+        StepCheckpoint::OnSuccessAction { index } => format!("onSuccess[{index}]"),
+        StepCheckpoint::OnSuccessCriterion {
+            action_index,
+            criterion_index,
+        } => format!("onSuccess[{action_index}].criteria[{criterion_index}]"),
+        StepCheckpoint::OnFailureAction { index } => format!("onFailure[{index}]"),
+        StepCheckpoint::OnFailureCriterion {
+            action_index,
+            criterion_index,
+        } => format!("onFailure[{action_index}].criteria[{criterion_index}]"),
+        StepCheckpoint::OnSuccessRetrySelected { action_index } => {
+            format!("onSuccess[{action_index}].retrySelected")
+        }
+        StepCheckpoint::OnSuccessRetryDelay { action_index } => {
+            format!("onSuccess[{action_index}].retryDelay")
+        }
+        StepCheckpoint::OnFailureRetrySelected { action_index } => {
+            format!("onFailure[{action_index}].retrySelected")
+        }
+        StepCheckpoint::OnFailureRetryDelay { action_index } => {
+            format!("onFailure[{action_index}].retryDelay")
+        }
         StepCheckpoint::Output { name } => format!("outputs.{name}"),
     }
 }
@@ -1139,7 +1940,47 @@ fn checkpoint_sort_key(checkpoint: &StepCheckpoint) -> String {
     match checkpoint {
         StepCheckpoint::Step => "step".to_string(),
         StepCheckpoint::SuccessCriterion { index } => format!("criterion:{index:08}"),
+        StepCheckpoint::OnSuccessAction { index } => format!("on-success:{index:08}"),
+        StepCheckpoint::OnSuccessCriterion {
+            action_index,
+            criterion_index,
+        } => format!("on-success-criterion:{action_index:08}:{criterion_index:08}"),
+        StepCheckpoint::OnFailureAction { index } => format!("on-failure:{index:08}"),
+        StepCheckpoint::OnFailureCriterion {
+            action_index,
+            criterion_index,
+        } => format!("on-failure-criterion:{action_index:08}:{criterion_index:08}"),
+        StepCheckpoint::OnSuccessRetrySelected { action_index } => {
+            format!("on-success-retry-selected:{action_index:08}")
+        }
+        StepCheckpoint::OnSuccessRetryDelay { action_index } => {
+            format!("on-success-retry-delay:{action_index:08}")
+        }
+        StepCheckpoint::OnFailureRetrySelected { action_index } => {
+            format!("on-failure-retry-selected:{action_index:08}")
+        }
+        StepCheckpoint::OnFailureRetryDelay { action_index } => {
+            format!("on-failure-retry-delay:{action_index:08}")
+        }
         StepCheckpoint::Output { name } => format!("output:{name}"),
+    }
+}
+
+fn retry_lifecycle_action_checkpoint(checkpoint: &StepCheckpoint) -> Option<StepCheckpoint> {
+    match checkpoint {
+        StepCheckpoint::OnSuccessRetrySelected { action_index }
+        | StepCheckpoint::OnSuccessRetryDelay { action_index } => {
+            Some(StepCheckpoint::OnSuccessAction {
+                index: *action_index,
+            })
+        }
+        StepCheckpoint::OnFailureRetrySelected { action_index }
+        | StepCheckpoint::OnFailureRetryDelay { action_index } => {
+            Some(StepCheckpoint::OnFailureAction {
+                index: *action_index,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -1274,7 +2115,35 @@ mod tests {
     }
 
     #[test]
-    fn extract_checkpoints_from_text_includes_step_criterion_and_output_lines() {
+    fn parse_launch_config_defaults_stop_on_entry_to_false() {
+        let args = json!({
+            "spec": "/tmp/workflow.arazzo.yaml",
+            "workflowId": "wf",
+            "inputs": {"code": 429}
+        });
+        let launch = match parse_launch_config(&args) {
+            Ok(launch) => launch,
+            Err(err) => panic!("valid launch config expected, got: {err}"),
+        };
+        assert!(!launch.stop_on_entry);
+    }
+
+    #[test]
+    fn parse_launch_config_reads_stop_on_entry() {
+        let args = json!({
+            "spec": "/tmp/workflow.arazzo.yaml",
+            "workflowId": "wf",
+            "stopOnEntry": true
+        });
+        let launch = match parse_launch_config(&args) {
+            Ok(launch) => launch,
+            Err(err) => panic!("valid launch config expected, got: {err}"),
+        };
+        assert!(launch.stop_on_entry);
+    }
+
+    #[test]
+    fn extract_checkpoints_from_text_includes_action_and_output_lines() {
         let text = r#"
 workflows:
   - workflowId: get-hackernews
@@ -1283,6 +2152,16 @@ workflows:
         operationPath: https://hnrss.org/frontpage
         successCriteria:
           - condition: $statusCode == 200
+        onSuccess:
+          - type: goto
+            stepId: done
+            criteria:
+              - condition: $statusCode == 200
+        onFailure:
+          - type: retry
+            criteria:
+              - condition: $statusCode == 503
+          - type: end
         outputs:
           title_1: //item[1]/title
           link_1: //item[1]/link
@@ -1302,14 +2181,50 @@ workflows:
                 )
         }));
         assert!(checkpoints.iter().any(|entry| {
-            entry.line == 10
+            matches!(
+                entry.checkpoint,
+                StepCheckpoint::OnSuccessAction { index: 0 }
+            )
+        }));
+        assert!(checkpoints.iter().any(|entry| {
+            matches!(
+                entry.checkpoint,
+                StepCheckpoint::OnSuccessCriterion {
+                    action_index: 0,
+                    criterion_index: 0
+                }
+            )
+        }));
+        assert!(checkpoints.iter().any(|entry| {
+            matches!(
+                entry.checkpoint,
+                StepCheckpoint::OnFailureAction { index: 0 }
+            )
+        }));
+        assert!(checkpoints.iter().any(|entry| {
+            matches!(
+                entry.checkpoint,
+                StepCheckpoint::OnFailureCriterion {
+                    action_index: 0,
+                    criterion_index: 0
+                }
+            )
+        }));
+        assert!(checkpoints.iter().any(|entry| {
+            matches!(
+                entry.checkpoint,
+                StepCheckpoint::OnFailureAction { index: 1 }
+            )
+        }));
+        assert!(checkpoints.iter().any(|entry| {
+            entry.line == 20
                 && matches!(
                     entry.checkpoint,
                     StepCheckpoint::Output { ref name } if name == "title_1"
                 )
         }));
         assert!(checkpoints.iter().any(|entry| {
-            entry.line == 11
+            entry.line == 21
                 && matches!(
                     entry.checkpoint,
                     StepCheckpoint::Output { ref name } if name == "link_1"
@@ -1337,5 +2252,101 @@ workflows:
             metadata.output_expressions.get(&key).map(String::as_str),
             Some("//item[1]/title")
         );
+    }
+
+    #[test]
+    fn resolve_breakpoint_checkpoint_snaps_on_failure_header_to_failure_action() {
+        let text = r#"
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: fetch
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: retry
+            criteria:
+              - condition: $statusCode == 503
+          - type: end
+"#;
+        let metadata = extract_source_metadata(text);
+        let index = SourceIndex {
+            path: "/tmp/workflow.arazzo.yaml".to_string(),
+            checkpoints: metadata.checkpoints,
+            line_contexts: metadata.line_contexts,
+            output_expressions: metadata.output_expressions,
+        };
+        let on_failure_line = u32::try_from(
+            text.lines()
+                .position(|line| line.trim() == "onFailure:")
+                .unwrap_or(0)
+                .saturating_add(1),
+        )
+        .unwrap_or(0);
+        let resolved = resolve_breakpoint_checkpoint(on_failure_line, &index, Some("wf"));
+        let resolved = match resolved {
+            Some(value) => value,
+            None => panic!("expected onFailure header to resolve to failure action"),
+        };
+        assert!(resolved.line > on_failure_line);
+        assert!(matches!(
+            resolved.checkpoint,
+            StepCheckpoint::OnFailureAction { index: 0 }
+        ));
+    }
+
+    #[test]
+    fn resolve_source_breakpoints_reports_mapped_checkpoint_name() {
+        let text = r#"
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: fetch
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: end
+"#;
+        let metadata = extract_source_metadata(text);
+        let source_path = "/tmp/workflow.arazzo.yaml".to_string();
+        let state = SessionState {
+            launch: Some(LaunchConfig {
+                spec: source_path.clone(),
+                workflow_id: "wf".to_string(),
+                inputs: BTreeMap::new(),
+                dry_run: false,
+                stop_on_entry: false,
+            }),
+            source_index: Some(SourceIndex {
+                path: source_path.clone(),
+                checkpoints: metadata.checkpoints,
+                line_contexts: metadata.line_contexts,
+                output_expressions: metadata.output_expressions,
+            }),
+            ..SessionState::default()
+        };
+
+        let on_failure_line = u32::try_from(
+            text.lines()
+                .position(|line| line.trim() == "onFailure:")
+                .unwrap_or(0)
+                .saturating_add(1),
+        )
+        .unwrap_or(0);
+
+        let resolved = resolve_source_breakpoints(
+            &source_path,
+            &[DapBreakpoint {
+                line: on_failure_line,
+                condition: None,
+            }],
+            &state,
+        );
+        assert_eq!(resolved.resolved.len(), 1);
+        let mapped = &resolved.resolved[0];
+        assert!(mapped.verified);
+        let message = mapped.message.as_deref().unwrap_or("");
+        assert!(message.contains("onFailure[0]"));
+        assert!(message.contains("mapped line"));
     }
 }

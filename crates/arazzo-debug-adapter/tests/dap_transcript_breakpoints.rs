@@ -35,10 +35,10 @@ fn dap_set_breakpoints_returns_verified_locations() {
             "arguments": {}
         }),
     ]);
-    let mut reader = Cursor::new(input);
+    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
 
-    let run = run_dap_stdio(&mut reader, &mut output);
+    let run = run_dap_stdio(reader, &mut output);
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
