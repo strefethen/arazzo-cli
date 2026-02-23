@@ -7,7 +7,9 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec, CriterionType, OnAction, SuccessCriterion};
+use arazzo_spec::{
+    parse_unvalidated_bytes, ArazzoSpec, CriterionType, OnAction, Parameter, SuccessCriterion,
+};
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
@@ -103,27 +105,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
             ));
         }
 
-        for (param_idx, param) in wf.parameters.iter().enumerate() {
-            let param_path = format!("{path}.parameters[{param_idx}]");
-            if param.name.is_empty() && param.reference.is_empty() {
-                errs.push(format!(
-                    "{param_path}.name is required (unless using reference)"
-                ));
-            }
-            if param.value.is_empty() && param.reference.is_empty() {
-                errs.push(format!("{param_path} must have value or reference"));
-            }
-            if !param.in_.is_empty()
-                && param.in_ != "path"
-                && param.in_ != "query"
-                && param.in_ != "header"
-                && param.in_ != "cookie"
-            {
-                errs.push(format!(
-                    "{param_path}.in must be path, query, header, or cookie"
-                ));
-            }
-        }
+        validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);
 
         validate_actions(
             &format!("{path}.successActions"),
@@ -158,27 +140,11 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 ));
             }
 
-            for (param_idx, param) in step.parameters.iter().enumerate() {
-                let param_path = format!("{step_path}.parameters[{param_idx}]");
-                if param.name.is_empty() && param.reference.is_empty() {
-                    errs.push(format!(
-                        "{param_path}.name is required (unless using reference)"
-                    ));
-                }
-                if param.value.is_empty() && param.reference.is_empty() {
-                    errs.push(format!("{param_path} must have value or reference"));
-                }
-                if !param.in_.is_empty()
-                    && param.in_ != "path"
-                    && param.in_ != "query"
-                    && param.in_ != "header"
-                    && param.in_ != "cookie"
-                {
-                    errs.push(format!(
-                        "{param_path}.in must be path, query, header, or cookie"
-                    ));
-                }
-            }
+            validate_parameters(
+                &format!("{step_path}.parameters"),
+                &step.parameters,
+                &mut errs,
+            );
 
             for (criterion_idx, criterion) in step.success_criteria.iter().enumerate() {
                 validate_criterion(
@@ -216,6 +182,30 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
         return Ok(());
     }
     Err(format!("validation errors:\n  - {}", errs.join("\n  - ")))
+}
+
+fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<String>) {
+    for (param_idx, param) in params.iter().enumerate() {
+        let param_path = format!("{path_prefix}[{param_idx}]");
+        if param.name.is_empty() && param.reference.is_empty() {
+            errs.push(format!(
+                "{param_path}.name is required (unless using reference)"
+            ));
+        }
+        if param.value.is_empty() && param.reference.is_empty() {
+            errs.push(format!("{param_path} must have value or reference"));
+        }
+        if !param.in_.is_empty()
+            && param.in_ != "path"
+            && param.in_ != "query"
+            && param.in_ != "header"
+            && param.in_ != "cookie"
+        {
+            errs.push(format!(
+                "{param_path}.in must be path, query, header, or cookie"
+            ));
+        }
+    }
 }
 
 fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<String>) {
@@ -299,145 +289,97 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
     };
 
     for workflow in &mut spec.workflows {
-        // Resolve workflow-level parameter references
-        let mut resolved_wf_params = Vec::with_capacity(workflow.parameters.len());
-        for mut param in workflow.parameters.drain(..) {
-            if !param.reference.is_empty() {
-                let Some(name) = param.reference.strip_prefix("$components.parameters.") else {
-                    return Err(format!(
-                        "workflow {}: unsupported parameter reference: {}",
-                        workflow.workflow_id, param.reference
-                    ));
-                };
-                let Some(component_param) = components.parameters.get(name) else {
-                    return Err(format!(
-                        "workflow {}: component parameter \"{}\" not found",
-                        workflow.workflow_id, name
-                    ));
-                };
-                if param.name.is_empty() {
-                    param.name = component_param.name.clone();
-                }
-                if param.in_.is_empty() {
-                    param.in_ = component_param.in_.clone();
-                }
-                if param.value.is_empty() {
-                    param.value = component_param.value.clone();
-                }
-                param.reference.clear();
-            }
-            resolved_wf_params.push(param);
-        }
-        workflow.parameters = resolved_wf_params;
-
-        // Resolve workflow-level successActions references
-        if workflow.success_actions.len() == 1
-            && workflow.success_actions[0].type_.is_empty()
-            && !workflow.success_actions[0].name.is_empty()
-        {
-            if let Some(name) = workflow.success_actions[0]
-                .name
-                .strip_prefix("$components.successActions.")
-            {
-                let Some(actions) = components.success_actions.get(name) else {
-                    return Err(format!(
-                        "workflow {}: component successAction \"{}\" not found",
-                        workflow.workflow_id, name
-                    ));
-                };
-                workflow.success_actions = actions.clone();
-            }
-        }
-
-        // Resolve workflow-level failureActions references
-        if workflow.failure_actions.len() == 1
-            && workflow.failure_actions[0].type_.is_empty()
-            && !workflow.failure_actions[0].name.is_empty()
-        {
-            if let Some(name) = workflow.failure_actions[0]
-                .name
-                .strip_prefix("$components.failureActions.")
-            {
-                let Some(actions) = components.failure_actions.get(name) else {
-                    return Err(format!(
-                        "workflow {}: component failureAction \"{}\" not found",
-                        workflow.workflow_id, name
-                    ));
-                };
-                workflow.failure_actions = actions.clone();
-            }
-        }
+        let wf_label = format!("workflow {}", workflow.workflow_id);
+        resolve_param_refs(&mut workflow.parameters, &components, &wf_label)?;
+        resolve_action_ref(
+            &mut workflow.success_actions,
+            &components.success_actions,
+            "$components.successActions.",
+            "successAction",
+            &wf_label,
+        )?;
+        resolve_action_ref(
+            &mut workflow.failure_actions,
+            &components.failure_actions,
+            "$components.failureActions.",
+            "failureAction",
+            &wf_label,
+        )?;
 
         for step in &mut workflow.steps {
-            let mut resolved_params = Vec::with_capacity(step.parameters.len());
-            for mut param in step.parameters.drain(..) {
-                if !param.reference.is_empty() {
-                    let Some(name) = param.reference.strip_prefix("$components.parameters.") else {
-                        return Err(format!(
-                            "step {}: unsupported parameter reference: {}",
-                            step.step_id, param.reference
-                        ));
-                    };
-                    let Some(component_param) = components.parameters.get(name) else {
-                        return Err(format!(
-                            "step {}: component parameter \"{}\" not found",
-                            step.step_id, name
-                        ));
-                    };
-
-                    if param.name.is_empty() {
-                        param.name = component_param.name.clone();
-                    }
-                    if param.in_.is_empty() {
-                        param.in_ = component_param.in_.clone();
-                    }
-                    if param.value.is_empty() {
-                        param.value = component_param.value.clone();
-                    }
-                    param.reference.clear();
-                }
-                resolved_params.push(param);
-            }
-            step.parameters = resolved_params;
-
-            if step.on_success.len() == 1
-                && step.on_success[0].type_.is_empty()
-                && !step.on_success[0].name.is_empty()
-            {
-                if let Some(name) = step.on_success[0]
-                    .name
-                    .strip_prefix("$components.successActions.")
-                {
-                    let Some(actions) = components.success_actions.get(name) else {
-                        return Err(format!(
-                            "step {}: component successAction \"{}\" not found",
-                            step.step_id, name
-                        ));
-                    };
-                    step.on_success = actions.clone();
-                }
-            }
-
-            if step.on_failure.len() == 1
-                && step.on_failure[0].type_.is_empty()
-                && !step.on_failure[0].name.is_empty()
-            {
-                if let Some(name) = step.on_failure[0]
-                    .name
-                    .strip_prefix("$components.failureActions.")
-                {
-                    let Some(actions) = components.failure_actions.get(name) else {
-                        return Err(format!(
-                            "step {}: component failureAction \"{}\" not found",
-                            step.step_id, name
-                        ));
-                    };
-                    step.on_failure = actions.clone();
-                }
-            }
+            let step_label = format!("step {}", step.step_id);
+            resolve_param_refs(&mut step.parameters, &components, &step_label)?;
+            resolve_action_ref(
+                &mut step.on_success,
+                &components.success_actions,
+                "$components.successActions.",
+                "successAction",
+                &step_label,
+            )?;
+            resolve_action_ref(
+                &mut step.on_failure,
+                &components.failure_actions,
+                "$components.failureActions.",
+                "failureAction",
+                &step_label,
+            )?;
         }
     }
 
+    Ok(())
+}
+
+fn resolve_param_refs(
+    params: &mut Vec<Parameter>,
+    components: &arazzo_spec::Components,
+    entity: &str,
+) -> Result<(), String> {
+    let mut resolved = Vec::with_capacity(params.len());
+    for mut param in params.drain(..) {
+        if !param.reference.is_empty() {
+            let Some(name) = param.reference.strip_prefix("$components.parameters.") else {
+                return Err(format!(
+                    "{entity}: unsupported parameter reference: {}",
+                    param.reference
+                ));
+            };
+            let Some(component_param) = components.parameters.get(name) else {
+                return Err(format!(
+                    "{entity}: component parameter \"{name}\" not found"
+                ));
+            };
+            if param.name.is_empty() {
+                param.name = component_param.name.clone();
+            }
+            if param.in_.is_empty() {
+                param.in_ = component_param.in_.clone();
+            }
+            if param.value.is_empty() {
+                param.value = component_param.value.clone();
+            }
+            param.reference.clear();
+        }
+        resolved.push(param);
+    }
+    *params = resolved;
+    Ok(())
+}
+
+fn resolve_action_ref(
+    actions: &mut Vec<OnAction>,
+    component_map: &std::collections::BTreeMap<String, Vec<OnAction>>,
+    prefix: &str,
+    kind: &str,
+    entity: &str,
+) -> Result<(), String> {
+    if actions.len() == 1 && actions[0].type_.is_empty() && !actions[0].name.is_empty() {
+        if let Some(name) = actions[0].name.strip_prefix(prefix) {
+            let Some(resolved) = component_map.get(name) else {
+                return Err(format!("{entity}: component {kind} \"{name}\" not found"));
+            };
+            *actions = resolved.clone();
+        }
+    }
     Ok(())
 }
 

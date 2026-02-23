@@ -160,22 +160,8 @@ impl ExpressionEvaluator {
                 .unwrap_or(Value::Null);
         }
 
-        if rest == "request.body" {
-            return self.ctx.request_body.clone().unwrap_or(Value::Null);
-        }
-
-        if let Some(pointer) = rest.strip_prefix("request.body#") {
-            if let Some(body) = &self.ctx.request_body {
-                return body.pointer(pointer).cloned().unwrap_or(Value::Null);
-            }
-            return Value::Null;
-        }
-
-        if let Some(path) = rest.strip_prefix("request.body.") {
-            if let Some(body) = &self.ctx.request_body {
-                return resolve_dot_path(body, path).unwrap_or(Value::Null);
-            }
-            return Value::Null;
+        if let Some(suffix) = rest.strip_prefix("request.body") {
+            return resolve_body_access(&self.ctx.request_body, suffix);
         }
 
         if let Some(after) = rest.strip_prefix("sourceDescriptions.") {
@@ -196,22 +182,8 @@ impl ExpressionEvaluator {
                 .unwrap_or(Value::Null);
         }
 
-        if rest == "response.body" {
-            return self.ctx.response_body.clone().unwrap_or(Value::Null);
-        }
-
-        if let Some(pointer) = rest.strip_prefix("response.body#") {
-            if let Some(body) = &self.ctx.response_body {
-                return body.pointer(pointer).cloned().unwrap_or(Value::Null);
-            }
-            return Value::Null;
-        }
-
-        if let Some(path) = rest.strip_prefix("response.body.") {
-            if let Some(body) = &self.ctx.response_body {
-                return resolve_dot_path(body, path).unwrap_or(Value::Null);
-            }
-            return Value::Null;
+        if let Some(suffix) = rest.strip_prefix("response.body") {
+            return resolve_body_access(&self.ctx.response_body, suffix);
         }
 
         Value::Null
@@ -219,7 +191,7 @@ impl ExpressionEvaluator {
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.
     pub fn evaluate_string(&self, expr: &str) -> String {
-        to_string_coerce(&self.evaluate(expr))
+        to_string_value(&self.evaluate(expr))
     }
 
     /// Evaluate a condition expression with `||` and `&&` precedence.
@@ -551,16 +523,6 @@ fn to_string_value(value: &Value) -> String {
     }
 }
 
-fn to_string_coerce(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::String(v) => v.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(v) => v.to_string(),
-        _ => String::new(),
-    }
-}
-
 pub fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -569,6 +531,25 @@ pub fn is_truthy(value: &Value) -> bool {
         Value::String(v) => !v.is_empty(),
         _ => true,
     }
+}
+
+fn resolve_body_access(body: &Option<Value>, suffix: &str) -> Value {
+    if suffix.is_empty() {
+        return body.clone().unwrap_or(Value::Null);
+    }
+    if let Some(pointer) = suffix.strip_prefix('#') {
+        if let Some(b) = body {
+            return b.pointer(pointer).cloned().unwrap_or(Value::Null);
+        }
+        return Value::Null;
+    }
+    if let Some(path) = suffix.strip_prefix('.') {
+        if let Some(b) = body {
+            return resolve_dot_path(b, path).unwrap_or(Value::Null);
+        }
+        return Value::Null;
+    }
+    Value::Null
 }
 
 fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {

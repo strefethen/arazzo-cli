@@ -344,7 +344,7 @@ fn evaluate_jsonpath_count_predicate(context_value: &Value, predicate: &str) -> 
     let rhs_num = rhs.parse::<f64>().ok()?;
     let value = extract_jsonpath_relative(context_value, path);
     let lhs = count_jsonpath_nodes(&value) as f64;
-    Some(compare_numbers(lhs, rhs_num, op))
+    Some(compare_with_op(&lhs, &rhs_num, op))
 }
 
 fn evaluate_jsonpath_comparison_predicate(context_value: &Value, predicate: &str) -> Option<bool> {
@@ -483,27 +483,15 @@ fn compare_json_values(left: &Value, right: &Value, op: &str) -> bool {
         "!=" => left != right,
         ">" | "<" | ">=" | "<=" => {
             if let (Some(lhs), Some(rhs)) = (left.as_f64(), right.as_f64()) {
-                return compare_numbers(lhs, rhs, op);
+                return compare_with_op(&lhs, &rhs, op);
             }
-            compare_strings(&value_to_string(left), &value_to_string(right), op)
+            compare_with_op(&value_to_string(left), &value_to_string(right), op)
         }
         _ => false,
     }
 }
 
-fn compare_numbers(lhs: f64, rhs: f64, op: &str) -> bool {
-    match op {
-        "==" => lhs == rhs,
-        "!=" => lhs != rhs,
-        ">" => lhs > rhs,
-        "<" => lhs < rhs,
-        ">=" => lhs >= rhs,
-        "<=" => lhs <= rhs,
-        _ => false,
-    }
-}
-
-fn compare_strings(lhs: &str, rhs: &str, op: &str) -> bool {
+fn compare_with_op<T: PartialOrd + PartialEq>(lhs: &T, rhs: &T, op: &str) -> bool {
     match op {
         "==" => lhs == rhs,
         "!=" => lhs != rhs,
@@ -695,30 +683,19 @@ pub(super) fn can_execute_parallel(workflow: &Workflow) -> bool {
             .all(|step| step.workflow_id.is_empty())
 }
 
+fn actions_have_control_flow(actions: &[OnAction]) -> bool {
+    actions
+        .iter()
+        .any(|a| matches!(a.type_.as_str(), "goto" | "retry" | "end"))
+}
+
 pub(crate) fn has_control_flow(workflow: &Workflow) -> bool {
-    for action in &workflow.success_actions {
-        if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
-            return true;
-        }
-    }
-    for action in &workflow.failure_actions {
-        if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
-            return true;
-        }
-    }
-    for step in &workflow.steps {
-        for action in &step.on_success {
-            if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
-                return true;
-            }
-        }
-        for action in &step.on_failure {
-            if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
-                return true;
-            }
-        }
-    }
-    false
+    actions_have_control_flow(&workflow.success_actions)
+        || actions_have_control_flow(&workflow.failure_actions)
+        || workflow.steps.iter().any(|step| {
+            actions_have_control_flow(&step.on_success)
+                || actions_have_control_flow(&step.on_failure)
+        })
 }
 
 pub(crate) fn build_levels(workflow: &Workflow) -> Result<Vec<Vec<usize>>, RuntimeError> {
