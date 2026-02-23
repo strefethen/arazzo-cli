@@ -471,7 +471,7 @@ fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
     if path.is_empty() {
         return Ok(root.clone());
     }
-    let tokens = tokenize_path(path);
+    let tokens = tokenize_path(path)?;
     if tokens.is_empty() {
         return Ok(Value::Null);
     }
@@ -634,12 +634,12 @@ fn filter_matches(item: &Value, expr: FilterExpr<'_>) -> bool {
     }
 }
 
-fn tokenize_path(path: &str) -> Vec<PathToken<'_>> {
+fn tokenize_path(path: &str) -> Result<Vec<PathToken<'_>>, PathError> {
     let mut tokens = Vec::new();
     for segment in split_path_segments(path) {
-        push_segment_tokens(segment, &mut tokens);
+        push_segment_tokens(segment, &mut tokens, path)?;
     }
-    tokens
+    Ok(tokens)
 }
 
 fn split_path_segments(path: &str) -> Vec<&str> {
@@ -691,34 +691,45 @@ fn split_path_segments(path: &str) -> Vec<&str> {
         .collect()
 }
 
-fn push_segment_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
+fn push_segment_tokens<'a>(
+    segment: &'a str,
+    out: &mut Vec<PathToken<'a>>,
+    full_path: &str,
+) -> Result<(), PathError> {
     let segment = segment.trim();
     if segment.is_empty() {
-        return;
+        return Ok(());
     }
 
     if segment == "*" {
         out.push(PathToken::Wildcard);
-        return;
+        return Ok(());
     }
     if segment == "#" {
         out.push(PathToken::Hash);
-        return;
+        return Ok(());
     }
 
-    if let Some((inner, all_matches)) = parse_filter_segment(segment) {
-        if let Some(expr) = parse_filter_expr(inner) {
-            out.push(PathToken::Filter { expr, all_matches });
-            return;
+    if segment.starts_with("#(") {
+        if let Some((inner, all_matches)) = parse_filter_segment(segment) {
+            if let Some(expr) = parse_filter_expr(inner) {
+                out.push(PathToken::Filter { expr, all_matches });
+                return Ok(());
+            }
         }
+        return Err(PathError::InvalidSyntax {
+            path: full_path.to_string(),
+            detail: format!("unbalanced filter expression: {segment}"),
+        });
     }
 
     if segment.contains('[') {
-        push_bracket_tokens(segment, out);
-        return;
+        push_bracket_tokens(segment, out, full_path)?;
+        return Ok(());
     }
 
     out.push(PathToken::Field(segment));
+    Ok(())
 }
 
 fn parse_filter_segment(segment: &str) -> Option<(&str, bool)> {
@@ -769,7 +780,11 @@ fn parse_filter_expr(inner: &str) -> Option<FilterExpr<'_>> {
     })
 }
 
-fn push_bracket_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
+fn push_bracket_tokens<'a>(
+    segment: &'a str,
+    out: &mut Vec<PathToken<'a>>,
+    full_path: &str,
+) -> Result<(), PathError> {
     let mut cursor = 0usize;
 
     while cursor < segment.len() {
@@ -783,8 +798,10 @@ fn push_bracket_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
         }
 
         let Some(close_rel) = segment[open + 1..].find(']') else {
-            out.push(PathToken::Field(&segment[open..]));
-            return;
+            return Err(PathError::InvalidSyntax {
+                path: full_path.to_string(),
+                detail: format!("unclosed bracket in: {segment}"),
+            });
         };
         let close = open + 1 + close_rel;
         let index_expr = segment[open + 1..close].trim();
@@ -803,6 +820,7 @@ fn push_bracket_tokens<'a>(segment: &'a str, out: &mut Vec<PathToken<'a>>) {
     if cursor < segment.len() {
         out.push(PathToken::Field(&segment[cursor..]));
     }
+    Ok(())
 }
 
 #[cfg(test)]
