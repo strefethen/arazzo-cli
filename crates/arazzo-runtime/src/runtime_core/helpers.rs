@@ -607,6 +607,8 @@ pub(super) fn resolve_payload(value: &serde_yaml::Value, eval: &ExpressionEvalua
         serde_yaml::Value::String(v) => {
             if v.starts_with('$') {
                 eval.evaluate(v)
+            } else if v.contains("{$") {
+                Value::String(eval.interpolate_string(v))
             } else {
                 Value::String(v.clone())
             }

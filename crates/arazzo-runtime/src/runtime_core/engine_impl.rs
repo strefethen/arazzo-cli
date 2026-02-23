@@ -423,9 +423,13 @@ impl Engine {
             explicit_method.to_string()
         };
 
+        let method_for_ctx = method.clone();
+
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
-                let eval = ExpressionEvaluator::new(vars.eval_context(None));
+                let mut ctx = vars.eval_context(None);
+                ctx.method = Some(method_for_ctx.clone());
+                let eval = ExpressionEvaluator::new(ctx);
                 Some(resolve_payload(payload, &eval))
             } else {
                 None
@@ -447,11 +451,23 @@ impl Engine {
                 .unwrap_or_else(|| "application/json".to_string());
             headers.insert("Content-Type".to_string(), content_type);
         }
-        let eval = ExpressionEvaluator::new(vars.eval_context(None));
+        let mut hdr_ctx = vars.eval_context(None);
+        hdr_ctx.method = Some(method_for_ctx.clone());
+        let eval = ExpressionEvaluator::new(hdr_ctx);
+        let mut cookie_parts = Vec::new();
         for param in &step.parameters {
             if param.in_ == "header" {
-                headers.insert(param.name.clone(), eval.evaluate_string(&param.value));
+                headers.insert(param.name.clone(), eval.interpolate_string(&param.value));
+            } else if param.in_ == "cookie" {
+                cookie_parts.push(format!(
+                    "{}={}",
+                    param.name,
+                    eval.interpolate_string(&param.value)
+                ));
             }
+        }
+        if !cookie_parts.is_empty() {
+            headers.insert("Cookie".to_string(), cookie_parts.join("; "));
         }
 
         let trace_request = TraceRequest {
@@ -508,7 +524,9 @@ impl Engine {
             options,
         )?;
 
-        let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
+        let mut post_ctx = vars.eval_context(Some(&response));
+        post_ctx.method = Some(method_for_ctx.clone());
+        let eval = ExpressionEvaluator::new(post_ctx);
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
@@ -594,7 +612,12 @@ impl Engine {
         let eval = ExpressionEvaluator::new(vars.eval_context(None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
-            sub_inputs.insert(param.name.clone(), eval.evaluate(&param.value));
+            let value = if param.value.contains("{$") {
+                Value::String(eval.interpolate_string(&param.value))
+            } else {
+                eval.evaluate(&param.value)
+            };
+            sub_inputs.insert(param.name.clone(), value);
         }
 
         let outputs = self
@@ -989,7 +1012,11 @@ impl Engine {
         let mut query_params = Vec::<(String, String)>::new();
 
         for param in &step.parameters {
-            let value = eval.evaluate(&param.value);
+            let value = if param.value.contains("{$") {
+                Value::String(eval.interpolate_string(&param.value))
+            } else {
+                eval.evaluate(&param.value)
+            };
             match param.in_.as_str() {
                 "path" => {
                     path_params.insert(param.name.clone(), value_to_string(&value));

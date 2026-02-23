@@ -29,7 +29,7 @@ impl std::fmt::Display for PathError {
 impl std::error::Error for PathError {}
 
 static INTERPOLATE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_\.]*(?:\[[0-9]+\])*)")
+    Regex::new(r"\{(\$[^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_\.]*(?:\[[0-9]+\])*)")
         .unwrap_or_else(|err| panic!("failed to compile interpolate regex: {err}"))
 });
 
@@ -39,6 +39,7 @@ pub struct EvalContext {
     pub inputs: BTreeMap<String, Value>,
     pub steps: BTreeMap<String, BTreeMap<String, Value>>,
     pub status_code: Option<i64>,
+    pub method: Option<String>,
     pub response_headers: BTreeMap<String, String>,
     pub response_body: Option<Value>,
 }
@@ -94,6 +95,15 @@ impl ExpressionEvaluator {
                 .ctx
                 .status_code
                 .map(|code| json!(code))
+                .unwrap_or(Value::Null);
+        }
+
+        if rest == "method" {
+            return self
+                .ctx
+                .method
+                .as_ref()
+                .map(|m| Value::String(m.clone()))
                 .unwrap_or(Value::Null);
         }
 
@@ -159,7 +169,7 @@ impl ExpressionEvaluator {
         self.evaluate_comparison(condition)
     }
 
-    /// Interpolate `${expr}` and `$inputs.foo` style segments in a string.
+    /// Interpolate `{$expr}` and `$inputs.foo` style segments in a string.
     pub fn interpolate_string(&self, input: &str) -> String {
         let mut out = String::with_capacity(input.len());
         let mut cursor = 0usize;
@@ -172,7 +182,7 @@ impl ExpressionEvaluator {
             out.push_str(&input[cursor..full.start()]);
 
             let expr = if let Some(inner) = captures.get(1) {
-                format!("${}", inner.as_str())
+                inner.as_str().to_string()
             } else {
                 full.as_str().to_string()
             };
@@ -1080,6 +1090,20 @@ mod tests {
     }
 
     #[test]
+    fn method_expression() {
+        let ctx = EvalContext {
+            method: Some("GET".to_string()),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+        assert_eq!(eval.evaluate("$method"), json!("GET"));
+
+        let ctx_no_method = EvalContext::default();
+        let eval_no_method = ExpressionEvaluator::new(ctx_no_method);
+        assert_eq!(eval_no_method.evaluate("$method"), Value::Null);
+    }
+
+    #[test]
     fn interpolate_string_modes() {
         let mut ctx = EvalContext::default();
         ctx.inputs.insert("name".to_string(), json!("Alice"));
@@ -1092,15 +1116,19 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(
-            eval.interpolate_string("Hello ${inputs.name}!"),
+            eval.interpolate_string("Hello {$inputs.name}!"),
             "Hello Alice!"
         );
         assert_eq!(eval.interpolate_string("Age: $inputs.age"), "Age: 30");
         assert_eq!(
-            eval.interpolate_string("${inputs.a}-$steps.s1.outputs.b"),
+            eval.interpolate_string("{$inputs.a}-$steps.s1.outputs.b"),
             "X-Y"
         );
         assert_eq!(eval.interpolate_string("plain text"), "plain text");
+        assert_eq!(
+            eval.interpolate_string("Bearer {$inputs.name}"),
+            "Bearer Alice"
+        );
     }
 
     proptest! {
@@ -1114,7 +1142,7 @@ mod tests {
             ctx.inputs.insert("token".to_string(), json!(value.clone()));
             let eval = ExpressionEvaluator::new(ctx);
 
-            let expr = format!("{prefix}${{inputs.token}}{suffix}");
+            let expr = format!("{prefix}{{$inputs.token}}{suffix}");
             let rendered = eval.interpolate_string(&expr);
             prop_assert_eq!(rendered, format!("{prefix}{value}{suffix}"));
         }
