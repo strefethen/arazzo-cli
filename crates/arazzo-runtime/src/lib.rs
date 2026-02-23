@@ -36,7 +36,7 @@ mod tests {
         SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, RequestBody, SourceDescription,
+        CriterionExpressionType, CriterionType, Info, Parameter, RequestBody, SourceDescription,
     };
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -210,6 +210,7 @@ mod tests {
             arazzo: "1.0.0".to_string(),
             info: Info {
                 title: "test".to_string(),
+                summary: String::new(),
                 version: "1.0.0".to_string(),
                 description: String::new(),
             },
@@ -3428,5 +3429,314 @@ paths:
     fn test_xpath_extraction_invalid_xml() {
         let body = b"this is not xml at all <broken>";
         assert_eq!(extract_xpath(body, "//item[1]/title"), Value::Null);
+    }
+
+    #[test]
+    fn workflow_level_success_actions_as_default() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                success_actions: vec![OnAction {
+                    type_: "end".to_string(),
+                    ..OnAction::default()
+                }],
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        operation_path: "/a".to_string(),
+                        success_criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 200".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        operation_path: "/b".to_string(),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        // Workflow-level end action should stop after s1, so s2 never runs
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn workflow_level_actions_ignored_when_step_has_own() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                success_actions: vec![OnAction {
+                    type_: "end".to_string(),
+                    ..OnAction::default()
+                }],
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        operation_path: "/a".to_string(),
+                        success_criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 200".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        // Step has its own on_success (goto s2), so workflow-level "end" is ignored
+                        on_success: vec![OnAction {
+                            type_: "goto".to_string(),
+                            step_id: "s2".to_string(),
+                            ..OnAction::default()
+                        }],
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        operation_path: "/b".to_string(),
+                        outputs: BTreeMap::from([(
+                            "reached".to_string(),
+                            "$statusCode".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                ],
+                outputs: BTreeMap::from([(
+                    "s2_reached".to_string(),
+                    "$steps.s2.outputs.reached".to_string(),
+                )]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        // s2 should execute because s1 has its own on_success, bypassing workflow-level end
+        assert_eq!(result.get("s2_reached"), Some(&json!(200)));
+    }
+
+    #[test]
+    fn workflow_level_failure_actions_as_default() {
+        let server =
+            start_server(|_m, _u, _h, _b| MockHttpResponse::json(500, r#"{"error":"internal"}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                failure_actions: vec![OnAction {
+                    type_: "end".to_string(),
+                    ..OnAction::default()
+                }],
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/fail".to_string(),
+                    success_criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 200".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        // Workflow-level "end" on failure should produce an error (end on failure path = error)
+        match engine.execute("wf", BTreeMap::new()) {
+            Ok(_) => panic!("expected workflow to fail"),
+            Err(err) => assert!(
+                err.message.contains("workflow ended by onFailure action"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn workflow_level_parameters_merge_into_steps() {
+        let spec = make_spec_with_base(
+            "http://localhost",
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                parameters: vec![Parameter {
+                    name: "X-Workflow-Header".to_string(),
+                    in_: "header".to_string(),
+                    value: "workflow-value".to_string(),
+                    ..Parameter::default()
+                }],
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/a".to_string(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let _ = engine.execute("wf", BTreeMap::new());
+        let reqs = engine.dry_run_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(
+            reqs[0].headers.get("X-Workflow-Header"),
+            Some(&"workflow-value".to_string())
+        );
+    }
+
+    #[test]
+    fn step_params_override_workflow_params() {
+        let spec = make_spec_with_base(
+            "http://localhost",
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                parameters: vec![Parameter {
+                    name: "X-Auth".to_string(),
+                    in_: "header".to_string(),
+                    value: "default-token".to_string(),
+                    ..Parameter::default()
+                }],
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/a".to_string(),
+                    parameters: vec![Parameter {
+                        name: "X-Auth".to_string(),
+                        in_: "header".to_string(),
+                        value: "step-token".to_string(),
+                        ..Parameter::default()
+                    }],
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let _ = engine.execute("wf", BTreeMap::new());
+        let reqs = engine.dry_run_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(
+            reqs[0].headers.get("X-Auth"),
+            Some(&"step-token".to_string())
+        );
+    }
+
+    #[test]
+    fn workflow_params_not_merged_into_subworkflow_steps() {
+        let spec = make_spec_with_base(
+            "http://localhost",
+            vec![
+                Workflow {
+                    workflow_id: "parent".to_string(),
+                    parameters: vec![Parameter {
+                        name: "X-Parent".to_string(),
+                        in_: "header".to_string(),
+                        value: "parent-val".to_string(),
+                        ..Parameter::default()
+                    }],
+                    steps: vec![Step {
+                        step_id: "call-child".to_string(),
+                        workflow_id: "child".to_string(),
+                        parameters: vec![Parameter {
+                            name: "input_val".to_string(),
+                            value: "hello".to_string(),
+                            ..Parameter::default()
+                        }],
+                        ..Step::default()
+                    }],
+                    ..Workflow::default()
+                },
+                Workflow {
+                    workflow_id: "child".to_string(),
+                    steps: vec![Step {
+                        step_id: "child-step".to_string(),
+                        operation_path: "/a".to_string(),
+                        ..Step::default()
+                    }],
+                    ..Workflow::default()
+                },
+            ],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let _ = engine.execute("parent", BTreeMap::new());
+        let reqs = engine.dry_run_requests();
+        // child-step should NOT have the parent's X-Parent header
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].headers.get("X-Parent"), None);
+    }
+
+    #[test]
+    fn build_outputs_with_interpolation_and_outputs_ref() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"total":42}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/a".to_string(),
+                    outputs: BTreeMap::from([("sum".to_string(), "total".to_string())]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([
+                    ("amount".to_string(), "$steps.s1.outputs.sum".to_string()),
+                    (
+                        "summary".to_string(),
+                        "Total is {$outputs.amount}".to_string(),
+                    ),
+                ]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(result.get("amount"), Some(&json!(42)));
+        assert_eq!(result.get("summary"), Some(&json!("Total is 42")));
+    }
+
+    fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
+        ArazzoSpec {
+            arazzo: "1.0.0".to_string(),
+            info: Info {
+                title: "test".to_string(),
+                summary: String::new(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+            },
+            source_descriptions: vec![SourceDescription {
+                name: "test".to_string(),
+                url: base_url.to_string(),
+                type_: "openapi".to_string(),
+            }],
+            workflows,
+            components: None,
+        }
     }
 }

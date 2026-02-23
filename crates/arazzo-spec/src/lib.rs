@@ -43,6 +43,8 @@ pub struct Info {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
     pub version: String,
     #[serde(default)]
     pub description: String,
@@ -76,6 +78,12 @@ pub struct Workflow {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_actions: Vec<OnAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failure_actions: Vec<OnAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<Parameter>,
 }
 
 /// Schema-like object used for workflow inputs.
@@ -110,6 +118,8 @@ pub struct PropertyDef {
 pub struct Step {
     #[serde(default)]
     pub step_id: String,
+    #[serde(default)]
+    pub description: String,
     #[serde(default)]
     pub operation_id: String,
     #[serde(default)]

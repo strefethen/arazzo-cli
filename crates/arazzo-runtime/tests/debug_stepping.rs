@@ -102,7 +102,7 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
         info: Info {
             title: "debug-stepping".to_string(),
             version: "1.0.0".to_string(),
-            description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
@@ -112,9 +112,6 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
         workflows: vec![
             Workflow {
                 workflow_id: "parent".to_string(),
-                summary: String::new(),
-                description: String::new(),
-                inputs: None,
                 steps: vec![
                     Step {
                         step_id: "call-child".to_string(),
@@ -131,13 +128,10 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
                         ..Step::default()
                     },
                 ],
-                outputs: BTreeMap::new(),
+                ..Workflow::default()
             },
             Workflow {
                 workflow_id: "child".to_string(),
-                summary: String::new(),
-                description: String::new(),
-                inputs: None,
                 steps: vec![
                     Step {
                         step_id: "child-one".to_string(),
@@ -150,7 +144,7 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
                         ..Step::default()
                     },
                 ],
-                outputs: BTreeMap::new(),
+                ..Workflow::default()
             },
         ],
         components: None,

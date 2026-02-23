@@ -38,6 +38,7 @@ static INTERPOLATE_RE: Lazy<Regex> = Lazy::new(|| {
 pub struct EvalContext {
     pub inputs: BTreeMap<String, Value>,
     pub steps: BTreeMap<String, BTreeMap<String, Value>>,
+    pub outputs: BTreeMap<String, Value>,
     pub status_code: Option<i64>,
     pub method: Option<String>,
     pub response_headers: BTreeMap<String, String>,
@@ -107,6 +108,19 @@ impl ExpressionEvaluator {
                 .unwrap_or(Value::Null);
         }
 
+        if let Some(after) = rest.strip_prefix("outputs.") {
+            if let Some((name, pointer)) = after.split_once('#') {
+                return self
+                    .ctx
+                    .outputs
+                    .get(name)
+                    .and_then(|v| v.pointer(pointer))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+            }
+            return self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null);
+        }
+
         if let Some(name) = rest.strip_prefix("response.header.") {
             if let Some(value) = self.ctx.response_headers.get(name) {
                 return Value::String(value.clone());
@@ -124,6 +138,13 @@ impl ExpressionEvaluator {
 
         if rest == "response.body" {
             return self.ctx.response_body.clone().unwrap_or(Value::Null);
+        }
+
+        if let Some(pointer) = rest.strip_prefix("response.body#") {
+            if let Some(body) = &self.ctx.response_body {
+                return body.pointer(pointer).cloned().unwrap_or(Value::Null);
+            }
+            return Value::Null;
         }
 
         if let Some(path) = rest.strip_prefix("response.body.") {
@@ -1260,5 +1281,56 @@ mod tests {
     fn resolve_dot_path_consecutive_dots_is_lenient() {
         let root = json!({"a": {"b": 42}});
         assert_eq!(super::resolve_dot_path(&root, "a..b"), Ok(json!(42)));
+    }
+
+    #[test]
+    fn evaluate_outputs_expression() {
+        let mut ctx = EvalContext::default();
+        ctx.outputs.insert("total".to_string(), json!(42));
+        ctx.outputs
+            .insert("nested".to_string(), json!({"a": {"b": "deep"}}));
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(eval.evaluate("$outputs.total"), json!(42));
+        assert_eq!(eval.evaluate("$outputs.missing"), Value::Null);
+        assert_eq!(
+            eval.evaluate("$outputs.nested"),
+            json!({"a": {"b": "deep"}})
+        );
+    }
+
+    #[test]
+    fn evaluate_outputs_json_pointer() {
+        let mut ctx = EvalContext::default();
+        ctx.outputs
+            .insert("data".to_string(), json!({"items": [{"id": 1}, {"id": 2}]}));
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(eval.evaluate("$outputs.data#/items/0/id"), json!(1));
+        assert_eq!(eval.evaluate("$outputs.data#/items/1/id"), json!(2));
+        assert_eq!(eval.evaluate("$outputs.data#/missing"), Value::Null);
+    }
+
+    #[test]
+    fn evaluate_response_body_json_pointer() {
+        let ctx = EvalContext {
+            response_body: Some(json!({
+                "data": [{"name": "Alice"}, {"name": "Bob"}],
+                "meta": {"total": 2}
+            })),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(eval.evaluate("$response.body#/data/0/name"), json!("Alice"));
+        assert_eq!(eval.evaluate("$response.body#/data/1/name"), json!("Bob"));
+        assert_eq!(eval.evaluate("$response.body#/meta/total"), json!(2));
+        assert_eq!(eval.evaluate("$response.body#/nonexistent"), Value::Null);
+    }
+
+    #[test]
+    fn evaluate_response_body_json_pointer_without_body() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        assert_eq!(eval.evaluate("$response.body#/data/0"), Value::Null);
     }
 }

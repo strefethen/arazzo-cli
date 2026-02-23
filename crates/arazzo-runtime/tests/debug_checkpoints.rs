@@ -246,7 +246,7 @@ fn build_engine(base_url: String) -> Engine {
         info: Info {
             title: "debug-checkpoints".to_string(),
             version: "1.0.0".to_string(),
-            description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
@@ -255,9 +255,6 @@ fn build_engine(base_url: String) -> Engine {
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
-            summary: String::new(),
-            description: String::new(),
-            inputs: None,
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
                 operation_path: "/rss".to_string(),
@@ -268,7 +265,7 @@ fn build_engine(base_url: String) -> Engine {
                 outputs: BTreeMap::from([("link_1".to_string(), "//item[1]/link".to_string())]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::new(),
+            ..Workflow::default()
         }],
         components: None,
     };
@@ -285,7 +282,7 @@ fn build_failure_engine(base_url: String) -> Engine {
         info: Info {
             title: "debug-checkpoints-failure".to_string(),
             version: "1.0.0".to_string(),
-            description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
@@ -294,9 +291,6 @@ fn build_failure_engine(base_url: String) -> Engine {
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
-            summary: String::new(),
-            description: String::new(),
-            inputs: None,
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
                 operation_path: "/rss".to_string(),
@@ -324,7 +318,7 @@ fn build_failure_engine(base_url: String) -> Engine {
                 ],
                 ..Step::default()
             }],
-            outputs: BTreeMap::new(),
+            ..Workflow::default()
         }],
         components: None,
     };
@@ -341,7 +335,7 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
         info: Info {
             title: "debug-checkpoints-retry".to_string(),
             version: "1.0.0".to_string(),
-            description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
@@ -350,9 +344,6 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
-            summary: String::new(),
-            description: String::new(),
-            inputs: None,
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
                 operation_path: "/rss".to_string(),
@@ -372,7 +363,7 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
                 }],
                 ..Step::default()
             }],
-            outputs: BTreeMap::new(),
+            ..Workflow::default()
         }],
         components: None,
     };

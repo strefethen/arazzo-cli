@@ -103,6 +103,61 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
             ));
         }
 
+        for (param_idx, param) in wf.parameters.iter().enumerate() {
+            let param_path = format!("{path}.parameters[{param_idx}]");
+            if param.name.is_empty() && param.reference.is_empty() {
+                errs.push(format!(
+                    "{param_path}.name is required (unless using reference)"
+                ));
+            }
+            if param.value.is_empty() && param.reference.is_empty() {
+                errs.push(format!("{param_path} must have value or reference"));
+            }
+            if !param.in_.is_empty()
+                && param.in_ != "path"
+                && param.in_ != "query"
+                && param.in_ != "header"
+                && param.in_ != "cookie"
+            {
+                errs.push(format!(
+                    "{param_path}.in must be path, query, header, or cookie"
+                ));
+            }
+        }
+
+        for (action_idx, action) in wf.success_actions.iter().enumerate() {
+            let action_path = format!("{path}.successActions[{action_idx}]");
+            if action.retry_after < 0 {
+                errs.push(format!("{action_path}.retryAfter must be non-negative"));
+            }
+            if action.retry_limit < 0 {
+                errs.push(format!("{action_path}.retryLimit must be non-negative"));
+            }
+            for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
+                validate_criterion(
+                    &format!("{action_path}.criteria[{criterion_idx}]"),
+                    criterion,
+                    &mut errs,
+                );
+            }
+        }
+        for (action_idx, action) in wf.failure_actions.iter().enumerate() {
+            let action_path = format!("{path}.failureActions[{action_idx}]");
+            if action.retry_after < 0 {
+                errs.push(format!("{action_path}.retryAfter must be non-negative"));
+            }
+            if action.retry_limit < 0 {
+                errs.push(format!("{action_path}.retryLimit must be non-negative"));
+            }
+            for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
+                validate_criterion(
+                    &format!("{action_path}.criteria[{criterion_idx}]"),
+                    criterion,
+                    &mut errs,
+                );
+            }
+        }
+
         let mut step_ids = HashSet::<String>::new();
         for (step_idx, step) in wf.steps.iter().enumerate() {
             let step_path = format!("{path}.steps[{step_idx}]");
@@ -269,6 +324,75 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
     };
 
     for workflow in &mut spec.workflows {
+        // Resolve workflow-level parameter references
+        let mut resolved_wf_params = Vec::with_capacity(workflow.parameters.len());
+        for mut param in workflow.parameters.drain(..) {
+            if !param.reference.is_empty() {
+                let Some(name) = param.reference.strip_prefix("$components.parameters.") else {
+                    return Err(format!(
+                        "workflow {}: unsupported parameter reference: {}",
+                        workflow.workflow_id, param.reference
+                    ));
+                };
+                let Some(component_param) = components.parameters.get(name) else {
+                    return Err(format!(
+                        "workflow {}: component parameter \"{}\" not found",
+                        workflow.workflow_id, name
+                    ));
+                };
+                if param.name.is_empty() {
+                    param.name = component_param.name.clone();
+                }
+                if param.in_.is_empty() {
+                    param.in_ = component_param.in_.clone();
+                }
+                if param.value.is_empty() {
+                    param.value = component_param.value.clone();
+                }
+                param.reference.clear();
+            }
+            resolved_wf_params.push(param);
+        }
+        workflow.parameters = resolved_wf_params;
+
+        // Resolve workflow-level successActions references
+        if workflow.success_actions.len() == 1
+            && workflow.success_actions[0].type_.is_empty()
+            && !workflow.success_actions[0].name.is_empty()
+        {
+            if let Some(name) = workflow.success_actions[0]
+                .name
+                .strip_prefix("$components.successActions.")
+            {
+                let Some(actions) = components.success_actions.get(name) else {
+                    return Err(format!(
+                        "workflow {}: component successAction \"{}\" not found",
+                        workflow.workflow_id, name
+                    ));
+                };
+                workflow.success_actions = actions.clone();
+            }
+        }
+
+        // Resolve workflow-level failureActions references
+        if workflow.failure_actions.len() == 1
+            && workflow.failure_actions[0].type_.is_empty()
+            && !workflow.failure_actions[0].name.is_empty()
+        {
+            if let Some(name) = workflow.failure_actions[0]
+                .name
+                .strip_prefix("$components.failureActions.")
+            {
+                let Some(actions) = components.failure_actions.get(name) else {
+                    return Err(format!(
+                        "workflow {}: component failureAction \"{}\" not found",
+                        workflow.workflow_id, name
+                    ));
+                };
+                workflow.failure_actions = actions.clone();
+            }
+        }
+
         for step in &mut workflow.steps {
             let mut resolved_params = Vec::with_capacity(step.parameters.len());
             for mut param in step.parameters.drain(..) {
@@ -375,6 +499,7 @@ workflows:
             arazzo: "1.0.0".to_string(),
             info: Info {
                 title: "Test".to_string(),
+                summary: String::new(),
                 version: "1.0.0".to_string(),
                 description: String::new(),
             },
@@ -958,5 +1083,156 @@ workflows:
                 }
             }
         }
+    }
+
+    #[test]
+    fn validate_workflow_level_actions_retry_fields() {
+        let mut spec = valid_spec();
+        spec.workflows[0].success_actions = vec![OnAction {
+            type_: "retry".to_string(),
+            retry_after: -1,
+            ..OnAction::default()
+        }];
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains("successActions[0].retryAfter must be non-negative") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_workflow_level_failure_actions_retry_fields() {
+        let mut spec = valid_spec();
+        spec.workflows[0].failure_actions = vec![OnAction {
+            type_: "retry".to_string(),
+            retry_limit: -1,
+            ..OnAction::default()
+        }];
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains("failureActions[0].retryLimit must be non-negative") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_workflow_level_param_invalid_in() {
+        let mut spec = valid_spec();
+        spec.workflows[0].parameters = vec![arazzo_spec::Parameter {
+            name: "q".to_string(),
+            value: "x".to_string(),
+            in_: "body".to_string(),
+            ..arazzo_spec::Parameter::default()
+        }];
+        let result = validate(&spec);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.contains(
+                    "workflows[0].parameters[0].in must be path, query, header, or cookie",
+                ) {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_bytes_workflow_level_fields() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  summary: A summary
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    parameters:
+      - name: Authorization
+        in: header
+        value: "Bearer token"
+    successActions:
+      - type: end
+    failureActions:
+      - type: retry
+        retryAfter: 5
+        retryLimit: 3
+    steps:
+      - stepId: s1
+        description: First step
+        operationPath: /test
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        assert_eq!(spec.info.summary, "A summary");
+        let wf = &spec.workflows[0];
+        assert_eq!(wf.parameters.len(), 1);
+        assert_eq!(wf.parameters[0].name, "Authorization");
+        assert_eq!(wf.success_actions.len(), 1);
+        assert_eq!(wf.success_actions[0].type_, "end");
+        assert_eq!(wf.failure_actions.len(), 1);
+        assert_eq!(wf.failure_actions[0].type_, "retry");
+        assert_eq!(wf.failure_actions[0].retry_after, 5);
+        assert_eq!(wf.steps[0].description, "First step");
+    }
+
+    #[test]
+    fn parse_bytes_component_workflow_level_actions() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  successActions:
+    endAll:
+      - type: end
+        name: stop
+  failureActions:
+    retryAll:
+      - type: retry
+        retryAfter: 1
+        retryLimit: 2
+workflows:
+  - workflowId: wf1
+    successActions:
+      - name: "$components.successActions.endAll"
+    failureActions:
+      - name: "$components.failureActions.retryAll"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let wf = &spec.workflows[0];
+        assert_eq!(wf.success_actions.len(), 1);
+        assert_eq!(wf.success_actions[0].type_, "end");
+        assert_eq!(wf.success_actions[0].name, "stop");
+        assert_eq!(wf.failure_actions.len(), 1);
+        assert_eq!(wf.failure_actions[0].type_, "retry");
+        assert_eq!(wf.failure_actions[0].retry_after, 1);
     }
 }

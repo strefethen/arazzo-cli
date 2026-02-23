@@ -81,7 +81,7 @@ fn build_engine(url: String) -> Engine {
         info: Info {
             title: "debug-evaluate".to_string(),
             version: "1.0.0".to_string(),
-            description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
@@ -90,9 +90,6 @@ fn build_engine(url: String) -> Engine {
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
-            summary: String::new(),
-            description: String::new(),
-            inputs: None,
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
@@ -106,7 +103,7 @@ fn build_engine(url: String) -> Engine {
                     ..Step::default()
                 },
             ],
-            outputs: BTreeMap::new(),
+            ..Workflow::default()
         }],
         components: None,
     };

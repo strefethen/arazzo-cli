@@ -221,7 +221,11 @@ impl Engine {
                 break;
             }
 
-            let step = workflow.steps[step_index].clone();
+            let step = {
+                let mut s = workflow.steps[step_index].clone();
+                merge_workflow_params(&workflow.parameters, &mut s);
+                s
+            };
             self.debug_gate_step(workflow_id, &step, &vars, depth)?;
 
             self.emit_before_step_event(workflow_id, &step);
@@ -655,6 +659,11 @@ impl Engine {
         let step = &ctx.workflow.steps[ctx.step_idx];
 
         if ctx.result.success {
+            let success_actions = if step.on_success.is_empty() {
+                &ctx.workflow.success_actions
+            } else {
+                &step.on_success
+            };
             let action = match self.find_matching_action_with_debug(
                 ActionSelectionContext {
                     workflow_id: ctx.workflow_id,
@@ -664,7 +673,7 @@ impl Engine {
                     response: ctx.result.response.as_ref(),
                     depth: ctx.depth,
                 },
-                &step.on_success,
+                success_actions,
             ) {
                 Ok(action) => action,
                 Err(err) => return RoutedDecision::error(err),
@@ -699,6 +708,11 @@ impl Engine {
             };
         }
 
+        let failure_actions = if step.on_failure.is_empty() {
+            &ctx.workflow.failure_actions
+        } else {
+            &step.on_failure
+        };
         let action = match self.find_matching_action_with_debug(
             ActionSelectionContext {
                 workflow_id: ctx.workflow_id,
@@ -708,7 +722,7 @@ impl Engine {
                 response: ctx.result.response.as_ref(),
                 depth: ctx.depth,
             },
-            &step.on_failure,
+            failure_actions,
         ) {
             Ok(action) => action,
             Err(err) => return RoutedDecision::error(err),
@@ -987,12 +1001,21 @@ impl Engine {
         workflow: &Workflow,
         vars: &VarStore,
     ) -> BTreeMap<String, Value> {
-        let eval = ExpressionEvaluator::new(vars.eval_context(None));
-        let mut outputs = BTreeMap::new();
+        let mut ctx = vars.eval_context(None);
+        let mut computed_outputs = BTreeMap::new();
         for (name, expr) in &workflow.outputs {
-            outputs.insert(name.clone(), eval.evaluate(expr));
+            let eval = ExpressionEvaluator::new(ctx.clone());
+            let value = if expr.starts_with('$') {
+                eval.evaluate(expr)
+            } else if expr.contains("{$") {
+                Value::String(eval.interpolate_string(expr))
+            } else {
+                Value::String(expr.clone())
+            };
+            computed_outputs.insert(name.clone(), value);
+            ctx.outputs = computed_outputs.clone();
         }
-        outputs
+        computed_outputs
     }
 
     pub(crate) fn build_url_from_path(
@@ -1077,9 +1100,13 @@ impl Engine {
                 let mut handles = Vec::new();
 
                 for idx in level.iter().copied() {
-                    let step = workflow.steps.get(idx).cloned().ok_or_else(|| {
-                        RuntimeError::unspecified("invalid step index".to_string())
-                    })?;
+                    let step = {
+                        let mut s = workflow.steps.get(idx).cloned().ok_or_else(|| {
+                            RuntimeError::unspecified("invalid step index".to_string())
+                        })?;
+                        merge_workflow_params(&workflow.parameters, &mut s);
+                        s
+                    };
                     let step_vars = level_vars.clone();
                     let opts = options.clone();
                     handles.push(scope.spawn(move || {
@@ -1768,6 +1795,17 @@ impl RoutedDecision {
                 ..TraceDecision::default()
             },
         }
+    }
+}
+
+fn merge_workflow_params(workflow_params: &[Parameter], step: &mut Step) {
+    if step.workflow_id.is_empty() && !workflow_params.is_empty() {
+        let mut merged = workflow_params.to_vec();
+        for sp in &step.parameters {
+            merged.retain(|wp| !(wp.name == sp.name && wp.in_ == sp.in_));
+            merged.push(sp.clone());
+        }
+        step.parameters = merged;
     }
 }
 

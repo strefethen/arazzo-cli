@@ -689,6 +689,16 @@ pub(super) fn can_execute_parallel(workflow: &Workflow) -> bool {
 }
 
 pub(crate) fn has_control_flow(workflow: &Workflow) -> bool {
+    for action in &workflow.success_actions {
+        if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
+            return true;
+        }
+    }
+    for action in &workflow.failure_actions {
+        if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
+            return true;
+        }
+    }
     for step in &workflow.steps {
         for action in &step.on_success {
             if matches!(action.type_.as_str(), "goto" | "retry" | "end") {
