@@ -128,16 +128,6 @@ pub(crate) fn evaluate_output_expression(
     eval.evaluate(&format!("$response.body.{json_path}"))
 }
 
-fn is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(v) => *v,
-        Value::Number(n) => n.as_f64().unwrap_or(0.0) != 0.0,
-        Value::String(v) => !v.is_empty(),
-        _ => true,
-    }
-}
-
 fn default_criterion_context(response: Option<&Response>) -> Value {
     match response {
         Some(resp) => {

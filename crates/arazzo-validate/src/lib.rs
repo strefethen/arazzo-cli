@@ -7,7 +7,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec, CriterionType, SuccessCriterion};
+use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec, CriterionType, OnAction, SuccessCriterion};
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
@@ -125,38 +125,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
             }
         }
 
-        for (action_idx, action) in wf.success_actions.iter().enumerate() {
-            let action_path = format!("{path}.successActions[{action_idx}]");
-            if action.retry_after < 0 {
-                errs.push(format!("{action_path}.retryAfter must be non-negative"));
-            }
-            if action.retry_limit < 0 {
-                errs.push(format!("{action_path}.retryLimit must be non-negative"));
-            }
-            for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
-                validate_criterion(
-                    &format!("{action_path}.criteria[{criterion_idx}]"),
-                    criterion,
-                    &mut errs,
-                );
-            }
-        }
-        for (action_idx, action) in wf.failure_actions.iter().enumerate() {
-            let action_path = format!("{path}.failureActions[{action_idx}]");
-            if action.retry_after < 0 {
-                errs.push(format!("{action_path}.retryAfter must be non-negative"));
-            }
-            if action.retry_limit < 0 {
-                errs.push(format!("{action_path}.retryLimit must be non-negative"));
-            }
-            for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
-                validate_criterion(
-                    &format!("{action_path}.criteria[{criterion_idx}]"),
-                    criterion,
-                    &mut errs,
-                );
-            }
-        }
+        validate_actions(
+            &format!("{path}.successActions"),
+            &wf.success_actions,
+            &mut errs,
+        );
+        validate_actions(
+            &format!("{path}.failureActions"),
+            &wf.failure_actions,
+            &mut errs,
+        );
 
         let mut step_ids = HashSet::<String>::new();
         for (step_idx, step) in wf.steps.iter().enumerate() {
@@ -210,38 +188,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 );
             }
 
-            for (action_idx, action) in step.on_failure.iter().enumerate() {
-                let action_path = format!("{step_path}.onFailure[{action_idx}]");
-                if action.retry_after < 0 {
-                    errs.push(format!("{action_path}.retryAfter must be non-negative"));
-                }
-                if action.retry_limit < 0 {
-                    errs.push(format!("{action_path}.retryLimit must be non-negative"));
-                }
-                for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
-                    validate_criterion(
-                        &format!("{action_path}.criteria[{criterion_idx}]"),
-                        criterion,
-                        &mut errs,
-                    );
-                }
-            }
-            for (action_idx, action) in step.on_success.iter().enumerate() {
-                let action_path = format!("{step_path}.onSuccess[{action_idx}]");
-                if action.retry_after < 0 {
-                    errs.push(format!("{action_path}.retryAfter must be non-negative"));
-                }
-                if action.retry_limit < 0 {
-                    errs.push(format!("{action_path}.retryLimit must be non-negative"));
-                }
-                for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
-                    validate_criterion(
-                        &format!("{action_path}.criteria[{criterion_idx}]"),
-                        criterion,
-                        &mut errs,
-                    );
-                }
-            }
+            validate_actions(
+                &format!("{step_path}.onFailure"),
+                &step.on_failure,
+                &mut errs,
+            );
+            validate_actions(
+                &format!("{step_path}.onSuccess"),
+                &step.on_success,
+                &mut errs,
+            );
         }
 
         for (name, expr) in &wf.outputs {
@@ -260,6 +216,25 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
         return Ok(());
     }
     Err(format!("validation errors:\n  - {}", errs.join("\n  - ")))
+}
+
+fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<String>) {
+    for (action_idx, action) in actions.iter().enumerate() {
+        let action_path = format!("{path_prefix}[{action_idx}]");
+        if action.retry_after < 0 {
+            errs.push(format!("{action_path}.retryAfter must be non-negative"));
+        }
+        if action.retry_limit < 0 {
+            errs.push(format!("{action_path}.retryLimit must be non-negative"));
+        }
+        for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
+            validate_criterion(
+                &format!("{action_path}.criteria[{criterion_idx}]"),
+                criterion,
+                errs,
+            );
+        }
+    }
 }
 
 fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<String>) {

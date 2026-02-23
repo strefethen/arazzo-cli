@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{DebugController, DebugScopes, StepCheckpoint};
-use arazzo_expr::{EvalContext, ExpressionEvaluator};
+use arazzo_expr::{is_truthy, EvalContext, ExpressionEvaluator};
 use arazzo_spec::{ArazzoSpec, OnAction, Parameter, Step, SuccessCriterion, Workflow};
 use regex::Regex;
 use serde::{Deserialize, Serialize};

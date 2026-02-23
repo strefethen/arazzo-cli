@@ -137,18 +137,9 @@ impl ExpressionEvaluator {
         }
 
         if let Some(name) = rest.strip_prefix("request.header.") {
-            if let Some(value) = self.ctx.request_headers.get(name) {
-                return Value::String(value.clone());
-            }
-            if let Some((_, value)) = self
-                .ctx
-                .request_headers
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            {
-                return Value::String(value.clone());
-            }
-            return Value::Null;
+            return get_header_case_insensitive(&self.ctx.request_headers, name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null);
         }
 
         if let Some(name) = rest.strip_prefix("request.query.") {
@@ -200,18 +191,9 @@ impl ExpressionEvaluator {
         }
 
         if let Some(name) = rest.strip_prefix("response.header.") {
-            if let Some(value) = self.ctx.response_headers.get(name) {
-                return Value::String(value.clone());
-            }
-            if let Some((_, value)) = self
-                .ctx
-                .response_headers
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            {
-                return Value::String(value.clone());
-            }
-            return Value::Null;
+            return get_header_case_insensitive(&self.ctx.response_headers, name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null);
         }
 
         if rest == "response.body" {
@@ -325,6 +307,19 @@ impl ExpressionEvaluator {
             _ => false,
         }
     }
+}
+
+fn get_header_case_insensitive<'a>(
+    headers: &'a BTreeMap<String, String>,
+    name: &str,
+) -> Option<&'a String> {
+    if let Some(value) = headers.get(name) {
+        return Some(value);
+    }
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value)
 }
 
 fn resolve_operand(eval: &ExpressionEvaluator, raw: &str) -> Value {
@@ -566,7 +561,7 @@ fn to_string_coerce(value: &Value) -> String {
     }
 }
 
-fn is_truthy(value: &Value) -> bool {
+pub fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(v) => *v,

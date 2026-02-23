@@ -254,25 +254,20 @@ impl Engine {
                 Err(err) => {
                     let duration = start.elapsed();
                     if self.trace_enabled {
-                        self.push_trace_record(TraceStepRecord {
-                            seq: self.next_trace_seq(),
-                            workflow_id: workflow_id.to_string(),
-                            step_id: step.step_id.clone(),
+                        let record = self.build_step_trace_record(
+                            workflow_id,
+                            &step,
                             attempt,
-                            kind: step_kind(&step),
-                            operation_path: step.operation_path.clone(),
-                            workflow_id_ref: step.workflow_id.clone(),
-                            duration_ms: duration_ms_u64(duration),
-                            request: None,
-                            response: None,
-                            criteria: Vec::new(),
-                            decision: TraceDecision {
+                            duration,
+                            &StepTraceData::default(),
+                            TraceDecision {
                                 path: TraceDecisionPath::Error,
                                 ..TraceDecision::default()
                             },
-                            outputs: BTreeMap::new(),
-                            error: Some(err.message.clone()),
-                        });
+                            BTreeMap::new(),
+                            Some(err.message.clone()),
+                        );
+                        self.push_trace_record(record);
                     }
                     return Err(err);
                 }
@@ -310,22 +305,17 @@ impl Engine {
                 _ => execution.result.err.clone(),
             };
             if self.trace_enabled {
-                self.push_trace_record(TraceStepRecord {
-                    seq: self.next_trace_seq(),
-                    workflow_id: workflow_id.to_string(),
-                    step_id: step.step_id.clone(),
+                let record = self.build_step_trace_record(
+                    workflow_id,
+                    &step,
                     attempt,
-                    kind: step_kind(&step),
-                    operation_path: step.operation_path.clone(),
-                    workflow_id_ref: step.workflow_id.clone(),
-                    duration_ms: duration_ms_u64(duration),
-                    request: execution.trace.request.clone(),
-                    response: execution.trace.response.clone(),
-                    criteria: execution.trace.criteria.clone(),
-                    decision: action.trace.clone(),
-                    outputs: step_outputs,
-                    error: trace_err,
-                });
+                    duration,
+                    &execution.trace,
+                    action.trace.clone(),
+                    step_outputs,
+                    trace_err,
+                );
+                self.push_trace_record(record);
             }
 
             match action.flow {
@@ -405,15 +395,11 @@ impl Engine {
         Ok(execution)
     }
 
-    fn execute_http_step(
+    fn prepare_http_request(
         &self,
-        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
-        depth: usize,
-        options: &ExecutionOptions,
-    ) -> Result<StepExecution, RuntimeError> {
-        options.check()?;
+    ) -> Result<PreparedRequest, RuntimeError> {
         let mut operation_path = step.operation_path.clone();
         if !step.operation_id.is_empty() && operation_path.is_empty() {
             let (method, path) = self.resolve_operation_id(&step.operation_id)?;
@@ -422,7 +408,6 @@ impl Engine {
 
         let (explicit_method, op_path) = parse_method(&operation_path);
         let url_result = self.build_url_from_path(op_path, step, vars);
-        let url = url_result.url;
 
         let method = if explicit_method.is_empty() {
             if step.request_body.is_some() {
@@ -434,12 +419,10 @@ impl Engine {
             explicit_method.to_string()
         };
 
-        let method_for_ctx = method.clone();
-
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
                 let mut ctx = self.make_eval_context(vars, None);
-                ctx.method = Some(method_for_ctx.clone());
+                ctx.method = Some(method.clone());
                 let eval = ExpressionEvaluator::new(ctx);
                 Some(resolve_payload(payload, &eval))
             } else {
@@ -463,7 +446,7 @@ impl Engine {
             headers.insert("Content-Type".to_string(), content_type);
         }
         let mut hdr_ctx = self.make_eval_context(vars, None);
-        hdr_ctx.method = Some(method_for_ctx.clone());
+        hdr_ctx.method = Some(method.clone());
         let eval = ExpressionEvaluator::new(hdr_ctx);
         let mut cookie_parts = Vec::new();
         for param in &step.parameters {
@@ -483,83 +466,129 @@ impl Engine {
 
         let trace_request = TraceRequest {
             method: method.clone(),
-            url: url.clone(),
+            url: url_result.url.clone(),
             headers: headers.clone(),
             body: body_json.clone(),
         };
 
+        Ok(PreparedRequest {
+            method,
+            url_result,
+            headers,
+            body,
+            body_json,
+            trace_request,
+        })
+    }
+
+    fn make_post_request_eval_context(
+        &self,
+        vars: &VarStore,
+        response: Option<&Response>,
+        prep: &PreparedRequest,
+    ) -> EvalContext {
+        let mut ctx = self.make_eval_context(vars, response);
+        ctx.method = Some(prep.method.clone());
+        ctx.url = Some(prep.url_result.url.clone());
+        ctx.request_headers = prep.headers.clone();
+        ctx.request_query = prep.url_result.query_params.clone();
+        ctx.request_path = prep.url_result.path_params.clone();
+        ctx.request_body = prep.body_json.clone();
+        ctx
+    }
+
+    fn execute_http_step(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        vars: &VarStore,
+        depth: usize,
+        options: &ExecutionOptions,
+    ) -> Result<StepExecution, RuntimeError> {
+        options.check()?;
+        let prep = self.prepare_http_request(step, vars)?;
+
         if self.dry_run_mode {
-            let req = DryRunRequest {
-                step_id: step.step_id.clone(),
-                method: method.clone(),
-                url: url.clone(),
-                headers: headers.clone(),
-                body: body_json.clone(),
-            };
-            let fake = Response {
-                status_code: 200,
-                headers: BTreeMap::new(),
-                body: b"{}".to_vec(),
-                body_json: Some(json!({})),
-                content_type: "json".to_string(),
-            };
-            let mut dry_ctx = self.make_eval_context(vars, Some(&fake));
-            dry_ctx.method = Some(method_for_ctx.clone());
-            dry_ctx.url = Some(url);
-            dry_ctx.request_headers = headers;
-            dry_ctx.request_query = url_result.query_params.clone();
-            dry_ctx.request_path = url_result.path_params.clone();
-            dry_ctx.request_body = body_json.clone();
-            let dry_eval = ExpressionEvaluator::new(dry_ctx);
-            let mut outputs = BTreeMap::new();
-            for (name, expr) in &step.outputs {
-                let value = evaluate_output_expression(expr, &dry_eval, Some(&fake));
-                outputs.insert(name.clone(), value);
-            }
-            return Ok(StepExecution {
-                result: StepResult {
-                    success: true,
-                    response: Some(fake),
-                    err: None,
-                },
-                outputs,
-                dry_run_request: Some(req),
-                trace: StepTraceData {
-                    request: Some(trace_request),
-                    response: Some(TraceResponse {
-                        status_code: 200,
-                        content_type: "json".to_string(),
-                        headers: BTreeMap::new(),
-                        body_bytes: 2,
-                        body_preview: Some("{}".to_string()),
-                    }),
-                    criteria: Vec::new(),
-                },
-            });
+            return self.execute_dry_run_step(step, vars, prep);
         }
 
         let response = self.client.request(
             RequestConfig {
-                method,
-                url: url.clone(),
-                headers: headers.clone(),
-                body,
+                method: prep.method.clone(),
+                url: prep.url_result.url.clone(),
+                headers: prep.headers.clone(),
+                body: prep.body.clone(),
             },
             options,
         )?;
 
-        let mut post_ctx = self.make_eval_context(vars, Some(&response));
-        post_ctx.method = Some(method_for_ctx.clone());
-        post_ctx.url = Some(url);
-        post_ctx.request_headers = headers;
-        post_ctx.request_query = url_result.query_params.clone();
-        post_ctx.request_path = url_result.path_params.clone();
-        post_ctx.request_body = body_json.clone();
+        self.evaluate_step_response(workflow_id, step, vars, depth, &response, &prep)
+    }
+
+    fn execute_dry_run_step(
+        &self,
+        step: &Step,
+        vars: &VarStore,
+        prep: PreparedRequest,
+    ) -> Result<StepExecution, RuntimeError> {
+        let req = DryRunRequest {
+            step_id: step.step_id.clone(),
+            method: prep.method.clone(),
+            url: prep.url_result.url.clone(),
+            headers: prep.headers.clone(),
+            body: prep.body_json.clone(),
+        };
+        let fake = Response {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: b"{}".to_vec(),
+            body_json: Some(json!({})),
+            content_type: "json".to_string(),
+        };
+        let dry_ctx = self.make_post_request_eval_context(vars, Some(&fake), &prep);
+        let dry_eval = ExpressionEvaluator::new(dry_ctx);
+        let mut outputs = BTreeMap::new();
+        for (name, expr) in &step.outputs {
+            let value = evaluate_output_expression(expr, &dry_eval, Some(&fake));
+            outputs.insert(name.clone(), value);
+        }
+        Ok(StepExecution {
+            result: StepResult {
+                success: true,
+                response: Some(fake),
+                err: None,
+            },
+            outputs,
+            dry_run_request: Some(req),
+            trace: StepTraceData {
+                request: Some(prep.trace_request),
+                response: Some(TraceResponse {
+                    status_code: 200,
+                    content_type: "json".to_string(),
+                    headers: BTreeMap::new(),
+                    body_bytes: 2,
+                    body_preview: Some("{}".to_string()),
+                }),
+                criteria: Vec::new(),
+            },
+        })
+    }
+
+    fn evaluate_step_response(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        vars: &VarStore,
+        depth: usize,
+        response: &Response,
+        prep: &PreparedRequest,
+    ) -> Result<StepExecution, RuntimeError> {
+        let post_ctx = self.make_post_request_eval_context(vars, Some(response), prep);
         let eval = ExpressionEvaluator::new(post_ctx);
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
-            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(&response));
+            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(response));
             criteria.push(TraceCriterionResult {
                 index,
                 type_: evaluation.type_name.clone(),
@@ -571,24 +600,24 @@ impl Engine {
                 workflow_id,
                 step_id: &step.step_id,
                 vars,
-                response: Some(&response),
-                request: Some(&trace_request),
+                response: Some(response),
+                request: Some(&prep.trace_request),
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
             self.debug_gate_success_criterion(&gate, index, &evaluation)?;
             if !evaluation.matched {
-                let trace_response = build_trace_response(&response);
+                let trace_response = build_trace_response(response);
                 return Ok(StepExecution {
                     result: StepResult {
                         success: false,
-                        response: Some(response),
+                        response: Some(response.clone()),
                         err: None,
                     },
                     outputs: BTreeMap::new(),
                     dry_run_request: None,
                     trace: StepTraceData {
-                        request: Some(trace_request),
+                        request: Some(prep.trace_request.clone()),
                         response: Some(trace_response),
                         criteria,
                     },
@@ -598,32 +627,32 @@ impl Engine {
 
         let mut outputs = BTreeMap::new();
         for (name, expr) in &step.outputs {
-            let value = evaluate_output_expression(expr, &eval, Some(&response));
+            let value = evaluate_output_expression(expr, &eval, Some(response));
             outputs.insert(name.clone(), value.clone());
             checkpoint_outputs.insert(name.clone(), value);
             let gate = DebugGateContext {
                 workflow_id,
                 step_id: &step.step_id,
                 vars,
-                response: Some(&response),
-                request: Some(&trace_request),
+                response: Some(response),
+                request: Some(&prep.trace_request),
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
             self.debug_gate_output(&gate, name, expr)?;
         }
 
-        let trace_response = build_trace_response(&response);
+        let trace_response = build_trace_response(response);
         Ok(StepExecution {
             result: StepResult {
                 success: true,
-                response: Some(response),
+                response: Some(response.clone()),
                 err: None,
             },
             outputs,
             dry_run_request: None,
             trace: StepTraceData {
-                request: Some(trace_request),
+                request: Some(prep.trace_request.clone()),
                 response: Some(trace_response),
                 criteria,
             },
@@ -1191,25 +1220,20 @@ impl Engine {
                     Ok(execution) => execution,
                     Err(err) => {
                         if self.trace_enabled {
-                            self.push_trace_record(TraceStepRecord {
-                                seq: self.next_trace_seq(),
-                                workflow_id: workflow_id.to_string(),
-                                step_id: step.step_id.clone(),
+                            let record = self.build_step_trace_record(
+                                workflow_id,
+                                &step,
                                 attempt,
-                                kind: step_kind(&step),
-                                operation_path: step.operation_path.clone(),
-                                workflow_id_ref: step.workflow_id.clone(),
-                                duration_ms: 0,
-                                request: None,
-                                response: None,
-                                criteria: Vec::new(),
-                                decision: TraceDecision {
+                                Duration::ZERO,
+                                &StepTraceData::default(),
+                                TraceDecision {
                                     path: TraceDecisionPath::Error,
                                     ..TraceDecision::default()
                                 },
-                                outputs: BTreeMap::new(),
-                                error: Some(err.message.clone()),
-                            });
+                                BTreeMap::new(),
+                                Some(err.message.clone()),
+                            );
+                            self.push_trace_record(record);
                         }
                         return Err(err);
                     }
@@ -1235,25 +1259,20 @@ impl Engine {
                 if !execution.result.success {
                     let err = step_result_error(&step.step_id, &execution.result);
                     if self.trace_enabled {
-                        self.push_trace_record(TraceStepRecord {
-                            seq: self.next_trace_seq(),
-                            workflow_id: workflow_id.to_string(),
-                            step_id: step.step_id.clone(),
+                        let record = self.build_step_trace_record(
+                            workflow_id,
+                            &step,
                             attempt,
-                            kind: step_kind(&step),
-                            operation_path: step.operation_path.clone(),
-                            workflow_id_ref: step.workflow_id.clone(),
-                            duration_ms: duration_ms_u64(duration),
-                            request: execution.trace.request.clone(),
-                            response: execution.trace.response.clone(),
-                            criteria: execution.trace.criteria.clone(),
-                            decision: TraceDecision {
+                            duration,
+                            &execution.trace,
+                            TraceDecision {
                                 path: TraceDecisionPath::Error,
                                 ..TraceDecision::default()
                             },
-                            outputs: outputs_for_trace,
-                            error: Some(err.message.clone()),
-                        });
+                            outputs_for_trace,
+                            Some(err.message.clone()),
+                        );
+                        self.push_trace_record(record);
                     }
                     return Err(err);
                 }
@@ -1266,25 +1285,20 @@ impl Engine {
                     vars.set_step_output(&step.step_id, name, value.clone());
                 }
                 if self.trace_enabled {
-                    self.push_trace_record(TraceStepRecord {
-                        seq: self.next_trace_seq(),
-                        workflow_id: workflow_id.to_string(),
-                        step_id: step.step_id.clone(),
+                    let record = self.build_step_trace_record(
+                        workflow_id,
+                        &step,
                         attempt,
-                        kind: step_kind(&step),
-                        operation_path: step.operation_path.clone(),
-                        workflow_id_ref: step.workflow_id.clone(),
-                        duration_ms: duration_ms_u64(duration),
-                        request: execution.trace.request.clone(),
-                        response: execution.trace.response.clone(),
-                        criteria: execution.trace.criteria.clone(),
-                        decision: TraceDecision {
+                        duration,
+                        &execution.trace,
+                        TraceDecision {
                             path: TraceDecisionPath::Next,
                             ..TraceDecision::default()
                         },
-                        outputs: outputs_for_trace,
-                        error: execution.result.err.clone(),
-                    });
+                        outputs_for_trace,
+                        execution.result.err.clone(),
+                    );
+                    self.push_trace_record(record);
                 }
             }
         }
@@ -1696,6 +1710,36 @@ impl Engine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn build_step_trace_record(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        attempt: u32,
+        duration: Duration,
+        trace: &StepTraceData,
+        decision: TraceDecision,
+        outputs: BTreeMap<String, Value>,
+        error: Option<String>,
+    ) -> TraceStepRecord {
+        TraceStepRecord {
+            seq: self.next_trace_seq(),
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            attempt,
+            kind: step_kind(step),
+            operation_path: step.operation_path.clone(),
+            workflow_id_ref: step.workflow_id.clone(),
+            duration_ms: duration_ms_u64(duration),
+            request: trace.request.clone(),
+            response: trace.response.clone(),
+            criteria: trace.criteria.clone(),
+            decision,
+            outputs,
+            error,
+        }
+    }
+
     fn push_trace_record(&self, record: TraceStepRecord) {
         if let Ok(mut guard) = self.trace_steps.lock() {
             guard.push(record);
@@ -1716,6 +1760,16 @@ enum FlowDecision {
 struct RoutedDecision {
     flow: FlowDecision,
     trace: TraceDecision,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedRequest {
+    method: String,
+    url_result: UrlBuildResult,
+    headers: BTreeMap<String, String>,
+    body: Option<Vec<u8>>,
+    body_json: Option<Value>,
+    trace_request: TraceRequest,
 }
 
 #[derive(Debug, Clone)]
