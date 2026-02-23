@@ -41,6 +41,12 @@ pub struct EvalContext {
     pub outputs: BTreeMap<String, Value>,
     pub status_code: Option<i64>,
     pub method: Option<String>,
+    pub url: Option<String>,
+    pub request_headers: BTreeMap<String, String>,
+    pub request_query: BTreeMap<String, String>,
+    pub request_path: BTreeMap<String, String>,
+    pub request_body: Option<Value>,
+    pub source_descriptions: BTreeMap<String, String>,
     pub response_headers: BTreeMap<String, String>,
     pub response_body: Option<Value>,
 }
@@ -108,6 +114,15 @@ impl ExpressionEvaluator {
                 .unwrap_or(Value::Null);
         }
 
+        if rest == "url" {
+            return self
+                .ctx
+                .url
+                .as_ref()
+                .map(|u| Value::String(u.clone()))
+                .unwrap_or(Value::Null);
+        }
+
         if let Some(after) = rest.strip_prefix("outputs.") {
             if let Some((name, pointer)) = after.split_once('#') {
                 return self
@@ -119,6 +134,69 @@ impl ExpressionEvaluator {
                     .unwrap_or(Value::Null);
             }
             return self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null);
+        }
+
+        if let Some(name) = rest.strip_prefix("request.header.") {
+            if let Some(value) = self.ctx.request_headers.get(name) {
+                return Value::String(value.clone());
+            }
+            if let Some((_, value)) = self
+                .ctx
+                .request_headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            {
+                return Value::String(value.clone());
+            }
+            return Value::Null;
+        }
+
+        if let Some(name) = rest.strip_prefix("request.query.") {
+            return self
+                .ctx
+                .request_query
+                .get(name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null);
+        }
+
+        if let Some(name) = rest.strip_prefix("request.path.") {
+            return self
+                .ctx
+                .request_path
+                .get(name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null);
+        }
+
+        if rest == "request.body" {
+            return self.ctx.request_body.clone().unwrap_or(Value::Null);
+        }
+
+        if let Some(pointer) = rest.strip_prefix("request.body#") {
+            if let Some(body) = &self.ctx.request_body {
+                return body.pointer(pointer).cloned().unwrap_or(Value::Null);
+            }
+            return Value::Null;
+        }
+
+        if let Some(path) = rest.strip_prefix("request.body.") {
+            if let Some(body) = &self.ctx.request_body {
+                return resolve_dot_path(body, path).unwrap_or(Value::Null);
+            }
+            return Value::Null;
+        }
+
+        if let Some(after) = rest.strip_prefix("sourceDescriptions.") {
+            if let Some(name) = after.strip_suffix(".url") {
+                return self
+                    .ctx
+                    .source_descriptions
+                    .get(name)
+                    .map(|u| Value::String(u.clone()))
+                    .unwrap_or(Value::Null);
+            }
+            return Value::Null;
         }
 
         if let Some(name) = rest.strip_prefix("response.header.") {

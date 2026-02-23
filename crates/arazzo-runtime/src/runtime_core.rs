@@ -354,6 +354,14 @@ pub struct RequestConfig {
     pub body: Option<Vec<u8>>,
 }
 
+/// Result of building a URL from an operationPath, including resolved parameters.
+#[derive(Debug, Clone)]
+pub(crate) struct UrlBuildResult {
+    pub url: String,
+    pub path_params: BTreeMap<String, String>,
+    pub query_params: BTreeMap<String, String>,
+}
+
 /// Response returned by the runtime client.
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -596,6 +604,7 @@ pub struct Engine {
     client: HttpClient,
     spec: ArazzoSpec,
     pub(crate) base_url: String,
+    source_descriptions_map: BTreeMap<String, String>,
     workflow_index: BTreeMap<String, usize>,
     step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
     op_index: BTreeMap<String, OperationEntry>,
@@ -616,8 +625,8 @@ mod engine_impl;
 mod helpers;
 
 use helpers::{
-    can_execute_parallel, replace_path_params, resolve_payload, sleep_with_checks,
-    step_result_error, value_to_string,
+    can_execute_parallel, parse_source_prefix, replace_path_params, resolve_payload,
+    sleep_with_checks, step_result_error, value_to_string,
 };
 
 pub(crate) use helpers::{

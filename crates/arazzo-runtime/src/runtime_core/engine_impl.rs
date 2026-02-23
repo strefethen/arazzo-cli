@@ -16,6 +16,11 @@ impl Engine {
             .map(|s| s.url.clone())
             .unwrap_or_default();
 
+        let mut source_descriptions_map = BTreeMap::new();
+        for sd in &spec.source_descriptions {
+            source_descriptions_map.insert(sd.name.clone(), sd.url.clone());
+        }
+
         let mut workflow_index = BTreeMap::new();
         let mut step_indexes = BTreeMap::new();
         for (wf_idx, wf) in spec.workflows.iter().enumerate() {
@@ -31,6 +36,7 @@ impl Engine {
             client,
             spec,
             base_url,
+            source_descriptions_map,
             workflow_index,
             step_indexes,
             op_index: BTreeMap::new(),
@@ -415,7 +421,8 @@ impl Engine {
         }
 
         let (explicit_method, op_path) = parse_method(&operation_path);
-        let url = self.build_url_from_path(op_path, step, vars);
+        let url_result = self.build_url_from_path(op_path, step, vars);
+        let url = url_result.url;
 
         let method = if explicit_method.is_empty() {
             if step.request_body.is_some() {
@@ -431,7 +438,7 @@ impl Engine {
 
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
-                let mut ctx = vars.eval_context(None);
+                let mut ctx = self.make_eval_context(vars, None);
                 ctx.method = Some(method_for_ctx.clone());
                 let eval = ExpressionEvaluator::new(ctx);
                 Some(resolve_payload(payload, &eval))
@@ -455,7 +462,7 @@ impl Engine {
                 .unwrap_or_else(|| "application/json".to_string());
             headers.insert("Content-Type".to_string(), content_type);
         }
-        let mut hdr_ctx = vars.eval_context(None);
+        let mut hdr_ctx = self.make_eval_context(vars, None);
         hdr_ctx.method = Some(method_for_ctx.clone());
         let eval = ExpressionEvaluator::new(hdr_ctx);
         let mut cookie_parts = Vec::new();
@@ -496,13 +503,26 @@ impl Engine {
                 body_json: Some(json!({})),
                 content_type: "json".to_string(),
             };
+            let mut dry_ctx = self.make_eval_context(vars, Some(&fake));
+            dry_ctx.method = Some(method_for_ctx.clone());
+            dry_ctx.url = Some(url);
+            dry_ctx.request_headers = headers;
+            dry_ctx.request_query = url_result.query_params.clone();
+            dry_ctx.request_path = url_result.path_params.clone();
+            dry_ctx.request_body = body_json.clone();
+            let dry_eval = ExpressionEvaluator::new(dry_ctx);
+            let mut outputs = BTreeMap::new();
+            for (name, expr) in &step.outputs {
+                let value = evaluate_output_expression(expr, &dry_eval, Some(&fake));
+                outputs.insert(name.clone(), value);
+            }
             return Ok(StepExecution {
                 result: StepResult {
                     success: true,
                     response: Some(fake),
                     err: None,
                 },
-                outputs: BTreeMap::new(),
+                outputs,
                 dry_run_request: Some(req),
                 trace: StepTraceData {
                     request: Some(trace_request),
@@ -521,15 +541,20 @@ impl Engine {
         let response = self.client.request(
             RequestConfig {
                 method,
-                url,
-                headers,
+                url: url.clone(),
+                headers: headers.clone(),
                 body,
             },
             options,
         )?;
 
-        let mut post_ctx = vars.eval_context(Some(&response));
+        let mut post_ctx = self.make_eval_context(vars, Some(&response));
         post_ctx.method = Some(method_for_ctx.clone());
+        post_ctx.url = Some(url);
+        post_ctx.request_headers = headers;
+        post_ctx.request_query = url_result.query_params.clone();
+        post_ctx.request_path = url_result.path_params.clone();
+        post_ctx.request_body = body_json.clone();
         let eval = ExpressionEvaluator::new(post_ctx);
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
@@ -613,7 +638,7 @@ impl Engine {
         options: &ExecutionOptions,
     ) -> Result<StepResult, RuntimeError> {
         options.check()?;
-        let eval = ExpressionEvaluator::new(vars.eval_context(None));
+        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
             let value = if param.value.contains("{$") {
@@ -637,7 +662,7 @@ impl Engine {
             vars.set_step_output(&step.step_id, &name, value);
         }
 
-        let eval_post = ExpressionEvaluator::new(vars.eval_context(None));
+        let eval_post = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         for criterion in &step.success_criteria {
             if !evaluate_criterion(criterion, &eval_post, None) {
                 return Ok(StepResult {
@@ -759,7 +784,7 @@ impl Engine {
         vars: &VarStore,
         response: Option<&Response>,
     ) -> Option<&'a OnAction> {
-        let eval = ExpressionEvaluator::new(vars.eval_context(response));
+        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, response));
         for action in actions {
             if action.criteria.is_empty() {
                 return Some(action);
@@ -783,7 +808,7 @@ impl Engine {
         ctx: ActionSelectionContext<'_>,
         actions: &'a [OnAction],
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
-        let eval = ExpressionEvaluator::new(ctx.vars.eval_context(ctx.response));
+        let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
         let gate = DebugGateContext {
             workflow_id: ctx.workflow_id,
@@ -996,12 +1021,18 @@ impl Engine {
             .and_then(|index| index.get(step_id).copied())
     }
 
+    fn make_eval_context(&self, vars: &VarStore, response: Option<&Response>) -> EvalContext {
+        let mut ctx = vars.eval_context(response);
+        ctx.source_descriptions = self.source_descriptions_map.clone();
+        ctx
+    }
+
     pub(crate) fn build_outputs(
         &self,
         workflow: &Workflow,
         vars: &VarStore,
     ) -> BTreeMap<String, Value> {
-        let mut ctx = vars.eval_context(None);
+        let mut ctx = self.make_eval_context(vars, None);
         let mut computed_outputs = BTreeMap::new();
         for (name, expr) in &workflow.outputs {
             let eval = ExpressionEvaluator::new(ctx.clone());
@@ -1023,16 +1054,28 @@ impl Engine {
         op_path: &str,
         step: &Step,
         vars: &VarStore,
-    ) -> String {
-        let mut target = if op_path.starts_with("http://") || op_path.starts_with("https://") {
-            op_path.to_string()
-        } else {
-            format!("{}{}", self.base_url.trim_end_matches('/'), op_path)
-        };
+    ) -> UrlBuildResult {
+        let (resolved_base, resolved_path) =
+            if let Some((name, path)) = parse_source_prefix(op_path) {
+                if let Some(source_url) = self.source_descriptions_map.get(name) {
+                    (source_url.as_str(), path)
+                } else {
+                    (self.base_url.as_str(), op_path)
+                }
+            } else {
+                (self.base_url.as_str(), op_path)
+            };
 
-        let eval = ExpressionEvaluator::new(vars.eval_context(None));
+        let mut target =
+            if resolved_path.starts_with("http://") || resolved_path.starts_with("https://") {
+                resolved_path.to_string()
+            } else {
+                format!("{}{}", resolved_base.trim_end_matches('/'), resolved_path)
+            };
+
+        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut path_params = BTreeMap::<String, String>::new();
-        let mut query_params = Vec::<(String, String)>::new();
+        let mut query_params_vec = Vec::<(String, String)>::new();
 
         for param in &step.parameters {
             let value = if param.value.contains("{$") {
@@ -1046,19 +1089,21 @@ impl Engine {
                 }
                 "query" => {
                     if !value.is_null() {
-                        query_params.push((param.name.clone(), value_to_string(&value)));
+                        query_params_vec.push((param.name.clone(), value_to_string(&value)));
                     }
                 }
                 _ => {}
             }
         }
 
+        let query_params: BTreeMap<String, String> = query_params_vec.iter().cloned().collect();
+
         if !path_params.is_empty() && target.contains('{') {
             target = replace_path_params(&target, &path_params);
         }
-        if !query_params.is_empty() {
+        if !query_params_vec.is_empty() {
             let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-            for (k, v) in query_params {
+            for (k, v) in query_params_vec {
                 serializer.append_pair(&k, &v);
             }
             let query = serializer.finish();
@@ -1070,7 +1115,11 @@ impl Engine {
                 target.push_str(&query);
             }
         }
-        target
+        UrlBuildResult {
+            url: target,
+            path_params,
+            query_params,
+        }
     }
 
     fn execute_parallel(
@@ -1523,7 +1572,7 @@ impl Engine {
             return Ok(());
         };
 
-        let mut eval_ctx = gate.vars.eval_context(gate.response);
+        let mut eval_ctx = self.make_eval_context(gate.vars, gate.response);
         if !gate.current_outputs.is_empty() {
             let scoped_outputs = eval_ctx.steps.entry(gate.step_id.to_string()).or_default();
             for (name, value) in gate.current_outputs {

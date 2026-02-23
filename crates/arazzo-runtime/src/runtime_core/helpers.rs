@@ -120,7 +120,7 @@ pub(crate) fn evaluate_output_expression(
         return Value::Null;
     }
 
-    if expr.starts_with("$response.header.") || expr.starts_with("$statusCode") {
+    if expr.starts_with('$') {
         return eval.evaluate(expr);
     }
 
@@ -532,6 +532,23 @@ fn count_jsonpath_nodes(value: &Value) -> usize {
         Value::Object(items) => items.len(),
         _ => 1,
     }
+}
+
+/// Parse `{sourceName}./path` prefix from an operationPath.
+/// Returns None if no `{name}.` prefix is found — the dot after `}` is required
+/// to distinguish source references from path parameter placeholders like `/{id}/resource`.
+pub(super) fn parse_source_prefix(op_path: &str) -> Option<(&str, &str)> {
+    if !op_path.starts_with('{') {
+        return None;
+    }
+    let close = op_path.find('}')?;
+    let name = &op_path[1..close];
+    if name.is_empty() {
+        return None;
+    }
+    let remaining = &op_path[close + 1..];
+    let path = remaining.strip_prefix('.')?;
+    Some((name, path))
 }
 
 pub(crate) fn parse_method(operation_path: &str) -> (&str, &str) {

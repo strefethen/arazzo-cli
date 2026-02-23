@@ -1227,10 +1227,10 @@ mod tests {
             ..Step::default()
         };
 
-        let url = engine.build_url_from_path("/search", &step, &vars);
-        let parsed = match Url::parse(&url) {
+        let url_result = engine.build_url_from_path("/search", &step, &vars);
+        let parsed = match Url::parse(&url_result.url) {
             Ok(v) => v,
-            Err(err) => panic!("parsing url {url}: {err}"),
+            Err(err) => panic!("parsing url {}: {err}", url_result.url),
         };
         let query = parsed
             .query_pairs()
@@ -1249,9 +1249,9 @@ mod tests {
             ..Step::default()
         };
 
-        let url = engine.build_url_from_path(&step.operation_path, &step, &vars);
-        assert_eq!(url, "https://api.example.com/users");
-        assert!(!url.contains("//users"));
+        let url_result = engine.build_url_from_path(&step.operation_path, &step, &vars);
+        assert_eq!(url_result.url, "https://api.example.com/users");
+        assert!(!url_result.url.contains("//users"));
     }
 
     #[test]
@@ -3719,6 +3719,415 @@ paths:
         };
         assert_eq!(result.get("amount"), Some(&json!(42)));
         assert_eq!(result.get("summary"), Some(&json!("Total is 42")));
+    }
+
+    // --- Phase 3: Request Introspection + Multiple Source Descriptions ---
+
+    #[test]
+    fn url_expression_in_outputs() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/api/test".to_string(),
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([
+                        ("captured_url".to_string(), "$url".to_string()),
+                        ("captured_method".to_string(), "$method".to_string()),
+                    ]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([(
+                    "url".to_string(),
+                    "$steps.s1.outputs.captured_url".to_string(),
+                )]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        let url_val = result
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            url_val.contains("/api/test"),
+            "expected url to contain /api/test, got: {url_val}"
+        );
+    }
+
+    #[test]
+    fn request_header_expression_in_outputs() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/api/test".to_string(),
+                    parameters: vec![Parameter {
+                        name: "X-Auth".to_string(),
+                        in_: "header".to_string(),
+                        value: "Bearer token123".to_string(),
+                        ..Parameter::default()
+                    }],
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([(
+                        "auth".to_string(),
+                        "$request.header.X-Auth".to_string(),
+                    )]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([(
+                    "auth".to_string(),
+                    "$steps.s1.outputs.auth".to_string(),
+                )]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(result.get("auth"), Some(&json!("Bearer token123")));
+    }
+
+    #[test]
+    fn request_query_expression_in_outputs() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/api/test".to_string(),
+                    parameters: vec![Parameter {
+                        name: "page".to_string(),
+                        in_: "query".to_string(),
+                        value: "5".to_string(),
+                        ..Parameter::default()
+                    }],
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([(
+                        "page".to_string(),
+                        "$request.query.page".to_string(),
+                    )]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([(
+                    "page".to_string(),
+                    "$steps.s1.outputs.page".to_string(),
+                )]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(result.get("page"), Some(&json!("5")));
+    }
+
+    #[test]
+    fn request_path_expression_in_outputs() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/users/{userId}/profile".to_string(),
+                    parameters: vec![Parameter {
+                        name: "userId".to_string(),
+                        in_: "path".to_string(),
+                        value: "42".to_string(),
+                        ..Parameter::default()
+                    }],
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([(
+                        "user_id".to_string(),
+                        "$request.path.userId".to_string(),
+                    )]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([(
+                    "user_id".to_string(),
+                    "$steps.s1.outputs.user_id".to_string(),
+                )]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(result.get("user_id"), Some(&json!("42")));
+    }
+
+    #[test]
+    fn request_body_expression_in_outputs() {
+        let server =
+            start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"created":true}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "POST /api/items".to_string(),
+                    request_body: Some(RequestBody {
+                        content_type: "application/json".to_string(),
+                        payload: Some(to_yaml(json!({"name": "widget", "count": 3}))),
+                        ..RequestBody::default()
+                    }),
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([
+                        ("full_body".to_string(), "$request.body".to_string()),
+                        ("body_name".to_string(), "$request.body.name".to_string()),
+                        (
+                            "body_count_ptr".to_string(),
+                            "$request.body#/count".to_string(),
+                        ),
+                    ]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([
+                    (
+                        "full_body".to_string(),
+                        "$steps.s1.outputs.full_body".to_string(),
+                    ),
+                    (
+                        "body_name".to_string(),
+                        "$steps.s1.outputs.body_name".to_string(),
+                    ),
+                    (
+                        "body_count_ptr".to_string(),
+                        "$steps.s1.outputs.body_count_ptr".to_string(),
+                    ),
+                ]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(
+            result.get("full_body"),
+            Some(&json!({"name": "widget", "count": 3}))
+        );
+        assert_eq!(result.get("body_name"), Some(&json!("widget")));
+        assert_eq!(result.get("body_count_ptr"), Some(&json!(3)));
+    }
+
+    #[test]
+    fn source_descriptions_url_expression() {
+        let spec = ArazzoSpec {
+            arazzo: "1.0.0".to_string(),
+            info: Info {
+                title: "test".to_string(),
+                summary: String::new(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+            },
+            source_descriptions: vec![
+                SourceDescription {
+                    name: "primary".to_string(),
+                    url: "http://localhost".to_string(),
+                    type_: "openapi".to_string(),
+                },
+                SourceDescription {
+                    name: "secondary".to_string(),
+                    url: "https://api.example.com".to_string(),
+                    type_: "openapi".to_string(),
+                },
+            ],
+            workflows: vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/status".to_string(),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([
+                    (
+                        "primary_url".to_string(),
+                        "$sourceDescriptions.primary.url".to_string(),
+                    ),
+                    (
+                        "secondary_url".to_string(),
+                        "$sourceDescriptions.secondary.url".to_string(),
+                    ),
+                    (
+                        "missing_url".to_string(),
+                        "$sourceDescriptions.nope.url".to_string(),
+                    ),
+                ]),
+                ..Workflow::default()
+            }],
+            components: None,
+        };
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(result.get("primary_url"), Some(&json!("http://localhost")));
+        assert_eq!(
+            result.get("secondary_url"),
+            Some(&json!("https://api.example.com"))
+        );
+        assert_eq!(result.get("missing_url"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn multiple_source_descriptions_routing() {
+        let spec = ArazzoSpec {
+            arazzo: "1.0.0".to_string(),
+            info: Info {
+                title: "test".to_string(),
+                summary: String::new(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+            },
+            source_descriptions: vec![
+                SourceDescription {
+                    name: "api1".to_string(),
+                    url: "https://api1.example.com".to_string(),
+                    type_: "openapi".to_string(),
+                },
+                SourceDescription {
+                    name: "api2".to_string(),
+                    url: "https://api2.example.com".to_string(),
+                    type_: "openapi".to_string(),
+                },
+            ],
+            workflows: vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        operation_path: "{api1}./v1/users".to_string(),
+                        outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        operation_path: "{api2}./v2/items".to_string(),
+                        outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s3".to_string(),
+                        operation_path: "/v1/default".to_string(),
+                        outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                        ..Step::default()
+                    },
+                ],
+                outputs: BTreeMap::from([
+                    ("url1".to_string(), "$steps.s1.outputs.url".to_string()),
+                    ("url2".to_string(), "$steps.s2.outputs.url".to_string()),
+                    ("url3".to_string(), "$steps.s3.outputs.url".to_string()),
+                ]),
+                ..Workflow::default()
+            }],
+            components: None,
+        };
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let result = match engine.execute("wf", BTreeMap::new()) {
+            Ok(r) => r,
+            Err(err) => panic!("executing workflow: {err}"),
+        };
+        assert_eq!(
+            result.get("url1"),
+            Some(&json!("https://api1.example.com/v1/users"))
+        );
+        assert_eq!(
+            result.get("url2"),
+            Some(&json!("https://api2.example.com/v2/items"))
+        );
+        assert_eq!(
+            result.get("url3"),
+            Some(&json!("https://api1.example.com/v1/default"))
+        );
+    }
+
+    #[test]
+    fn evaluate_output_expression_routes_dollar_expressions_correctly() {
+        let spec = make_spec_with_base(
+            "http://localhost",
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    operation_path: "/test".to_string(),
+                    outputs: BTreeMap::from([
+                        ("method_out".to_string(), "$method".to_string()),
+                        ("input_out".to_string(), "$inputs.name".to_string()),
+                    ]),
+                    ..Step::default()
+                }],
+                outputs: BTreeMap::from([
+                    (
+                        "method".to_string(),
+                        "$steps.s1.outputs.method_out".to_string(),
+                    ),
+                    (
+                        "input".to_string(),
+                        "$steps.s1.outputs.input_out".to_string(),
+                    ),
+                ]),
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = match Engine::new(spec) {
+            Ok(e) => e,
+            Err(err) => panic!("creating engine: {err}"),
+        };
+        engine.set_dry_run_mode(true);
+        let result =
+            match engine.execute("wf", BTreeMap::from([("name".to_string(), json!("Alice"))])) {
+                Ok(r) => r,
+                Err(err) => panic!("executing workflow: {err}"),
+            };
+        assert_eq!(result.get("method"), Some(&json!("GET")));
+        assert_eq!(result.get("input"), Some(&json!("Alice")));
     }
 
     fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
