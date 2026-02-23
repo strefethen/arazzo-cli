@@ -20,6 +20,10 @@ serde_yaml = "0.9"
 sxd-document = "0.3"
 sxd-xpath = "0.4"
 url = "2"
+schemars = { version = "1", optional = true }
+
+[features]
+schema = ["schemars"]
 
 [dev-dependencies]
 proptest = "1"

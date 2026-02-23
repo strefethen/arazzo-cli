@@ -366,6 +366,7 @@ pub struct Response {
 
 /// Captured request emitted during dry-run mode.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DryRunRequest {
     pub step_id: String,

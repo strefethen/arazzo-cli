@@ -2,22 +2,23 @@ use std::collections::BTreeMap;
 
 use arazzo_runtime::DryRunRequest;
 use arazzo_spec::{ArazzoSpec, Workflow};
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogEntry {
     pub file: String,
     pub title: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub version: String,
     pub sources: Vec<SourceInfo>,
     pub workflows: Vec<WorkflowInfo>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct SourceInfo {
     pub name: String,
     pub url: String,
@@ -25,30 +26,30 @@ pub struct SourceInfo {
     pub type_: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct WorkflowInfo {
     pub id: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct InputDetail {
     #[serde(rename = "type")]
     pub type_: String,
     pub required: bool,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct WorkflowDetail {
     pub id: String,
     pub file: String,
     pub title: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     pub steps: usize,
     pub inputs: BTreeMap<String, InputDetail>,
@@ -56,7 +57,7 @@ pub struct WorkflowDetail {
     pub sources: Vec<SourceInfo>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct ValidateResult {
     pub valid: bool,
     pub file: String,
@@ -68,8 +69,29 @@ pub struct ValidateResult {
     pub workflows: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<usize>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+}
+
+/// Error response emitted by the `run` command on failure.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunError {
+    pub error: String,
+}
+
+/// Combined schema type for the `run` command output.
+///
+/// The actual shape depends on flags and exit code:
+/// - `Success`: workflow outputs (exit 0, no `--dry-run`). Keys are workflow-defined.
+/// - `Error`: error response (non-zero exit).
+/// - `DryRun`: planned requests (exit 0, `--dry-run`).
+#[derive(Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum RunOutput {
+    Success(BTreeMap<String, Value>),
+    Error(RunError),
+    DryRun(Vec<DryRunRequest>),
 }
 
 pub fn output_json<T: Serialize + ?Sized>(value: &T) -> Result<(), String> {
@@ -241,7 +263,9 @@ pub fn emit_workflow_detail(
 
 pub fn emit_run_error(json: bool, err: &str) -> Result<(), String> {
     if json {
-        return output_json(&serde_json::json!({ "error": err }));
+        return output_json(&RunError {
+            error: err.to_string(),
+        });
     }
     Err(err.to_string())
 }
