@@ -1145,5 +1145,92 @@ mod tests {
             let eval = ExpressionEvaluator::new(EvalContext::default());
             let _ = eval.evaluate_condition(&condition);
         }
+
+        #[test]
+        fn resolve_dot_path_fuzz_does_not_panic(path in ".{0,128}") {
+            let root = json!({"a": [1, {"b": "c"}, [2, 3]], "d": null});
+            let _ = super::resolve_dot_path(&root, &path);
+        }
+
+        #[test]
+        fn resolve_dot_path_valid_field_chain_is_ok(
+            keys in proptest::collection::vec("[a-z]{1,8}", 1..5),
+        ) {
+            let mut value = json!("leaf");
+            for key in keys.iter().rev() {
+                value = json!({ key.as_str(): value });
+            }
+            let path = keys.join(".");
+            match super::resolve_dot_path(&value, &path) {
+                Ok(v) => prop_assert_eq!(v, json!("leaf")),
+                Err(e) => prop_assert!(false, "valid path should be Ok, got {e:?}"),
+            }
+        }
+
+        #[test]
+        fn resolve_dot_path_bracket_index_consistency(
+            values in proptest::collection::vec(any::<i64>(), 0..20),
+            idx in 0usize..30usize,
+        ) {
+            let root = json!(values);
+            match super::resolve_dot_path(&root, &format!("[{idx}]")) {
+                Ok(value) => {
+                    if idx < values.len() {
+                        prop_assert_eq!(value, json!(values[idx]));
+                    } else {
+                        prop_assert_eq!(value, Value::Null);
+                    }
+                }
+                Err(e) => prop_assert!(false, "bracket index should be Ok, got {e:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_dot_path_unclosed_bracket_is_error() {
+        let root = json!({"foo": [1, 2]});
+        let result = super::resolve_dot_path(&root, "foo[0");
+        assert!(
+            matches!(result, Err(super::PathError::InvalidSyntax { .. })),
+            "expected InvalidSyntax, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_dot_path_unbalanced_filter_is_error() {
+        let root = json!({"arr": [{"id": 1}]});
+        let result = super::resolve_dot_path(&root, "#(id==1");
+        assert!(
+            matches!(result, Err(super::PathError::InvalidSyntax { .. })),
+            "expected InvalidSyntax, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_dot_path_negative_index_on_array_returns_null() {
+        let root = json!([1, 2, 3]);
+        assert_eq!(
+            super::resolve_dot_path(&root, "[-1]"),
+            Ok(Value::Null),
+            "negative index should not be a syntax error"
+        );
+    }
+
+    #[test]
+    fn resolve_dot_path_negative_index_on_object_returns_value() {
+        let root = json!({"-1": "found"});
+        assert_eq!(super::resolve_dot_path(&root, "[-1]"), Ok(json!("found")));
+    }
+
+    #[test]
+    fn resolve_dot_path_null_field_returns_ok_null() {
+        let root = json!({"a": null});
+        assert_eq!(super::resolve_dot_path(&root, "a"), Ok(Value::Null));
+    }
+
+    #[test]
+    fn resolve_dot_path_consecutive_dots_is_lenient() {
+        let root = json!({"a": {"b": 42}});
+        assert_eq!(super::resolve_dot_path(&root, "a..b"), Ok(json!(42)));
     }
 }
