@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_CatalogEntry",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/CatalogEntry"
+  },
+  "$defs": {
+    "CatalogEntry": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceInfo"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "workflows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowInfo"
+          }
+        }
+      },
+      "required": [
+        "file",
+        "title",
+        "version",
+        "sources",
+        "workflows"
+      ]
+    },
+    "SourceInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "type"
+      ]
+    },
+    "WorkflowInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "inputs",
+        "outputs"
+      ]
+    }
+  }
+}

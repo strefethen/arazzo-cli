@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunOutput",
+  "description": "Combined schema type for the `run` command output.\n\nThe actual shape depends on flags and exit code:\n- `Success`: workflow outputs (exit 0, no `--dry-run`). Keys are workflow-defined.\n- `Error`: error response (non-zero exit).\n- `DryRun`: planned requests (exit 0, `--dry-run`).",
+  "anyOf": [
+    {
+      "type": "object",
+      "additionalProperties": true
+    },
+    {
+      "$ref": "#/$defs/RunError"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DryRunRequest"
+      }
+    }
+  ],
+  "$defs": {
+    "DryRunRequest": {
+      "description": "Captured request emitted during dry-run mode.",
+      "type": "object",
+      "properties": {
+        "body": true,
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "type": "string"
+        },
+        "stepId": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stepId",
+        "method",
+        "url"
+      ]
+    },
+    "RunError": {
+      "description": "Error response emitted by the `run` command on failure.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowDetail",
+  "type": "object",
+  "properties": {
+    "file": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/InputDetail"
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SourceInfo"
+      }
+    },
+    "steps": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "summary": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "file",
+    "title",
+    "steps",
+    "inputs",
+    "outputs",
+    "sources"
+  ],
+  "$defs": {
+    "InputDetail": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required"
+      ]
+    },
+    "SourceInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "type"
+      ]
+    }
+  }
+}
