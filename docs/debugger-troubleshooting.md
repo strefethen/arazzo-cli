@@ -10,15 +10,6 @@ Checks:
 1. Verify DAP messages use `Content-Length: N` and `\r\n\r\n` separator.
 2. Confirm payload byte count matches header length exactly.
 
-## `debug-stdio` Returns Unsupported Method
-
-Cause:
-1. Newline protocol endpoint currently supports `initialize`, `ping`, and `shutdown`.
-
-Action:
-1. Use DAP endpoint (`arazzo-debug-adapter`) for DAP commands.
-2. Keep `debug-stdio` for internal smoke/bootstrapping flows.
-
 ## Breakpoint Not Hit
 
 Cause:

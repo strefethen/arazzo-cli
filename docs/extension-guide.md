@@ -36,8 +36,7 @@ Guideline:
 2. Keep step gate ordering deterministic and covered by tests.
 3. Extend adapter protocol handling in `crates/arazzo-debug-adapter/src/dap.rs`.
 4. Add transcript tests in `crates/arazzo-debug-adapter/tests/`.
-5. Keep CLI debug transport (`debug-stdio`) behavior stable while evolving DAP.
-6. Update `vscode-arazzo-debug/` only after runtime/adapter contracts are stable.
+5. Update `vscode-arazzo-debug/` only after runtime/adapter contracts are stable.
 
 ## Add Expression Capabilities
 

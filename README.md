@@ -76,7 +76,6 @@ cargo install --path ./crates/arazzo-cli --locked
 - `list <spec>`
 - `catalog <dir>`
 - `show <workflow-id> --dir <dir>`
-- `debug-stdio` (DAP backend transport for VS Code debugger)
 
 Global flags:
 

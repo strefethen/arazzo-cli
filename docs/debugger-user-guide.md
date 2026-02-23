@@ -8,13 +8,7 @@ This project now includes an early debugger stack:
 
 ## CLI Debug Transport
 
-For the newline protocol backend:
-
-```bash
-cargo run -p arazzo-cli -- debug-stdio
-```
-
-For DAP transport backend:
+DAP transport backend:
 
 ```bash
 cargo run -p arazzo-debug-adapter --

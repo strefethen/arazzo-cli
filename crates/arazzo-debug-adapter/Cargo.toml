@@ -9,7 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-arazzo-debug-protocol = { path = "../arazzo-debug-protocol" }
 arazzo-runtime = { path = "../arazzo-runtime" }
 arazzo-validate = { path = "../arazzo-validate" }
 serde = { version = "1", features = ["derive"] }

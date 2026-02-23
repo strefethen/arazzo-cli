@@ -23,15 +23,9 @@ This repository now treats the following surfaces as frozen internal v1 contract
 
 - `trace::INTERNAL_TRACE_PIPELINE_VERSION == "v1"`
 
-## Debugger Protocol Version Markers
-
-- `arazzo_debug_protocol::INTERNAL_DEBUG_PROTOCOL_VERSION == "v1"`
-- `arazzo_debug_adapter::INTERNAL_DEBUG_ADAPTER_VERSION == "v1"`
-
 ## Change Policy
 
 1. Backward-compatible additions are allowed.
 2. Renames/removals/type-shape changes require a version bump and migration note.
 3. Deterministic event ordering is part of the contract.
 4. Trace redaction behavior is part of the contract.
-5. Debug protocol/version markers must stay stable within v1.
