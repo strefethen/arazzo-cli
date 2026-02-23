@@ -62,6 +62,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::List { spec } => handlers::list_workflows(&spec, global),
         Commands::Catalog { dir } => handlers::catalog_workflows(&dir, global),
         Commands::Show { workflow_id, dir } => handlers::show_workflow(&workflow_id, &dir, global),
+        Commands::Schema { command } => handlers::schema(command.as_deref()),
     }
 }
 

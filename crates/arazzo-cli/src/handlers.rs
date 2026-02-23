@@ -243,6 +243,24 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), S
     }
 }
 
+pub fn schema(command: Option<&str>) -> Result<(), String> {
+    use schemars::schema_for;
+
+    use crate::output::{CatalogEntry, RunOutput, ValidateResult, WorkflowDetail, WorkflowInfo};
+
+    match command {
+        Some("validate") => output::output_json(&schema_for!(ValidateResult)),
+        Some("list") => output::output_json(&schema_for!(Vec<WorkflowInfo>)),
+        Some("catalog") => output::output_json(&schema_for!(Vec<CatalogEntry>)),
+        Some("show") => output::output_json(&schema_for!(WorkflowDetail)),
+        Some("run") => output::output_json(&schema_for!(RunOutput)),
+        Some(other) => Err(format!(
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, run"
+        )),
+        None => output::output_json(&["validate", "list", "catalog", "show", "run"]),
+    }
+}
+
 fn parse_input_value(raw: &str) -> Value {
     let mut value = raw.to_string();
     if value.starts_with('$') {

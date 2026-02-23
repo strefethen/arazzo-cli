@@ -76,6 +76,7 @@ cargo install --path ./crates/arazzo-cli --locked
 - `list <spec>`
 - `catalog <dir>`
 - `show <workflow-id> --dir <dir>`
+- `schema [command]` — print JSON Schema for a command's `--json` output
 
 Global flags:
 
@@ -342,7 +343,6 @@ Condition operators supported:
   - `docs/extension-guide.md`
   - `docs/internal-api-v1.md`
   - `docs/debugger-architecture.md`
-  - `docs/debugger-protocol-v1.md`
   - `docs/debugger-user-guide.md`
   - `docs/debugger-troubleshooting.md`
 

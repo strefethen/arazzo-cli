@@ -68,6 +68,11 @@ pub enum Commands {
         #[arg(long = "dir", default_value = ".")]
         dir: String,
     },
+    /// Print JSON Schema for a command's --json output
+    Schema {
+        /// Command name (validate, list, catalog, show, run). Omit to list available commands.
+        command: Option<String>,
+    },
 }
 
 pub fn parse_duration_value(raw: &str) -> Result<Duration, String> {
