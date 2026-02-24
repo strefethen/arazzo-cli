@@ -16,7 +16,9 @@ use arazzo_spec::{
 pub enum Error {
     ReadFile(std::io::Error),
     ParseYaml(String),
-    Message(String),
+    Validation(ValidationReport),
+    /// Component resolution error (pre-validation).
+    ComponentResolution(String),
 }
 
 impl fmt::Display for Error {
@@ -24,7 +26,8 @@ impl fmt::Display for Error {
         match self {
             Self::ReadFile(err) => write!(f, "reading arazzo file: {err}"),
             Self::ParseYaml(err) => write!(f, "parsing arazzo yaml: {err}"),
-            Self::Message(msg) => write!(f, "{msg}"),
+            Self::Validation(report) => write!(f, "{report}"),
+            Self::ComponentResolution(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -33,9 +36,64 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ReadFile(err) => Some(err),
-            Self::ParseYaml(_) | Self::Message(_) => None,
+            Self::Validation(report) => Some(report),
+            Self::ParseYaml(_) | Self::ComponentResolution(_) => None,
         }
     }
+}
+
+/// A collection of structural validation errors found in an Arazzo spec.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationReport {
+    pub errors: Vec<ValidationError>,
+}
+
+impl fmt::Display for ValidationReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "validation errors:")?;
+        for err in &self.errors {
+            write!(f, "\n  - {err}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ValidationReport {}
+
+/// A single structural validation error with kind, spec path, and message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationError {
+    pub kind: ValidationErrorKind,
+    pub path: String,
+    pub message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.path.is_empty() {
+            write!(f, "{}", self.message)
+        } else {
+            write!(f, "{}: {}", self.path, self.message)
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// Classification of validation errors for programmatic matching.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ValidationErrorKind {
+    MissingRequiredField,
+    DuplicateIdentifier,
+    InvalidStepTarget,
+    UnsupportedVersion,
+    InvalidParameterLocation,
+    MissingParameterValue,
+    InvalidExpression,
+    InvalidReference,
+    InvalidRetryField,
+    InvalidCriterionType,
 }
 
 /// Parses and validates an Arazzo spec file from disk.
@@ -48,41 +106,66 @@ pub fn parse(path: impl AsRef<Path>) -> Result<ArazzoSpec, Error> {
 pub fn parse_bytes(data: &[u8]) -> Result<ArazzoSpec, Error> {
     let mut spec =
         parse_unvalidated_bytes(data).map_err(|err| Error::ParseYaml(err.to_string()))?;
-    resolve_components(&mut spec).map_err(Error::Message)?;
-    validate(&spec).map_err(Error::Message)?;
+    resolve_components(&mut spec).map_err(Error::ComponentResolution)?;
+    validate(&spec)?;
     Ok(spec)
 }
 
 /// Applies structural validation rules to an Arazzo spec.
-pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
-    let mut errs = Vec::<String>::new();
+pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
+    let mut errs = Vec::<ValidationError>::new();
 
     if spec.arazzo.is_empty() {
-        errs.push("arazzo version is required".to_string());
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: "arazzo".to_string(),
+            message: "arazzo version is required".to_string(),
+        });
     } else if !spec.arazzo.starts_with("1.") {
-        errs.push(format!(
-            "unsupported arazzo version: {} (expected 1.x)",
-            spec.arazzo
-        ));
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::UnsupportedVersion,
+            path: "arazzo".to_string(),
+            message: format!("unsupported arazzo version: {} (expected 1.x)", spec.arazzo),
+        });
     }
 
     if spec.info.title.is_empty() {
-        errs.push("info.title is required".to_string());
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: "info.title".to_string(),
+            message: "info.title is required".to_string(),
+        });
     }
     if spec.info.version.is_empty() {
-        errs.push("info.version is required".to_string());
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: "info.version".to_string(),
+            message: "info.version is required".to_string(),
+        });
     }
 
     let mut source_names = HashSet::<String>::new();
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
         let path = format!("sourceDescriptions[{idx}]");
         if src.name.is_empty() {
-            errs.push(format!("{path}.name is required"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: format!("{path}.name"),
+                message: format!("{path}.name is required"),
+            });
         } else if !source_names.insert(src.name.clone()) {
-            errs.push(format!("{path}.name '{}' is duplicate", src.name));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::DuplicateIdentifier,
+                path: format!("{path}.name"),
+                message: format!("{path}.name '{}' is duplicate", src.name),
+            });
         }
         if src.url.is_empty() {
-            errs.push(format!("{path}.url is required"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: format!("{path}.url"),
+                message: format!("{path}.url is required"),
+            });
         }
     }
 
@@ -91,12 +174,17 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
         let path = format!("workflows[{wf_idx}]");
 
         if wf.workflow_id.is_empty() {
-            errs.push(format!("{path}.workflowId is required"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: format!("{path}.workflowId"),
+                message: format!("{path}.workflowId is required"),
+            });
         } else if !workflow_ids.insert(wf.workflow_id.clone()) {
-            errs.push(format!(
-                "{path}.workflowId '{}' is duplicate",
-                wf.workflow_id
-            ));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::DuplicateIdentifier,
+                path: format!("{path}.workflowId"),
+                message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
+            });
         }
 
         validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);
@@ -117,18 +205,27 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
             let step_path = format!("{path}.steps[{step_idx}]");
 
             if step.step_id.is_empty() {
-                errs.push(format!("{step_path}.stepId is required"));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: format!("{step_path}.stepId"),
+                    message: format!("{step_path}.stepId is required"),
+                });
             } else if !step_ids.insert(step.step_id.clone()) {
-                errs.push(format!(
-                    "{step_path}.stepId '{}' is duplicate",
-                    step.step_id
-                ));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::DuplicateIdentifier,
+                    path: format!("{step_path}.stepId"),
+                    message: format!("{step_path}.stepId '{}' is duplicate", step.step_id),
+                });
             }
 
             if step.target.is_none() {
-                errs.push(format!(
-                    "{step_path} must have operationId, operationPath, or workflowId"
-                ));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidStepTarget,
+                    path: step_path.clone(),
+                    message: format!(
+                        "{step_path} must have operationId, operationPath, or workflowId"
+                    ),
+                });
             }
 
             validate_parameters(
@@ -161,9 +258,13 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
             if let Some(after) = expr.strip_prefix("$steps.") {
                 let step_name = after.split('.').next().unwrap_or_default();
                 if !step_ids.contains(step_name) {
-                    errs.push(format!(
-                        "{path}.outputs.{name} references unknown step '{step_name}'"
-                    ));
+                    errs.push(ValidationError {
+                        kind: ValidationErrorKind::InvalidReference,
+                        path: format!("{path}.outputs.{name}"),
+                        message: format!(
+                            "{path}.outputs.{name} references unknown step '{step_name}'"
+                        ),
+                    });
                 }
             }
         }
@@ -172,32 +273,45 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
     if errs.is_empty() {
         return Ok(());
     }
-    Err(format!("validation errors:\n  - {}", errs.join("\n  - ")))
+    Err(Error::Validation(ValidationReport { errors: errs }))
 }
 
-fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<String>) {
+fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<ValidationError>) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
         if param.name.is_empty() && param.reference.is_empty() {
-            errs.push(format!(
-                "{param_path}.name is required (unless using reference)"
-            ));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: format!("{param_path}.name"),
+                message: format!("{param_path}.name is required (unless using reference)"),
+            });
         }
         if param.value.is_empty() && param.reference.is_empty() {
-            errs.push(format!("{param_path} must have value or reference"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingParameterValue,
+                path: param_path,
+                message: format!("{path_prefix}[{param_idx}] must have value or reference"),
+            });
         }
-        // ParamLocation enum handles valid `in` values at parse time
     }
 }
 
-fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<String>) {
+fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<ValidationError>) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         if action.retry_after < 0 {
-            errs.push(format!("{action_path}.retryAfter must be non-negative"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::InvalidRetryField,
+                path: format!("{action_path}.retryAfter"),
+                message: format!("{action_path}.retryAfter must be non-negative"),
+            });
         }
         if action.retry_limit < 0 {
-            errs.push(format!("{action_path}.retryLimit must be non-negative"));
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::InvalidRetryField,
+                path: format!("{action_path}.retryLimit"),
+                message: format!("{action_path}.retryLimit must be non-negative"),
+            });
         }
         for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
             validate_criterion(
@@ -209,13 +323,21 @@ fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<Stri
     }
 }
 
-fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<String>) {
+fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<ValidationError>) {
     if criterion.condition.trim().is_empty() {
-        errs.push(format!("{path}.condition is required"));
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{path}.condition"),
+            message: format!("{path}.condition is required"),
+        });
     }
 
     if criterion.has_declared_type() && criterion.context.trim().is_empty() {
-        errs.push(format!("{path}.context is required when type is specified"));
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{path}.context"),
+            message: format!("{path}.context is required when type is specified"),
+        });
     }
 
     let Some(type_) = &criterion.type_ else {
@@ -229,36 +351,54 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<S
                 normalized.as_str(),
                 "simple" | "regex" | "jsonpath" | "xpath"
             ) {
-                errs.push(format!(
-                    "{path}.type must be one of simple, regex, jsonpath, xpath"
-                ));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidCriterionType,
+                    path: format!("{path}.type"),
+                    message: format!("{path}.type must be one of simple, regex, jsonpath, xpath"),
+                });
             }
         }
         CriterionType::ExpressionType(expr) => {
             let normalized = expr.type_.trim().to_lowercase();
             if !matches!(normalized.as_str(), "jsonpath" | "xpath") {
-                errs.push(format!("{path}.type.type must be one of jsonpath or xpath"));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidCriterionType,
+                    path: format!("{path}.type.type"),
+                    message: format!("{path}.type.type must be one of jsonpath or xpath"),
+                });
                 return;
             }
 
             let version = expr.version.trim().to_lowercase();
             if version.is_empty() {
-                errs.push(format!("{path}.type.version is required"));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: format!("{path}.type.version"),
+                    message: format!("{path}.type.version is required"),
+                });
                 return;
             }
 
             if normalized == "jsonpath" && version != "draft-goessner-dispatch-jsonpath-00" {
-                errs.push(format!(
-                    "{path}.type.version must be draft-goessner-dispatch-jsonpath-00 for jsonpath"
-                ));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidCriterionType,
+                    path: format!("{path}.type.version"),
+                    message: format!(
+                        "{path}.type.version must be draft-goessner-dispatch-jsonpath-00 for jsonpath"
+                    ),
+                });
             }
 
             if normalized == "xpath"
                 && !matches!(version.as_str(), "xpath-10" | "xpath-20" | "xpath-30")
             {
-                errs.push(format!(
-                    "{path}.type.version must be one of xpath-10, xpath-20, xpath-30 for xpath"
-                ));
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidCriterionType,
+                    path: format!("{path}.type.version"),
+                    message: format!(
+                        "{path}.type.version must be one of xpath-10, xpath-20, xpath-30 for xpath"
+                    ),
+                });
             }
         }
     }
@@ -376,7 +516,16 @@ mod tests {
         SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
     };
 
-    use super::{parse, parse_bytes, validate, ArazzoSpec};
+    use super::{parse, parse_bytes, validate, ArazzoSpec, Error, ValidationErrorKind};
+
+    /// Unwrap a validation Error into its report errors, panicking on other variants.
+    fn expect_validation_errors(result: Result<(), Error>) -> Vec<super::ValidationError> {
+        match result {
+            Ok(()) => panic!("expected validation error"),
+            Err(Error::Validation(report)) => report.errors,
+            Err(other) => panic!("expected Validation error, got: {other}"),
+        }
+    }
 
     const VALID_YAML: &str = r#"arazzo: "1.0.0"
 info:
@@ -476,11 +625,13 @@ workflows:
         let result = parse_bytes(b"foo: bar\n");
         match result {
             Ok(_) => panic!("expected validation error"),
-            Err(err) => {
-                if !err.to_string().contains("arazzo version is required") {
-                    panic!("unexpected error: {err}");
-                }
+            Err(Error::Validation(report)) => {
+                assert!(report
+                    .errors
+                    .iter()
+                    .any(|e| e.message.contains("arazzo version is required")));
             }
+            Err(err) => panic!("expected Validation error, got: {err}"),
         }
     }
 
@@ -682,8 +833,7 @@ workflows:
     #[test]
     fn validate_valid_spec() {
         let spec = valid_spec();
-        let result = validate(&spec);
-        if let Err(err) = result {
+        if let Err(err) = validate(&spec) {
             panic!("expected no error for valid spec, got: {err}");
         }
     }
@@ -692,60 +842,36 @@ workflows:
     fn validate_missing_version() {
         let mut spec = valid_spec();
         spec.arazzo.clear();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("arazzo version is required") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0].message.contains("arazzo version is required"));
     }
 
     #[test]
     fn validate_unsupported_version() {
         let mut spec = valid_spec();
         spec.arazzo = "2.0.0".to_string();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("unsupported arazzo version") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::UnsupportedVersion);
+        assert!(errs[0].message.contains("unsupported arazzo version"));
     }
 
     #[test]
     fn validate_missing_title() {
         let mut spec = valid_spec();
         spec.info.title.clear();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("info.title is required") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0].message.contains("info.title is required"));
     }
 
     #[test]
     fn validate_missing_info_version() {
         let mut spec = valid_spec();
         spec.info.version.clear();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("info.version is required") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0].message.contains("info.version is required"));
     }
 
     #[test]
@@ -756,30 +882,20 @@ workflows:
             url: "https://other.example.com".to_string(),
             type_: SourceType::OpenApi,
         });
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("is duplicate") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::DuplicateIdentifier);
+        assert!(errs[0].message.contains("is duplicate"));
     }
 
     #[test]
     fn validate_source_missing_url() {
         let mut spec = valid_spec();
         spec.source_descriptions[0].url.clear();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("sourceDescriptions[0].url is required") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0]
+            .message
+            .contains("sourceDescriptions[0].url is required"));
     }
 
     #[test]
@@ -824,15 +940,11 @@ workflows:
     fn validate_step_no_operation() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].target = None;
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("must have operationId, operationPath, or workflowId") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidStepTarget);
+        assert!(errs[0]
+            .message
+            .contains("must have operationId, operationPath, or workflowId"));
     }
 
     #[test]
@@ -874,15 +986,11 @@ workflows:
             "result".to_string(),
             "$steps.nonexistent.outputs.value".to_string(),
         )]);
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("references unknown step 'nonexistent'") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidReference);
+        assert!(errs[0]
+            .message
+            .contains("references unknown step 'nonexistent'"));
     }
 
     #[test]
@@ -893,15 +1001,9 @@ workflows:
             retry_after: -1,
             ..arazzo_spec::OnAction::default()
         }];
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("retryAfter must be non-negative") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
+        assert!(errs[0].message.contains("retryAfter must be non-negative"));
     }
 
     #[test]
@@ -913,15 +1015,11 @@ workflows:
             ..SuccessCriterion::default()
         }];
 
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("context is required when type is specified") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0]
+            .message
+            .contains("context is required when type is specified"));
     }
 
     #[test]
@@ -954,15 +1052,11 @@ workflows:
             })),
         }];
 
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("type.version must be draft-goessner-dispatch-jsonpath-00") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidCriterionType);
+        assert!(errs[0]
+            .message
+            .contains("type.version must be draft-goessner-dispatch-jsonpath-00"));
     }
 
     #[test]
@@ -981,32 +1075,25 @@ workflows:
             ..OnAction::default()
         }];
 
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains(".onFailure[0].criteria[0].context is required") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
+        assert!(errs[0]
+            .message
+            .contains(".onFailure[0].criteria[0].context is required"));
     }
 
     #[test]
     fn validate_multiple_errors() {
         let spec = ArazzoSpec::default();
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("arazzo version is required") {
-                    panic!("missing expected version error: {err}");
-                }
-                if !err.contains("info.title is required") {
-                    panic!("missing expected title error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs.len() >= 2);
+        let messages: Vec<&str> = errs.iter().map(|e| e.message.as_str()).collect();
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("arazzo version is required")));
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("info.title is required")));
     }
 
     #[test]
@@ -1017,15 +1104,11 @@ workflows:
             retry_after: -1,
             ..OnAction::default()
         }];
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("successActions[0].retryAfter must be non-negative") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
+        assert!(errs[0]
+            .message
+            .contains("successActions[0].retryAfter must be non-negative"));
     }
 
     #[test]
@@ -1036,15 +1119,11 @@ workflows:
             retry_limit: -1,
             ..OnAction::default()
         }];
-        let result = validate(&spec);
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(err) => {
-                if !err.contains("failureActions[0].retryLimit must be non-negative") {
-                    panic!("unexpected error: {err}");
-                }
-            }
-        }
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
+        assert!(errs[0]
+            .message
+            .contains("failureActions[0].retryLimit must be non-negative"));
     }
 
     #[test]
