@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, Workflow};
+use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
 #[test]
@@ -115,12 +115,12 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
                 steps: vec![
                     Step {
                         step_id: "call-child".to_string(),
-                        workflow_id: "child".to_string(),
+                        target: Some(StepTarget::WorkflowId("child".to_string())),
                         ..Step::default()
                     },
                     Step {
                         step_id: "parent-after".to_string(),
-                        operation_path: "/status/200".to_string(),
+                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
                         outputs: BTreeMap::from([(
                             "observed".to_string(),
                             "$inputs.code".to_string(),
@@ -135,12 +135,12 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
                 steps: vec![
                     Step {
                         step_id: "child-one".to_string(),
-                        operation_path: "/status/200".to_string(),
+                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
                         ..Step::default()
                     },
                     Step {
                         step_id: "child-two".to_string(),
-                        operation_path: "/status/200".to_string(),
+                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
                         ..Step::default()
                     },
                 ],

@@ -680,13 +680,16 @@ pub(super) fn can_execute_parallel(workflow: &Workflow) -> bool {
         && workflow
             .steps
             .iter()
-            .all(|step| step.workflow_id.is_empty())
+            .all(|step| !matches!(&step.target, Some(StepTarget::WorkflowId(_))))
 }
 
 fn actions_have_control_flow(actions: &[OnAction]) -> bool {
-    actions
-        .iter()
-        .any(|a| matches!(a.type_, ActionType::Goto | ActionType::Retry | ActionType::End))
+    actions.iter().any(|a| {
+        matches!(
+            a.type_,
+            ActionType::Goto | ActionType::Retry | ActionType::End
+        )
+    })
 }
 
 pub(crate) fn has_control_flow(workflow: &Workflow) -> bool {
@@ -762,7 +765,11 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
         }
     };
 
-    scan(&step.operation_path);
+    match &step.target {
+        Some(StepTarget::OperationPath(p)) => scan(p),
+        Some(StepTarget::OperationId(id)) => scan(id),
+        _ => {}
+    }
     for p in &step.parameters {
         scan(&p.value);
     }

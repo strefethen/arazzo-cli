@@ -4,7 +4,7 @@
 [![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A standalone CLI, Rust library workspace, and VS Code debugger for executing and debugging [Arazzo 1.0](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation.
+A standalone CLI, Rust library workspace, and VS Code debugger for executing and debugging [Arazzo 1.0.1](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation.
 
 ## What It Does
 
@@ -318,15 +318,34 @@ Neither channel blocks the other. A slow HTTP request in the engine does not pre
 
 ## Expression Language
 
+Runtime expressions:
+
 - `$inputs.name` -> workflow input
 - `$steps.<id>.outputs.<name>` -> previous step output
+- `$outputs.name` -> workflow outputs map (inside `workflow.outputs`)
 - `$env.VAR_NAME` -> environment variable (`.env` is auto-loaded)
 - `$statusCode` -> response status code
-- `$response.header.Name` -> response header
-- `$response.body.path.to.field` -> JSON body extraction
-- `//xpath/expression` -> XML extraction
+- `$method` -> HTTP method (GET, POST, etc.)
+- `$url` -> fully constructed request URL (post-request only)
+- `$response.header.Name` -> response header (case-insensitive)
+- `$response.body.path.to.field` -> JSON dot-path body extraction
+- `$response.body#/json/pointer` -> RFC 6901 JSON Pointer body access
+- `$request.header.Name` -> request header introspection
+- `$request.query.Name` -> request query parameter
+- `$request.path.Name` -> request path parameter (substituted value)
+- `$request.body` / `$request.body.path` / `$request.body#/pointer` -> request body access
+- `$sourceDescriptions.{name}.url` -> source description URL lookup
+- `//xpath/expression` -> XML/HTML extraction
 
-Condition operators supported:
+String interpolation:
+
+- `{$expr}` -> embed any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
+
+Multi-source routing:
+
+- `{sourceName}./path` -> operationPath prefix selects a source description's base URL
+
+Condition operators:
 
 - `==`, `!=`, `>`, `<`, `>=`, `<=`
 - `&&`, `||`

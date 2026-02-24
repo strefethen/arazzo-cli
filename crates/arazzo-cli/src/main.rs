@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+//! CLI for executing and debugging Arazzo 1.0.1 API workflow specifications.
+//!
+//! Commands: `run`, `validate`, `list`, `catalog`, `show`, `schema`.
+//! All commands support `--json` for structured output.
+
 mod cli;
 mod handlers;
 mod output;

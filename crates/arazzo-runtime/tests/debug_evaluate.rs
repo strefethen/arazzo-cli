@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, Engine, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, Workflow};
+use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::json;
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
@@ -93,13 +93,13 @@ fn build_engine(url: String) -> Engine {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/echo".to_string(),
+                    target: Some(StepTarget::OperationPath("/echo".to_string())),
                     outputs: BTreeMap::from([("code".to_string(), "code".to_string())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/noop".to_string(),
+                    target: Some(StepTarget::OperationPath("/noop".to_string())),
                     ..Step::default()
                 },
             ],

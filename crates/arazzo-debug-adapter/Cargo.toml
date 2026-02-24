@@ -1,9 +1,10 @@
 [package]
 name = "arazzo-debug-adapter"
+description = "Debug Adapter Protocol server for Arazzo workflow debugging"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 [lints]
 workspace = true

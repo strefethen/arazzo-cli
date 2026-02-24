@@ -125,10 +125,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
                 ));
             }
 
-            let has_op = !step.operation_id.is_empty()
-                || !step.operation_path.is_empty()
-                || !step.workflow_id.is_empty();
-            if !has_op {
+            if step.target.is_none() {
                 errs.push(format!(
                     "{step_path} must have operationId, operationPath, or workflowId"
                 ));
@@ -376,7 +373,7 @@ mod tests {
 
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation,
-        SourceDescription, SourceType, Step, SuccessCriterion, Workflow,
+        SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec};
@@ -414,7 +411,7 @@ workflows:
                 workflow_id: "wf1".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/test".to_string(),
+                    target: Some(StepTarget::OperationPath("/test".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -826,7 +823,7 @@ workflows:
     #[test]
     fn validate_step_no_operation() {
         let mut spec = valid_spec();
-        spec.workflows[0].steps[0].operation_path.clear();
+        spec.workflows[0].steps[0].target = None;
         let result = validate(&spec);
         match result {
             Ok(_) => panic!("expected error"),

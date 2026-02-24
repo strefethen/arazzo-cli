@@ -1,9 +1,10 @@
 [package]
 name = "arazzo-cli"
+description = "CLI for executing and debugging Arazzo 1.0.1 API workflow specifications"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
 
 [lints]
 workspace = true

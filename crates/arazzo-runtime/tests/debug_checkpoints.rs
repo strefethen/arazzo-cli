@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint, StepCheckpoint};
 use arazzo_spec::{
-    ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step,
+    ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, StepTarget,
     SuccessCriterion, Workflow,
 };
 use serde_json::{json, Value};
@@ -258,7 +258,7 @@ fn build_engine(base_url: String) -> Engine {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                operation_path: "/rss".to_string(),
+                target: Some(StepTarget::OperationPath("/rss".to_string())),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -294,7 +294,7 @@ fn build_failure_engine(base_url: String) -> Engine {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                operation_path: "/rss".to_string(),
+                target: Some(StepTarget::OperationPath("/rss".to_string())),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -347,7 +347,7 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                operation_path: "/rss".to_string(),
+                target: Some(StepTarget::OperationPath("/rss".to_string())),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()

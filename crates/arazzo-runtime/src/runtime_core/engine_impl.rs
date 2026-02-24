@@ -373,7 +373,7 @@ impl Engine {
         depth: usize,
         options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
-        if !step.workflow_id.is_empty() {
+        if matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
             let result = self.execute_subworkflow_step(step, vars, depth, options)?;
             return Ok(StepExecution {
                 result,
@@ -400,11 +400,14 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
     ) -> Result<PreparedRequest, RuntimeError> {
-        let mut operation_path = step.operation_path.clone();
-        if !step.operation_id.is_empty() && operation_path.is_empty() {
-            let (method, path) = self.resolve_operation_id(&step.operation_id)?;
-            operation_path = format!("{method} {path}");
-        }
+        let operation_path = match &step.target {
+            Some(StepTarget::OperationPath(path)) => path.clone(),
+            Some(StepTarget::OperationId(id)) => {
+                let (method, path) = self.resolve_operation_id(id)?;
+                format!("{method} {path}")
+            }
+            _ => String::new(),
+        };
 
         let (explicit_method, op_path) = parse_method(&operation_path);
         let url_result = self.build_url_from_path(op_path, step, vars);
@@ -678,13 +681,14 @@ impl Engine {
             sub_inputs.insert(param.name.clone(), value);
         }
 
+        let wf_id = match &step.target {
+            Some(StepTarget::WorkflowId(id)) => id.as_str(),
+            _ => "",
+        };
         let outputs = self
-            .execute_inner(&step.workflow_id, sub_inputs, depth + 1, options)
+            .execute_inner(wf_id, sub_inputs, depth + 1, options)
             .map_err(|err| {
-                RuntimeError::unspecified(format!(
-                    "sub-workflow {}: {}",
-                    step.workflow_id, err.message
-                ))
+                RuntimeError::unspecified(format!("sub-workflow {wf_id}: {}", err.message))
             })?;
 
         for (name, value) in outputs {
@@ -1322,8 +1326,8 @@ impl Engine {
             kind: ExecutionEventKind::BeforeStep,
             workflow_id: workflow_id.to_string(),
             step_id: step.step_id.clone(),
-            operation_path: step.operation_path.clone(),
-            workflow_id_ref: step.workflow_id.clone(),
+            operation_path: step_operation_path(step),
+            workflow_id_ref: step_workflow_id_ref(step),
             status_code: 0,
             outputs: BTreeMap::new(),
             err: None,
@@ -1621,8 +1625,8 @@ impl Engine {
             kind: ExecutionEventKind::AfterStep,
             workflow_id: workflow_id.to_string(),
             step_id: step.step_id.clone(),
-            operation_path: step.operation_path.clone(),
-            workflow_id_ref: step.workflow_id.clone(),
+            operation_path: step_operation_path(step),
+            workflow_id_ref: step_workflow_id_ref(step),
             status_code,
             outputs,
             err,
@@ -1720,8 +1724,8 @@ impl Engine {
             step_id: step.step_id.clone(),
             attempt,
             kind: step_kind(step),
-            operation_path: step.operation_path.clone(),
-            workflow_id_ref: step.workflow_id.clone(),
+            operation_path: step_operation_path(step),
+            workflow_id_ref: step_workflow_id_ref(step),
             duration_ms: duration_ms_u64(duration),
             request: trace.request.clone(),
             response: trace.response.clone(),
@@ -1894,7 +1898,7 @@ impl RoutedDecision {
 }
 
 fn merge_workflow_params(workflow_params: &[Parameter], step: &mut Step) {
-    if step.workflow_id.is_empty() && !workflow_params.is_empty() {
+    if !matches!(&step.target, Some(StepTarget::WorkflowId(_))) && !workflow_params.is_empty() {
         let mut merged = workflow_params.to_vec();
         for sp in &step.parameters {
             merged.retain(|wp| !(wp.name == sp.name && wp.in_ == sp.in_));
@@ -1913,10 +1917,25 @@ fn duration_ns_u64(duration: Duration) -> u64 {
 }
 
 fn step_kind(step: &Step) -> String {
-    if step.workflow_id.is_empty() {
-        "http".to_string()
-    } else {
+    if matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
         "workflow".to_string()
+    } else {
+        "http".to_string()
+    }
+}
+
+fn step_operation_path(step: &Step) -> String {
+    match &step.target {
+        Some(StepTarget::OperationPath(p)) => p.clone(),
+        Some(StepTarget::OperationId(id)) => id.clone(),
+        _ => String::new(),
+    }
+}
+
+fn step_workflow_id_ref(step: &Step) -> String {
+    match &step.target {
+        Some(StepTarget::WorkflowId(id)) => id.clone(),
+        _ => String::new(),
     }
 }
 

@@ -1,5 +1,23 @@
 #![forbid(unsafe_code)]
 
+//! Arazzo workflow execution engine.
+//!
+//! This crate provides [`Engine`] for executing Arazzo 1.0.1 workflow specifications
+//! at runtime. It handles HTTP request construction, expression evaluation,
+//! success criteria checking, control flow (onSuccess/onFailure actions),
+//! sub-workflow calls, retry logic, and parallel step execution.
+//!
+//! # Usage
+//!
+//! ```ignore
+//! use arazzo_runtime::{Engine, ClientConfig};
+//! use arazzo_validate::parse_and_validate;
+//!
+//! let spec = parse_and_validate("spec.arazzo.yaml")?;
+//! let engine = Engine::new(&spec, ClientConfig::default());
+//! let result = engine.execute("workflow-id", &inputs)?;
+//! ```
+
 mod debug;
 mod runtime_core;
 
@@ -20,7 +38,7 @@ pub mod api_v1 {
 #[cfg(test)]
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 #[cfg(test)]
-use arazzo_spec::{ArazzoSpec, OnAction, Step, SuccessCriterion, Workflow};
+use arazzo_spec::{ArazzoSpec, OnAction, Step, StepTarget, SuccessCriterion, Workflow};
 #[cfg(test)]
 use runtime_core::{
     build_levels, evaluate_criterion, extract_step_refs, extract_xpath, has_control_flow,
@@ -33,7 +51,7 @@ mod tests {
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
         ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionEventKind, ExecutionOptions,
         ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent,
-        SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
+        StepTarget, SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter,
@@ -293,13 +311,13 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/step1".to_string(),
+                    target: Some(StepTarget::OperationPath("/step1".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/step2".to_string(),
+                    target: Some(StepTarget::OperationPath("/step2".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -325,7 +343,7 @@ mod tests {
             workflow_id: "fail-no-handler".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/fail".to_string(),
+                target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -354,7 +372,7 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/fail".to_string(),
+                    target: Some(StepTarget::OperationPath("/fail".to_string())),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
                         type_: ActionType::End,
@@ -364,7 +382,7 @@ mod tests {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/should-not-reach".to_string(),
+                    target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
                     ..Step::default()
                 },
             ],
@@ -397,7 +415,7 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/ok".to_string(),
+                    target: Some(StepTarget::OperationPath("/ok".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: ActionType::End,
@@ -407,7 +425,7 @@ mod tests {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/should-not-reach".to_string(),
+                    target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
                     ..Step::default()
                 },
             ],
@@ -448,7 +466,7 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/fail".to_string(),
+                    target: Some(StepTarget::OperationPath("/fail".to_string())),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
                         type_: ActionType::Goto,
@@ -459,12 +477,12 @@ mod tests {
                 },
                 Step {
                     step_id: "skipped".to_string(),
-                    operation_path: "/should-not-reach".to_string(),
+                    target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "fallback".to_string(),
-                    operation_path: "/fallback".to_string(),
+                    target: Some(StepTarget::OperationPath("/fallback".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -505,7 +523,7 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/start".to_string(),
+                    target: Some(StepTarget::OperationPath("/start".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: ActionType::Goto,
@@ -516,12 +534,12 @@ mod tests {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/skipped".to_string(),
+                    target: Some(StepTarget::OperationPath("/skipped".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    operation_path: "/target".to_string(),
+                    target: Some(StepTarget::OperationPath("/target".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -559,7 +577,7 @@ mod tests {
             workflow_id: "retry".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/flaky".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -586,7 +604,7 @@ mod tests {
             workflow_id: "retry-max".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/always-fail".to_string(),
+                target: Some(StepTarget::OperationPath("/always-fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -622,7 +640,7 @@ mod tests {
             workflow_id: "retry-limit".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/flaky".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -650,7 +668,7 @@ mod tests {
             workflow_id: "retry-limit-exceeded".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/always-fail".to_string(),
+                target: Some(StepTarget::OperationPath("/always-fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -687,7 +705,7 @@ mod tests {
             workflow_id: "retry-delay".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/flaky".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -722,7 +740,7 @@ mod tests {
             workflow_id: "retry-delay-timeout".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/flaky".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -764,7 +782,7 @@ mod tests {
             workflow_id: "cancelled".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/ok".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -801,13 +819,13 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/one".to_string(),
+                    target: Some(StepTarget::OperationPath("/one".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/two".to_string(),
+                    target: Some(StepTarget::OperationPath("/two".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -855,7 +873,7 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/main".to_string(),
+                    target: Some(StepTarget::OperationPath("/main".to_string())),
                     success_criteria: success_200(),
                     on_failure: vec![
                         OnAction {
@@ -885,13 +903,13 @@ mod tests {
                 },
                 Step {
                     step_id: "rate-handler".to_string(),
-                    operation_path: "/rate-limit-handler".to_string(),
+                    target: Some(StepTarget::OperationPath("/rate-limit-handler".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "server-error-handler".to_string(),
-                    operation_path: "/should-not-reach".to_string(),
+                    target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
                     ..Step::default()
                 },
             ],
@@ -920,7 +938,7 @@ mod tests {
             workflow_id: "no-criteria-match".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/teapot".to_string(),
+                target: Some(StepTarget::OperationPath("/teapot".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![
                     OnAction {
@@ -965,7 +983,7 @@ mod tests {
             workflow_id: "bad-goto".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/fail".to_string(),
+                target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Goto,
@@ -992,7 +1010,7 @@ mod tests {
             workflow_id: "goto-no-target".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/fail".to_string(),
+                target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Goto,
@@ -1045,19 +1063,19 @@ mod tests {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    operation_path: "/c".to_string(),
+                    target: Some(StepTarget::OperationPath("/c".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1097,7 +1115,7 @@ mod tests {
             workflow_id: "header-extract".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/test".to_string(),
+                target: Some(StepTarget::OperationPath("/test".to_string())),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "request_id".to_string(),
@@ -1133,7 +1151,7 @@ mod tests {
             workflow_id: "env-test".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/protected".to_string(),
+                target: Some(StepTarget::OperationPath("/protected".to_string())),
                 parameters: vec![arazzo_spec::Parameter {
                     name: "Authorization".to_string(),
                     in_: Some(ParamLocation::Header),
@@ -1164,7 +1182,7 @@ mod tests {
         vars.set_input("q", json!("hello world&more=stuff"));
 
         let step = Step {
-            operation_path: "/search".to_string(),
+            target: Some(StepTarget::OperationPath("/search".to_string())),
             parameters: vec![
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
@@ -1200,11 +1218,11 @@ mod tests {
         let engine = new_test_engine("https://api.example.com/", make_spec(Vec::new()));
         let vars = super::VarStore::default();
         let step = Step {
-            operation_path: "/users".to_string(),
+            target: Some(StepTarget::OperationPath("/users".to_string())),
             ..Step::default()
         };
 
-        let url_result = engine.build_url_from_path(&step.operation_path, &step, &vars);
+        let url_result = engine.build_url_from_path("/users", &step, &vars);
         assert_eq!(url_result.url, "https://api.example.com/users");
         assert!(!url_result.url.contains("//users"));
     }
@@ -1232,7 +1250,7 @@ mod tests {
             workflow_id: "put".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "PUT /users/123".to_string(),
+                target: Some(StepTarget::OperationPath("PUT /users/123".to_string())),
                 request_body: Some(RequestBody {
                     content_type: "application/x-www-form-urlencoded".to_string(),
                     payload: Some(to_yaml(json!({"key":"val"}))),
@@ -1275,7 +1293,7 @@ mod tests {
             workflow_id: "delete".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "DELETE /users/123".to_string(),
+                target: Some(StepTarget::OperationPath("DELETE /users/123".to_string())),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 204".to_string(),
                     ..SuccessCriterion::default()
@@ -1308,7 +1326,7 @@ mod tests {
             workflow_id: "patch".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "PATCH /items/42".to_string(),
+                target: Some(StepTarget::OperationPath("PATCH /items/42".to_string())),
                 request_body: Some(RequestBody {
                     payload: Some(to_yaml(json!({"status":"active"}))),
                     ..RequestBody::default()
@@ -1342,7 +1360,7 @@ mod tests {
             workflow_id: "fallback-get".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/health".to_string(),
+                target: Some(StepTarget::OperationPath("/health".to_string())),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -1371,7 +1389,7 @@ mod tests {
                 workflow_id: "parent".to_string(),
                 steps: vec![Step {
                     step_id: "call-child".to_string(),
-                    workflow_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
                     ..Step::default()
                 }],
                 outputs: BTreeMap::from([(
@@ -1384,7 +1402,7 @@ mod tests {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "get-token".to_string(),
-                    operation_path: "/auth".to_string(),
+                    target: Some(StepTarget::OperationPath("/auth".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "token".to_string(),
@@ -1426,7 +1444,7 @@ mod tests {
                 workflow_id: "parent".to_string(),
                 steps: vec![Step {
                     step_id: "call-child".to_string(),
-                    workflow_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
                         value: "$inputs.uid".to_string(),
@@ -1440,7 +1458,7 @@ mod tests {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "get-user".to_string(),
-                    operation_path: "/users/{userId}".to_string(),
+                    target: Some(StepTarget::OperationPath("/users/{userId}".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
@@ -1478,7 +1496,7 @@ mod tests {
                 workflow_id: "parent".to_string(),
                 steps: vec![Step {
                     step_id: "call-child".to_string(),
-                    workflow_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -1487,7 +1505,7 @@ mod tests {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/fail".to_string(),
+                    target: Some(StepTarget::OperationPath("/fail".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -1517,7 +1535,7 @@ mod tests {
                 workflow_id: "main-wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/main".to_string(),
+                    target: Some(StepTarget::OperationPath("/main".to_string())),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
                         type_: ActionType::Goto,
@@ -1532,7 +1550,7 @@ mod tests {
                 workflow_id: "fallback-wf".to_string(),
                 steps: vec![Step {
                     step_id: "fb".to_string(),
-                    operation_path: "/fallback".to_string(),
+                    target: Some(StepTarget::OperationPath("/fallback".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "ok".to_string(),
@@ -1561,7 +1579,7 @@ mod tests {
                 workflow_id: "wf-a".to_string(),
                 steps: vec![Step {
                     step_id: "call-b".to_string(),
-                    workflow_id: "wf-b".to_string(),
+                    target: Some(StepTarget::WorkflowId("wf-b".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -1570,7 +1588,7 @@ mod tests {
                 workflow_id: "wf-b".to_string(),
                 steps: vec![Step {
                     step_id: "call-a".to_string(),
-                    workflow_id: "wf-a".to_string(),
+                    target: Some(StepTarget::WorkflowId("wf-a".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -1592,7 +1610,7 @@ mod tests {
             workflow_id: "parent".to_string(),
             steps: vec![Step {
                 step_id: "call-missing".to_string(),
-                workflow_id: "nonexistent".to_string(),
+                target: Some(StepTarget::WorkflowId("nonexistent".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -1702,7 +1720,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_id: "getUser".to_string(),
+                target: Some(StepTarget::OperationId("getUser".to_string())),
                 parameters: vec![arazzo_spec::Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
@@ -1746,7 +1764,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_id: "listUsers".to_string(),
+                target: Some(StepTarget::OperationId("listUsers".to_string())),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -1768,13 +1786,13 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "GET /users".to_string(),
+                    target: Some(StepTarget::OperationPath("GET /users".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "POST /items".to_string(),
+                    target: Some(StepTarget::OperationPath("POST /items".to_string())),
                     request_body: Some(RequestBody {
                         payload: Some(to_yaml(json!({"name":"test"}))),
                         ..RequestBody::default()
@@ -1818,7 +1836,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "GET /users/{id}".to_string(),
+                target: Some(StepTarget::OperationPath("GET /users/{id}".to_string())),
                 parameters: vec![
                     arazzo_spec::Parameter {
                         name: "id".to_string(),
@@ -1874,14 +1892,14 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/create".to_string(),
+                    target: Some(StepTarget::OperationPath("/create".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/get/{id}".to_string(),
+                    target: Some(StepTarget::OperationPath("/get/{id}".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Path),
@@ -1893,7 +1911,7 @@ paths:
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    operation_path: "PUT /data".to_string(),
+                    target: Some(StepTarget::OperationPath("PUT /data".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "X-Custom".to_string(),
                         in_: Some(ParamLocation::Header),
@@ -1949,19 +1967,19 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "c".to_string(),
-                    operation_path: "/c".to_string(),
+                    target: Some(StepTarget::OperationPath("/c".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1991,13 +2009,13 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -2041,14 +2059,14 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -2094,7 +2112,7 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: ActionType::End,
@@ -2104,7 +2122,7 @@ paths:
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -2144,12 +2162,12 @@ paths:
                 steps: vec![
                     Step {
                         step_id: "call-child".to_string(),
-                        workflow_id: "child".to_string(),
+                        target: Some(StepTarget::WorkflowId("child".to_string())),
                         ..Step::default()
                     },
                     Step {
                         step_id: "after".to_string(),
-                        operation_path: "/after".to_string(),
+                        target: Some(StepTarget::OperationPath("/after".to_string())),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
@@ -2160,7 +2178,7 @@ paths:
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "child-step".to_string(),
-                    operation_path: "/child".to_string(),
+                    target: Some(StepTarget::OperationPath("/child".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -2195,13 +2213,13 @@ paths:
             steps: vec![
                 Step {
                     step_id: "ok".to_string(),
-                    operation_path: "/ok".to_string(),
+                    target: Some(StepTarget::OperationPath("/ok".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "fail".to_string(),
-                    operation_path: "/fail".to_string(),
+                    target: Some(StepTarget::OperationPath("/fail".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -2242,14 +2260,14 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([("x".to_string(), "$response.body.val".to_string())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -2262,7 +2280,7 @@ paths:
                 },
                 Step {
                     step_id: "c".to_string(),
-                    operation_path: "/c".to_string(),
+                    target: Some(StepTarget::OperationPath("/c".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -2275,7 +2293,7 @@ paths:
                 },
                 Step {
                     step_id: "d".to_string(),
-                    operation_path: "/d".to_string(),
+                    target: Some(StepTarget::OperationPath("/d".to_string())),
                     parameters: vec![
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
@@ -2336,13 +2354,13 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -2400,7 +2418,7 @@ paths:
                 workflow_id: "parent".to_string(),
                 steps: vec![Step {
                     step_id: "call-child".to_string(),
-                    workflow_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -2410,13 +2428,13 @@ paths:
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        operation_path: "/api".to_string(),
+                        target: Some(StepTarget::OperationPath("/api".to_string())),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        operation_path: "/fail".to_string(),
+                        target: Some(StepTarget::OperationPath("/fail".to_string())),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
@@ -2462,19 +2480,19 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/slow".to_string(),
+                    target: Some(StepTarget::OperationPath("/slow".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/fast".to_string(),
+                    target: Some(StepTarget::OperationPath("/fast".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    operation_path: "/mid".to_string(),
+                    target: Some(StepTarget::OperationPath("/mid".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -2524,7 +2542,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/ok".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "value".to_string(),
@@ -2596,7 +2614,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "retry-step".to_string(),
-                operation_path: "/retry".to_string(),
+                target: Some(StepTarget::OperationPath("/retry".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: ActionType::Retry,
@@ -2644,7 +2662,7 @@ paths:
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "broken".to_string(),
-                operation_path: "http://[::1".to_string(),
+                target: Some(StepTarget::OperationPath("http://[::1".to_string())),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -2676,7 +2694,7 @@ paths:
                 workflow_id: "parent".to_string(),
                 steps: vec![Step {
                     step_id: "call-child".to_string(),
-                    workflow_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -2685,7 +2703,7 @@ paths:
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "child-step".to_string(),
-                    operation_path: "/child".to_string(),
+                    target: Some(StepTarget::OperationPath("/child".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -2747,19 +2765,19 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/slow".to_string(),
+                    target: Some(StepTarget::OperationPath("/slow".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/fast".to_string(),
+                    target: Some(StepTarget::OperationPath("/fast".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    operation_path: "/mid".to_string(),
+                    target: Some(StepTarget::OperationPath("/mid".to_string())),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -3015,7 +3033,9 @@ paths:
     fn extract_step_refs_and_control_flow() {
         let step = Step {
             step_id: "s2".to_string(),
-            operation_path: "/items/$steps.s1.outputs.id".to_string(),
+            target: Some(StepTarget::OperationPath(
+                "/items/$steps.s1.outputs.id".to_string(),
+            )),
             parameters: vec![arazzo_spec::Parameter {
                 name: "q".to_string(),
                 in_: Some(ParamLocation::Query),
@@ -3041,7 +3061,7 @@ paths:
             workflow_id: "no-flow".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/ok".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -3052,7 +3072,7 @@ paths:
             workflow_id: "with-flow".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                operation_path: "/ok".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
                 on_failure: vec![OnAction {
                     type_: ActionType::Goto,
                     step_id: "fallback".to_string(),
@@ -3072,12 +3092,12 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     ..Step::default()
                 },
             ],
@@ -3094,12 +3114,12 @@ paths:
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/one".to_string(),
+                    target: Some(StepTarget::OperationPath("/one".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/two".to_string(),
+                    target: Some(StepTarget::OperationPath("/two".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -3159,12 +3179,12 @@ paths:
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    operation_path: "/b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
                     ..Step::default()
                 },
                 Step {
@@ -3257,7 +3277,7 @@ paths:
 
                 steps.push(Step {
                     step_id: format!("s{idx}"),
-                    operation_path: format!("/s{idx}"),
+                    target: Some(StepTarget::OperationPath(format!("/s{idx}"))),
                     parameters,
                     ..Step::default()
                 });
@@ -3400,7 +3420,7 @@ paths:
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        operation_path: "/a".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
                         success_criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 200".to_string(),
                             ..SuccessCriterion::default()
@@ -3409,7 +3429,7 @@ paths:
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        operation_path: "/b".to_string(),
+                        target: Some(StepTarget::OperationPath("/b".to_string())),
                         ..Step::default()
                     },
                 ],
@@ -3439,7 +3459,7 @@ paths:
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        operation_path: "/a".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
                         success_criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 200".to_string(),
                             ..SuccessCriterion::default()
@@ -3454,7 +3474,7 @@ paths:
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        operation_path: "/b".to_string(),
+                        target: Some(StepTarget::OperationPath("/b".to_string())),
                         outputs: BTreeMap::from([(
                             "reached".to_string(),
                             "$statusCode".to_string(),
@@ -3495,7 +3515,7 @@ paths:
                 }],
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/fail".to_string(),
+                    target: Some(StepTarget::OperationPath("/fail".to_string())),
                     success_criteria: vec![SuccessCriterion {
                         condition: "$statusCode == 200".to_string(),
                         ..SuccessCriterion::default()
@@ -3533,7 +3553,7 @@ paths:
                 }],
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -3567,7 +3587,7 @@ paths:
                 }],
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
@@ -3608,7 +3628,7 @@ paths:
                     }],
                     steps: vec![Step {
                         step_id: "call-child".to_string(),
-                        workflow_id: "child".to_string(),
+                        target: Some(StepTarget::WorkflowId("child".to_string())),
                         parameters: vec![Parameter {
                             name: "input_val".to_string(),
                             value: "hello".to_string(),
@@ -3622,7 +3642,7 @@ paths:
                     workflow_id: "child".to_string(),
                     steps: vec![Step {
                         step_id: "child-step".to_string(),
-                        operation_path: "/a".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
                         ..Step::default()
                     }],
                     ..Workflow::default()
@@ -3650,7 +3670,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
                     outputs: BTreeMap::from([("sum".to_string(), "total".to_string())]),
                     ..Step::default()
                 }],
@@ -3687,7 +3707,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/api/test".to_string(),
+                    target: Some(StepTarget::OperationPath("/api/test".to_string())),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([
                         ("captured_url".to_string(), "$url".to_string()),
@@ -3729,7 +3749,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/api/test".to_string(),
+                    target: Some(StepTarget::OperationPath("/api/test".to_string())),
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
@@ -3770,7 +3790,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/api/test".to_string(),
+                    target: Some(StepTarget::OperationPath("/api/test".to_string())),
                     parameters: vec![Parameter {
                         name: "page".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -3811,7 +3831,9 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/users/{userId}/profile".to_string(),
+                    target: Some(StepTarget::OperationPath(
+                        "/users/{userId}/profile".to_string(),
+                    )),
                     parameters: vec![Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
@@ -3853,7 +3875,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "POST /api/items".to_string(),
+                    target: Some(StepTarget::OperationPath("POST /api/items".to_string())),
                     request_body: Some(RequestBody {
                         content_type: "application/json".to_string(),
                         payload: Some(to_yaml(json!({"name": "widget", "count": 3}))),
@@ -3929,7 +3951,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/status".to_string(),
+                    target: Some(StepTarget::OperationPath("/status".to_string())),
                     ..Step::default()
                 }],
                 outputs: BTreeMap::from([
@@ -3994,19 +4016,19 @@ paths:
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        operation_path: "{api1}./v1/users".to_string(),
+                        target: Some(StepTarget::OperationPath("{api1}./v1/users".to_string())),
                         outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
                         ..Step::default()
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        operation_path: "{api2}./v2/items".to_string(),
+                        target: Some(StepTarget::OperationPath("{api2}./v2/items".to_string())),
                         outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
                         ..Step::default()
                     },
                     Step {
                         step_id: "s3".to_string(),
-                        operation_path: "/v1/default".to_string(),
+                        target: Some(StepTarget::OperationPath("/v1/default".to_string())),
                         outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
                         ..Step::default()
                     },
@@ -4051,7 +4073,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/test".to_string(),
+                    target: Some(StepTarget::OperationPath("/test".to_string())),
                     outputs: BTreeMap::from([
                         ("method_out".to_string(), "$method".to_string()),
                         ("input_out".to_string(), "$inputs.name".to_string()),

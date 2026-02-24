@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Root Arazzo specification document.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -145,32 +145,105 @@ pub struct PropertyDef {
     pub default: Option<serde_yaml::Value>,
 }
 
+/// Step target discriminator — exactly one of operationId, operationPath, or workflowId.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepTarget {
+    OperationId(String),
+    OperationPath(String),
+    WorkflowId(String),
+}
+
 /// Workflow step definition.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Step {
-    #[serde(default)]
     pub step_id: String,
-    #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    pub operation_id: String,
-    #[serde(default)]
-    pub operation_path: String,
-    #[serde(default)]
-    pub workflow_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target: Option<StepTarget>,
     pub parameters: Vec<Parameter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_body: Option<RequestBody>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub success_criteria: Vec<SuccessCriterion>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_success: Vec<OnAction>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_failure: Vec<OnAction>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, String>,
+}
+
+/// Serde helper that mirrors the flat YAML/JSON shape of a Step.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StepSerde {
+    #[serde(default)]
+    step_id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    operation_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    operation_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    workflow_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parameters: Vec<Parameter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_body: Option<RequestBody>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    success_criteria: Vec<SuccessCriterion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    on_success: Vec<OnAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    on_failure: Vec<OnAction>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    outputs: BTreeMap<String, String>,
+}
+
+impl Serialize for Step {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let (operation_id, operation_path, workflow_id) = match &self.target {
+            Some(StepTarget::OperationId(v)) => (v.clone(), String::new(), String::new()),
+            Some(StepTarget::OperationPath(v)) => (String::new(), v.clone(), String::new()),
+            Some(StepTarget::WorkflowId(v)) => (String::new(), String::new(), v.clone()),
+            None => (String::new(), String::new(), String::new()),
+        };
+        StepSerde {
+            step_id: self.step_id.clone(),
+            description: self.description.clone(),
+            operation_id,
+            operation_path,
+            workflow_id,
+            parameters: self.parameters.clone(),
+            request_body: self.request_body.clone(),
+            success_criteria: self.success_criteria.clone(),
+            on_success: self.on_success.clone(),
+            on_failure: self.on_failure.clone(),
+            outputs: self.outputs.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Step {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = StepSerde::deserialize(deserializer)?;
+        let target = if !raw.workflow_id.is_empty() {
+            Some(StepTarget::WorkflowId(raw.workflow_id))
+        } else if !raw.operation_path.is_empty() {
+            Some(StepTarget::OperationPath(raw.operation_path))
+        } else if !raw.operation_id.is_empty() {
+            Some(StepTarget::OperationId(raw.operation_id))
+        } else {
+            None
+        };
+        Ok(Step {
+            step_id: raw.step_id,
+            description: raw.description,
+            target,
+            parameters: raw.parameters,
+            request_body: raw.request_body,
+            success_criteria: raw.success_criteria,
+            on_success: raw.on_success,
+            on_failure: raw.on_failure,
+            outputs: raw.outputs,
+        })
+    }
 }
 
 /// Parameter location discriminator.

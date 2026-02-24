@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, Workflow};
+use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
 #[test]
@@ -163,12 +163,12 @@ fn build_engine() -> Engine {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    operation_path: "/status/200".to_string(),
+                    target: Some(StepTarget::OperationPath("/status/200".to_string())),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    operation_path: "/status/200".to_string(),
+                    target: Some(StepTarget::OperationPath("/status/200".to_string())),
                     ..Step::default()
                 },
             ],
