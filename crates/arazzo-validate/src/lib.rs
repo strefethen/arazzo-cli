@@ -357,7 +357,7 @@ fn resolve_action_ref(
     kind: &str,
     entity: &str,
 ) -> Result<(), String> {
-    if actions.len() == 1 && actions[0].type_.is_empty() && !actions[0].name.is_empty() {
+    if actions.len() == 1 && !actions[0].name.is_empty() {
         if let Some(name) = actions[0].name.strip_prefix(prefix) {
             let Some(resolved) = component_map.get(name) else {
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
@@ -375,8 +375,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation, SourceDescription,
-        SourceType, Step, SuccessCriterion, Workflow,
+        ActionType, CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation,
+        SourceDescription, SourceType, Step, SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec};
@@ -640,7 +640,7 @@ workflows:
 
         let actions = &spec.workflows[0].steps[0].on_success;
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].type_, "end");
+        assert_eq!(actions[0].type_, ActionType::End);
         assert_eq!(actions[0].name, "terminate");
     }
 
@@ -677,7 +677,7 @@ workflows:
 
         let actions = &spec.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].type_, "retry");
+        assert_eq!(actions[0].type_, ActionType::Retry);
         assert_eq!(actions[0].retry_after, 2);
         assert_eq!(actions[0].retry_limit, 5);
     }
@@ -892,7 +892,7 @@ workflows:
     fn validate_retry_fields() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_failure = vec![arazzo_spec::OnAction {
-            type_: "retry".to_string(),
+            type_: ActionType::Retry,
             retry_after: -1,
             ..arazzo_spec::OnAction::default()
         }];
@@ -972,7 +972,7 @@ workflows:
     fn validate_action_criteria_follow_criterion_rules() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_failure = vec![OnAction {
-            type_: "retry".to_string(),
+            type_: ActionType::Retry,
             criteria: vec![SuccessCriterion {
                 condition: "//item[1]".to_string(),
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1016,7 +1016,7 @@ workflows:
     fn validate_workflow_level_actions_retry_fields() {
         let mut spec = valid_spec();
         spec.workflows[0].success_actions = vec![OnAction {
-            type_: "retry".to_string(),
+            type_: ActionType::Retry,
             retry_after: -1,
             ..OnAction::default()
         }];
@@ -1035,7 +1035,7 @@ workflows:
     fn validate_workflow_level_failure_actions_retry_fields() {
         let mut spec = valid_spec();
         spec.workflows[0].failure_actions = vec![OnAction {
-            type_: "retry".to_string(),
+            type_: ActionType::Retry,
             retry_limit: -1,
             ..OnAction::default()
         }];
@@ -1121,9 +1121,9 @@ workflows:
         assert_eq!(wf.parameters.len(), 1);
         assert_eq!(wf.parameters[0].name, "Authorization");
         assert_eq!(wf.success_actions.len(), 1);
-        assert_eq!(wf.success_actions[0].type_, "end");
+        assert_eq!(wf.success_actions[0].type_, ActionType::End);
         assert_eq!(wf.failure_actions.len(), 1);
-        assert_eq!(wf.failure_actions[0].type_, "retry");
+        assert_eq!(wf.failure_actions[0].type_, ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 5);
         assert_eq!(wf.steps[0].description, "First step");
     }
@@ -1166,10 +1166,10 @@ workflows:
         };
         let wf = &spec.workflows[0];
         assert_eq!(wf.success_actions.len(), 1);
-        assert_eq!(wf.success_actions[0].type_, "end");
+        assert_eq!(wf.success_actions[0].type_, ActionType::End);
         assert_eq!(wf.success_actions[0].name, "stop");
         assert_eq!(wf.failure_actions.len(), 1);
-        assert_eq!(wf.failure_actions[0].type_, "retry");
+        assert_eq!(wf.failure_actions[0].type_, ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 1);
     }
 }

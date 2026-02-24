@@ -240,6 +240,26 @@ impl SuccessCriterion {
     }
 }
 
+/// Action type discriminator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionType {
+    #[default]
+    End,
+    Goto,
+    Retry,
+}
+
+impl std::fmt::Display for ActionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::End => write!(f, "end"),
+            Self::Goto => write!(f, "goto"),
+            Self::Retry => write!(f, "retry"),
+        }
+    }
+}
+
 /// Action for `onSuccess` / `onFailure`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -247,7 +267,7 @@ pub struct OnAction {
     #[serde(default)]
     pub name: String,
     #[serde(rename = "type", default)]
-    pub type_: String,
+    pub type_: ActionType,
     #[serde(default)]
     pub workflow_id: String,
     #[serde(default)]

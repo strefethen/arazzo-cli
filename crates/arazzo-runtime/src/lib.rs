@@ -36,8 +36,8 @@ mod tests {
         SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter, RequestBody,
-        SourceDescription, SourceType,
+        ActionType, CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter,
+        RequestBody, SourceDescription, SourceType,
     };
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -357,7 +357,7 @@ mod tests {
                     operation_path: "/fail".to_string(),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
-                        type_: "end".to_string(),
+                        type_: ActionType::End,
                         ..OnAction::default()
                     }],
                     ..Step::default()
@@ -400,7 +400,7 @@ mod tests {
                     operation_path: "/ok".to_string(),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: "end".to_string(),
+                        type_: ActionType::End,
                         ..OnAction::default()
                     }],
                     ..Step::default()
@@ -451,7 +451,7 @@ mod tests {
                     operation_path: "/fail".to_string(),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
-                        type_: "goto".to_string(),
+                        type_: ActionType::Goto,
                         step_id: "fallback".to_string(),
                         ..OnAction::default()
                     }],
@@ -508,7 +508,7 @@ mod tests {
                     operation_path: "/start".to_string(),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: "goto".to_string(),
+                        type_: ActionType::Goto,
                         step_id: "s3".to_string(),
                         ..OnAction::default()
                     }],
@@ -562,7 +562,7 @@ mod tests {
                 operation_path: "/flaky".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -589,7 +589,7 @@ mod tests {
                 operation_path: "/always-fail".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -625,7 +625,7 @@ mod tests {
                 operation_path: "/flaky".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_limit: 6,
                     ..OnAction::default()
                 }],
@@ -653,7 +653,7 @@ mod tests {
                 operation_path: "/always-fail".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_limit: 2,
                     ..OnAction::default()
                 }],
@@ -690,7 +690,7 @@ mod tests {
                 operation_path: "/flaky".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_after: 1,
                     ..OnAction::default()
                 }],
@@ -725,7 +725,7 @@ mod tests {
                 operation_path: "/flaky".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_after: 2,
                     ..OnAction::default()
                 }],
@@ -859,7 +859,7 @@ mod tests {
                     success_criteria: success_200(),
                     on_failure: vec![
                         OnAction {
-                            type_: "goto".to_string(),
+                            type_: ActionType::Goto,
                             step_id: "rate-handler".to_string(),
                             criteria: vec![SuccessCriterion {
                                 condition: "$statusCode == 429".to_string(),
@@ -868,7 +868,7 @@ mod tests {
                             ..OnAction::default()
                         },
                         OnAction {
-                            type_: "goto".to_string(),
+                            type_: ActionType::Goto,
                             step_id: "server-error-handler".to_string(),
                             criteria: vec![SuccessCriterion {
                                 condition: "$statusCode == 500".to_string(),
@@ -877,7 +877,7 @@ mod tests {
                             ..OnAction::default()
                         },
                         OnAction {
-                            type_: "end".to_string(),
+                            type_: ActionType::End,
                             ..OnAction::default()
                         },
                     ],
@@ -924,7 +924,7 @@ mod tests {
                 success_criteria: success_200(),
                 on_failure: vec![
                     OnAction {
-                        type_: "retry".to_string(),
+                        type_: ActionType::Retry,
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 429".to_string(),
                             ..SuccessCriterion::default()
@@ -932,7 +932,7 @@ mod tests {
                         ..OnAction::default()
                     },
                     OnAction {
-                        type_: "goto".to_string(),
+                        type_: ActionType::Goto,
                         step_id: "handler".to_string(),
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 500".to_string(),
@@ -968,7 +968,7 @@ mod tests {
                 operation_path: "/fail".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "goto".to_string(),
+                    type_: ActionType::Goto,
                     step_id: "nonexistent".to_string(),
                     ..OnAction::default()
                 }],
@@ -995,7 +995,7 @@ mod tests {
                 operation_path: "/fail".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "goto".to_string(),
+                    type_: ActionType::Goto,
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -1081,53 +1081,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execute_unknown_action_type_moves_to_next_step() {
-        let paths = Arc::new(Mutex::new(Vec::<String>::new()));
-        let paths_ref = Arc::clone(&paths);
-        let server = start_server(move |_method, url, _headers, _body| {
-            match paths_ref.lock() {
-                Ok(mut guard) => guard.push(url),
-                Err(_) => panic!("recording request path"),
-            }
-            MockHttpResponse::empty(200)
-        });
-
-        let spec = make_spec(vec![Workflow {
-            workflow_id: "unknown-action".to_string(),
-            steps: vec![
-                Step {
-                    step_id: "s1".to_string(),
-                    operation_path: "/a".to_string(),
-                    success_criteria: success_200(),
-                    on_success: vec![OnAction {
-                        type_: "unknown-type".to_string(),
-                        ..OnAction::default()
-                    }],
-                    ..Step::default()
-                },
-                Step {
-                    step_id: "s2".to_string(),
-                    operation_path: "/b".to_string(),
-                    success_criteria: success_200(),
-                    ..Step::default()
-                },
-            ],
-            ..Workflow::default()
-        }]);
-
-        let mut engine = new_test_engine(&server.base_url, spec);
-        let result = engine.execute("unknown-action", BTreeMap::new());
-        if let Err(err) = result {
-            panic!("expected success, got: {err}");
-        }
-
-        let observed = match paths.lock() {
-            Ok(guard) => guard.clone(),
-            Err(_) => panic!("reading captured paths"),
-        };
-        assert_eq!(observed, vec!["/a".to_string(), "/b".to_string()]);
-    }
+    // execute_unknown_action_type test removed — ActionType enum prevents unknown variants at parse time
 
     #[test]
     fn execute_response_header_expression() {
@@ -1566,7 +1520,7 @@ mod tests {
                     operation_path: "/main".to_string(),
                     success_criteria: success_200(),
                     on_failure: vec![OnAction {
-                        type_: "goto".to_string(),
+                        type_: ActionType::Goto,
                         workflow_id: "fallback-wf".to_string(),
                         ..OnAction::default()
                     }],
@@ -2143,7 +2097,7 @@ paths:
                     operation_path: "/a".to_string(),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: "end".to_string(),
+                        type_: ActionType::End,
                         ..OnAction::default()
                     }],
                     ..Step::default()
@@ -2645,7 +2599,7 @@ paths:
                 operation_path: "/retry".to_string(),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_limit: 2,
                     ..OnAction::default()
                 }],
@@ -2957,17 +2911,17 @@ paths:
         let vars = super::VarStore::default();
 
         let no_criteria = vec![OnAction {
-            type_: "end".to_string(),
+            type_: ActionType::End,
             ..OnAction::default()
         }];
         let first = engine.find_matching_action(&no_criteria, &vars, None);
         assert!(first.is_some());
         if let Some(action) = first {
-            assert_eq!(action.type_, "end".to_string());
+            assert_eq!(action.type_, ActionType::End);
         }
 
         let with_criteria = vec![OnAction {
-            type_: "retry".to_string(),
+            type_: ActionType::Retry,
             criteria: vec![SuccessCriterion {
                 condition: "$statusCode == 429".to_string(),
                 ..SuccessCriterion::default()
@@ -2987,7 +2941,7 @@ paths:
         let ordered = vec![
             OnAction {
                 name: "first".to_string(),
-                type_: "retry".to_string(),
+                type_: ActionType::Retry,
                 criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 429".to_string(),
                     ..SuccessCriterion::default()
@@ -2996,7 +2950,7 @@ paths:
             },
             OnAction {
                 name: "second".to_string(),
-                type_: "end".to_string(),
+                type_: ActionType::End,
                 ..OnAction::default()
             },
         ];
@@ -3015,7 +2969,7 @@ paths:
         };
         let typed = vec![OnAction {
             name: "typed".to_string(),
-            type_: "goto".to_string(),
+            type_: ActionType::Goto,
             step_id: "next".to_string(),
             criteria: vec![SuccessCriterion {
                 context: "$response.body".to_string(),
@@ -3070,7 +3024,7 @@ paths:
             }],
             outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
             on_failure: vec![OnAction {
-                type_: "retry".to_string(),
+                type_: ActionType::Retry,
                 criteria: vec![SuccessCriterion {
                     condition: "$steps.s1.outputs.code == 429".to_string(),
                     ..SuccessCriterion::default()
@@ -3100,7 +3054,7 @@ paths:
                 step_id: "s1".to_string(),
                 operation_path: "/ok".to_string(),
                 on_failure: vec![OnAction {
-                    type_: "goto".to_string(),
+                    type_: ActionType::Goto,
                     step_id: "fallback".to_string(),
                     ..OnAction::default()
                 }],
@@ -3440,7 +3394,7 @@ paths:
             vec![Workflow {
                 workflow_id: "wf".to_string(),
                 success_actions: vec![OnAction {
-                    type_: "end".to_string(),
+                    type_: ActionType::End,
                     ..OnAction::default()
                 }],
                 steps: vec![
@@ -3479,7 +3433,7 @@ paths:
             vec![Workflow {
                 workflow_id: "wf".to_string(),
                 success_actions: vec![OnAction {
-                    type_: "end".to_string(),
+                    type_: ActionType::End,
                     ..OnAction::default()
                 }],
                 steps: vec![
@@ -3492,7 +3446,7 @@ paths:
                         }],
                         // Step has its own on_success (goto s2), so workflow-level "end" is ignored
                         on_success: vec![OnAction {
-                            type_: "goto".to_string(),
+                            type_: ActionType::Goto,
                             step_id: "s2".to_string(),
                             ..OnAction::default()
                         }],
@@ -3536,7 +3490,7 @@ paths:
             vec![Workflow {
                 workflow_id: "wf".to_string(),
                 failure_actions: vec![OnAction {
-                    type_: "end".to_string(),
+                    type_: ActionType::End,
                     ..OnAction::default()
                 }],
                 steps: vec![Step {

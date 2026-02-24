@@ -889,8 +889,8 @@ impl Engine {
         action: &OnAction,
         debug_ctx: Option<SelectedActionDebugContext<'_>>,
     ) -> RoutedDecision {
-        match action.type_.as_str() {
-            "end" => {
+        match action.type_ {
+            ActionType::End => {
                 if ctx.is_failure_path {
                     RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::unspecified(format!(
@@ -899,7 +899,7 @@ impl Engine {
                         ))),
                         trace: TraceDecision {
                             path: TraceDecisionPath::Done,
-                            action_type: "end".to_string(),
+                            action_type: action.type_.to_string(),
                             ..TraceDecision::default()
                         },
                     }
@@ -908,20 +908,20 @@ impl Engine {
                         flow: FlowDecision::Done,
                         trace: TraceDecision {
                             path: TraceDecisionPath::Done,
-                            action_type: "end".to_string(),
+                            action_type: action.type_.to_string(),
                             ..TraceDecision::default()
                         },
                     }
                 }
             }
-            "goto" => {
+            ActionType::Goto => {
                 if !action.step_id.is_empty() {
                     if let Some(idx) = self.find_step_index(ctx.workflow, &action.step_id) {
                         return RoutedDecision {
                             flow: FlowDecision::Next(idx),
                             trace: TraceDecision {
                                 path: TraceDecisionPath::GotoStep,
-                                action_type: "goto".to_string(),
+                                action_type: action.type_.to_string(),
                                 target_step_id: action.step_id.clone(),
                                 ..TraceDecision::default()
                             },
@@ -934,7 +934,7 @@ impl Engine {
                         )),
                         trace: TraceDecision {
                             path: TraceDecisionPath::Error,
-                            action_type: "goto".to_string(),
+                            action_type: action.type_.to_string(),
                             target_step_id: action.step_id.clone(),
                             ..TraceDecision::default()
                         },
@@ -945,7 +945,7 @@ impl Engine {
                         flow: FlowDecision::GotoWorkflow(action.workflow_id.clone()),
                         trace: TraceDecision {
                             path: TraceDecisionPath::GotoWorkflow,
-                            action_type: "goto".to_string(),
+                            action_type: action.type_.to_string(),
                             target_workflow_id: action.workflow_id.clone(),
                             ..TraceDecision::default()
                         },
@@ -958,12 +958,12 @@ impl Engine {
                     )),
                     trace: TraceDecision {
                         path: TraceDecisionPath::Error,
-                        action_type: "goto".to_string(),
+                        action_type: action.type_.to_string(),
                         ..TraceDecision::default()
                     },
                 }
             }
-            "retry" => {
+            ActionType::Retry => {
                 let mut limit = MAX_RETRIES_PER_STEP;
                 if action.retry_limit > 0 {
                     limit = usize::try_from(action.retry_limit).unwrap_or(MAX_RETRIES_PER_STEP);
@@ -992,7 +992,7 @@ impl Engine {
                         )),
                         trace: TraceDecision {
                             path: TraceDecisionPath::Error,
-                            action_type: "retry".to_string(),
+                            action_type: action.type_.to_string(),
                             retry_after_seconds: Some(action.retry_after),
                             retry_limit: Some(action.retry_limit),
                             ..TraceDecision::default()
@@ -1014,7 +1014,7 @@ impl Engine {
                             flow: FlowDecision::Error(err),
                             trace: TraceDecision {
                                 path: TraceDecisionPath::Error,
-                                action_type: "retry".to_string(),
+                                action_type: action.type_.to_string(),
                                 retry_after_seconds: Some(action.retry_after),
                                 retry_limit: Some(action.retry_limit),
                                 ..TraceDecision::default()
@@ -1026,21 +1026,13 @@ impl Engine {
                     flow: FlowDecision::Retry(ctx.current_idx),
                     trace: TraceDecision {
                         path: TraceDecisionPath::Retry,
-                        action_type: "retry".to_string(),
+                        action_type: action.type_.to_string(),
                         retry_after_seconds: Some(action.retry_after),
                         retry_limit: Some(action.retry_limit),
                         ..TraceDecision::default()
                     },
                 }
             }
-            _ => RoutedDecision {
-                flow: FlowDecision::Next(ctx.current_idx + 1),
-                trace: TraceDecision {
-                    path: TraceDecisionPath::Next,
-                    action_type: action.type_.clone(),
-                    ..TraceDecision::default()
-                },
-            },
         }
     }
 
@@ -1438,7 +1430,7 @@ impl Engine {
         insert_action_branch_locals(&mut locals, branch, action_index);
         locals.insert(
             "actionType".to_string(),
-            Value::String(action.type_.clone()),
+            Value::String(action.type_.to_string()),
         );
         if !action.name.is_empty() {
             locals.insert("actionName".to_string(), Value::String(action.name.clone()));

@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint, StepCheckpoint};
 use arazzo_spec::{
-    ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, SuccessCriterion, Workflow,
+    ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step,
+    SuccessCriterion, Workflow,
 };
 use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
@@ -300,7 +301,7 @@ fn build_failure_engine(base_url: String) -> Engine {
                 }],
                 on_failure: vec![
                     OnAction {
-                        type_: "end".to_string(),
+                        type_: ActionType::End,
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 502".to_string(),
                             ..SuccessCriterion::default()
@@ -308,7 +309,7 @@ fn build_failure_engine(base_url: String) -> Engine {
                         ..OnAction::default()
                     },
                     OnAction {
-                        type_: "retry".to_string(),
+                        type_: ActionType::Retry,
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 503".to_string(),
                             ..SuccessCriterion::default()
@@ -352,7 +353,7 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
                     ..SuccessCriterion::default()
                 }],
                 on_failure: vec![OnAction {
-                    type_: "retry".to_string(),
+                    type_: ActionType::Retry,
                     retry_after,
                     retry_limit,
                     criteria: vec![SuccessCriterion {
