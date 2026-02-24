@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, Step, Workflow};
+use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, Workflow};
 use serde_json::{json, Value};
 
 #[test]
@@ -107,7 +107,7 @@ fn build_debug_engine() -> (Engine, Arc<DebugController>) {
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: "http://localhost".to_string(),
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         }],
         workflows: vec![
             Workflow {

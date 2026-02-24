@@ -84,12 +84,6 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), String> {
         if src.url.is_empty() {
             errs.push(format!("{path}.url is required"));
         }
-        if src.type_ != "openapi" && src.type_ != "arazzo" {
-            errs.push(format!(
-                "{path}.type must be 'openapi' or 'arazzo', got '{}'",
-                src.type_
-            ));
-        }
     }
 
     let mut workflow_ids = HashSet::<String>::new();
@@ -390,8 +384,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, OnAction, SourceDescription, Step,
-        SuccessCriterion, Workflow,
+        CriterionExpressionType, CriterionType, Info, OnAction, SourceDescription, SourceType,
+        Step, SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec};
@@ -423,7 +417,7 @@ workflows:
             source_descriptions: vec![SourceDescription {
                 name: "api".to_string(),
                 url: "https://example.com".to_string(),
-                type_: "openapi".to_string(),
+                type_: SourceType::OpenApi,
             }],
             workflows: vec![Workflow {
                 workflow_id: "wf1".to_string(),
@@ -772,7 +766,7 @@ workflows:
         spec.source_descriptions.push(SourceDescription {
             name: "api".to_string(),
             url: "https://other.example.com".to_string(),
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         });
         let result = validate(&spec);
         match result {
@@ -801,15 +795,28 @@ workflows:
     }
 
     #[test]
-    fn validate_source_invalid_type() {
-        let mut spec = valid_spec();
-        spec.source_descriptions[0].type_ = "invalid".to_string();
-        let result = validate(&spec);
+    fn parse_bytes_source_invalid_type() {
+        let yaml = r#"arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: invalid
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#;
+        let result = parse_bytes(yaml.as_bytes());
         match result {
-            Ok(_) => panic!("expected error"),
+            Ok(_) => panic!("expected error for invalid source type"),
             Err(err) => {
-                if !err.contains("must be 'openapi' or 'arazzo'") {
-                    panic!("unexpected error: {err}");
+                let msg = err.to_string();
+                if !msg.contains("parsing arazzo yaml") {
+                    panic!("unexpected error: {msg}");
                 }
             }
         }
@@ -818,7 +825,7 @@ workflows:
     #[test]
     fn validate_source_type_arazzo() {
         let mut spec = valid_spec();
-        spec.source_descriptions[0].type_ = "arazzo".to_string();
+        spec.source_descriptions[0].type_ = SourceType::Arazzo;
         let result = validate(&spec);
         if let Err(err) = result {
             panic!("expected no error, got: {err}");

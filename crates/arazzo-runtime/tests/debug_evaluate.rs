@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, Engine, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, Step, Workflow};
+use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, Workflow};
 use serde_json::json;
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
@@ -86,7 +86,7 @@ fn build_engine(url: String) -> Engine {
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url,
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),

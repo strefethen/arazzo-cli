@@ -37,6 +37,7 @@ mod tests {
     };
     use arazzo_spec::{
         CriterionExpressionType, CriterionType, Info, Parameter, RequestBody, SourceDescription,
+        SourceType,
     };
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -217,7 +218,7 @@ mod tests {
             source_descriptions: vec![SourceDescription {
                 name: "test".to_string(),
                 url: "http://localhost".to_string(),
-                type_: "openapi".to_string(),
+                type_: SourceType::OpenApi,
             }],
             workflows,
             components: None,
@@ -3962,12 +3963,12 @@ paths:
                 SourceDescription {
                     name: "primary".to_string(),
                     url: "http://localhost".to_string(),
-                    type_: "openapi".to_string(),
+                    type_: SourceType::OpenApi,
                 },
                 SourceDescription {
                     name: "secondary".to_string(),
                     url: "https://api.example.com".to_string(),
-                    type_: "openapi".to_string(),
+                    type_: SourceType::OpenApi,
                 },
             ],
             workflows: vec![Workflow {
@@ -4026,12 +4027,12 @@ paths:
                 SourceDescription {
                     name: "api1".to_string(),
                     url: "https://api1.example.com".to_string(),
-                    type_: "openapi".to_string(),
+                    type_: SourceType::OpenApi,
                 },
                 SourceDescription {
                     name: "api2".to_string(),
                     url: "https://api2.example.com".to_string(),
-                    type_: "openapi".to_string(),
+                    type_: SourceType::OpenApi,
                 },
             ],
             workflows: vec![Workflow {
@@ -4142,7 +4143,7 @@ paths:
             source_descriptions: vec![SourceDescription {
                 name: "test".to_string(),
                 url: base_url.to_string(),
-                type_: "openapi".to_string(),
+                type_: SourceType::OpenApi,
             }],
             workflows,
             components: None,

@@ -50,16 +50,24 @@ pub struct Info {
     pub description: String,
 }
 
+/// Source description type discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceType {
+    OpenApi,
+    Arazzo,
+}
+
 /// API source descriptor.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceDescription {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub url: String,
-    #[serde(rename = "type", default)]
-    pub type_: String,
+    #[serde(rename = "type")]
+    pub type_: SourceType,
 }
 
 /// A single workflow in the document.

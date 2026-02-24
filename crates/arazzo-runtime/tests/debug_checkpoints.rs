@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint, StepCheckpoint};
 use arazzo_spec::{
-    ArazzoSpec, Info, OnAction, SourceDescription, Step, SuccessCriterion, Workflow,
+    ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, SuccessCriterion, Workflow,
 };
 use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
@@ -251,7 +251,7 @@ fn build_engine(base_url: String) -> Engine {
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: base_url,
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -287,7 +287,7 @@ fn build_failure_engine(base_url: String) -> Engine {
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: base_url,
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -340,7 +340,7 @@ fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> E
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: base_url,
-            type_: "openapi".to_string(),
+            type_: SourceType::OpenApi,
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
