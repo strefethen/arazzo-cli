@@ -161,7 +161,8 @@ pub fn emit_workflow_list(spec: &ArazzoSpec, json: bool) -> Result<(), String> {
                     } else {
                         ""
                     };
-                    println!("      - {}: {}{}", name, prop.type_, required);
+                    let type_str = prop.type_.map_or("unknown".to_string(), |t| t.to_string());
+                    println!("      - {name}: {type_str}{required}");
                 }
             }
         }
@@ -203,7 +204,7 @@ pub fn emit_workflow_detail(
                 inputs.insert(
                     name.clone(),
                     InputDetail {
-                        type_: prop.type_.clone(),
+                        type_: prop.type_.map_or(String::new(), |t| t.to_string()),
                         required,
                         description: prop.description.clone(),
                     },
@@ -246,7 +247,8 @@ pub fn emit_workflow_detail(
                 } else {
                     format!(" - {}", prop.description)
                 };
-                println!("  --input {}=<{}>{required}{desc}", name, prop.type_);
+                let type_str = prop.type_.map_or("unknown".to_string(), |t| t.to_string());
+                println!("  --input {name}=<{type_str}>{required}{desc}");
             }
             println!();
         }

@@ -94,12 +94,37 @@ pub struct Workflow {
     pub parameters: Vec<Parameter>,
 }
 
+/// JSON Schema type discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JsonSchemaType {
+    String,
+    Integer,
+    Number,
+    Boolean,
+    Array,
+    Object,
+}
+
+impl std::fmt::Display for JsonSchemaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String => write!(f, "string"),
+            Self::Integer => write!(f, "integer"),
+            Self::Number => write!(f, "number"),
+            Self::Boolean => write!(f, "boolean"),
+            Self::Array => write!(f, "array"),
+            Self::Object => write!(f, "object"),
+        }
+    }
+}
+
 /// Schema-like object used for workflow inputs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaObject {
-    #[serde(rename = "type", default)]
-    pub type_: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<JsonSchemaType>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, PropertyDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -110,8 +135,8 @@ pub struct SchemaObject {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyDef {
-    #[serde(rename = "type", default)]
-    pub type_: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<JsonSchemaType>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
