@@ -189,16 +189,7 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<S
         if param.value.is_empty() && param.reference.is_empty() {
             errs.push(format!("{param_path} must have value or reference"));
         }
-        if !param.in_.is_empty()
-            && param.in_ != "path"
-            && param.in_ != "query"
-            && param.in_ != "header"
-            && param.in_ != "cookie"
-        {
-            errs.push(format!(
-                "{param_path}.in must be path, query, header, or cookie"
-            ));
-        }
+        // ParamLocation enum handles valid `in` values at parse time
     }
 }
 
@@ -345,8 +336,8 @@ fn resolve_param_refs(
             if param.name.is_empty() {
                 param.name = component_param.name.clone();
             }
-            if param.in_.is_empty() {
-                param.in_ = component_param.in_.clone();
+            if param.in_.is_none() {
+                param.in_ = component_param.in_;
             }
             if param.value.is_empty() {
                 param.value = component_param.value.clone();
@@ -384,8 +375,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, OnAction, SourceDescription, SourceType,
-        Step, SuccessCriterion, Workflow,
+        CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation, SourceDescription,
+        SourceType, Step, SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec};
@@ -541,7 +532,7 @@ workflows:
         let params = &spec.workflows[0].steps[0].parameters;
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "Authorization");
-        assert_eq!(params[0].in_, "header");
+        assert_eq!(params[0].in_, Some(ParamLocation::Header));
         assert_eq!(params[0].value, "Bearer abc123");
         assert!(params[0].reference.is_empty());
     }
@@ -848,20 +839,32 @@ workflows:
     }
 
     #[test]
-    fn validate_param_invalid_in() {
-        let mut spec = valid_spec();
-        spec.workflows[0].steps[0].parameters = vec![arazzo_spec::Parameter {
-            name: "q".to_string(),
-            value: "x".to_string(),
-            in_: "body".to_string(),
-            ..arazzo_spec::Parameter::default()
-        }];
-        let result = validate(&spec);
+    fn parse_bytes_param_invalid_in() {
+        let yaml = r#"arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        parameters:
+          - name: q
+            in: body
+            value: x
+"#;
+        let result = parse_bytes(yaml.as_bytes());
         match result {
-            Ok(_) => panic!("expected error"),
+            Ok(_) => panic!("expected error for invalid param location"),
             Err(err) => {
-                if !err.contains("must be path, query, header, or cookie") {
-                    panic!("unexpected error: {err}");
+                let msg = err.to_string();
+                if !msg.contains("parsing arazzo yaml") {
+                    panic!("unexpected error: {msg}");
                 }
             }
         }
@@ -1048,22 +1051,32 @@ workflows:
     }
 
     #[test]
-    fn validate_workflow_level_param_invalid_in() {
-        let mut spec = valid_spec();
-        spec.workflows[0].parameters = vec![arazzo_spec::Parameter {
-            name: "q".to_string(),
-            value: "x".to_string(),
-            in_: "body".to_string(),
-            ..arazzo_spec::Parameter::default()
-        }];
-        let result = validate(&spec);
+    fn parse_bytes_workflow_level_param_invalid_in() {
+        let yaml = r#"arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    parameters:
+      - name: q
+        in: body
+        value: x
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#;
+        let result = parse_bytes(yaml.as_bytes());
         match result {
-            Ok(_) => panic!("expected error"),
+            Ok(_) => panic!("expected error for invalid workflow param location"),
             Err(err) => {
-                if !err.contains(
-                    "workflows[0].parameters[0].in must be path, query, header, or cookie",
-                ) {
-                    panic!("unexpected error: {err}");
+                let msg = err.to_string();
+                if !msg.contains("parsing arazzo yaml") {
+                    panic!("unexpected error: {msg}");
                 }
             }
         }

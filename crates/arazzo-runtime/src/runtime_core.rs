@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::{DebugController, DebugScopes, StepCheckpoint};
 use arazzo_expr::{is_truthy, EvalContext, ExpressionEvaluator};
-use arazzo_spec::{ArazzoSpec, OnAction, Parameter, Step, SuccessCriterion, Workflow};
+use arazzo_spec::{ArazzoSpec, OnAction, ParamLocation, Parameter, Step, SuccessCriterion, Workflow};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

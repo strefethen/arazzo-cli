@@ -450,9 +450,9 @@ impl Engine {
         let eval = ExpressionEvaluator::new(hdr_ctx);
         let mut cookie_parts = Vec::new();
         for param in &step.parameters {
-            if param.in_ == "header" {
+            if param.in_ == Some(ParamLocation::Header) {
                 headers.insert(param.name.clone(), eval.interpolate_string(&param.value));
-            } else if param.in_ == "cookie" {
+            } else if param.in_ == Some(ParamLocation::Cookie) {
                 cookie_parts.push(format!(
                     "{}={}",
                     param.name,
@@ -1112,11 +1112,11 @@ impl Engine {
             } else {
                 eval.evaluate(&param.value)
             };
-            match param.in_.as_str() {
-                "path" => {
+            match param.in_ {
+                Some(ParamLocation::Path) => {
                     path_params.insert(param.name.clone(), value_to_string(&value));
                 }
-                "query" => {
+                Some(ParamLocation::Query) => {
                     if !value.is_null() {
                         query_params_vec.push((param.name.clone(), value_to_string(&value)));
                     }

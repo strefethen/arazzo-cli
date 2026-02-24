@@ -148,14 +148,24 @@ pub struct Step {
     pub outputs: BTreeMap<String, String>,
 }
 
+/// Parameter location discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ParamLocation {
+    Path,
+    Query,
+    Header,
+    Cookie,
+}
+
 /// Operation parameter.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Parameter {
     #[serde(default)]
     pub name: String,
-    #[serde(rename = "in", default)]
-    pub in_: String,
+    #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
+    pub in_: Option<ParamLocation>,
     #[serde(default)]
     pub value: String,
     #[serde(default)]

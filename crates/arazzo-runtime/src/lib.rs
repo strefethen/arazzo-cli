@@ -36,8 +36,8 @@ mod tests {
         SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
-        CriterionExpressionType, CriterionType, Info, Parameter, RequestBody, SourceDescription,
-        SourceType,
+        CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter, RequestBody,
+        SourceDescription, SourceType,
     };
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -1182,7 +1182,7 @@ mod tests {
                 operation_path: "/protected".to_string(),
                 parameters: vec![arazzo_spec::Parameter {
                     name: "Authorization".to_string(),
-                    in_: "header".to_string(),
+                    in_: Some(ParamLocation::Header),
                     value: "$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string(),
                     ..arazzo_spec::Parameter::default()
                 }],
@@ -1214,13 +1214,13 @@ mod tests {
             parameters: vec![
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
-                    in_: "query".to_string(),
+                    in_: Some(ParamLocation::Query),
                     value: "$inputs.q".to_string(),
                     ..arazzo_spec::Parameter::default()
                 },
                 arazzo_spec::Parameter {
                     name: "tag".to_string(),
-                    in_: "query".to_string(),
+                    in_: Some(ParamLocation::Query),
                     value: "a=b".to_string(),
                     ..arazzo_spec::Parameter::default()
                 },
@@ -1489,7 +1489,7 @@ mod tests {
                     operation_path: "/users/{userId}".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
-                        in_: "path".to_string(),
+                        in_: Some(ParamLocation::Path),
                         value: "$inputs.userId".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -1751,7 +1751,7 @@ paths:
                 operation_id: "getUser".to_string(),
                 parameters: vec![arazzo_spec::Parameter {
                     name: "id".to_string(),
-                    in_: "path".to_string(),
+                    in_: Some(ParamLocation::Path),
                     value: "$inputs.userId".to_string(),
                     ..arazzo_spec::Parameter::default()
                 }],
@@ -1868,19 +1868,19 @@ paths:
                 parameters: vec![
                     arazzo_spec::Parameter {
                         name: "id".to_string(),
-                        in_: "path".to_string(),
+                        in_: Some(ParamLocation::Path),
                         value: "$inputs.userId".to_string(),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "Authorization".to_string(),
-                        in_: "header".to_string(),
+                        in_: Some(ParamLocation::Header),
                         value: "$inputs.token".to_string(),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "format".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "json".to_string(),
                         ..arazzo_spec::Parameter::default()
                     },
@@ -1930,7 +1930,7 @@ paths:
                     operation_path: "/get/{id}".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
-                        in_: "path".to_string(),
+                        in_: Some(ParamLocation::Path),
                         value: "$steps.s1.outputs.id".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -1942,7 +1942,7 @@ paths:
                     operation_path: "PUT /data".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "X-Custom".to_string(),
-                        in_: "header".to_string(),
+                        in_: Some(ParamLocation::Header),
                         value: "custom-value".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -2097,7 +2097,7 @@ paths:
                     operation_path: "/b".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.a.outputs.id".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -2298,7 +2298,7 @@ paths:
                     operation_path: "/b".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.a.outputs.x".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -2311,7 +2311,7 @@ paths:
                     operation_path: "/c".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.a.outputs.x".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -2325,13 +2325,13 @@ paths:
                     parameters: vec![
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
-                            in_: "query".to_string(),
+                            in_: Some(ParamLocation::Query),
                             value: "$steps.b.outputs.y".to_string(),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "z".to_string(),
-                            in_: "query".to_string(),
+                            in_: Some(ParamLocation::Query),
                             value: "$steps.c.outputs.z".to_string(),
                             ..arazzo_spec::Parameter::default()
                         },
@@ -3064,7 +3064,7 @@ paths:
             operation_path: "/items/$steps.s1.outputs.id".to_string(),
             parameters: vec![arazzo_spec::Parameter {
                 name: "q".to_string(),
-                in_: "query".to_string(),
+                in_: Some(ParamLocation::Query),
                 value: "$steps.s1.outputs.query".to_string(),
                 ..arazzo_spec::Parameter::default()
             }],
@@ -3148,7 +3148,7 @@ paths:
                     operation_path: "/two".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.s1.outputs.id".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -3170,7 +3170,7 @@ paths:
                     step_id: "s1".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.s2.outputs.id".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -3180,7 +3180,7 @@ paths:
                     step_id: "s2".to_string(),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "$steps.s1.outputs.id".to_string(),
                         ..arazzo_spec::Parameter::default()
                     }],
@@ -3218,13 +3218,13 @@ paths:
                     parameters: vec![
                         arazzo_spec::Parameter {
                             name: "x".to_string(),
-                            in_: "query".to_string(),
+                            in_: Some(ParamLocation::Query),
                             value: "$steps.a.outputs.id".to_string(),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
-                            in_: "query".to_string(),
+                            in_: Some(ParamLocation::Query),
                             value: "$steps.b.outputs.id".to_string(),
                             ..arazzo_spec::Parameter::default()
                         },
@@ -3294,7 +3294,7 @@ paths:
                     if has_edge {
                         parameters.push(arazzo_spec::Parameter {
                             name: format!("p{dep}"),
-                            in_: "query".to_string(),
+                            in_: Some(ParamLocation::Query),
                             value: format!("$steps.s{dep}.outputs.value"),
                             ..arazzo_spec::Parameter::default()
                         });
@@ -3573,7 +3573,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 parameters: vec![Parameter {
                     name: "X-Workflow-Header".to_string(),
-                    in_: "header".to_string(),
+                    in_: Some(ParamLocation::Header),
                     value: "workflow-value".to_string(),
                     ..Parameter::default()
                 }],
@@ -3607,7 +3607,7 @@ paths:
                 workflow_id: "wf".to_string(),
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
-                    in_: "header".to_string(),
+                    in_: Some(ParamLocation::Header),
                     value: "default-token".to_string(),
                     ..Parameter::default()
                 }],
@@ -3616,7 +3616,7 @@ paths:
                     operation_path: "/a".to_string(),
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
-                        in_: "header".to_string(),
+                        in_: Some(ParamLocation::Header),
                         value: "step-token".to_string(),
                         ..Parameter::default()
                     }],
@@ -3648,7 +3648,7 @@ paths:
                     workflow_id: "parent".to_string(),
                     parameters: vec![Parameter {
                         name: "X-Parent".to_string(),
-                        in_: "header".to_string(),
+                        in_: Some(ParamLocation::Header),
                         value: "parent-val".to_string(),
                         ..Parameter::default()
                     }],
@@ -3778,7 +3778,7 @@ paths:
                     operation_path: "/api/test".to_string(),
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
-                        in_: "header".to_string(),
+                        in_: Some(ParamLocation::Header),
                         value: "Bearer token123".to_string(),
                         ..Parameter::default()
                     }],
@@ -3819,7 +3819,7 @@ paths:
                     operation_path: "/api/test".to_string(),
                     parameters: vec![Parameter {
                         name: "page".to_string(),
-                        in_: "query".to_string(),
+                        in_: Some(ParamLocation::Query),
                         value: "5".to_string(),
                         ..Parameter::default()
                     }],
@@ -3860,7 +3860,7 @@ paths:
                     operation_path: "/users/{userId}/profile".to_string(),
                     parameters: vec![Parameter {
                         name: "userId".to_string(),
-                        in_: "path".to_string(),
+                        in_: Some(ParamLocation::Path),
                         value: "42".to_string(),
                         ..Parameter::default()
                     }],
