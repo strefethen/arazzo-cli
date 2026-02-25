@@ -199,6 +199,8 @@ where
                         }
                     }
                     Err(err) => {
+                        // Intentional: reader thread is exiting; if main loop already
+                        // dropped the receiver, this send failing is harmless.
                         let _ = cmd_tx.send(DapCommand::ReadError(format!(
                             "parsing DAP request JSON: {err}"
                         )));
@@ -206,10 +208,12 @@ where
                     }
                 },
                 Ok(None) => {
+                    // Intentional: EOF on stdin; receiver may already be dropped.
                     let _ = cmd_tx.send(DapCommand::Eof);
                     break;
                 }
                 Err(err) => {
+                    // Intentional: reader thread is exiting; receiver may already be dropped.
                     let _ = cmd_tx.send(DapCommand::ReadError(err));
                     break;
                 }
@@ -628,6 +632,8 @@ fn engine_event_monitor(
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
             if let Some(h) = handle.take() {
+                // Intentional: join can only fail if engine thread panicked;
+                // we're shutting down regardless.
                 let _ = h.join();
             }
             return;
@@ -660,6 +666,8 @@ fn engine_event_monitor(
                 let Some(h) = handle.take() else {
                     return;
                 };
+                // Intentional: monitor is exiting; if main loop already
+                // dropped the receiver, this send failing is harmless.
                 match h.join() {
                     Ok(_) => {
                         let _ = event_tx.send(EngineEvent::Terminated);
@@ -675,6 +683,7 @@ fn engine_event_monitor(
         }
 
         // Condvar-driven sleep—wakes instantly when a stop event is posted.
+        // Intentional: timeout or lock failure just means we'll re-poll on next iteration.
         let expected = delivered.saturating_add(1);
         let _ = controller.wait_for_stop_count(expected, ENGINE_MONITOR_POLL);
     }
@@ -732,8 +741,12 @@ where
 fn cleanup_runtime(state: &mut SessionState) {
     if let Some(runtime) = state.runtime.as_mut() {
         runtime.cancel_flag.store(true, Ordering::Relaxed);
+        // Intentional: force_resume unblocks the engine thread so it can observe
+        // the cancel flag; if the controller is already resumed, this is a no-op.
         let _ = runtime.controller.force_resume();
         if let Some(monitor) = runtime.monitor_handle.take() {
+            // Intentional: join can only fail if the monitor thread panicked;
+            // we're tearing down regardless.
             let _ = monitor.join();
         }
         runtime.terminated = true;

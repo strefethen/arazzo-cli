@@ -365,6 +365,9 @@ impl HttpClient {
             .unwrap_or_default();
 
         let is_xml = content_type.contains("xml") || content_type.contains("rss");
+        // Intentional: response body may not be valid JSON (e.g. HTML, plain text).
+        // We attempt parsing and store None if it fails — expressions that reference
+        // $response.body will fall back to the raw bytes.
         let body_json = if is_xml {
             None
         } else {

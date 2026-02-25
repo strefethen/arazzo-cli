@@ -77,21 +77,33 @@ impl Engine {
     pub fn dry_run_requests(&self) -> Vec<DryRunRequest> {
         match self.dry_run_reqs.lock() {
             Ok(guard) => guard.clone(),
-            Err(_) => Vec::new(),
+            Err(poisoned) => {
+                // Intentional: recover partial data from poisoned mutex (thread panicked)
+                eprintln!("WARNING: dry_run_reqs mutex poisoned, returning partial data");
+                poisoned.into_inner().clone()
+            }
         }
     }
 
     pub fn trace_steps(&self) -> Vec<TraceStepRecord> {
         match self.trace_steps.lock() {
             Ok(guard) => guard.clone(),
-            Err(_) => Vec::new(),
+            Err(poisoned) => {
+                // Intentional: recover partial data from poisoned mutex (thread panicked)
+                eprintln!("WARNING: trace_steps mutex poisoned, returning partial data");
+                poisoned.into_inner().clone()
+            }
         }
     }
 
     pub fn execution_events(&self) -> Vec<ExecutionEvent> {
         match self.execution_events.lock() {
             Ok(guard) => guard.clone(),
-            Err(_) => Vec::new(),
+            Err(poisoned) => {
+                // Intentional: recover partial data from poisoned mutex (thread panicked)
+                eprintln!("WARNING: execution_events mutex poisoned, returning partial data");
+                poisoned.into_inner().clone()
+            }
         }
     }
 
@@ -438,6 +450,8 @@ impl Engine {
         } else {
             None
         };
+        // Intentional: body_json is already a valid serde_json::Value, so serialization
+        // should not fail. If it does, the request proceeds without a body.
         let body = body_json
             .as_ref()
             .and_then(|value| serde_json::to_vec(value).ok());

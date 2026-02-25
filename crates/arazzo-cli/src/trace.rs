@@ -164,6 +164,8 @@ pub fn write_trace_file_atomic(path: &Path, trace: &TraceFile) -> Result<(), Str
     }
 
     fs::rename(&tmp_path, path).map_err(|err| {
+        // Intentional: best-effort cleanup of temp file; the rename error
+        // is the one we propagate.
         let _ = fs::remove_file(&tmp_path);
         format!(
             "renaming temp trace file {} to {}: {err}",
