@@ -8,7 +8,8 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    parse_unvalidated_bytes, ArazzoSpec, CriterionType, OnAction, Parameter, SuccessCriterion,
+    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, Parameter,
+    SuccessCriterion,
 };
 
 /// Parser/validation error type for Arazzo specs.
@@ -169,7 +170,14 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         }
     }
 
-    let mut workflow_ids = HashSet::<String>::new();
+    // Collect all workflow IDs upfront for cross-workflow goto validation.
+    let workflow_ids: HashSet<String> = spec
+        .workflows
+        .iter()
+        .filter(|wf| !wf.workflow_id.is_empty())
+        .map(|wf| wf.workflow_id.clone())
+        .collect();
+
     for (wf_idx, wf) in spec.workflows.iter().enumerate() {
         let path = format!("workflows[{wf_idx}]");
 
@@ -179,28 +187,48 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId is required"),
             });
-        } else if !workflow_ids.insert(wf.workflow_id.clone()) {
-            errs.push(ValidationError {
-                kind: ValidationErrorKind::DuplicateIdentifier,
-                path: format!("{path}.workflowId"),
-                message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
-            });
+        } else {
+            // Check for duplicates by counting occurrences.
+            let dup_count = spec
+                .workflows
+                .iter()
+                .filter(|w| w.workflow_id == wf.workflow_id)
+                .count();
+            if dup_count > 1 {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::DuplicateIdentifier,
+                    path: format!("{path}.workflowId"),
+                    message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
+                });
+            }
         }
 
         validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);
 
+        // Collect step IDs for this workflow before validating actions.
+        let step_ids: HashSet<String> = wf
+            .steps
+            .iter()
+            .filter(|s| !s.step_id.is_empty())
+            .map(|s| s.step_id.clone())
+            .collect();
+
         validate_actions(
             &format!("{path}.successActions"),
             &wf.success_actions,
+            &step_ids,
+            &workflow_ids,
             &mut errs,
         );
         validate_actions(
             &format!("{path}.failureActions"),
             &wf.failure_actions,
+            &step_ids,
+            &workflow_ids,
             &mut errs,
         );
 
-        let mut step_ids = HashSet::<String>::new();
+        let mut seen_step_ids = HashSet::<String>::new();
         for (step_idx, step) in wf.steps.iter().enumerate() {
             let step_path = format!("{path}.steps[{step_idx}]");
 
@@ -210,7 +238,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                     path: format!("{step_path}.stepId"),
                     message: format!("{step_path}.stepId is required"),
                 });
-            } else if !step_ids.insert(step.step_id.clone()) {
+            } else if !seen_step_ids.insert(step.step_id.clone()) {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::DuplicateIdentifier,
                     path: format!("{step_path}.stepId"),
@@ -245,11 +273,15 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             validate_actions(
                 &format!("{step_path}.onFailure"),
                 &step.on_failure,
+                &step_ids,
+                &workflow_ids,
                 &mut errs,
             );
             validate_actions(
                 &format!("{step_path}.onSuccess"),
                 &step.on_success,
+                &step_ids,
+                &workflow_ids,
                 &mut errs,
             );
         }
@@ -296,7 +328,13 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<V
     }
 }
 
-fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<ValidationError>) {
+fn validate_actions(
+    path_prefix: &str,
+    actions: &[OnAction],
+    step_ids: &HashSet<String>,
+    workflow_ids: &HashSet<String>,
+    errs: &mut Vec<ValidationError>,
+) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         if action.retry_after < 0 {
@@ -312,6 +350,37 @@ fn validate_actions(path_prefix: &str, actions: &[OnAction], errs: &mut Vec<Vali
                 path: format!("{action_path}.retryLimit"),
                 message: format!("{action_path}.retryLimit must be non-negative"),
             });
+        }
+        if action.type_ == ActionType::Goto {
+            let has_step = !action.step_id.is_empty();
+            let has_workflow = !action.workflow_id.is_empty();
+            if !has_step && !has_workflow {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: action_path.clone(),
+                    message: format!("{action_path} goto action must specify stepId or workflowId"),
+                });
+            }
+            if has_step && !step_ids.contains(&action.step_id) {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidReference,
+                    path: format!("{action_path}.stepId"),
+                    message: format!(
+                        "{action_path}.stepId references unknown step \"{}\"",
+                        action.step_id
+                    ),
+                });
+            }
+            if has_workflow && !workflow_ids.contains(&action.workflow_id) {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidReference,
+                    path: format!("{action_path}.workflowId"),
+                    message: format!(
+                        "{action_path}.workflowId references unknown workflow \"{}\"",
+                        action.workflow_id
+                    ),
+                });
+            }
         }
         for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
             validate_criterion(
@@ -1247,5 +1316,92 @@ workflows:
         assert_eq!(wf.failure_actions.len(), 1);
         assert_eq!(wf.failure_actions[0].type_, ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 1);
+    }
+
+    #[test]
+    fn validate_goto_valid_step_id() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps.push(Step {
+            step_id: "s2".to_string(),
+            target: Some(StepTarget::OperationPath("/other".to_string())),
+            ..Step::default()
+        });
+        spec.workflows[0].steps[0].on_success = vec![OnAction {
+            type_: ActionType::Goto,
+            step_id: "s2".to_string(),
+            ..OnAction::default()
+        }];
+        let result = validate(&spec);
+        if let Err(err) = result {
+            panic!("expected no error for valid goto, got: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_goto_invalid_step_id() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_success = vec![OnAction {
+            type_: ActionType::Goto,
+            step_id: "nonexistent".to_string(),
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::InvalidReference
+                && e.message.contains("unknown step \"nonexistent\"")));
+    }
+
+    #[test]
+    fn validate_goto_valid_workflow_id() {
+        let mut spec = valid_spec();
+        spec.workflows.push(Workflow {
+            workflow_id: "wf2".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test2".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        });
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: ActionType::Goto,
+            workflow_id: "wf2".to_string(),
+            ..OnAction::default()
+        }];
+        let result = validate(&spec);
+        if let Err(err) = result {
+            panic!("expected no error for valid goto workflow, got: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_goto_invalid_workflow_id() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: ActionType::Goto,
+            workflow_id: "missing_wf".to_string(),
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::InvalidReference
+                && e.message.contains("unknown workflow \"missing_wf\"")));
+    }
+
+    #[test]
+    fn validate_goto_missing_step_and_workflow() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_success = vec![OnAction {
+            type_: ActionType::Goto,
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::MissingRequiredField
+                && e.message
+                    .contains("goto action must specify stepId or workflowId")));
     }
 }
