@@ -33,13 +33,15 @@ impl Engine {
         }
 
         Ok(Self {
+            index: WorkflowIndex {
+                spec,
+                base_url,
+                source_descriptions_map,
+                workflow_index,
+                step_indexes,
+                op_index: BTreeMap::new(),
+            },
             client,
-            spec,
-            base_url,
-            source_descriptions_map,
-            workflow_index,
-            step_indexes,
-            op_index: BTreeMap::new(),
             parallel_mode: false,
             dry_run_mode: false,
             trace_enabled: false,
@@ -108,11 +110,12 @@ impl Engine {
     }
 
     pub fn spec(&self) -> &ArazzoSpec {
-        &self.spec
+        &self.index.spec
     }
 
     pub fn workflows(&self) -> Vec<String> {
-        self.spec
+        self.index
+            .spec
             .workflows
             .iter()
             .map(|wf| wf.workflow_id.clone())
@@ -164,7 +167,7 @@ impl Engine {
                 if op_id.is_empty() {
                     continue;
                 }
-                self.op_index.insert(
+                self.index.op_index.insert(
                     op_id,
                     OperationEntry {
                         method: method.to_uppercase(),
@@ -361,16 +364,18 @@ impl Engine {
     }
 
     fn get_workflow(&self, workflow_id: &str) -> Option<&Workflow> {
-        self.workflow_index
+        self.index
+            .workflow_index
             .get(workflow_id)
-            .and_then(|idx| self.spec.workflows.get(*idx))
+            .and_then(|idx| self.index.spec.workflows.get(*idx))
     }
 
     pub(crate) fn resolve_operation_id(
         &self,
         operation_id: &str,
     ) -> Result<(String, String), RuntimeError> {
-        self.op_index
+        self.index
+            .op_index
             .get(operation_id)
             .map(|entry| (entry.method.clone(), entry.path.clone()))
             .ok_or_else(|| {
@@ -1064,14 +1069,15 @@ impl Engine {
     }
 
     fn find_step_index(&self, workflow: &Workflow, step_id: &str) -> Option<usize> {
-        self.step_indexes
+        self.index
+            .step_indexes
             .get(&workflow.workflow_id)
             .and_then(|index| index.get(step_id).copied())
     }
 
     fn make_eval_context(&self, vars: &VarStore, response: Option<&Response>) -> EvalContext {
         let mut ctx = vars.eval_context(response);
-        ctx.source_descriptions = self.source_descriptions_map.clone();
+        ctx.source_descriptions = self.index.source_descriptions_map.clone();
         ctx
     }
 
@@ -1105,13 +1111,13 @@ impl Engine {
     ) -> UrlBuildResult {
         let (resolved_base, resolved_path) =
             if let Some((name, path)) = parse_source_prefix(op_path) {
-                if let Some(source_url) = self.source_descriptions_map.get(name) {
+                if let Some(source_url) = self.index.source_descriptions_map.get(name) {
                     (source_url.as_str(), path)
                 } else {
-                    (self.base_url.as_str(), op_path)
+                    (self.index.base_url.as_str(), op_path)
                 }
             } else {
-                (self.base_url.as_str(), op_path)
+                (self.index.base_url.as_str(), op_path)
             };
 
         let mut target =

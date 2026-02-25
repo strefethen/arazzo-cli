@@ -592,7 +592,7 @@ pub trait TraceHook: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-struct OperationEntry {
+pub(crate) struct OperationEntry {
     method: String,
     path: String,
 }
@@ -664,15 +664,22 @@ impl VarStore {
     }
 }
 
+/// Immutable index built once from the parsed spec. Holds the data that does
+/// not change after construction (except `op_index` which is populated lazily
+/// via [`Engine::load_openapi_spec`]).
+pub(crate) struct WorkflowIndex {
+    pub spec: ArazzoSpec,
+    pub base_url: String,
+    pub source_descriptions_map: BTreeMap<String, String>,
+    pub workflow_index: BTreeMap<String, usize>,
+    pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
+    pub op_index: BTreeMap<String, OperationEntry>,
+}
+
 /// Runtime engine for executing Arazzo workflows.
 pub struct Engine {
+    pub(crate) index: WorkflowIndex,
     client: HttpClient,
-    spec: ArazzoSpec,
-    pub(crate) base_url: String,
-    source_descriptions_map: BTreeMap<String, String>,
-    workflow_index: BTreeMap<String, usize>,
-    step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
-    op_index: BTreeMap<String, OperationEntry>,
     parallel_mode: bool,
     dry_run_mode: bool,
     trace_enabled: bool,

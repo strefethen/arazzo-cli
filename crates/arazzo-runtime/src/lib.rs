@@ -841,7 +841,7 @@ mod tests {
             Ok(engine) => engine,
             Err(err) => panic!("creating engine: {err}"),
         };
-        engine.base_url = server.base_url.clone();
+        engine.index.base_url = server.base_url.clone();
 
         let started = Instant::now();
         let result = engine.execute("rate-limit", BTreeMap::new());
