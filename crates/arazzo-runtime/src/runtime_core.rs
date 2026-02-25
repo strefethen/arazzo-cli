@@ -64,10 +64,11 @@ impl RuntimeErrorKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
     pub message: String,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 impl RuntimeError {
@@ -75,6 +76,19 @@ impl RuntimeError {
         Self {
             kind,
             message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn with_source(
+        kind: RuntimeErrorKind,
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            source: Some(Box::new(source)),
         }
     }
 
@@ -93,7 +107,34 @@ impl std::fmt::Display for RuntimeError {
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|e| e.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
+
+impl From<reqwest::Error> for RuntimeError {
+    fn from(err: reqwest::Error) -> Self {
+        let kind = if err.is_timeout() {
+            RuntimeErrorKind::ExecutionTimeout
+        } else {
+            RuntimeErrorKind::HttpRequest
+        };
+        Self::with_source(kind, err.to_string(), err)
+    }
+}
+
+impl From<serde_json::Error> for RuntimeError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::with_source(
+            RuntimeErrorKind::Unspecified,
+            format!("JSON parse error: {err}"),
+            err,
+        )
+    }
+}
 
 /// Per-execution controls for deadline and external cancellation.
 #[derive(Debug, Clone, Default)]
@@ -242,9 +283,10 @@ impl HttpClient {
             .timeout(config.timeout)
             .build()
             .map_err(|err| {
-                RuntimeError::new(
+                RuntimeError::with_source(
                     RuntimeErrorKind::HttpClientBuild,
                     format!("building HTTP client: {err}"),
+                    err,
                 )
             })?;
         Ok(Self {
@@ -279,9 +321,10 @@ impl HttpClient {
         }
 
         let resp = req.send().map_err(|err| {
-            RuntimeError::new(
+            RuntimeError::with_source(
                 RuntimeErrorKind::HttpRequest,
                 format!("executing request: {err}"),
+                err,
             )
         })?;
 
@@ -294,9 +337,10 @@ impl HttpClient {
         let body = resp
             .bytes()
             .map_err(|err| {
-                RuntimeError::new(
+                RuntimeError::with_source(
                     RuntimeErrorKind::HttpResponseRead,
                     format!("reading response body: {err}"),
+                    err,
                 )
             })?
             .to_vec();

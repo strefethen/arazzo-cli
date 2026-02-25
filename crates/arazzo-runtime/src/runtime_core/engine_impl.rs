@@ -1743,7 +1743,7 @@ impl Engine {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum FlowDecision {
     Next(usize),
     Retry(usize),
@@ -1752,7 +1752,7 @@ enum FlowDecision {
     Error(RuntimeError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct RoutedDecision {
     flow: FlowDecision,
     trace: TraceDecision,

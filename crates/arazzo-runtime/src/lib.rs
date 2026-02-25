@@ -3229,6 +3229,18 @@ paths:
     }
 
     #[test]
+    fn runtime_error_chain_preserved() {
+        use std::error::Error;
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let runtime_err =
+            RuntimeError::with_source(RuntimeErrorKind::HttpRequest, "request failed", io_err);
+        match runtime_err.source() {
+            Some(source) => assert!(source.to_string().contains("file missing")),
+            None => panic!("expected source error in chain"),
+        }
+    }
+
+    #[test]
     fn internal_runtime_api_version_is_v1() {
         assert_eq!(super::INTERNAL_RUNTIME_API_VERSION, "v1");
     }
