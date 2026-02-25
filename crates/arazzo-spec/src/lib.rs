@@ -265,9 +265,41 @@ pub struct Parameter {
     #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
     pub in_: Option<ParamLocation>,
     #[serde(default)]
-    pub value: String,
+    pub value: serde_yaml::Value,
     #[serde(default)]
     pub reference: String,
+}
+
+impl Parameter {
+    /// Returns the value as a string suitable for expression evaluation.
+    pub fn value_as_str(&self) -> String {
+        match &self.value {
+            serde_yaml::Value::String(s) => s.clone(),
+            serde_yaml::Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    u.to_string()
+                } else if let Some(i) = n.as_i64() {
+                    i.to_string()
+                } else if let Some(f) = n.as_f64() {
+                    f.to_string()
+                } else {
+                    String::new()
+                }
+            }
+            serde_yaml::Value::Bool(b) => b.to_string(),
+            serde_yaml::Value::Null => String::new(),
+            other => serde_yaml::to_string(other).unwrap_or_default(),
+        }
+    }
+
+    /// Returns true if the value is empty (null or empty string).
+    pub fn is_value_empty(&self) -> bool {
+        match &self.value {
+            serde_yaml::Value::Null => true,
+            serde_yaml::Value::String(s) => s.is_empty(),
+            _ => false,
+        }
+    }
 }
 
 /// Request body metadata.

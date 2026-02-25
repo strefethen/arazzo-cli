@@ -318,7 +318,7 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<V
                 message: format!("{param_path}.name is required (unless using reference)"),
             });
         }
-        if param.value.is_empty() && param.reference.is_empty() {
+        if param.is_value_empty() && param.reference.is_empty() {
             errs.push(ValidationError {
                 kind: ValidationErrorKind::MissingParameterValue,
                 path: param_path,
@@ -545,7 +545,7 @@ fn resolve_param_refs(
             if param.in_.is_none() {
                 param.in_ = component_param.in_;
             }
-            if param.value.is_empty() {
+            if param.is_value_empty() {
                 param.value = component_param.value.clone();
             }
             param.reference.clear();

@@ -477,13 +477,21 @@ impl Engine {
         let mut cookie_parts = Vec::new();
         for param in &step.parameters {
             if param.in_ == Some(ParamLocation::Header) {
-                headers.insert(param.name.clone(), eval.interpolate_string(&param.value));
+                let value_str = param.value_as_str();
+                let resolved = if value_str.starts_with('$') {
+                    value_to_string(&eval.evaluate(&value_str))
+                } else {
+                    eval.interpolate_string(&value_str)
+                };
+                headers.insert(param.name.clone(), resolved);
             } else if param.in_ == Some(ParamLocation::Cookie) {
-                cookie_parts.push(format!(
-                    "{}={}",
-                    param.name,
-                    eval.interpolate_string(&param.value)
-                ));
+                let value_str = param.value_as_str();
+                let resolved = if value_str.starts_with('$') {
+                    value_to_string(&eval.evaluate(&value_str))
+                } else {
+                    eval.interpolate_string(&value_str)
+                };
+                cookie_parts.push(format!("{}={}", param.name, resolved));
             }
         }
         if !cookie_parts.is_empty() {
@@ -697,10 +705,11 @@ impl Engine {
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
-            let value = if param.value.contains("{$") {
-                Value::String(eval.interpolate_string(&param.value))
+            let value_str = param.value_as_str();
+            let value = if value_str.contains("{$") {
+                Value::String(eval.interpolate_string(&value_str))
             } else {
-                eval.evaluate(&param.value)
+                eval.evaluate(&value_str)
             };
             sub_inputs.insert(param.name.clone(), value);
         }
@@ -1132,10 +1141,11 @@ impl Engine {
         let mut query_params_vec = Vec::<(String, String)>::new();
 
         for param in &step.parameters {
-            let value = if param.value.contains("{$") {
-                Value::String(eval.interpolate_string(&param.value))
+            let value_str = param.value_as_str();
+            let value = if value_str.contains("{$") {
+                Value::String(eval.interpolate_string(&value_str))
             } else {
-                eval.evaluate(&param.value)
+                eval.evaluate(&value_str)
             };
             match param.in_ {
                 Some(ParamLocation::Path) => {

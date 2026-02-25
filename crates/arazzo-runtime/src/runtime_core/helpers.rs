@@ -785,7 +785,8 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
         _ => {}
     }
     for p in &step.parameters {
-        scan(&p.value);
+        let v = p.value_as_str();
+        scan(&v);
     }
     if let Some(body) = &step.request_body {
         if let Some(payload) = &body.payload {

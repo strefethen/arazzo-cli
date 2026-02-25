@@ -1155,7 +1155,7 @@ mod tests {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "Authorization".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: "$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string(),
+                    value: serde_yaml::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
                     ..arazzo_spec::Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1187,13 +1187,13 @@ mod tests {
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: "$inputs.q".to_string(),
+                    value: serde_yaml::Value::String("$inputs.q".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
                 arazzo_spec::Parameter {
                     name: "tag".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: "a=b".to_string(),
+                    value: serde_yaml::Value::String("a=b".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
             ],
@@ -1447,7 +1447,7 @@ mod tests {
                     target: Some(StepTarget::WorkflowId("child".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
-                        value: "$inputs.uid".to_string(),
+                        value: serde_yaml::Value::String("$inputs.uid".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1462,7 +1462,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: "$inputs.userId".to_string(),
+                        value: serde_yaml::Value::String("$inputs.userId".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -1724,7 +1724,7 @@ paths:
                 parameters: vec![arazzo_spec::Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: "$inputs.userId".to_string(),
+                    value: serde_yaml::Value::String("$inputs.userId".to_string()),
                     ..arazzo_spec::Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1841,19 +1841,19 @@ paths:
                     arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: "$inputs.userId".to_string(),
+                        value: serde_yaml::Value::String("$inputs.userId".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "Authorization".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: "$inputs.token".to_string(),
+                        value: serde_yaml::Value::String("$inputs.token".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "format".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "json".to_string(),
+                        value: serde_yaml::Value::String("json".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                 ],
@@ -1903,7 +1903,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: "$steps.s1.outputs.id".to_string(),
+                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -1915,7 +1915,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "X-Custom".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: "custom-value".to_string(),
+                        value: serde_yaml::Value::String("custom-value".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     request_body: Some(RequestBody {
@@ -2070,7 +2070,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.a.outputs.id".to_string(),
+                        value: serde_yaml::Value::String("$steps.a.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2271,7 +2271,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.a.outputs.x".to_string(),
+                        value: serde_yaml::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2284,7 +2284,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.a.outputs.x".to_string(),
+                        value: serde_yaml::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2298,13 +2298,13 @@ paths:
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: "$steps.b.outputs.y".to_string(),
+                            value: serde_yaml::Value::String("$steps.b.outputs.y".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "z".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: "$steps.c.outputs.z".to_string(),
+                            value: serde_yaml::Value::String("$steps.c.outputs.z".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -3039,7 +3039,7 @@ paths:
             parameters: vec![arazzo_spec::Parameter {
                 name: "q".to_string(),
                 in_: Some(ParamLocation::Query),
-                value: "$steps.s1.outputs.query".to_string(),
+                value: serde_yaml::Value::String("$steps.s1.outputs.query".to_string()),
                 ..arazzo_spec::Parameter::default()
             }],
             outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
@@ -3123,7 +3123,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.s1.outputs.id".to_string(),
+                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3145,7 +3145,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.s2.outputs.id".to_string(),
+                        value: serde_yaml::Value::String("$steps.s2.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3155,7 +3155,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "$steps.s1.outputs.id".to_string(),
+                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3193,13 +3193,13 @@ paths:
                         arazzo_spec::Parameter {
                             name: "x".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: "$steps.a.outputs.id".to_string(),
+                            value: serde_yaml::Value::String("$steps.a.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: "$steps.b.outputs.id".to_string(),
+                            value: serde_yaml::Value::String("$steps.b.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -3281,7 +3281,9 @@ paths:
                         parameters.push(arazzo_spec::Parameter {
                             name: format!("p{dep}"),
                             in_: Some(ParamLocation::Query),
-                            value: format!("$steps.s{dep}.outputs.value"),
+                            value: serde_yaml::Value::String(format!(
+                                "$steps.s{dep}.outputs.value"
+                            )),
                             ..arazzo_spec::Parameter::default()
                         });
                     }
@@ -3560,7 +3562,7 @@ paths:
                 parameters: vec![Parameter {
                     name: "X-Workflow-Header".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: "workflow-value".to_string(),
+                    value: serde_yaml::Value::String("workflow-value".to_string()),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -3594,7 +3596,7 @@ paths:
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: "default-token".to_string(),
+                    value: serde_yaml::Value::String("default-token".to_string()),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -3603,7 +3605,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: "step-token".to_string(),
+                        value: serde_yaml::Value::String("step-token".to_string()),
                         ..Parameter::default()
                     }],
                     ..Step::default()
@@ -3635,7 +3637,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Parent".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: "parent-val".to_string(),
+                        value: serde_yaml::Value::String("parent-val".to_string()),
                         ..Parameter::default()
                     }],
                     steps: vec![Step {
@@ -3643,7 +3645,7 @@ paths:
                         target: Some(StepTarget::WorkflowId("child".to_string())),
                         parameters: vec![Parameter {
                             name: "input_val".to_string(),
-                            value: "hello".to_string(),
+                            value: serde_yaml::Value::String("hello".to_string()),
                             ..Parameter::default()
                         }],
                         ..Step::default()
@@ -3765,7 +3767,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: "Bearer token123".to_string(),
+                        value: serde_yaml::Value::String("Bearer token123".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -3806,7 +3808,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "page".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: "5".to_string(),
+                        value: serde_yaml::Value::String("5".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -3849,7 +3851,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: "42".to_string(),
+                        value: serde_yaml::Value::String("42".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
