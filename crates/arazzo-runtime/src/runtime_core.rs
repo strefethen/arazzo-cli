@@ -22,11 +22,13 @@ pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
 
 /// Runtime error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RuntimeErrorKind {
     Unspecified,
     ExecutionTimeout,
     ExecutionCancelled,
     WorkflowNotFound,
+    StepNotFound,
     OperationIdNotFound,
     MaxCallDepthExceeded,
     RetryLimitExceeded,
@@ -39,6 +41,11 @@ pub enum RuntimeErrorKind {
     HttpResponseRead,
     RateLimiterLockPoisoned,
     ParallelThreadPanic,
+    JsonParse,
+    SourceDescriptionParse,
+    SubWorkflowFailed,
+    SuccessCriteriaFailed,
+    DebugController,
 }
 
 impl RuntimeErrorKind {
@@ -48,6 +55,7 @@ impl RuntimeErrorKind {
             Self::ExecutionTimeout => "RUNTIME_EXECUTION_TIMEOUT",
             Self::ExecutionCancelled => "RUNTIME_EXECUTION_CANCELLED",
             Self::WorkflowNotFound => "RUNTIME_WORKFLOW_NOT_FOUND",
+            Self::StepNotFound => "RUNTIME_STEP_NOT_FOUND",
             Self::OperationIdNotFound => "RUNTIME_OPERATION_ID_NOT_FOUND",
             Self::MaxCallDepthExceeded => "RUNTIME_MAX_CALL_DEPTH_EXCEEDED",
             Self::RetryLimitExceeded => "RUNTIME_RETRY_LIMIT_EXCEEDED",
@@ -60,6 +68,11 @@ impl RuntimeErrorKind {
             Self::HttpResponseRead => "RUNTIME_HTTP_RESPONSE_READ",
             Self::RateLimiterLockPoisoned => "RUNTIME_RATE_LIMITER_LOCK_POISONED",
             Self::ParallelThreadPanic => "RUNTIME_PARALLEL_THREAD_PANIC",
+            Self::JsonParse => "RUNTIME_JSON_PARSE",
+            Self::SourceDescriptionParse => "RUNTIME_SOURCE_DESCRIPTION_PARSE",
+            Self::SubWorkflowFailed => "RUNTIME_SUB_WORKFLOW_FAILED",
+            Self::SuccessCriteriaFailed => "RUNTIME_SUCCESS_CRITERIA_FAILED",
+            Self::DebugController => "RUNTIME_DEBUG_CONTROLLER",
         }
     }
 }
@@ -129,7 +142,7 @@ impl From<reqwest::Error> for RuntimeError {
 impl From<serde_json::Error> for RuntimeError {
     fn from(err: serde_json::Error) -> Self {
         Self::with_source(
-            RuntimeErrorKind::Unspecified,
+            RuntimeErrorKind::JsonParse,
             format!("JSON parse error: {err}"),
             err,
         )

@@ -108,8 +108,12 @@ impl Engine {
     }
 
     pub fn load_openapi_spec(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
-        let root: serde_yaml::Value = serde_yaml::from_slice(data)
-            .map_err(|err| RuntimeError::unspecified(format!("parsing OpenAPI spec: {err}")))?;
+        let root: serde_yaml::Value = serde_yaml::from_slice(data).map_err(|err| {
+            RuntimeError::new(
+                RuntimeErrorKind::SourceDescriptionParse,
+                format!("parsing OpenAPI spec: {err}"),
+            )
+        })?;
         let Some(paths) = root.get("paths") else {
             return Ok(());
         };
@@ -688,7 +692,8 @@ impl Engine {
         let outputs = self
             .execute_inner(wf_id, sub_inputs, depth + 1, options)
             .map_err(|err| {
-                RuntimeError::unspecified(format!("sub-workflow {wf_id}: {}", err.message))
+                let msg = format!("sub-workflow {wf_id}: {}", err.message);
+                RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
             })?;
 
         for (name, value) in outputs {
@@ -897,10 +902,13 @@ impl Engine {
             ActionType::End => {
                 if ctx.is_failure_path {
                     RoutedDecision {
-                        flow: FlowDecision::Error(RuntimeError::unspecified(format!(
-                            "step {}: workflow ended by onFailure action",
-                            ctx.workflow.steps[ctx.current_idx].step_id
-                        ))),
+                        flow: FlowDecision::Error(RuntimeError::new(
+                            RuntimeErrorKind::SuccessCriteriaFailed,
+                            format!(
+                                "step {}: workflow ended by onFailure action",
+                                ctx.workflow.steps[ctx.current_idx].step_id
+                            ),
+                        )),
                         trace: TraceDecision {
                             path: TraceDecisionPath::Done,
                             action_type: action.type_.to_string(),
@@ -1163,10 +1171,9 @@ impl Engine {
                 Vec::<(usize, Step, Result<ParallelStepExecution, RuntimeError>)>::new();
 
             for idx in level.iter().copied() {
-                let step =
-                    workflow.steps.get(idx).cloned().ok_or_else(|| {
-                        RuntimeError::unspecified("invalid step index".to_string())
-                    })?;
+                let step = workflow.steps.get(idx).cloned().ok_or_else(|| {
+                    RuntimeError::new(RuntimeErrorKind::StepNotFound, "invalid step index")
+                })?;
                 self.emit_before_step_event(workflow_id, &step);
             }
 
@@ -1176,7 +1183,7 @@ impl Engine {
                 for idx in level.iter().copied() {
                     let step = {
                         let mut s = workflow.steps.get(idx).cloned().ok_or_else(|| {
-                            RuntimeError::unspecified("invalid step index".to_string())
+                            RuntimeError::new(RuntimeErrorKind::StepNotFound, "invalid step index")
                         })?;
                         merge_workflow_params(&workflow.parameters, &mut s);
                         s
@@ -1608,7 +1615,12 @@ impl Engine {
                 &eval_ctx,
                 scopes,
             )
-            .map_err(|err| RuntimeError::unspecified(format!("debug controller: {err}")))
+            .map_err(|err| {
+                RuntimeError::new(
+                    RuntimeErrorKind::DebugController,
+                    format!("debug controller: {err}"),
+                )
+            })
     }
 
     fn emit_after_step_event(

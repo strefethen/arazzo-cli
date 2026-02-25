@@ -639,7 +639,10 @@ pub(super) fn to_json_path(expr: &str) -> String {
 
 pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeError {
     if let Some(err) = &result.err {
-        return RuntimeError::unspecified(format!("step {step_id}: {err}"));
+        return RuntimeError::new(
+            RuntimeErrorKind::SuccessCriteriaFailed,
+            format!("step {step_id}: {err}"),
+        );
     }
     if let Some(resp) = &result.response {
         let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
@@ -647,12 +650,18 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
             body_preview.truncate(500);
             body_preview.push_str("...");
         }
-        return RuntimeError::unspecified(format!(
-            "step {step_id}: success criteria not met (status={}, body={})",
-            resp.status_code, body_preview
-        ));
+        return RuntimeError::new(
+            RuntimeErrorKind::SuccessCriteriaFailed,
+            format!(
+                "step {step_id}: success criteria not met (status={}, body={})",
+                resp.status_code, body_preview
+            ),
+        );
     }
-    RuntimeError::unspecified(format!("step {step_id}: success criteria not met"))
+    RuntimeError::new(
+        RuntimeErrorKind::SuccessCriteriaFailed,
+        format!("step {step_id}: success criteria not met"),
+    )
 }
 
 pub(super) fn sleep_with_checks(
