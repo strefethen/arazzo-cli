@@ -616,6 +616,7 @@ impl Engine {
                 condition: evaluation.condition.clone(),
                 context: evaluation.context_expr.clone(),
                 result: evaluation.matched,
+                warnings: evaluation.warnings.iter().map(|w| w.to_string()).collect(),
             });
             let gate = DebugGateContext {
                 workflow_id,

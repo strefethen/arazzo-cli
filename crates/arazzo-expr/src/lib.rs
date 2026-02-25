@@ -28,6 +28,21 @@ impl std::fmt::Display for PathError {
 
 impl std::error::Error for PathError {}
 
+/// Warning produced when an expression resolves to `Null` due to a missing key,
+/// unknown step, or unrecognised namespace. Collected by
+/// [`ExpressionEvaluator::evaluate_with_diagnostics`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpressionWarning {
+    pub expression: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ExpressionWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.expression, self.message)
+    }
+}
+
 static INTERPOLATE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\{(\$[^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_\.]*(?:\[[0-9]+\])*)")
         .unwrap_or_else(|err| panic!("failed to compile interpolate regex: {err}"))
@@ -71,122 +86,195 @@ impl ExpressionEvaluator {
     }
 
     /// Evaluate an expression and return a dynamic JSON value.
+    ///
+    /// Missing keys and unknown namespaces silently return `Value::Null`.
+    /// Use [`evaluate_with_diagnostics`](Self::evaluate_with_diagnostics) to
+    /// collect warnings about unresolved expressions.
     pub fn evaluate(&self, expr: &str) -> Value {
+        self.evaluate_with_diagnostics(expr).0
+    }
+
+    /// Evaluate an expression, returning both the value and any diagnostic
+    /// warnings produced when resolution falls back to `Null`.
+    pub fn evaluate_with_diagnostics(&self, expr: &str) -> (Value, Vec<ExpressionWarning>) {
+        let mut warnings = Vec::new();
+
         let Some(rest) = expr.strip_prefix('$') else {
-            return Value::String(expr.to_string());
+            return (Value::String(expr.to_string()), warnings);
         };
 
         if let Some(name) = rest.strip_prefix("env.") {
-            return Value::String(env::var(name).unwrap_or_default());
+            return (Value::String(env::var(name).unwrap_or_default()), warnings);
         }
 
         if let Some(name) = rest.strip_prefix("inputs.") {
-            return self.ctx.inputs.get(name).cloned().unwrap_or(Value::Null);
+            let value = self.ctx.inputs.get(name).cloned().unwrap_or_else(|| {
+                warnings.push(ExpressionWarning {
+                    expression: expr.to_string(),
+                    message: format!("input \"{name}\" not found in context"),
+                });
+                Value::Null
+            });
+            return (value, warnings);
         }
 
         if let Some(after) = rest.strip_prefix("steps.") {
             if let Some((step_id, output_name)) = after.split_once(".outputs.") {
-                return self
-                    .ctx
-                    .steps
-                    .get(step_id)
-                    .and_then(|outputs| outputs.get(output_name))
-                    .cloned()
-                    .unwrap_or(Value::Null);
+                let value = match self.ctx.steps.get(step_id) {
+                    Some(outputs) => outputs.get(output_name).cloned().unwrap_or_else(|| {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!(
+                                "output \"{output_name}\" not found in step \"{step_id}\""
+                            ),
+                        });
+                        Value::Null
+                    }),
+                    None => {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!("step \"{step_id}\" not found in context"),
+                        });
+                        Value::Null
+                    }
+                };
+                return (value, warnings);
             }
-            return Value::Null;
+            warnings.push(ExpressionWarning {
+                expression: expr.to_string(),
+                message: "invalid $steps expression: expected $steps.<id>.outputs.<key>"
+                    .to_string(),
+            });
+            return (Value::Null, warnings);
         }
 
         if rest == "statusCode" {
-            return self
-                .ctx
-                .status_code
-                .map(|code| json!(code))
-                .unwrap_or(Value::Null);
+            return (
+                self.ctx
+                    .status_code
+                    .map(|code| json!(code))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if rest == "method" {
-            return self
-                .ctx
-                .method
-                .as_ref()
-                .map(|m| Value::String(m.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                self.ctx
+                    .method
+                    .as_ref()
+                    .map(|m| Value::String(m.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if rest == "url" {
-            return self
-                .ctx
-                .url
-                .as_ref()
-                .map(|u| Value::String(u.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                self.ctx
+                    .url
+                    .as_ref()
+                    .map(|u| Value::String(u.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(after) = rest.strip_prefix("outputs.") {
             if let Some((name, pointer)) = after.split_once('#') {
-                return self
+                let value = self
                     .ctx
                     .outputs
                     .get(name)
                     .and_then(|v| v.pointer(pointer))
                     .cloned()
                     .unwrap_or(Value::Null);
+                return (value, warnings);
             }
-            return self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null);
+            return (
+                self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(name) = rest.strip_prefix("request.header.") {
-            return get_header_case_insensitive(&self.ctx.request_headers, name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                get_header_case_insensitive(&self.ctx.request_headers, name)
+                    .map(|v| Value::String(v.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(name) = rest.strip_prefix("request.query.") {
-            return self
-                .ctx
-                .request_query
-                .get(name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                self.ctx
+                    .request_query
+                    .get(name)
+                    .map(|v| Value::String(v.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(name) = rest.strip_prefix("request.path.") {
-            return self
-                .ctx
-                .request_path
-                .get(name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                self.ctx
+                    .request_path
+                    .get(name)
+                    .map(|v| Value::String(v.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(suffix) = rest.strip_prefix("request.body") {
-            return resolve_body_access(&self.ctx.request_body, suffix);
+            return (
+                resolve_body_access(&self.ctx.request_body, suffix),
+                warnings,
+            );
         }
 
         if let Some(after) = rest.strip_prefix("sourceDescriptions.") {
             if let Some(name) = after.strip_suffix(".url") {
-                return self
+                let value = self
                     .ctx
                     .source_descriptions
                     .get(name)
                     .map(|u| Value::String(u.clone()))
-                    .unwrap_or(Value::Null);
+                    .unwrap_or_else(|| {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!("source description \"{name}\" not found in context"),
+                        });
+                        Value::Null
+                    });
+                return (value, warnings);
             }
-            return Value::Null;
+            return (Value::Null, warnings);
         }
 
         if let Some(name) = rest.strip_prefix("response.header.") {
-            return get_header_case_insensitive(&self.ctx.response_headers, name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null);
+            return (
+                get_header_case_insensitive(&self.ctx.response_headers, name)
+                    .map(|v| Value::String(v.clone()))
+                    .unwrap_or(Value::Null),
+                warnings,
+            );
         }
 
         if let Some(suffix) = rest.strip_prefix("response.body") {
-            return resolve_body_access(&self.ctx.response_body, suffix);
+            return (
+                resolve_body_access(&self.ctx.response_body, suffix),
+                warnings,
+            );
         }
 
-        Value::Null
+        warnings.push(ExpressionWarning {
+            expression: expr.to_string(),
+            message: format!("unknown expression namespace \"${rest}\""),
+        });
+        (Value::Null, warnings)
     }
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.
@@ -1386,5 +1474,65 @@ mod tests {
     fn evaluate_response_body_json_pointer_without_body() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
         assert_eq!(eval.evaluate("$response.body#/data/0"), Value::Null);
+    }
+
+    #[test]
+    fn diagnostics_missing_step_warns() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$steps.missing.outputs.x");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("step \"missing\" not found"));
+    }
+
+    #[test]
+    fn diagnostics_missing_output_key_warns() {
+        let mut ctx = EvalContext::default();
+        ctx.steps.insert(
+            "s1".to_string(),
+            BTreeMap::from([("a".to_string(), json!(1))]),
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+        let (value, warnings) = eval.evaluate_with_diagnostics("$steps.s1.outputs.nope");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("output \"nope\" not found"));
+    }
+
+    #[test]
+    fn diagnostics_valid_expression_no_warnings() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("name".to_string(), json!("Alice"));
+        let eval = ExpressionEvaluator::new(ctx);
+        let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.name");
+        assert_eq!(value, json!("Alice"));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn diagnostics_unknown_namespace_warns() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$foo.bar");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("unknown expression namespace"));
+    }
+
+    #[test]
+    fn diagnostics_missing_source_description_warns() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$sourceDescriptions.missing.url");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0]
+            .message
+            .contains("source description \"missing\""));
+    }
+
+    #[test]
+    fn evaluate_backward_compat_still_returns_null() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        assert_eq!(eval.evaluate("$steps.missing.outputs.x"), Value::Null);
+        assert_eq!(eval.evaluate("$foo.bar"), Value::Null);
     }
 }

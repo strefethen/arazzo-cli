@@ -10,6 +10,7 @@ pub(crate) struct CriterionEvaluation {
     pub context_expr: String,
     pub context_value: Value,
     pub error: Option<String>,
+    pub warnings: Vec<arazzo_expr::ExpressionWarning>,
 }
 
 pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
@@ -56,10 +57,13 @@ pub(crate) fn evaluate_criterion_detailed(
     response: Option<&Response>,
 ) -> CriterionEvaluation {
     let type_name = criterion.resolved_type_name();
+    let mut expr_warnings = Vec::new();
     let mut context_value = if criterion.context.trim().is_empty() {
         default_criterion_context(response)
     } else {
-        eval.evaluate(&criterion.context)
+        let (val, warnings) = eval.evaluate_with_diagnostics(&criterion.context);
+        expr_warnings = warnings;
+        val
     };
     let mut error = None;
 
@@ -105,6 +109,7 @@ pub(crate) fn evaluate_criterion_detailed(
         context_expr: criterion.context.clone(),
         context_value,
         error,
+        warnings: expr_warnings,
     }
 }
 

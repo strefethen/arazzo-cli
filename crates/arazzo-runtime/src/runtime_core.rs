@@ -515,6 +515,8 @@ pub struct TraceCriterionResult {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub context: String,
     pub result: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Runtime trace record for one step attempt.
