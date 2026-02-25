@@ -366,10 +366,17 @@ fn run_json_reports_error_for_missing_workflow() {
         ["--json", "run", &spec_str, "missing-workflow", "--dry-run"].as_slice(),
         None,
     );
-    assert!(output.status.success());
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
 
     let body = stdout_json(&output);
     assert!(body.get("error").is_some());
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUNTIME_WORKFLOW_NOT_FOUND")
+    );
 }
 
 #[test]
@@ -510,7 +517,10 @@ fn run_trace_writes_on_failure() {
         .as_slice(),
         None,
     );
-    assert!(output.status.success());
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
 
     let body = stdout_json(&output);
     assert!(body.get("error").is_some());

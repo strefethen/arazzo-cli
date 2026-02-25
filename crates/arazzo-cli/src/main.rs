@@ -24,7 +24,9 @@ fn main() {
     load_env_file(".env");
     let cli = Cli::parse();
     if let Err(err) = run(cli) {
-        eprintln!("{err}");
+        if !err.is_empty() {
+            eprintln!("{err}");
+        }
         std::process::exit(1);
     }
 }

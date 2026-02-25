@@ -77,6 +77,8 @@ pub struct ValidateResult {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct RunError {
     pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// Combined schema type for the `run` command output.
@@ -263,11 +265,15 @@ pub fn emit_workflow_detail(
     Ok(())
 }
 
-pub fn emit_run_error(json: bool, err: &str) -> Result<(), String> {
+pub fn emit_run_error(json: bool, err: &str, code: Option<&str>) -> Result<(), String> {
     if json {
-        return output_json(&RunError {
+        output_json(&RunError {
             error: err.to_string(),
-        });
+            code: code.map(String::from),
+        })?;
+        // Return Err so main() exits with code 1. Empty string signals
+        // that the error message was already written to stdout as JSON.
+        return Err(String::new());
     }
     Err(err.to_string())
 }

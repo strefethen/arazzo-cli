@@ -24,7 +24,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         Ok(spec) => spec,
         Err(err) => {
             return if global.json {
-                output::emit_run_error(true, &err.to_string())
+                output::emit_run_error(true, &err.to_string(), None)
             } else {
                 Err(format!("parsing spec: {err}"))
             };
@@ -78,6 +78,10 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let run_duration = run_started_inst.elapsed();
 
     let run_error_text = outputs_result.as_ref().err().map(ToString::to_string);
+    let run_error_code = outputs_result
+        .as_ref()
+        .err()
+        .map(|e| e.kind.code().to_string());
     let mut trace_write_error: Option<String> = None;
 
     if let Some(trace_path) = &run.trace {
@@ -106,7 +110,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         if let Some(trace_error) = trace_write_error {
             return Err(format!("{run_error}; writing trace: {trace_error}"));
         }
-        return output::emit_run_error(global.json, &run_error);
+        return output::emit_run_error(global.json, &run_error, run_error_code.as_deref());
     }
 
     if let Some(trace_error) = trace_write_error {

@@ -49,6 +49,12 @@
       "description": "Error response emitted by the `run` command on failure.",
       "type": "object",
       "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "error": {
           "type": "string"
         }

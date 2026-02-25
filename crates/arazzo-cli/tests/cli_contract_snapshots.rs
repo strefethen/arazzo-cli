@@ -182,7 +182,10 @@ fn snapshot_run_missing_workflow_json_contract() {
         "--dry-run",
     ]
     .as_slice());
-    assert!(output.status.success());
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
     let body = stdout_json(&output);
     assert_snapshot("run-missing-workflow.json", &body);
 }
@@ -230,7 +233,10 @@ fn snapshot_run_trace_failure_contract() {
         &trace_path_str,
     ]
     .as_slice());
-    assert!(output.status.success());
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
 
     let mut trace = read_json_file(&trace_path);
     normalize_trace_snapshot(&mut trace);
