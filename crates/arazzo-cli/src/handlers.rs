@@ -17,8 +17,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
     let run = ctx.run;
     let global = ctx.global;
-    let trace_enabled = run.trace.is_some() || ctx.debug.capture_runtime_trace;
-    let _capture_execution_events = ctx.debug.capture_execution_events;
+    let trace_enabled = run.trace.is_some();
 
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,

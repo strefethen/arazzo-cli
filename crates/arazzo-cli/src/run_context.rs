@@ -7,13 +7,6 @@ pub struct GlobalOptions {
     pub verbose: bool,
 }
 
-/// Reserved debug toggles for upcoming replay/debugger features.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DebugFlags {
-    pub capture_runtime_trace: bool,
-    pub capture_execution_events: bool,
-}
-
 /// Run-command options parsed from CLI flags.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -28,20 +21,15 @@ pub struct RunOptions {
     pub trace_max_body_bytes: usize,
 }
 
-/// Centralized run context with global options and future debug controls.
+/// Centralized run context with global options.
 #[derive(Debug, Clone)]
 pub struct RunContext {
     pub global: GlobalOptions,
     pub run: RunOptions,
-    pub debug: DebugFlags,
 }
 
 impl RunContext {
     pub fn new(global: GlobalOptions, run: RunOptions) -> Self {
-        Self {
-            global,
-            run,
-            debug: DebugFlags::default(),
-        }
+        Self { global, run }
     }
 }
