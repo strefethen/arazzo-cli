@@ -371,7 +371,10 @@ fn validate_actions(
                     ),
                 });
             }
-            if has_workflow && !workflow_ids.contains(&action.workflow_id) {
+            if has_workflow
+                && !action.workflow_id.starts_with('$')
+                && !workflow_ids.contains(&action.workflow_id)
+            {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::InvalidReference,
                     path: format!("{action_path}.workflowId"),
@@ -1388,6 +1391,26 @@ workflows:
             .iter()
             .any(|e| e.kind == ValidationErrorKind::InvalidReference
                 && e.message.contains("unknown workflow \"missing_wf\"")));
+    }
+
+    #[test]
+    fn validate_goto_source_description_workflow_ref() {
+        let mut spec = valid_spec();
+        // Add an Arazzo-type source description for cross-source workflow references.
+        spec.source_descriptions.push(SourceDescription {
+            name: "external".to_string(),
+            url: "https://example.com/other.arazzo.yaml".to_string(),
+            type_: SourceType::Arazzo,
+        });
+        spec.workflows[0].steps[0].on_success = vec![OnAction {
+            type_: ActionType::Goto,
+            workflow_id: "$sourceDescriptions.external.someWorkflow".to_string(),
+            ..OnAction::default()
+        }];
+        assert!(
+            validate(&spec).is_ok(),
+            "runtime expression workflowId should not be rejected"
+        );
     }
 
     #[test]

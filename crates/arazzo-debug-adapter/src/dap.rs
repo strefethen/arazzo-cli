@@ -47,7 +47,8 @@ enum EngineEvent {
 #[derive(Debug, Clone)]
 struct LaunchConfig {
     spec: String,
-    workflow_id: String,
+    /// `None` means "use the first workflow in the spec".
+    workflow_id: Option<String>,
     inputs: BTreeMap<String, Value>,
     dry_run: bool,
     stop_on_entry: bool,
@@ -531,6 +532,17 @@ fn ensure_runtime_started(
         .ok_or_else(|| "launch must be sent before configurationDone".to_string())?;
     let spec = arazzo_validate::parse(&launch.spec)
         .map_err(|err| format!("loading arazzo spec for debug: {err}"))?;
+
+    let workflow_ids: Vec<String> = spec
+        .workflows
+        .iter()
+        .map(|wf| wf.workflow_id.clone())
+        .collect();
+    let workflow_id = match launch.workflow_id.clone() {
+        Some(id) => id,
+        None => infer_workflow_id(&state.runtime_breakpoints, &workflow_ids)?,
+    };
+
     let controller = Arc::new(DebugController::new());
     if !state.runtime_breakpoints.is_empty() {
         controller
@@ -547,7 +559,6 @@ fn ensure_runtime_started(
     let mut engine = Engine::new(spec).map_err(|err| format!("creating runtime engine: {err}"))?;
     engine.set_debug_controller(Arc::clone(&controller));
     engine.set_dry_run_mode(launch.dry_run);
-    let workflow_id = launch.workflow_id.clone();
     let inputs = launch.inputs.clone();
     let engine_cancel = Arc::clone(&cancel_flag);
     let engine_handle = thread::spawn(move || {
@@ -987,7 +998,7 @@ fn resolve_source_breakpoints(
     let launch_workflow = state
         .launch
         .as_ref()
-        .map(|launch| launch.workflow_id.as_str());
+        .and_then(|launch| launch.workflow_id.as_deref());
     let mut index = state
         .source_index
         .clone()
@@ -1829,13 +1840,29 @@ fn lookup_output_expression<'a>(
         .map(String::as_str)
 }
 
+/// When `workflowId` is omitted from the launch config, pick the workflow to run.
+/// Preference order:
+/// 1. The workflow that the first resolved breakpoint belongs to.
+/// 2. The first workflow defined in the spec (by workflow_id list).
+fn infer_workflow_id(
+    runtime_breakpoints: &[StepBreakpoint],
+    workflow_ids: &[String],
+) -> Result<String, String> {
+    if let Some(bp) = runtime_breakpoints.first() {
+        return Ok(bp.workflow_id.clone());
+    }
+    workflow_ids
+        .first()
+        .cloned()
+        .ok_or_else(|| "spec contains no workflows".to_string())
+}
+
 fn parse_launch_config(arguments: &Value) -> Result<LaunchConfig, String> {
     let spec = parse_string_argument(arguments, "spec")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "launch requires non-empty 'spec'".to_string())?;
-    let workflow_id = parse_string_argument(arguments, "workflowId")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "launch requires non-empty 'workflowId'".to_string())?;
+    let workflow_id =
+        parse_string_argument(arguments, "workflowId").filter(|value| !value.trim().is_empty());
 
     let inputs = arguments
         .get("inputs")
@@ -2156,6 +2183,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_launch_config_allows_missing_workflow_id() {
+        let args = json!({
+            "spec": "/tmp/workflow.arazzo.yaml",
+            "inputs": {"code": 429}
+        });
+        let launch = match parse_launch_config(&args) {
+            Ok(launch) => launch,
+            Err(err) => panic!("valid launch config expected, got: {err}"),
+        };
+        assert!(launch.workflow_id.is_none());
+    }
+
+    #[test]
     fn extract_checkpoints_from_text_includes_action_and_output_lines() {
         let text = r#"
 workflows:
@@ -2325,7 +2365,7 @@ workflows:
         let state = SessionState {
             launch: Some(LaunchConfig {
                 spec: source_path.clone(),
-                workflow_id: "wf".to_string(),
+                workflow_id: Some("wf".to_string()),
                 inputs: BTreeMap::new(),
                 dry_run: false,
                 stop_on_entry: false,
