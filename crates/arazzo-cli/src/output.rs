@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arazzo_runtime::DryRunRequest;
+use arazzo_runtime::{DryRunRequest, TraceStepRecord};
 use arazzo_spec::{ArazzoSpec, Workflow};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -295,8 +295,67 @@ pub fn emit_dry_run_requests(json: bool, reqs: Vec<DryRunRequest>) -> Result<(),
     Ok(())
 }
 
-pub fn emit_run_outputs(outputs: &BTreeMap<String, Value>) -> Result<(), String> {
-    output_json(outputs)
+pub fn emit_run_steps(steps: &[TraceStepRecord]) {
+    for step in steps {
+        let status_code = step
+            .response
+            .as_ref()
+            .map(|r| r.status_code.to_string())
+            .unwrap_or_else(|| "---".to_string());
+
+        let method = step
+            .request
+            .as_ref()
+            .map(|r| r.method.as_str())
+            .unwrap_or("???");
+
+        let url = step
+            .request
+            .as_ref()
+            .map(|r| r.url.as_str())
+            .unwrap_or(&step.operation_path);
+
+        let retry_suffix = if step.attempt > 1 {
+            format!(" (attempt {})", step.attempt)
+        } else {
+            String::new()
+        };
+
+        println!(
+            "  [{status_code}] {method} {url}  ({duration}ms){retry_suffix}",
+            duration = step.duration_ms,
+        );
+    }
+    println!();
+}
+
+pub fn emit_run_outputs(outputs: &BTreeMap<String, Value>, json: bool) -> Result<(), String> {
+    if json {
+        return output_json(outputs);
+    }
+
+    if outputs.is_empty() {
+        println!("Workflow completed (no outputs)");
+        return Ok(());
+    }
+
+    println!("Outputs:\n");
+    for (key, value) in outputs {
+        let display = format_value(value);
+        println!("  {key}: {display}");
+    }
+    Ok(())
+}
+
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        // For arrays/objects, fall back to compact JSON
+        other => other.to_string(),
+    }
 }
 
 pub fn build_sources(spec: &ArazzoSpec) -> Vec<SourceInfo> {

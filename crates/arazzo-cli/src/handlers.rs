@@ -17,7 +17,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
     let run = ctx.run;
     let global = ctx.global;
-    let trace_enabled = run.trace.is_some();
+    let trace_enabled = run.trace.is_some() || global.verbose;
 
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,
@@ -121,7 +121,10 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     }
 
     let outputs = outputs_result.unwrap_or_default();
-    output::emit_run_outputs(&outputs)
+    if global.verbose && !global.json {
+        output::emit_run_steps(&engine.trace_steps());
+    }
+    output::emit_run_outputs(&outputs, global.json)
 }
 
 pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), String> {
