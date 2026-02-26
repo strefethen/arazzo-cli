@@ -1,20 +1,20 @@
-# Debugger User Guide (v1 Preview)
+# Debugger User Guide
 
-This project now includes an early debugger stack:
+This project includes a debugger stack for stepping through Arazzo workflows:
 
 1. Runtime debug controls in `crates/arazzo-runtime`
-2. Adapter transport in `crates/arazzo-debug-adapter`
-3. VSCode extension scaffold in `vscode-arazzo-debug/`
+2. DAP adapter in `crates/arazzo-debug-adapter`
+3. VSCode extension in `vscode-arazzo-debug/`
 
 ## CLI Debug Transport
 
-DAP transport backend:
+Start the DAP transport backend:
 
 ```bash
 cargo run -p arazzo-debug-adapter --
 ```
 
-## VSCode Extension (Scaffold)
+## VSCode Extension
 
 ```bash
 cd vscode-arazzo-debug
@@ -24,16 +24,11 @@ npm run build
 
 Then launch an extension host in VSCode and use a launch config of type `arazzo`.
 
-## Current v1 Capabilities
+## Capabilities
 
-1. Step breakpoints in runtime debug controller
-2. Continue / step over / step in / step out semantics in runtime
-3. Paused stack and scope snapshots
-4. Watch/evaluate APIs in runtime controller
-5. DAP transcript-level command handling for initialize/breakpoints/stepping/evaluate
-
-## Known Gaps
-
-1. End-to-end DAP to runtime execution wiring is still in progress.
-2. YAML line-to-step mapping in extension is placeholder-level.
-3. VSCode UI integration is scaffolded but not production-ready.
+1. Step breakpoints with conditional expressions
+2. Continue / Step Over / Step In / Step Out controls
+3. Paused stack frames with sub-workflow depth tracking
+4. Variable scopes: Locals, Request, Response, Inputs, Steps
+5. Watch and evaluate expressions at pause points
+6. Full DAP protocol support (initialize, breakpoints, stepping, evaluate)

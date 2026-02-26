@@ -1,13 +1,13 @@
 # vscode-arazzo-debug
 
-Early scaffolding for a VSCode debugger extension targeting Arazzo workflows.
+VSCode debugger extension for Arazzo workflows. Provides step-through debugging with breakpoints, variable inspection, and watch expressions.
 
-## Current Status
+## Features
 
-1. Registers debugger type: `arazzo`
-2. Provides launch configuration defaults
-3. Launches Rust adapter executable via `runtimeExecutable`/`runtimeArgs`
-4. Includes placeholder modules for YAML step indexing and breakpoint mapping
+- Registers debugger type: `arazzo`
+- Launch configuration with spec path, workflow ID, and input parameters
+- Launches the Rust DAP adapter (`arazzo-debug-adapter`) automatically
+- YAML step indexing for breakpoint mapping
 
 ## Local Development
 
@@ -19,7 +19,7 @@ npm run build
 
 In VS Code:
 
-1. Open `/Users/stevetrefethen/github/arazzo-cli/vscode-arazzo-debug`
+1. Open the `vscode-arazzo-debug` directory
 2. Select launch config `Run Arazzo Debug Extension`
 3. Press `F5` to start an Extension Development Host
 

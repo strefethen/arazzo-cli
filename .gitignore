@@ -12,6 +12,31 @@
 
 # Claude Code
 .claude/
+CLAUDE.md
+
+# Beads issue tracker
+.beads/
+
+# Internal planning docs (kept locally, not tracked)
+ARCHITECTURE.md
+FINDINGS.md
+OSS-LAUNCH-PLAN.md
+PHASE3_ARCHITECTURE_PLAN.md
+PHASE1_TYPE_SAFETY_PLAN.md
+PHASE2_ERROR_ARCHITECTURE_PLAN.md
+REVIEW_PROGRESS.md
+REVIEW_REPORT.md
+assessment-*.md
+docs/30-ideas.md
+docs/5-best-ideas.md
+docs/weekwise-plans.md
+docs/rust-migration-plan.md
+docs/rust-development.md
+docs/trace-v1.md
+docs/future-diagnostics.md
+docs/debugger-architecture.md
+docs/arazzo-tui-design.md
+docs/roadmap-close-spec-coverage.md
 
 # OS
 .DS_Store

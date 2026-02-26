@@ -13,8 +13,12 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "Standalone Arazzo 1.0 workflow executor"
+keywords = ["arazzo", "openapi", "workflow", "api-testing", "cli"]
+categories = ["command-line-utilities", "web-programming"]
 repository = "https://github.com/strefethen/arazzo-cli"
 homepage = "https://github.com/strefethen/arazzo-cli"
+readme = "README.md"
 publish = false
 
 [workspace.lints.rust]

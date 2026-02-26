@@ -1,6 +1,6 @@
 # Arazzo CLI Architecture
 
-This document captures the current runtime and CLI architecture after the Week 5/6 hardening pass.
+This document describes the runtime and CLI architecture.
 
 ## High-level Layers
 
@@ -32,8 +32,6 @@ The command UX is intentionally unchanged by this split.
 
 - Global output settings (`json`, `verbose`)
 - Run settings (`workflow`, timeout, headers, parallel, dry-run, trace flags)
-- Reserved `DebugFlags` for upcoming replay/debugger behavior
-
 This keeps run-time feature growth out of clap structs and handlers.
 
 ## Runtime Event/Trace Model

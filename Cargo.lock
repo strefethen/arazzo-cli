@@ -104,7 +104,6 @@ version = "0.1.0"
 dependencies = [
  "arazzo-expr",
  "arazzo-spec",
- "arazzo-validate",
  "proptest",
  "regex",
  "reqwest",

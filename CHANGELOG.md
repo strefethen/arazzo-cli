@@ -72,6 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `unsafe_code = "forbid"` across all crates
 - `unwrap_used = "deny"`, `expect_used = "deny"` via workspace clippy lints
 - Execution trace redaction for Authorization, Cookie, API keys, passwords
-- 199 tests, all hermetic (tiny_http test servers, no external API calls)
+- 227 tests, all hermetic (tiny_http test servers, no external API calls)
 - Proptest fuzzing on expression evaluator
 - CI: format, clippy, test, VS Code extension typecheck + build
