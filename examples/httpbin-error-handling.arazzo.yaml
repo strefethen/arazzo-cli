@@ -1,0 +1,151 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin Error Handling and Retry Tests
+  version: 1.0.0
+  description: >
+    Tests error handling patterns: retry with exhaustion, criteria-based
+    routing to different error handlers, workflow-level default failure
+    actions, and goto-based error recovery chains.
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: retry-exhaustion
+    summary: Retries a failing endpoint until retryLimit is exceeded (expected to fail)
+    steps:
+      - stepId: always-fails
+        operationPath: /status/500
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: retry
+            retryAfter: 1
+            retryLimit: 2
+    outputs: {}
+
+  - workflowId: route-server-error
+    summary: 500 triggers server-error handler via criteria routing
+    steps:
+      - stepId: trigger-500
+        operationPath: /status/500
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: handle-not-found
+            criteria:
+              - condition: $statusCode == 404
+          - type: goto
+            stepId: handle-server-error
+            criteria:
+              - condition: $statusCode >= 500
+          - type: end
+      - stepId: handle-not-found
+        operationPath: /get
+        parameters:
+          - name: handler
+            in: query
+            value: "not-found"
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: end
+      - stepId: handle-server-error
+        operationPath: /get
+        parameters:
+          - name: handler
+            in: query
+            value: "server-error"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          handler: $response.body.args.handler
+    outputs:
+      handler: $steps.handle-server-error.outputs.handler
+
+  - workflowId: route-client-error
+    summary: 404 triggers not-found handler via criteria routing
+    steps:
+      - stepId: trigger-404
+        operationPath: /status/404
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: handle-not-found
+            criteria:
+              - condition: $statusCode == 404
+          - type: goto
+            stepId: handle-other
+            criteria:
+              - condition: $statusCode >= 400
+          - type: end
+      - stepId: handle-not-found
+        operationPath: /get
+        parameters:
+          - name: handler
+            in: query
+            value: "not-found"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          handler: $response.body.args.handler
+        onSuccess:
+          - type: end
+      - stepId: handle-other
+        operationPath: /get
+        parameters:
+          - name: handler
+            in: query
+            value: "other-error"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          handler: $response.body.args.handler
+    outputs:
+      handler: $steps.handle-not-found.outputs.handler
+
+  - workflowId: workflow-default-failure
+    summary: Workflow-level failureActions apply when steps have no onFailure
+    failureActions:
+      - type: end
+    steps:
+      - stepId: will-fail
+        operationPath: /status/500
+        successCriteria:
+          - condition: $statusCode == 200
+      - stepId: should-not-run
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs: {}
+
+  - workflowId: goto-error-recovery
+    summary: Step fails, goto handler recovers, workflow succeeds
+    steps:
+      - stepId: might-fail
+        operationPath: /status/503
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: recover
+      - stepId: success-path
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: end
+      - stepId: recover
+        operationPath: /get
+        parameters:
+          - name: recovered
+            in: query
+            value: "true"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          recovered: $response.body.args.recovered
+    outputs:
+      recovered: $steps.recover.outputs.recovered

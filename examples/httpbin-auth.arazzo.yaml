@@ -1,0 +1,96 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin Authentication Tests
+  version: 1.0.0
+  description: >
+    Tests authentication patterns against httpbin.org including basic auth,
+    bearer tokens, and auth failure handling with error recovery.
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: basic-auth-success
+    summary: Correct basic auth credentials return 200
+    steps:
+      - stepId: authenticate
+        operationPath: /basic-auth/{user}/{passwd}
+        parameters:
+          - name: user
+            in: path
+            value: "testuser"
+          - name: passwd
+            in: path
+            value: "testpass"
+          - name: Authorization
+            in: header
+            value: "Basic dGVzdHVzZXI6dGVzdHBhc3M="
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          authenticated: $response.body.authenticated
+          user: $response.body.user
+    outputs:
+      authenticated: $steps.authenticate.outputs.authenticated
+      user: $steps.authenticate.outputs.user
+
+  - workflowId: basic-auth-failure
+    summary: Wrong credentials trigger 401, error handler recovers
+    steps:
+      - stepId: bad-auth
+        operationPath: /basic-auth/{user}/{passwd}
+        parameters:
+          - name: user
+            in: path
+            value: "testuser"
+          - name: passwd
+            in: path
+            value: "testpass"
+          - name: Authorization
+            in: header
+            value: "Basic d3Jvbmc6Y3JlZHM="
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: goto
+            stepId: handle-auth-error
+            criteria:
+              - condition: $statusCode == 401
+          - type: end
+      - stepId: handle-auth-error
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          recovery: $response.body.url
+    outputs:
+      recovery: $steps.handle-auth-error.outputs.recovery
+
+  - workflowId: bearer-auth
+    summary: Bearer token authentication succeeds
+    steps:
+      - stepId: auth-with-token
+        operationPath: /bearer
+        parameters:
+          - name: Authorization
+            in: header
+            value: "Bearer my-secret-api-token"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          authenticated: $response.body.authenticated
+          token: $response.body.token
+    outputs:
+      authenticated: $steps.auth-with-token.outputs.authenticated
+      token: $steps.auth-with-token.outputs.token
+
+  - workflowId: bearer-no-token
+    summary: Missing bearer token triggers 401 and workflow ends cleanly
+    steps:
+      - stepId: no-token
+        operationPath: /bearer
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: end
+    outputs: {}

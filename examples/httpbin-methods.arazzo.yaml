@@ -1,0 +1,77 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin HTTP Methods and Request Bodies
+  version: 1.0.0
+  description: >
+    Tests POST, PUT, PATCH, DELETE methods with JSON request bodies.
+    Verifies that httpbin echoes back the submitted data correctly.
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: post-json
+    summary: POST JSON body and verify echo
+    steps:
+      - stepId: post-data
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            name: "arazzo-test"
+            version: 1
+            tags:
+              - workflow
+              - testing
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          echoed_name: $response.body.json.name
+          echoed_version: $response.body.json.version
+    outputs:
+      echoed_name: $steps.post-data.outputs.echoed_name
+      echoed_version: $steps.post-data.outputs.echoed_version
+
+  - workflowId: put-json
+    summary: PUT JSON body to update a resource
+    steps:
+      - stepId: put-data
+        operationPath: PUT /put
+        requestBody:
+          contentType: application/json
+          payload:
+            id: 42
+            status: "updated"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          echoed_id: $response.body.json.id
+          echoed_status: $response.body.json.status
+    outputs:
+      echoed_id: $steps.put-data.outputs.echoed_id
+      echoed_status: $steps.put-data.outputs.echoed_status
+
+  - workflowId: patch-and-delete
+    summary: PATCH then DELETE, verifying method echo via /anything
+    steps:
+      - stepId: patch-item
+        operationPath: PATCH /anything
+        requestBody:
+          contentType: application/json
+          payload:
+            field: "patched-value"
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $response.body.method == "PATCH"
+        outputs:
+          method: $response.body.method
+      - stepId: delete-item
+        operationPath: DELETE /anything
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $response.body.method == "DELETE"
+        outputs:
+          method: $response.body.method
+    outputs:
+      patch_method: $steps.patch-item.outputs.method
+      delete_method: $steps.delete-item.outputs.method

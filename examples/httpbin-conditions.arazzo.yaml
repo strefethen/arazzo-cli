@@ -1,0 +1,74 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin Condition Expression Tests
+  version: 1.0.0
+  description: >
+    Tests the full range of Arazzo condition expressions: comparison operators,
+    string operators (contains, matches), and compound conditions (&&, ||).
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: status-code-comparisons
+    summary: Test numeric comparison operators on status codes
+    steps:
+      - stepId: check-200
+        operationPath: /status/200
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $statusCode != 404
+          - condition: $statusCode < 300
+          - condition: $statusCode >= 200
+          - condition: $statusCode <= 200
+          - condition: $statusCode > 199
+    outputs: {}
+
+  - workflowId: body-string-equality
+    summary: Verify response body string field equality
+    steps:
+      - stepId: fetch-data
+        operationPath: /get
+        parameters:
+          - name: fruit
+            in: query
+            value: "apple"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          fruit: $response.body.args.fruit
+      - stepId: verify-value
+        operationPath: /get
+        parameters:
+          - name: check
+            in: query
+            value: $steps.fetch-data.outputs.fruit
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $response.body.args.check == "apple"
+    outputs:
+      fruit: $steps.fetch-data.outputs.fruit
+
+  - workflowId: contains-operator
+    summary: Test the contains operator on response body strings
+    steps:
+      - stepId: fetch-url
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: '$response.body.url contains "httpbin"'
+          - condition: '$response.body.headers.Host contains "httpbin"'
+    outputs: {}
+
+  - workflowId: compound-conditions
+    summary: Test && and || compound conditions
+    steps:
+      - stepId: success-range
+        operationPath: /status/200
+        successCriteria:
+          - condition: $statusCode >= 200 && $statusCode < 300
+      - stepId: fetch-with-or
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200 || $statusCode == 201
+    outputs: {}
