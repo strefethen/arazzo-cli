@@ -31,9 +31,9 @@ pub struct Components {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: BTreeMap<String, Parameter>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub success_actions: BTreeMap<String, Vec<OnAction>>,
+    pub success_actions: BTreeMap<String, OnAction>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub failure_actions: BTreeMap<String, Vec<OnAction>>,
+    pub failure_actions: BTreeMap<String, OnAction>,
 }
 
 /// Metadata about the specification.

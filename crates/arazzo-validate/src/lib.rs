@@ -561,7 +561,7 @@ fn resolve_param_refs(
 
 fn resolve_action_ref(
     actions: &mut Vec<OnAction>,
-    component_map: &std::collections::BTreeMap<String, Vec<OnAction>>,
+    component_map: &std::collections::BTreeMap<String, OnAction>,
     prefix: &str,
     kind: &str,
     entity: &str,
@@ -571,7 +571,7 @@ fn resolve_action_ref(
             let Some(resolved) = component_map.get(name) else {
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
-            *actions = resolved.clone();
+            *actions = vec![resolved.clone()];
         }
     }
     Ok(())
@@ -842,8 +842,8 @@ sourceDescriptions:
 components:
   successActions:
     endWorkflow:
-      - type: end
-        name: terminate
+      type: end
+      name: terminate
 workflows:
   - workflowId: wf1
     steps:
@@ -878,9 +878,9 @@ sourceDescriptions:
 components:
   failureActions:
     retryPolicy:
-      - type: retry
-        retryAfter: 2
-        retryLimit: 5
+      type: retry
+      retryAfter: 2
+      retryLimit: 5
 workflows:
   - workflowId: wf1
     steps:
@@ -1290,13 +1290,13 @@ sourceDescriptions:
 components:
   successActions:
     endAll:
-      - type: end
-        name: stop
+      type: end
+      name: stop
   failureActions:
     retryAll:
-      - type: retry
-        retryAfter: 1
-        retryLimit: 2
+      type: retry
+      retryAfter: 1
+      retryLimit: 2
 workflows:
   - workflowId: wf1
     successActions:
