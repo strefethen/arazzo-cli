@@ -1,0 +1,153 @@
+arazzo: 1.0.0
+info:
+  title: HTTPBin Parallel Execution Tests
+  version: 1.0.0
+  description: >
+    Tests parallel step execution. Run with --parallel to execute independent
+    steps concurrently. Dependent steps are automatically sequenced.
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+workflows:
+  - workflowId: independent-steps
+    summary: Four independent steps that can all run concurrently
+    steps:
+      - stepId: fetch-a
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "alpha"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          a: $response.body.args.label
+      - stepId: fetch-b
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "bravo"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          b: $response.body.args.label
+      - stepId: fetch-c
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "charlie"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          c: $response.body.args.label
+      - stepId: fetch-d
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "delta"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          d: $response.body.args.label
+    outputs:
+      a: $steps.fetch-a.outputs.a
+      b: $steps.fetch-b.outputs.b
+      c: $steps.fetch-c.outputs.c
+      d: $steps.fetch-d.outputs.d
+
+  - workflowId: dependent-chain
+    summary: Three steps where each depends on the previous (must run sequentially)
+    steps:
+      - stepId: step-1
+        operationPath: /get
+        parameters:
+          - name: seed
+            in: query
+            value: "hello"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.seed
+      - stepId: step-2
+        operationPath: /get
+        parameters:
+          - name: echo
+            in: query
+            value: $steps.step-1.outputs.val
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.echo
+      - stepId: step-3
+        operationPath: /get
+        parameters:
+          - name: final
+            in: query
+            value: $steps.step-2.outputs.val
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.final
+    outputs:
+      result: $steps.step-3.outputs.val
+
+  - workflowId: diamond-dependency
+    summary: "Diamond pattern: A fans out to B+C, then D depends on both"
+    steps:
+      - stepId: root
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "root"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.label
+      - stepId: left
+        operationPath: /get
+        parameters:
+          - name: from_root
+            in: query
+            value: $steps.root.outputs.val
+          - name: branch
+            in: query
+            value: "left"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.branch
+      - stepId: right
+        operationPath: /get
+        parameters:
+          - name: from_root
+            in: query
+            value: $steps.root.outputs.val
+          - name: branch
+            in: query
+            value: "right"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.args.branch
+      - stepId: join
+        operationPath: /get
+        parameters:
+          - name: left
+            in: query
+            value: $steps.left.outputs.val
+          - name: right
+            in: query
+            value: $steps.right.outputs.val
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          left: $response.body.args.left
+          right: $response.body.args.right
+    outputs:
+      left: $steps.join.outputs.left
+      right: $steps.join.outputs.right

@@ -719,3 +719,402 @@ fn run_trace_write_failure_returns_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("writing trace"));
 }
+
+// ---------------------------------------------------------------------------
+// --parallel flag tests
+// ---------------------------------------------------------------------------
+
+fn parallel_spec_content() -> &'static str {
+    r#"
+arazzo: 1.0.0
+info:
+  title: Parallel Test
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: independent
+    steps:
+      - stepId: a
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "alpha"
+        successCriteria:
+          - condition: $statusCode == 200
+      - stepId: b
+        operationPath: /get
+        parameters:
+          - name: label
+            in: query
+            value: "bravo"
+        successCriteria:
+          - condition: $statusCode == 200
+  - workflowId: dependent
+    steps:
+      - stepId: first
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          val: $response.body.origin
+      - stepId: second
+        operationPath: /get
+        parameters:
+          - name: echo
+            in: query
+            value: $steps.first.outputs.val
+        successCriteria:
+          - condition: $statusCode == 200
+"#
+}
+
+#[test]
+fn run_parallel_dry_run_json_returns_all_steps() {
+    let temp = TempDir::new("arazzo-parallel-dry-run");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("parallel.yaml");
+    write_file(&spec_path, parallel_spec_content());
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "independent",
+            "--dry-run",
+            "--parallel",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let rows = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected dry-run array, got: {body}"),
+    };
+    assert_eq!(rows.len(), 2);
+
+    let ids: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.get("stepId").and_then(Value::as_str))
+        .collect();
+    assert!(ids.contains(&"a"));
+    assert!(ids.contains(&"b"));
+}
+
+#[test]
+fn run_parallel_trace_records_parallel_flag() {
+    let temp = TempDir::new("arazzo-parallel-trace");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("parallel.yaml");
+    write_file(&spec_path, parallel_spec_content());
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "independent",
+            "--dry-run",
+            "--parallel",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/run/parallel"),
+        Some(&Value::Bool(true)),
+        "trace should record parallel: true"
+    );
+    assert_eq!(
+        trace.pointer("/run/status"),
+        Some(&Value::String("success".to_string()))
+    );
+}
+
+#[test]
+fn run_sequential_trace_records_parallel_false() {
+    let temp = TempDir::new("arazzo-sequential-trace");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("parallel.yaml");
+    write_file(&spec_path, parallel_spec_content());
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "dependent",
+            "--dry-run",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/run/parallel"),
+        Some(&Value::Bool(false)),
+        "trace should record parallel: false when flag is not set"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// schema command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_lists_available_commands() {
+    let output = run(["schema"].as_slice(), None);
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    let names = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected schema array, got: {body}"),
+    };
+    let strs: Vec<&str> = names.iter().filter_map(Value::as_str).collect();
+    assert!(strs.contains(&"validate"));
+    assert!(strs.contains(&"list"));
+    assert!(strs.contains(&"catalog"));
+    assert!(strs.contains(&"show"));
+    assert!(strs.contains(&"run"));
+}
+
+#[test]
+fn schema_validate_returns_json_schema() {
+    let output = run(["schema", "validate"].as_slice(), None);
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert!(
+        body.get("type").is_some() || body.get("$schema").is_some(),
+        "expected JSON Schema document, got: {body}"
+    );
+}
+
+#[test]
+fn schema_run_returns_json_schema() {
+    let output = run(["schema", "run"].as_slice(), None);
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert!(
+        body.get("type").is_some() || body.get("$schema").is_some() || body.get("anyOf").is_some(),
+        "expected JSON Schema document, got: {body}"
+    );
+}
+
+#[test]
+fn schema_unknown_command_fails() {
+    let output = run(["schema", "nonexistent"].as_slice(), None);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown command"));
+}
+
+// ---------------------------------------------------------------------------
+// validate --json edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_json_reports_error_for_unparseable_yaml() {
+    let temp = TempDir::new("arazzo-validate-bad-yaml");
+    let mut bad = temp.path().to_path_buf();
+    bad.push("broken.yaml");
+    write_file(&bad, "not: [valid yaml {{{{");
+
+    let bad_str = bad.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &bad_str].as_slice(), None);
+    // validate exits 0 and reports valid: false in JSON mode
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or(&Vec::new())
+        .clone();
+    assert!(!errors.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// show --json input detail tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn show_json_includes_input_details() {
+    let temp = TempDir::new("arazzo-show-inputs");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("with-inputs.yaml");
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Input Detail Test
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: with-inputs
+    inputs:
+      type: object
+      properties:
+        name:
+          type: string
+        count:
+          type: integer
+      required:
+        - name
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs:
+      result: $steps.step-one.outputs.val
+"#;
+    write_file(&spec_path, spec);
+
+    let dir_str = temp.path().to_string_lossy().to_string();
+    let output = run(
+        ["--json", "show", "with-inputs", "--dir", &dir_str].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+
+    assert_eq!(
+        body.get("id"),
+        Some(&Value::String("with-inputs".to_string()))
+    );
+
+    let inputs = match body.get("inputs") {
+        Some(v) => v,
+        None => panic!("expected inputs key in show output: {body}"),
+    };
+    let name_input = match inputs.get("name") {
+        Some(v) => v,
+        None => panic!("expected 'name' in inputs: {inputs}"),
+    };
+    assert_eq!(name_input.get("required"), Some(&Value::Bool(true)));
+    assert_eq!(
+        name_input.get("type"),
+        Some(&Value::String("string".to_string()))
+    );
+
+    let count_input = match inputs.get("count") {
+        Some(v) => v,
+        None => panic!("expected 'count' in inputs: {inputs}"),
+    };
+    assert_eq!(count_input.get("required"), Some(&Value::Bool(false)));
+
+    let outputs = match body.get("outputs").and_then(Value::as_array) {
+        Some(v) => v,
+        None => panic!("expected outputs array in show output: {body}"),
+    };
+    assert!(outputs.contains(&Value::String("result".to_string())));
+}
+
+// ---------------------------------------------------------------------------
+// list --json output shape tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_json_workflow_entry_has_expected_fields() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--json", "list", &spec_str].as_slice(), None);
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let rows = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected list output array, got: {body}"),
+    };
+    assert!(!rows.is_empty());
+
+    let first = &rows[0];
+    assert!(first.get("id").is_some(), "workflow entry should have 'id'");
+    assert!(
+        first.get("summary").is_some() || first.get("summary").is_none(),
+        "summary may be present or absent"
+    );
+    assert!(
+        first.get("inputs").is_some(),
+        "workflow entry should have 'inputs' array"
+    );
+    assert!(
+        first.get("outputs").is_some(),
+        "workflow entry should have 'outputs' array"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// catalog --json output shape tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn catalog_json_entries_have_expected_fields() {
+    let temp = TempDir::new("arazzo-catalog-fields");
+    let source = fixture_spec();
+    let mut dest = temp.path().to_path_buf();
+    dest.push("spec.yaml");
+    if let Err(err) = fs::copy(&source, &dest) {
+        panic!("copying fixture: {err}");
+    }
+
+    let dir_str = temp.path().to_string_lossy().to_string();
+    let output = run(["--json", "catalog", &dir_str].as_slice(), None);
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    let rows = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected catalog array, got: {body}"),
+    };
+    assert_eq!(rows.len(), 1);
+
+    let entry = &rows[0];
+    assert!(
+        entry.get("file").is_some(),
+        "catalog entry should have 'file'"
+    );
+    assert!(
+        entry.get("title").is_some(),
+        "catalog entry should have 'title'"
+    );
+    assert!(
+        entry.get("version").is_some(),
+        "catalog entry should have 'version'"
+    );
+    assert!(
+        entry.get("sources").and_then(Value::as_array).is_some(),
+        "catalog entry should have 'sources' array"
+    );
+    assert!(
+        entry.get("workflows").and_then(Value::as_array).is_some(),
+        "catalog entry should have 'workflows' array"
+    );
+}
