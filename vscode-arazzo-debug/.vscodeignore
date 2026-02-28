@@ -1,5 +1,9 @@
-node_modules/**
-src/**
-tsconfig.json
 .vscode/**
+src/**
+scripts/**
+node_modules/**
+tsconfig.json
 *.tsbuildinfo
+**/*.map
+dist/test/**
+.gitignore

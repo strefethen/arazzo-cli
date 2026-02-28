@@ -47,4 +47,6 @@ docs/roadmap-close-spec-coverage.md
 # VSCode extension build artifacts
 /vscode-arazzo-debug/node_modules/
 /vscode-arazzo-debug/dist/
+/vscode-arazzo-debug/bin/
+/vscode-arazzo-debug/*.vsix
 /vscode-arazzo-debug/.vscode-test/

@@ -5,6 +5,29 @@
   "version": "0.0.1",
   "publisher": "strefethen",
   "license": "MIT",
+  "preview": true,
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/strefethen/arazzo-cli"
+  },
+  "homepage": "https://github.com/strefethen/arazzo-cli/tree/main/vscode-arazzo-debug",
+  "bugs": {
+    "url": "https://github.com/strefethen/arazzo-cli/issues"
+  },
+  "keywords": [
+    "arazzo",
+    "debugger",
+    "openapi",
+    "workflow",
+    "api",
+    "dap",
+    "yaml"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -78,7 +101,7 @@
             "request": "launch",
             "name": "Debug Arazzo Workflow",
             "spec": "${file}",
-            "workflowId": "status-check",
+            "workflowId": "",
             "inputs": {}
           }
         ]
@@ -86,6 +109,7 @@
     ]
   },
   "scripts": {
+    "vscode:prepublish": "npm run build && node scripts/copy-binary.js",
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p .",
     "watch": "tsc -w -p .",
