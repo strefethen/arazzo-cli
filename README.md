@@ -1,180 +1,141 @@
 # arazzo-cli
 
 [![CI](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-stable-000000?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.82+-000000?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A standalone CLI, Rust library workspace, and VS Code debugger for executing and debugging [Arazzo 1.0.1](https://spec.openapis.org/arazzo/latest.html) workflow specifications without code generation.
+**Execute multi-step API workflows from a YAML spec — no code generation, no glue scripts.**
 
-## What It Does
+arazzo-cli is a standalone executor for [Arazzo](https://spec.openapis.org/arazzo/latest.html), the OpenAPI Initiative's spec for describing sequences of API calls as declarative workflows. Define your steps, parameters, success criteria, and control flow in YAML, then run them directly from the command line or step through them in VS Code.
 
-`arazzo-cli` parses Arazzo YAML specs and executes workflows at runtime:
+## Why?
 
-- Builds and sends HTTP requests from `operationPath` (or sub-workflow calls via `workflowId`)
-- Resolves expressions (`$inputs`, `$steps`, `$env`, `$statusCode`, `$response.*`)
-- Evaluates success criteria and routes control flow (`onSuccess`, `onFailure`)
-- Extracts step outputs and returns workflow outputs
-- Supports `--json` on all CLI commands for machine-readable output
-- Ships a full **VS Code debug extension** for interactive step-through debugging of Arazzo workflows
+Testing a sequence of API calls today means writing imperative scripts, maintaining Postman collections, or building custom test harnesses. The Arazzo spec (part of the OpenAPI ecosystem) lets you describe these sequences declaratively — but without a runtime, the spec is just documentation.
 
-## Repository Layout
+arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, and debug them interactively.
 
-```text
-arazzo-cli/
-  crates/
-    arazzo-spec            # Arazzo domain model types
-    arazzo-validate        # parser + structural validation
-    arazzo-expr            # expression parser/evaluator
-    arazzo-runtime         # execution engine + debug controller
-    arazzo-cli             # command-line binary
-    arazzo-debug-adapter   # DAP server (Debug Adapter Protocol)
-    arazzo-debug-protocol  # DAP message types
-  vscode-arazzo-debug/     # VS Code debugger extension (TypeScript)
-  examples/                # sample specs
-  testdata/                # shared fixtures
-```
-
-## Prerequisites
-
-- Rust stable toolchain
-- `rustfmt`, `clippy` components
-
-Toolchain is pinned in `rust-toolchain.toml`.
-
-## Compatibility Policy
-
-- **MSRV:** Rust `1.82`
-- CI validates stable plus an explicit MSRV job on Rust `1.82`
-
-## Build And Verify
-
-Run from the repository root:
+## Quick Start
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+git clone https://github.com/strefethen/arazzo-cli.git
+cd arazzo-cli
+cargo run -p arazzo-cli -- validate examples/httpbin-get.arazzo.yaml
+cargo run -p arazzo-cli -- run examples/httpbin-get.arazzo.yaml get-origin
 ```
 
-## Run The CLI
-
-Run from repository root and use `examples/...` paths (not `../examples/...`):
-
-```bash
-cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml
-cargo run -p arazzo-cli -- --json list examples/httpbin-get.arazzo.yaml
-cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml get-origin
-```
-
-If running from `crates/arazzo-cli/`, use `../../examples/...` paths instead.
-
-Optional install:
+Or install it:
 
 ```bash
 cargo install --path ./crates/arazzo-cli --locked
+arazzo validate examples/httpbin-get.arazzo.yaml
+arazzo run examples/httpbin-get.arazzo.yaml get-origin
 ```
 
-This project is private-release oriented right now: crates.io publishing is disabled across the workspace (`publish = false` in all manifests).
+## Features
 
-## Internal Distribution (Private Repo)
+| Feature | What it does |
+|---|---|
+| **Run workflows** | Execute HTTP steps, resolve expressions, evaluate success criteria, route control flow |
+| **Validate specs** | Parse and structurally validate Arazzo YAML before running |
+| **Parallel execution** | Run independent steps concurrently with `--parallel` |
+| **Dry-run mode** | Resolve all requests without sending them (`--dry-run`) |
+| **Execution traces** | Write detailed `trace.v1` JSON artifacts with automatic sensitive value redaction |
+| **Sub-workflows** | Call workflows from workflows with input/output passing |
+| **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
+| **JSON output** | `--json` on every command for scripting and CI integration |
+| **Expression language** | `$inputs`, `$steps`, `$response`, `$env`, XPath, JSON Pointer, interpolation |
+| **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
 
-- Build and run directly from source:
-  - `cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml`
-- Install locally from a checked-out repo:
-  - `cargo install --path ./crates/arazzo-cli --locked`
-- For tagged internal releases, prefer release artifacts from your private GitHub release flow.
-- Release playbook: `docs/internal-release.md`
-- Tag helper: `bash scripts/release/cut-tag.sh <tag> [--push] [remote]`
-- Post-release validator: `bash scripts/release/verify-downloaded-release.sh <tag>`
+## Contents
+
+- [CLI Commands](#cli-commands)
+- [Examples](#examples)
+- [Execution Traces](#execution-traces)
+- [VS Code Debugger](#vs-code-debugger)
+- [Expression Language](#expression-language)
+- [Repository Layout](#repository-layout)
+- [Building from Source](#building-from-source)
+- [Contributing](#contributing)
 
 ## CLI Commands
 
-- `run <spec> <workflow-id>`
-- `validate <spec>`
-- `list <spec>`
-- `catalog <dir>`
-- `show <workflow-id> --dir <dir>`
-- `schema [command]` — print JSON Schema for a command's `--json` output
+```
+arazzo run <spec> <workflow-id>     Execute a workflow
+arazzo validate <spec>              Parse and validate a spec
+arazzo list <spec>                  List workflows in a spec
+arazzo catalog <dir>                Discover specs across a directory tree
+arazzo show <workflow-id> --dir <dir>  Display workflow details
+arazzo schema [command]             Print JSON Schema for a command's --json output
+```
 
 Global flags:
 
-- `--json` for structured output
-- `--verbose` for additional diagnostics
+- `--json` — structured JSON output (all commands)
+- `--verbose` — step-by-step execution details
 
 `run` flags:
 
-- `--input key=value` (repeatable)
-- `--header Name=value` (repeatable)
-- `--http-timeout <duration>` (per-request HTTP timeout; default `30s`)
-- `--execution-timeout <duration>` (overall workflow deadline; default `5m`)
-- `--parallel`
-- `--dry-run`
-- `--openapi <path>` (repeatable operationId source specs)
-- `--input-json key=<json>` (repeatable JSON-typed inputs)
-- `--expr-diagnostics <off|warn|error>` (default `off`)
-- `--trace <path>` (write a `trace.v1` execution artifact)
-- `--trace-max-body-bytes <n>` (default `2048`)
+- `--input key=value` — workflow input (repeatable)
+- `--input-json key=<json>` — JSON-typed input (repeatable)
+- `--header Name=value` — HTTP header applied to all requests (repeatable)
+- `--http-timeout <duration>` — per-request timeout (default `30s`)
+- `--execution-timeout <duration>` — overall workflow deadline (default `5m`)
+- `--parallel` — execute independent steps concurrently
+- `--dry-run` — resolve requests without sending
+- `--openapi <path>` — operationId source spec (repeatable)
+- `--expr-diagnostics <off|warn|error>` — expression warning level (default `off`)
+- `--trace <path>` — write a trace.v1 execution artifact
+- `--trace-max-body-bytes <n>` — max body size in trace (default `2048`)
 
 ## Examples
 
-Scenario catalog: see `examples/README.md` for intent-driven examples (`auth-flow`, `error-handling-retry`, `sub-workflow`, `multi-api-orchestration`).
+The `examples/` directory contains 14 runnable specs using httpbin.org:
 
-Validate a spec:
+| Spec | Demonstrates |
+|---|---|
+| `httpbin-get.arazzo.yaml` | Basic GET, headers, status codes, inputs |
+| `httpbin-methods.arazzo.yaml` | POST, PUT, PATCH, DELETE with JSON bodies |
+| `httpbin-auth.arazzo.yaml` | Basic auth, bearer tokens, auth failure handling |
+| `httpbin-conditions.arazzo.yaml` | Comparison operators, contains, compound conditions |
+| `httpbin-data-flow.arazzo.yaml` | Output chaining, interpolation, cookies, sub-workflows |
+| `httpbin-error-handling.arazzo.yaml` | Retry, criteria-based goto, workflow-level failure actions |
+| `httpbin-parallel.arazzo.yaml` | Parallel execution, diamond dependencies |
+| `httpbin-response-headers.arazzo.yaml` | Reading and forwarding response headers |
+| `httpbin-components.arazzo.yaml` | Reusable parameters and actions via components |
+| `httpbin-chained-posts.arazzo.yaml` | Multi-step POST body chaining, onSuccess goto |
 
-```bash
-cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml
-```
-
-List workflows:
-
-```bash
-cargo run -p arazzo-cli -- --json list examples/httpbin-get.arazzo.yaml
-```
-
-Execute workflow with inputs:
-
-```bash
-cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --input code=200
-```
-
-Dry-run request planning (no network calls):
+Try them:
 
 ```bash
-cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
-```
+# Validate
+arazzo validate examples/httpbin-auth.arazzo.yaml
 
-Write a trace file while executing:
+# Run with inputs
+arazzo run examples/httpbin-get.arazzo.yaml status-check --input code=200
 
-```bash
-cargo run -p arazzo-cli -- --json run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./tmp/run-trace.json
+# Dry-run (no network calls)
+arazzo run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
+
+# Verbose output with step details
+arazzo run examples/httpbin-parallel.arazzo.yaml independent-steps --parallel --verbose
+
+# Write a trace file
+arazzo run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./trace.json
 ```
 
 ## Execution Traces
 
-`run --trace <path>` writes a `trace.v1` JSON artifact for both successful and failed runs.
+`run --trace <path>` writes a `trace.v1` JSON artifact capturing every step's request, response, criteria evaluation, and routing decision.
 
-- Normal stdout behavior is unchanged (`--json` output contract remains the same).
-- Sensitive values are redacted as `"[REDACTED]"`.
-- Redaction applies to:
-  - headers such as `Authorization`, `Cookie`, `X-API-Key`
-  - URL query params with sensitive names (for example `token`, `password`, `session`)
-  - JSON fields in inputs/request bodies/outputs with sensitive keys
-
-Reference docs:
-
-- `docs/trace-schema-v1.md`
-- `docs/trace-schema-changelog.md`
-- `docs/schemas/trace-v1.schema.json`
-
-Minimal trace example:
+Sensitive values are automatically redacted:
+- Headers: `Authorization`, `Cookie`, `X-API-Key`
+- URL query params: `token`, `password`, `session`
+- JSON body fields with sensitive keys
 
 ```json
 {
   "schemaVersion": "trace.v1",
-  "tool": {
-    "name": "arazzo",
-    "version": "0.1.0"
-  },
+  "tool": { "name": "arazzo", "version": "0.1.0" },
   "run": {
     "workflowId": "status-check",
     "status": "success",
@@ -185,24 +146,29 @@ Minimal trace example:
       "seq": 1,
       "workflowId": "status-check",
       "stepId": "check-status",
-      "decision": {
-        "path": "next"
-      }
+      "decision": { "path": "next" }
     }
   ]
 }
 ```
 
+Schema reference: `docs/trace-schema-v1.md` | `docs/schemas/trace-v1.schema.json`
+
 ## VS Code Debugger
 
-The project includes a full-featured VS Code debug extension that lets you set breakpoints, step through workflows, inspect variables, and evaluate expressions — all from the standard VS Code debug UI.
+The project includes a full Debug Adapter Protocol (DAP) implementation with a VS Code extension for interactive workflow debugging.
 
-### Quick Start
+**Capabilities:** breakpoints on steps/criteria/actions, conditional breakpoints, Step Over / Step In / Step Out / Continue / Pause, variable inspection (Locals, Request, Response, Inputs, Steps scopes), watch expressions, call stack with sub-workflow depth tracking.
 
-1. Open this repository in VS Code
-2. Run `npm install && npm run build` in `vscode-arazzo-debug/`
-3. Press **F5** to launch the Extension Development Host
-4. In the new window, create a `.vscode/launch.json`:
+### Setup
+
+1. Build the debug adapter and extension:
+   ```bash
+   cargo build --release -p arazzo-debug-adapter
+   cd vscode-arazzo-debug && npm install && npm run build && node scripts/copy-binary.js
+   ```
+2. In VS Code, press **F5** to launch the Extension Development Host
+3. Create `.vscode/launch.json` in the new window:
 
 ```json
 {
@@ -220,7 +186,7 @@ The project includes a full-featured VS Code debug extension that lets you set b
 }
 ```
 
-5. Open the Arazzo YAML file, set breakpoints on step lines, and press **F5**
+4. Open the Arazzo YAML file, set breakpoints on step lines, and press **F5**
 
 ### Launch Configuration
 
@@ -236,18 +202,14 @@ The project includes a full-featured VS Code debug extension that lets you set b
 
 ### Breakpoints
 
-Set breakpoints on any meaningful line in a YAML spec. The debugger maps source lines to internal checkpoints using YAML-aware parsing.
+Set breakpoints on any meaningful line in a YAML spec. The debugger maps source lines to internal checkpoints:
 
-**Where breakpoints can be set:**
+- **Step lines** (`- stepId: fetch-data`) — pause before execution
+- **Success criteria** (`- condition: $statusCode == 200`) — pause at evaluation
+- **onSuccess / onFailure actions** — pause at dispatch
+- **Output lines** (`title: //item[1]/title`) — pause at extraction
 
-- **Step lines** (`- stepId: fetch-data`) — pause before the step executes
-- **Success criteria** (`- condition: $statusCode == 200`) — pause at each criterion evaluation
-- **onSuccess / onFailure actions** — pause at action dispatch, criterion checks, retry selection, and retry delays
-- **Output lines** (`title: //item[1]/title`) — pause at output extraction
-
-The debugger resolves breakpoints to the nearest valid checkpoint within 10 lines. The verified line and a descriptive message are returned to VS Code (visible in the Breakpoints panel).
-
-**Conditional breakpoints** are supported. Right-click a breakpoint and add a condition using any expression the runtime understands:
+Conditional breakpoints are supported — right-click a breakpoint and add an expression:
 
 ```
 $statusCode == 429
@@ -256,75 +218,38 @@ $steps.fetch-auth.outputs.token != null
 
 ### Stepping
 
-All standard VS Code stepping controls work:
-
 | Control | Behavior |
 |---|---|
 | **Continue** (F5) | Run to next breakpoint or end |
-| **Step Over** (F10) | Execute the next checkpoint at the current workflow depth |
+| **Step Over** (F10) | Next checkpoint at current workflow depth |
 | **Step In** (F11) | Descend into sub-workflow calls |
-| **Step Out** (Shift+F11) | Run until returning to the parent workflow |
-| **Pause** (F6) | Request pause at the next checkpoint |
-
-Step depth tracking is fully sub-workflow aware. Stepping over a step that triggers a sub-workflow executes the entire sub-workflow and stops at the next step in the calling workflow.
+| **Step Out** (Shift+F11) | Run until returning to parent workflow |
+| **Pause** (F6) | Pause at next checkpoint |
 
 ### Variable Inspection
 
-When paused, the Variables panel shows five scope categories:
+When paused, the Variables panel shows:
 
-**Locals** — current step context:
-- `workflowId`, `stepId`, `checkpoint` (human-readable name like `onSuccess[0]`)
-
-**Request** — the HTTP request that was (or will be) sent:
-- `method`, `url`, `headers`, `body`
-
-**Response** — the HTTP response received:
-- `statusCode`, `contentType`, `headers`, `bodyPreview`
-
-**Inputs** — all workflow input parameters as key-value pairs
-
-**Steps** — completed step outputs as a nested tree:
-```
-steps/
-  fetch-auth/
-    token: "eyJ..."
-  get-data/
-    items: "[{...}]"
-```
-
-All variables are expandable where the underlying value is an object or array.
+- **Locals** — `workflowId`, `stepId`, `checkpoint`
+- **Request** — `method`, `url`, `headers`, `body`
+- **Response** — `statusCode`, `contentType`, `headers`, `bodyPreview`
+- **Inputs** — workflow input parameters
+- **Steps** — completed step outputs as a nested tree
 
 ### Watch Expressions
 
-Add expressions to the Watch panel or hover over identifiers in the editor. The debugger evaluates against the current runtime state:
+Add expressions to the Watch panel or hover in the editor:
 
-**Runtime expressions:**
 - `$inputs.name` — workflow input
 - `$steps.fetch-data.outputs.token` — step output
 - `$statusCode` — HTTP status code
 - `$response.header.Content-Type` — response header
 - `$response.body.data.origin` — JSON body path
+- `//item[1]/title` — XPath query
 
-**XPath expressions:**
-- `//item[1]/title` — query XML/HTML response bodies
+### Debugger Architecture
 
-**Shorthand names:**
-- `origin` — resolves to a matching local variable or step output automatically
-
-### Call Stack
-
-The Call Stack panel shows the current workflow execution depth. When a step triggers a sub-workflow, the stack grows:
-
-```
-get-data          (sub-workflow, current)
-main-workflow     (caller)
-```
-
-Each frame shows the workflow ID, step ID, and source line. Clicking a frame navigates to that location in the spec.
-
-### Architecture
-
-The debugger uses a three-thread coordinator design to prevent deadlocks during slow HTTP requests:
+Three-thread coordinator design prevents deadlocks during slow HTTP requests:
 
 ```
 stdin ──> [Reader Thread] ──cmd_tx──> [Coordinator] ──> stdout
@@ -334,70 +259,77 @@ stdin ──> [Reader Thread] ──cmd_tx──> [Coordinator] ──> stdout
           [Runtime Engine]
 ```
 
-- **Reader thread** — reads DAP commands from stdin, forwards via channel
-- **Coordinator** (main thread) — multiplexes commands and engine events; owns all DAP I/O
-- **Engine monitor** — watches for runtime stop events and completion; forwards via channel
-
-Neither channel blocks the other. A slow HTTP request in the engine does not prevent the coordinator from processing VS Code commands (pause, disconnect, etc.).
+Neither channel blocks the other. A slow HTTP request does not prevent processing VS Code commands (pause, disconnect, etc.).
 
 ## Expression Language
 
-Runtime expressions:
+| Expression | Resolves to |
+|---|---|
+| `$inputs.name` | Workflow input parameter |
+| `$steps.<id>.outputs.<name>` | Previous step output |
+| `$outputs.name` | Workflow outputs map (inside `workflow.outputs`) |
+| `$env.VAR_NAME` | Environment variable (`.env` auto-loaded) |
+| `$statusCode` | HTTP response status code |
+| `$method` | HTTP method (GET, POST, etc.) |
+| `$url` | Fully constructed request URL |
+| `$response.header.Name` | Response header (case-insensitive) |
+| `$response.body.path` | JSON dot-path body extraction |
+| `$response.body#/pointer` | RFC 6901 JSON Pointer body access |
+| `$request.header.Name` | Request header |
+| `$request.query.Name` | Request query parameter |
+| `$request.path.Name` | Request path parameter |
+| `$request.body` | Request body (dot-path or JSON Pointer) |
+| `$sourceDescriptions.<name>.url` | Source description URL |
+| `//xpath/expression` | XML/HTML extraction |
 
-- `$inputs.name` -> workflow input
-- `$steps.<id>.outputs.<name>` -> previous step output
-- `$outputs.name` -> workflow outputs map (inside `workflow.outputs`)
-- `$env.VAR_NAME` -> environment variable (`.env` is auto-loaded)
-- `$statusCode` -> response status code
-- `$method` -> HTTP method (GET, POST, etc.)
-- `$url` -> fully constructed request URL (post-request only)
-- `$response.header.Name` -> response header (case-insensitive)
-- `$response.body.path.to.field` -> JSON dot-path body extraction
-- `$response.body#/json/pointer` -> RFC 6901 JSON Pointer body access
-- `$request.header.Name` -> request header introspection
-- `$request.query.Name` -> request query parameter
-- `$request.path.Name` -> request path parameter (substituted value)
-- `$request.body` / `$request.body.path` / `$request.body#/pointer` -> request body access
-- `$sourceDescriptions.<name>.url` -> source description URL lookup
-- `//xpath/expression` -> XML/HTML extraction
+**String interpolation:** `{$expr}` embeds any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
 
-String interpolation:
+**Multi-source routing:** `{sourceName}./path` selects a source description's base URL
 
-- `{$expr}` -> embed any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
+**Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
 
-Multi-source routing:
+## Repository Layout
 
-- `{sourceName}./path` -> operationPath prefix selects a source description's base URL
+```text
+crates/
+  arazzo-spec            Arazzo domain model types
+  arazzo-validate        YAML parser + structural validation
+  arazzo-expr            Expression parser/evaluator
+  arazzo-runtime         Execution engine + debug controller
+  arazzo-cli             CLI binary
+  arazzo-debug-adapter   DAP server (Debug Adapter Protocol)
+vscode-arazzo-debug/     VS Code debugger extension (TypeScript)
+examples/                14 runnable workflow specs
+testdata/                Test fixtures
+```
 
-Condition operators:
+## Building from Source
 
-- `==`, `!=`, `>`, `<`, `>=`, `<=`
-- `&&`, `||`
-- `contains`, `matches`, `in`
+**Prerequisites:** Rust 1.82+ (`rustup` will handle this automatically via `rust-toolchain.toml`)
 
-## Development Notes
+```bash
+git clone https://github.com/strefethen/arazzo-cli.git
+cd arazzo-cli
+cargo build --workspace
+cargo test --workspace
+```
 
-- This project is a generic Arazzo executor; avoid domain-specific behavior.
-- Keep CLI output machine-friendly; every command must continue supporting `--json`.
-- Tests should stay hermetic (local test servers/fixtures), with no external API dependencies.
-- The VS Code debugger (`arazzo-debug-adapter` + `vscode-arazzo-debug`) is a separate debug surface; existing CLI command UX remains stable.
-- Architecture and extension docs:
-  - `docs/architecture.md`
-  - `docs/extension-guide.md`
-  - `docs/internal-api-v1.md`
-  - `docs/debugger-architecture.md`
-  - `docs/debugger-user-guide.md`
-  - `docs/debugger-troubleshooting.md`
+Quality gates (run by CI on every push):
 
-## Contributions
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
 
-This is a personal project maintained for focus and velocity. External code contributions are not accepted for direct merge.
+CI also runs `cargo audit`, MSRV verification (Rust 1.82), and cross-platform builds (Linux, macOS, Windows).
 
-- Issues and bug reports are welcome.
-- PRs can be opened to demonstrate a fix or approach, but may be closed without merge.
-- The maintainer may independently implement similar changes after review, including AI-assisted review workflows.
-- See `CONTRIBUTING.md` for details.
+## Contributing
+
+Issues, bug reports, and feature requests are welcome.
+
+This project accepts PRs to demonstrate a fix or approach, though the maintainer may independently implement changes after review. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-MIT
+[MIT](LICENSE)
