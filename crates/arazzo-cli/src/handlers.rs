@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use arazzo_runtime::{ClientConfig, Engine, ExecutionOptions};
+use arazzo_runtime::{ClientConfig, EngineBuilder, ExecutionOptions, TraceStepRecord};
 use arazzo_spec::ArazzoSpec;
+use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
 
+use crate::cli::ExpressionDiagnosticsMode;
 use crate::output::{self, CatalogEntry};
 use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::{
@@ -17,13 +19,20 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
     let run = ctx.run;
     let global = ctx.global;
-    let trace_enabled = run.trace.is_some() || global.verbose;
+    let trace_enabled = run.trace.is_some()
+        || global.verbose
+        || run.expr_diagnostics != ExpressionDiagnosticsMode::Off;
 
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,
         Err(err) => {
             return if global.json {
-                output::emit_run_error(true, &err.to_string(), None)
+                output::emit_run_error(
+                    true,
+                    &err.to_string(),
+                    Some(run_parse_error_code(&err)),
+                    &[],
+                )
             } else {
                 Err(format!("parsing spec: {err}"))
             };
@@ -32,12 +41,15 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
 
     let mut inputs = BTreeMap::<String, Value>::new();
     for item in run.input_flags {
-        let Some((k, v)) = item.split_once('=') else {
-            return Err(format!(
-                "invalid input format: \"{item}\" (expected key=value)"
-            ));
-        };
-        inputs.insert(k.to_string(), parse_input_value(v));
+        let (key, raw_value) = parse_input_kv(&item)?;
+        inputs.insert(key, parse_input_value(raw_value));
+    }
+    for item in run.input_json_flags {
+        let (key, raw_value) = parse_input_kv(&item)?;
+        let value = serde_json::from_str::<Value>(raw_value).map_err(|err| {
+            format!("invalid JSON input format for \"{key}\": {err} (expected key=<json>)")
+        })?;
+        inputs.insert(key, value);
     }
 
     if global.verbose {
@@ -46,7 +58,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     }
 
     let mut cfg = ClientConfig {
-        timeout: run.timeout,
+        timeout: run.http_timeout,
         ..ClientConfig::default()
     };
     for header in run.header_flags {
@@ -55,16 +67,37 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         }
     }
 
-    let mut engine = Engine::with_client_config(spec, cfg)
+    let mut engine = EngineBuilder::new(spec)
+        .client_config(cfg)
+        .parallel(run.parallel)
+        .dry_run(run.dry_run)
+        .trace(trace_enabled)
+        .build()
         .map_err(|err| format!("creating runtime engine: {err}"))?;
-    engine.set_parallel_mode(run.parallel);
-    engine.set_dry_run_mode(run.dry_run);
-    engine.set_trace_enabled(trace_enabled);
 
-    let execution_timeout = run
-        .timeout
-        .checked_mul(10)
-        .unwrap_or_else(|| std::time::Duration::from_secs(u64::MAX));
+    for openapi_path in &run.openapi_flags {
+        let bytes = match fs::read(openapi_path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let msg = format!("reading OpenAPI file \"{openapi_path}\": {err}");
+                return if global.json {
+                    output::emit_run_error(true, &msg, Some("RUN_OPENAPI_READ_FILE"), &[])
+                } else {
+                    Err(msg)
+                };
+            }
+        };
+        if let Err(err) = engine.load_openapi_spec(&bytes) {
+            let msg = format!("loading OpenAPI file \"{openapi_path}\": {err}");
+            return if global.json {
+                output::emit_run_error(true, &msg, Some(err.code()), &[])
+            } else {
+                Err(msg)
+            };
+        }
+    }
+
+    let execution_timeout = run.execution_timeout;
 
     let run_started_at = SystemTime::now();
     let run_started_inst = std::time::Instant::now();
@@ -81,6 +114,12 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         .as_ref()
         .err()
         .map(|e| e.kind.code().to_string());
+    let trace_steps = engine.trace_steps();
+    let expression_warnings = if run.expr_diagnostics == ExpressionDiagnosticsMode::Off {
+        Vec::new()
+    } else {
+        collect_expression_warnings(&trace_steps)
+    };
     let mut trace_write_error: Option<String> = None;
 
     if let Some(trace_path) = &run.trace {
@@ -97,7 +136,7 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 run_error: run_error_text.clone(),
             },
             inputs,
-            engine.trace_steps(),
+            trace_steps.clone(),
         );
         prepare_trace_for_write(&mut trace_file, run.trace_max_body_bytes);
         if let Err(err) = write_trace_file_atomic(Path::new(trace_path), &trace_file) {
@@ -109,28 +148,59 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         if let Some(trace_error) = trace_write_error {
             return Err(format!("{run_error}; writing trace: {trace_error}"));
         }
-        return output::emit_run_error(global.json, &run_error, run_error_code.as_deref());
+        return output::emit_run_error(
+            global.json,
+            &run_error,
+            run_error_code.as_deref(),
+            &expression_warnings,
+        );
     }
 
     if let Some(trace_error) = trace_write_error {
         return Err(format!("writing trace: {trace_error}"));
     }
 
+    if !expression_warnings.is_empty() {
+        match run.expr_diagnostics {
+            ExpressionDiagnosticsMode::Off => {}
+            ExpressionDiagnosticsMode::Warn => {
+                if !global.json {
+                    emit_expression_warnings(&expression_warnings);
+                }
+            }
+            ExpressionDiagnosticsMode::Error => {
+                return output::emit_run_error(
+                    global.json,
+                    &format!(
+                        "expression diagnostics reported {} warning(s)",
+                        expression_warnings.len()
+                    ),
+                    Some("RUNTIME_EXPRESSION_DIAGNOSTICS"),
+                    &expression_warnings,
+                );
+            }
+        }
+    }
+
     if run.dry_run {
-        return output::emit_dry_run_requests(global.json, engine.dry_run_requests());
+        return output::emit_dry_run_requests(
+            global.json,
+            engine.dry_run_requests(),
+            &expression_warnings,
+        );
     }
 
     let outputs = outputs_result.unwrap_or_default();
     if global.verbose && !global.json {
-        output::emit_run_steps(&engine.trace_steps());
+        output::emit_run_steps(&trace_steps);
     }
-    output::emit_run_outputs(&outputs, global.json)
+    output::emit_run_outputs(&outputs, global.json, &expression_warnings)
 }
 
 pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), String> {
     match arazzo_validate::parse(path) {
         Ok(spec) => output::emit_validate_result(path, &spec, global.json),
-        Err(err) => output::emit_validate_error(path, &err.to_string(), global.json),
+        Err(err) => output::emit_validate_error(path, &err, global.json),
     }
 }
 
@@ -141,8 +211,7 @@ pub fn list_workflows(path: &str, global: GlobalOptions) -> Result<(), String> {
 
 pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|err| format!("reading directory \"{dir}\": {err}"))?;
-
-    let mut catalog = Vec::<CatalogEntry>::new();
+    let mut paths = Vec::<PathBuf>::new();
     for entry in entries {
         let entry = match entry {
             Ok(v) => v,
@@ -153,8 +222,13 @@ pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String>
                 continue;
             }
         };
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+        paths.push(entry.path());
+    }
+    paths.sort_unstable();
+
+    let mut catalog = Vec::<CatalogEntry>::new();
+    for path in paths {
+        if !is_arazzo_yaml_path(&path) {
             continue;
         }
 
@@ -186,6 +260,7 @@ pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String>
             workflows,
         });
     }
+    catalog.sort_unstable_by(|a, b| a.file.cmp(&b.file));
 
     output::emit_catalog(&catalog, global.json)
 }
@@ -202,18 +277,22 @@ pub fn show_workflow(workflow_id: &str, dir: &str, global: GlobalOptions) -> Res
 
 fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), String> {
     let entries = fs::read_dir(dir).map_err(|err| format!("reading directory \"{dir}\": {err}"))?;
-
-    let mut matches = Vec::<String>::new();
-    let mut match_spec: Option<ArazzoSpec> = None;
-    let mut match_file = String::new();
-
+    let mut paths = Vec::<PathBuf>::new();
     for entry in entries {
         let entry = match entry {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+        paths.push(entry.path());
+    }
+    paths.sort_unstable();
+
+    let mut matches = Vec::<String>::new();
+    let mut match_spec: Option<ArazzoSpec> = None;
+    let mut match_file = String::new();
+
+    for path in paths {
+        if !is_arazzo_yaml_path(&path) {
             continue;
         }
         let spec = match arazzo_validate::parse(&path) {
@@ -233,6 +312,7 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), S
             }
         }
     }
+    matches.sort_unstable();
 
     if matches.is_empty() {
         return Err(format!("workflow \"{workflow_id}\" not found in {dir}"));
@@ -247,6 +327,53 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), S
         Some(spec) => Ok((spec, match_file)),
         None => Err(format!("workflow \"{workflow_id}\" not found in {dir}")),
     }
+}
+
+fn is_arazzo_yaml_path(path: &Path) -> bool {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some(ext) => {
+            let ext = ext.to_ascii_lowercase();
+            ext == "yaml" || ext == "yml"
+        }
+        None => false,
+    }
+}
+
+fn run_parse_error_code(err: &ValidateError) -> &'static str {
+    match err {
+        ValidateError::ReadFile(_) => "RUN_SPEC_READ_FILE",
+        ValidateError::ParseYaml(_) => "RUN_SPEC_PARSE_YAML",
+        ValidateError::Validation(_) => "RUN_SPEC_VALIDATION",
+        ValidateError::ComponentResolution(_) => "RUN_SPEC_COMPONENT_RESOLUTION",
+    }
+}
+
+fn collect_expression_warnings(steps: &[TraceStepRecord]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for step in steps {
+        for warning in &step.warnings {
+            warnings.push(format!(
+                "workflow \"{}\" step \"{}\": {}",
+                step.workflow_id, step.step_id, warning
+            ));
+        }
+    }
+    warnings
+}
+
+fn emit_expression_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+}
+
+fn parse_input_kv(raw: &str) -> Result<(String, &str), String> {
+    let Some((key, value)) = raw.split_once('=') else {
+        return Err(format!(
+            "invalid input format: \"{raw}\" (expected key=value)"
+        ));
+    };
+    Ok((key.to_string(), value))
 }
 
 pub fn schema(command: Option<&str>) -> Result<(), String> {
@@ -278,14 +405,23 @@ fn parse_input_value(raw: &str) -> Value {
         }
     }
 
-    if let Ok(v) = value.parse::<f64>() {
-        return serde_json::json!(v);
-    }
     if value == "true" {
         return Value::Bool(true);
     }
     if value == "false" {
         return Value::Bool(false);
+    }
+    if value == "null" {
+        return Value::Null;
+    }
+    if let Ok(v) = value.parse::<i64>() {
+        return serde_json::json!(v);
+    }
+    if let Ok(v) = value.parse::<u64>() {
+        return serde_json::json!(v);
+    }
+    if let Ok(v) = value.parse::<f64>() {
+        return serde_json::json!(v);
     }
     Value::String(value)
 }

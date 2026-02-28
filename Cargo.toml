@@ -12,9 +12,10 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.82"
 license = "MIT"
-description = "Standalone Arazzo 1.0 workflow executor"
-keywords = ["arazzo", "openapi", "workflow", "api-testing", "cli"]
+description = "Standalone Arazzo 1.0 workflow executor and debugger"
+keywords = ["arazzo", "openapi", "workflow", "api", "cli"]
 categories = ["command-line-utilities", "web-programming"]
 repository = "https://github.com/strefethen/arazzo-cli"
 homepage = "https://github.com/strefethen/arazzo-cli"

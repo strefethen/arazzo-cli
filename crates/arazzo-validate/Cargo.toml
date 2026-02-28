@@ -3,11 +3,14 @@ name = "arazzo-validate"
 description = "Arazzo YAML parser and structural validator"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
 arazzo-spec = { path = "../arazzo-spec" }
+serde_yml = "0.0.12"

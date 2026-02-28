@@ -1,0 +1,110 @@
+name: Internal Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to release (example: v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: arazzo-cli
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+
+jobs:
+  build:
+    name: Build release binary (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            exe_suffix: ""
+          - os: macos-latest
+            label: macos
+            exe_suffix: ""
+          - os: windows-latest
+            label: windows-x86_64
+            exe_suffix: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Verify private publish settings
+        shell: bash
+        run: bash scripts/ci/verify-private-workspace.sh
+
+      - name: Build release binary
+        run: cargo build --locked --release -p arazzo-cli
+
+      - name: Smoke test release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_PATH="target/release/${BIN_NAME}${{ matrix.exe_suffix }}"
+          "$BIN_PATH" --json validate examples/httpbin-get.arazzo.yaml >/dev/null
+
+      - name: Package release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BIN_PATH="target/release/${BIN_NAME}${{ matrix.exe_suffix }}"
+          OUT="dist/${BIN_NAME}-${RELEASE_TAG}-${{ matrix.label }}${{ matrix.exe_suffix }}"
+          cp "$BIN_PATH" "$OUT"
+
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish internal GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag exists
+        run: git rev-parse "refs/tags/${RELEASE_TAG}"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist/*
+          generate_release_notes: true

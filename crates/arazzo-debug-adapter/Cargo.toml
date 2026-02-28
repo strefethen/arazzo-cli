@@ -1,8 +1,9 @@
 [package]
 name = "arazzo-debug-adapter"
-description = "Debug Adapter Protocol server for Arazzo workflow debugging"
+description = "Debug Adapter Protocol server for Arazzo workflows"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

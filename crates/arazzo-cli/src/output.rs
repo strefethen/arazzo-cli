@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use arazzo_runtime::{DryRunRequest, TraceStepRecord};
 use arazzo_spec::{ArazzoSpec, Workflow};
+use arazzo_validate::{Error as ValidateError, ValidationErrorKind};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -70,30 +71,47 @@ pub struct ValidateResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
+    pub errors: Vec<ValidateIssue>,
 }
 
-/// Error response emitted by the `run` command on failure.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct RunError {
-    pub error: String,
+#[serde(rename_all = "camelCase")]
+pub struct ValidateIssue {
+    pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
 }
 
 /// Combined schema type for the `run` command output.
 ///
 /// The actual shape depends on flags and exit code:
-/// - `Success`: workflow outputs (exit 0, no `--dry-run`). Keys are workflow-defined.
-/// - `Error`: error response (non-zero exit).
-/// - `DryRun`: planned requests (exit 0, `--dry-run`).
-#[derive(Serialize, JsonSchema)]
-#[serde(untagged)]
+/// - `Success`: `{"kind":"success","outputs":{...},"warnings":[...]?}` (exit 0, no `--dry-run`)
+/// - `Error`: `{"kind":"error","error":"...","code":"...","warnings":[...]?}` (non-zero exit)
+/// - `DryRun`: `{"kind":"dryRun","requests":[...],"warnings":[...]?}` (exit 0, `--dry-run`)
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 #[allow(dead_code)] // Used only for schema generation via schema_for!()
 pub enum RunOutput {
-    Success(BTreeMap<String, Value>),
-    Error(RunError),
-    DryRun(Vec<DryRunRequest>),
+    Success {
+        outputs: BTreeMap<String, Value>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
+    },
+    Error {
+        error: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
+    },
+    DryRun {
+        requests: Vec<DryRunRequest>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
+    },
 }
 
 pub fn output_json<T: Serialize + ?Sized>(value: &T) -> Result<(), String> {
@@ -123,7 +141,7 @@ pub fn emit_validate_result(path: &str, spec: &ArazzoSpec, json: bool) -> Result
     Ok(())
 }
 
-pub fn emit_validate_error(path: &str, err: &str, json: bool) -> Result<(), String> {
+pub fn emit_validate_error(path: &str, err: &ValidateError, json: bool) -> Result<(), String> {
     if json {
         return output_json(&ValidateResult {
             valid: false,
@@ -132,10 +150,63 @@ pub fn emit_validate_error(path: &str, err: &str, json: bool) -> Result<(), Stri
             title: None,
             workflows: None,
             sources: None,
-            errors: vec![err.to_string()],
+            errors: build_validate_issues(err),
         });
     }
     Err(format!("validation failed: {err}"))
+}
+
+fn build_validate_issues(err: &ValidateError) -> Vec<ValidateIssue> {
+    match err {
+        ValidateError::Validation(report) => report
+            .errors
+            .iter()
+            .map(|item| ValidateIssue {
+                source: "validation".to_string(),
+                kind: Some(validation_error_kind_name(&item.kind).to_string()),
+                path: if item.path.is_empty() {
+                    None
+                } else {
+                    Some(item.path.clone())
+                },
+                message: item.message.clone(),
+            })
+            .collect(),
+        ValidateError::ReadFile(inner) => vec![ValidateIssue {
+            source: "readFile".to_string(),
+            kind: None,
+            path: None,
+            message: format!("reading arazzo file: {inner}"),
+        }],
+        ValidateError::ParseYaml(inner) => vec![ValidateIssue {
+            source: "parseYaml".to_string(),
+            kind: None,
+            path: None,
+            message: format!("parsing arazzo yaml: {inner}"),
+        }],
+        ValidateError::ComponentResolution(message) => vec![ValidateIssue {
+            source: "componentResolution".to_string(),
+            kind: None,
+            path: None,
+            message: message.clone(),
+        }],
+    }
+}
+
+fn validation_error_kind_name(kind: &ValidationErrorKind) -> &'static str {
+    match kind {
+        ValidationErrorKind::MissingRequiredField => "missingRequiredField",
+        ValidationErrorKind::DuplicateIdentifier => "duplicateIdentifier",
+        ValidationErrorKind::InvalidStepTarget => "invalidStepTarget",
+        ValidationErrorKind::UnsupportedVersion => "unsupportedVersion",
+        ValidationErrorKind::InvalidParameterLocation => "invalidParameterLocation",
+        ValidationErrorKind::MissingParameterValue => "missingParameterValue",
+        ValidationErrorKind::InvalidExpression => "invalidExpression",
+        ValidationErrorKind::InvalidReference => "invalidReference",
+        ValidationErrorKind::InvalidRetryField => "invalidRetryField",
+        ValidationErrorKind::InvalidCriterionType => "invalidCriterionType",
+        _ => "unknown",
+    }
 }
 
 pub fn emit_workflow_list(spec: &ArazzoSpec, json: bool) -> Result<(), String> {
@@ -265,11 +336,17 @@ pub fn emit_workflow_detail(
     Ok(())
 }
 
-pub fn emit_run_error(json: bool, err: &str, code: Option<&str>) -> Result<(), String> {
+pub fn emit_run_error(
+    json: bool,
+    err: &str,
+    code: Option<&str>,
+    warnings: &[String],
+) -> Result<(), String> {
     if json {
-        output_json(&RunError {
+        output_json(&RunOutput::Error {
             error: err.to_string(),
             code: code.map(String::from),
+            warnings: warnings.to_vec(),
         })?;
         // Return Err so main() exits with code 1. Empty string signals
         // that the error message was already written to stdout as JSON.
@@ -278,9 +355,16 @@ pub fn emit_run_error(json: bool, err: &str, code: Option<&str>) -> Result<(), S
     Err(err.to_string())
 }
 
-pub fn emit_dry_run_requests(json: bool, reqs: Vec<DryRunRequest>) -> Result<(), String> {
+pub fn emit_dry_run_requests(
+    json: bool,
+    reqs: Vec<DryRunRequest>,
+    warnings: &[String],
+) -> Result<(), String> {
     if json {
-        return output_json(&reqs);
+        return output_json(&RunOutput::DryRun {
+            requests: reqs,
+            warnings: warnings.to_vec(),
+        });
     }
     for r in reqs {
         println!("{} {}", r.method, r.url);
@@ -329,9 +413,16 @@ pub fn emit_run_steps(steps: &[TraceStepRecord]) {
     println!();
 }
 
-pub fn emit_run_outputs(outputs: &BTreeMap<String, Value>, json: bool) -> Result<(), String> {
+pub fn emit_run_outputs(
+    outputs: &BTreeMap<String, Value>,
+    json: bool,
+    warnings: &[String],
+) -> Result<(), String> {
     if json {
-        return output_json(outputs);
+        return output_json(&RunOutput::Success {
+            outputs: outputs.clone(),
+            warnings: warnings.to_vec(),
+        });
     }
 
     if outputs.is_empty() {

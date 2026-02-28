@@ -43,6 +43,7 @@ pub enum RuntimeErrorKind {
     ParallelThreadPanic,
     JsonParse,
     SourceDescriptionParse,
+    SourceDescriptionNotFound,
     SubWorkflowFailed,
     SuccessCriteriaFailed,
     DebugController,
@@ -70,6 +71,7 @@ impl RuntimeErrorKind {
             Self::ParallelThreadPanic => "RUNTIME_PARALLEL_THREAD_PANIC",
             Self::JsonParse => "RUNTIME_JSON_PARSE",
             Self::SourceDescriptionParse => "RUNTIME_SOURCE_DESCRIPTION_PARSE",
+            Self::SourceDescriptionNotFound => "RUNTIME_SOURCE_DESCRIPTION_NOT_FOUND",
             Self::SubWorkflowFailed => "RUNTIME_SUB_WORKFLOW_FAILED",
             Self::SuccessCriteriaFailed => "RUNTIME_SUCCESS_CRITERIA_FAILED",
             Self::DebugController => "RUNTIME_DEBUG_CONTROLLER",
@@ -380,9 +382,9 @@ impl HttpClient {
             body,
             body_json,
             content_type: if is_xml {
-                "xml".to_string()
+                ContentType::Xml
             } else {
-                "json".to_string()
+                ContentType::Json
             },
         })
     }
@@ -425,6 +427,26 @@ pub(crate) struct UrlBuildResult {
     pub query_params: BTreeMap<String, String>,
 }
 
+/// Content type classification for HTTP responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentType {
+    #[default]
+    Json,
+    Xml,
+    Other(String),
+}
+
+impl std::fmt::Display for ContentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json => write!(f, "json"),
+            Self::Xml => write!(f, "xml"),
+            Self::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 /// Response returned by the runtime client.
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -432,7 +454,7 @@ pub struct Response {
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
     pub body_json: Option<Value>,
-    pub content_type: String,
+    pub content_type: ContentType,
 }
 
 /// Captured request emitted during dry-run mode.
@@ -452,6 +474,7 @@ pub struct DryRunRequest {
 /// Trace path chosen after a step attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum TraceDecisionPath {
     #[default]
     Next,
@@ -474,9 +497,19 @@ pub struct TraceDecision {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_workflow_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_after_seconds: Option<i64>,
+    pub retry_after_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_limit: Option<i64>,
+    pub retry_limit: Option<u64>,
+}
+
+impl TraceDecision {
+    /// Creates a `TraceDecision` with the given `path` and all other fields defaulted.
+    pub fn with_path(path: TraceDecisionPath) -> Self {
+        Self {
+            path,
+            ..Self::default()
+        }
+    }
 }
 
 /// Trace request payload for one step attempt.
@@ -496,7 +529,7 @@ pub struct TraceRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TraceResponse {
     pub status_code: i64,
-    pub content_type: String,
+    pub content_type: ContentType,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
     pub body_bytes: u64,
@@ -539,6 +572,8 @@ pub struct TraceStepRecord {
     pub response: Option<TraceResponse>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<TraceCriterionResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub decision: TraceDecision,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, Value>,
@@ -562,6 +597,7 @@ pub struct StepEvent {
 /// Canonical runtime execution event kind.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum ExecutionEventKind {
     BeforeStep,
     AfterStep,
@@ -617,6 +653,7 @@ struct StepTraceData {
     request: Option<TraceRequest>,
     response: Option<TraceResponse>,
     criteria: Vec<TraceCriterionResult>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -693,8 +730,149 @@ pub struct Engine {
     debug_controller: Option<Arc<DebugController>>,
 }
 
+/// Builder for constructing a fully configured [`Engine`] instance.
+///
+/// `EngineBuilder` replaces the setter-based configuration pattern on `Engine`.
+/// All optional settings have sensible defaults, and the builder is consumed by
+/// [`EngineBuilder::build`] to produce a ready-to-execute engine.
+///
+/// # Example
+///
+/// ```ignore
+/// use arazzo_runtime::EngineBuilder;
+///
+/// let engine = EngineBuilder::new(spec)
+///     .parallel(true)
+///     .dry_run(false)
+///     .trace(true)
+///     .build()?;
+/// ```
+pub struct EngineBuilder {
+    spec: ArazzoSpec,
+    client_config: Option<ClientConfig>,
+    parallel: bool,
+    dry_run: bool,
+    trace: bool,
+    trace_hook: Option<Arc<dyn TraceHook>>,
+    debug_controller: Option<Arc<DebugController>>,
+}
+
+impl EngineBuilder {
+    /// Creates a new builder with the given Arazzo spec. All optional settings
+    /// default to their inactive/off state.
+    pub fn new(spec: ArazzoSpec) -> Self {
+        Self {
+            spec,
+            client_config: None,
+            parallel: false,
+            dry_run: false,
+            trace: false,
+            trace_hook: None,
+            debug_controller: None,
+        }
+    }
+
+    /// Sets custom HTTP client configuration. When omitted, `ClientConfig::default()` is used.
+    pub fn client_config(mut self, config: ClientConfig) -> Self {
+        self.client_config = Some(config);
+        self
+    }
+
+    /// Enables or disables parallel execution of independent steps within a workflow.
+    pub fn parallel(mut self, enabled: bool) -> Self {
+        self.parallel = enabled;
+        self
+    }
+
+    /// Enables or disables dry-run mode, which resolves requests without sending them.
+    pub fn dry_run(mut self, enabled: bool) -> Self {
+        self.dry_run = enabled;
+        self
+    }
+
+    /// Enables or disables detailed per-step trace recording during execution.
+    pub fn trace(mut self, enabled: bool) -> Self {
+        self.trace = enabled;
+        self
+    }
+
+    /// Registers a trace hook that receives step lifecycle events during execution.
+    pub fn trace_hook(mut self, hook: Arc<dyn TraceHook>) -> Self {
+        self.trace_hook = Some(hook);
+        self
+    }
+
+    /// Attaches a debug controller for breakpoint-driven step-through execution.
+    pub fn debug_controller(mut self, controller: Arc<DebugController>) -> Self {
+        self.debug_controller = Some(controller);
+        self
+    }
+
+    /// Consumes the builder and creates a fully configured [`Engine`].
+    ///
+    /// Returns an error if the HTTP client cannot be constructed (e.g. invalid TLS settings).
+    pub fn build(self) -> Result<Engine, RuntimeError> {
+        let config = self.client_config.unwrap_or_default();
+        let client = HttpClient::new(&config)?;
+
+        let base_url = self
+            .spec
+            .source_descriptions
+            .first()
+            .map(|s| s.url.clone())
+            .unwrap_or_default();
+
+        let mut source_descriptions_map = BTreeMap::new();
+        for sd in &self.spec.source_descriptions {
+            source_descriptions_map.insert(sd.name.clone(), sd.url.clone());
+        }
+
+        let mut workflow_index = BTreeMap::new();
+        let mut step_indexes = BTreeMap::new();
+        for (wf_idx, wf) in self.spec.workflows.iter().enumerate() {
+            workflow_index.insert(wf.workflow_id.clone(), wf_idx);
+            let mut step_idx_map = BTreeMap::new();
+            for (step_idx, step) in wf.steps.iter().enumerate() {
+                step_idx_map.insert(step.step_id.clone(), step_idx);
+            }
+            step_indexes.insert(wf.workflow_id.clone(), step_idx_map);
+        }
+
+        Ok(Engine {
+            index: WorkflowIndex {
+                spec: self.spec,
+                base_url,
+                source_descriptions_map,
+                workflow_index,
+                step_indexes,
+                op_index: BTreeMap::new(),
+            },
+            client,
+            parallel_mode: self.parallel,
+            dry_run_mode: self.dry_run,
+            trace_enabled: self.trace,
+            dry_run_reqs: Arc::new(Mutex::new(Vec::new())),
+            trace_steps: Arc::new(Mutex::new(Vec::new())),
+            trace_seq: Arc::new(Mutex::new(0)),
+            execution_events: Arc::new(Mutex::new(Vec::new())),
+            execution_event_seq: Arc::new(Mutex::new(0)),
+            step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
+            trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
+            debug_controller: self.debug_controller,
+        })
+    }
+}
+
+mod engine_actions;
+mod engine_http;
 mod engine_impl;
+mod engine_parallel;
+mod engine_trace;
 mod helpers;
+
+use engine_actions::{ActionBranch, FlowDecision, SelectedActionDebugContext, StepDecisionContext};
+use engine_impl::merge_workflow_params;
+use engine_trace::{build_trace_response, DebugGateContext};
 
 use helpers::{
     can_execute_parallel, parse_source_prefix, replace_path_params, resolve_payload,
@@ -703,7 +881,7 @@ use helpers::{
 
 pub(crate) use helpers::{
     build_levels, evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
-    extract_xpath, parse_method, CriterionEvaluation,
+    evaluate_output_expression_detailed, extract_xpath, parse_method, CriterionEvaluation,
 };
 #[cfg(test)]
 pub(crate) use helpers::{extract_step_refs, has_control_flow};

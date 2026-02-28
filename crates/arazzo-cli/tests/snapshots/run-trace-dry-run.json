@@ -16,7 +16,7 @@
     "status": "success"
   },
   "inputs": {
-    "code": 429.0
+    "code": 429
   },
   "steps": [
     {
@@ -29,7 +29,7 @@
       "durationMs": 0,
       "request": {
         "method": "GET",
-        "url": "https://httpbin.org/status/429.0"
+        "url": "https://httpbin.org/status/429"
       },
       "response": {
         "statusCode": 200,

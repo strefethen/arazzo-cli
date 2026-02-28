@@ -1,0 +1,121 @@
+# httpbin-response-headers.arazzo.yaml
+#
+# Demonstrates reading response headers with $response.header.* expressions,
+# using the httpbin /response-headers endpoint to set custom response headers,
+# and passing header values between steps.
+#
+# Features covered:
+#   - $response.header.<Name> expressions to extract response headers
+#   - httpbin /response-headers endpoint (returns caller-specified headers)
+#   - Multi-step data flow using header values (not just body values)
+#   - Step-level description fields for documentation
+#   - Workflow inputs feeding into response header configuration
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/httpbin-response-headers.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/httpbin-response-headers.arazzo.yaml read-custom-headers --dry-run
+#   cargo run -p arazzo-cli -- run examples/httpbin-response-headers.arazzo.yaml header-to-header-chain --dry-run
+
+arazzo: 1.0.0
+info:
+  title: HTTPBin Response Header Reading
+  version: 1.0.0
+  description: >
+    Demonstrates $response.header.* expressions by requesting custom response
+    headers from httpbin and passing header values between workflow steps.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  # -----------------------------------------------------------
+  # Workflow 1: Read custom response headers set by the server
+  # -----------------------------------------------------------
+  - workflowId: read-custom-headers
+    summary: Request custom response headers and read them via $response.header.*
+    description: >
+      Uses httpbin /response-headers to have the server return specific headers,
+      then extracts those header values using $response.header.* expressions.
+    steps:
+      - stepId: get-custom-headers
+        description: Ask httpbin to return X-Request-Id and X-Rate-Limit headers
+        operationPath: /response-headers
+        parameters:
+          - name: X-Request-Id
+            in: query
+            value: "req-abc-12345"
+          - name: X-Rate-Limit
+            in: query
+            value: "100"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          request_id: $response.header.X-Request-Id
+          rate_limit: $response.header.X-Rate-Limit
+          content_type: $response.header.Content-Type
+    outputs:
+      request_id: $steps.get-custom-headers.outputs.request_id
+      rate_limit: $steps.get-custom-headers.outputs.rate_limit
+      content_type: $steps.get-custom-headers.outputs.content_type
+
+  # -----------------------------------------------------------
+  # Workflow 2: Chain header values between steps
+  # -----------------------------------------------------------
+  - workflowId: header-to-header-chain
+    summary: Extract a response header from step 1 and send it as a request header in step 2
+    description: >
+      Step 1 requests a custom response header from httpbin. Step 2 sends that
+      extracted header value as a request header to /headers, which echoes it back
+      in the response body. This proves header-to-header data flow works.
+    steps:
+      - stepId: get-trace-id
+        description: Request a trace ID from the server via /response-headers
+        operationPath: /response-headers
+        parameters:
+          - name: X-Trace-Id
+            in: query
+            value: "trace-7890-xyz"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          trace_id: $response.header.X-Trace-Id
+
+      - stepId: forward-trace-id
+        description: Forward the extracted trace ID as a request header to /headers
+        operationPath: /headers
+        parameters:
+          - name: X-Forwarded-Trace
+            in: header
+            value: $steps.get-trace-id.outputs.trace_id
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          echoed_trace: $response.body.headers.X-Forwarded-Trace
+    outputs:
+      trace_id: $steps.get-trace-id.outputs.trace_id
+      echoed_trace: $steps.forward-trace-id.outputs.echoed_trace
+
+  # -----------------------------------------------------------
+  # Workflow 3: Read standard HTTP headers
+  # -----------------------------------------------------------
+  - workflowId: inspect-standard-headers
+    summary: Read standard response headers like Content-Type and Server
+    description: >
+      Makes a simple GET request and extracts standard HTTP response headers.
+      Demonstrates that $response.header.* works with any header, not just custom ones.
+    steps:
+      - stepId: simple-get
+        description: Fetch /get and inspect the standard response headers
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          content_type: $response.header.Content-Type
+          server: $response.header.Server
+          access_control: $response.header.Access-Control-Allow-Origin
+    outputs:
+      content_type: $steps.simple-get.outputs.content_type
+      server: $steps.simple-get.outputs.server
+      access_control: $steps.simple-get.outputs.access_control

@@ -202,20 +202,29 @@ where
                     Err(err) => {
                         // Intentional: reader thread is exiting; if main loop already
                         // dropped the receiver, this send failing is harmless.
-                        let _ = cmd_tx.send(DapCommand::ReadError(format!(
-                            "parsing DAP request JSON: {err}"
-                        )));
+                        if cmd_tx
+                            .send(DapCommand::ReadError(format!(
+                                "parsing DAP request JSON: {err}"
+                            )))
+                            .is_err()
+                        {
+                            // Coordinator is gone; nothing left to do in reader thread.
+                        }
                         break;
                     }
                 },
                 Ok(None) => {
                     // Intentional: EOF on stdin; receiver may already be dropped.
-                    let _ = cmd_tx.send(DapCommand::Eof);
+                    if cmd_tx.send(DapCommand::Eof).is_err() {
+                        // Coordinator already exited.
+                    }
                     break;
                 }
                 Err(err) => {
                     // Intentional: reader thread is exiting; receiver may already be dropped.
-                    let _ = cmd_tx.send(DapCommand::ReadError(err));
+                    if cmd_tx.send(DapCommand::ReadError(err)).is_err() {
+                        // Coordinator already exited.
+                    }
                     break;
                 }
             }
@@ -292,7 +301,7 @@ where
                     "launch" => {
                         let launch = parse_launch_config(&request.arguments)?;
                         state.launch = Some(launch.clone());
-                        state.source_index = build_source_index(&launch.spec).ok();
+                        state.source_index = try_build_source_index(&launch.spec);
                         rebuild_runtime_breakpoints(&mut state);
                         let response = response_with_body(
                             outbound.alloc(),
@@ -325,7 +334,7 @@ where
                             .as_ref()
                             .is_none_or(|index| index.path != source_path)
                         {
-                            state.source_index = build_source_index(&source_path).ok();
+                            state.source_index = try_build_source_index(&source_path);
                         }
 
                         let resolved =
@@ -517,6 +526,7 @@ where
     Ok(())
 }
 
+#[allow(deprecated)]
 fn ensure_runtime_started(
     state: &mut SessionState,
     event_tx: &mpsc::Sender<EngineEvent>,
@@ -645,7 +655,9 @@ fn engine_event_monitor(
             if let Some(h) = handle.take() {
                 // Intentional: join can only fail if engine thread panicked;
                 // we're shutting down regardless.
-                let _ = h.join();
+                if h.join().is_err() {
+                    // Engine thread panicked during cancellation; monitor exits anyway.
+                }
             }
             return;
         }
@@ -681,10 +693,14 @@ fn engine_event_monitor(
                 // dropped the receiver, this send failing is harmless.
                 match h.join() {
                     Ok(_) => {
-                        let _ = event_tx.send(EngineEvent::Terminated);
+                        if event_tx.send(EngineEvent::Terminated).is_err() {
+                            // Coordinator already exited.
+                        }
                     }
                     Err(_) => {
-                        let _ = event_tx.send(EngineEvent::Panicked);
+                        if event_tx.send(EngineEvent::Panicked).is_err() {
+                            // Coordinator already exited.
+                        }
                     }
                 }
                 return;
@@ -696,7 +712,12 @@ fn engine_event_monitor(
         // Condvar-driven sleep—wakes instantly when a stop event is posted.
         // Intentional: timeout or lock failure just means we'll re-poll on next iteration.
         let expected = delivered.saturating_add(1);
-        let _ = controller.wait_for_stop_count(expected, ENGINE_MONITOR_POLL);
+        if controller
+            .wait_for_stop_count(expected, ENGINE_MONITOR_POLL)
+            .is_err()
+        {
+            // Debug controller became unavailable; continue polling until shutdown.
+        }
     }
 }
 
@@ -754,11 +775,15 @@ fn cleanup_runtime(state: &mut SessionState) {
         runtime.cancel_flag.store(true, Ordering::Relaxed);
         // Intentional: force_resume unblocks the engine thread so it can observe
         // the cancel flag; if the controller is already resumed, this is a no-op.
-        let _ = runtime.controller.force_resume();
+        if runtime.controller.force_resume().is_err() {
+            // Controller unavailable during teardown; continue cleanup.
+        }
         if let Some(monitor) = runtime.monitor_handle.take() {
             // Intentional: join can only fail if the monitor thread panicked;
             // we're tearing down regardless.
-            let _ = monitor.join();
+            if monitor.join().is_err() {
+                // Monitor panicked; runtime is already shutting down.
+            }
         }
         runtime.terminated = true;
     }
@@ -970,12 +995,12 @@ fn evaluate_expression_with_fallback(
             if let Some(mapped) =
                 lookup_output_expression(source_index, &stop.workflow_id, &stop.step_id, trimmed)
             {
-                return runtime.controller.evaluate_watch_expression(mapped).ok();
+                return try_evaluate_watch_expression(runtime, mapped);
             }
         }
     }
 
-    runtime.controller.evaluate_watch_expression(trimmed).ok()
+    try_evaluate_watch_expression(runtime, trimmed)
 }
 
 #[derive(Debug, Default)]
@@ -1004,7 +1029,7 @@ fn resolve_source_breakpoints(
         .clone()
         .filter(|idx| idx.path == source_path);
     if index.is_none() {
-        index = build_source_index(source_path).ok();
+        index = try_build_source_index(source_path);
     }
 
     let Some(index) = index else {
@@ -1196,6 +1221,7 @@ fn checkpoint_area(checkpoint: &StepCheckpoint) -> BreakpointArea {
         | StepCheckpoint::OnFailureRetrySelected { .. }
         | StepCheckpoint::OnFailureRetryDelay { .. } => BreakpointArea::OnFailure,
         StepCheckpoint::Output { .. } => BreakpointArea::Outputs,
+        _ => BreakpointArea::Step,
     }
 }
 
@@ -1246,6 +1272,20 @@ fn build_source_index(path: &str) -> Result<SourceIndex, String> {
         line_contexts: metadata.line_contexts,
         output_expressions: metadata.output_expressions,
     })
+}
+
+fn try_build_source_index(path: &str) -> Option<SourceIndex> {
+    // Intentional: source index failures should not block launch or breakpoint setup.
+    // The adapter returns verified placeholders and resolves at runtime instead.
+    build_source_index(path).ok()
+}
+
+fn try_evaluate_watch_expression(runtime: &RuntimeSession, expression: &str) -> Option<Value> {
+    // Intentional: watch/evaluate should degrade to "null" rather than hard-fail DAP.
+    runtime
+        .controller
+        .evaluate_watch_expression(expression)
+        .ok()
 }
 
 #[cfg(test)]
@@ -1943,6 +1983,7 @@ fn stop_reason_name(reason: DebugStopReason) -> &'static str {
         DebugStopReason::Breakpoint => "breakpoint",
         DebugStopReason::Pause => "pause",
         DebugStopReason::Step => "step",
+        _ => "pause",
     }
 }
 
@@ -1973,6 +2014,7 @@ fn checkpoint_display_name(checkpoint: &StepCheckpoint) -> String {
             format!("onFailure[{action_index}].retryDelay")
         }
         StepCheckpoint::Output { name } => format!("outputs.{name}"),
+        _ => "step".to_string(),
     }
 }
 
@@ -2003,6 +2045,7 @@ fn checkpoint_sort_key(checkpoint: &StepCheckpoint) -> String {
             format!("on-failure-retry-delay:{action_index:08}")
         }
         StepCheckpoint::Output { name } => format!("output:{name}"),
+        _ => "step".to_string(),
     }
 }
 

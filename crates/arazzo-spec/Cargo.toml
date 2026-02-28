@@ -1,14 +1,16 @@
 [package]
 name = "arazzo-spec"
-description = "Typed Arazzo 1.0.1 domain model for API workflow specifications"
+description = "Typed Arazzo 1.0 domain model"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+serde_yml = "0.0.12"

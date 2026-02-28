@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 /// One executable checkpoint within a workflow step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum StepCheckpoint {
     #[default]
     Step,

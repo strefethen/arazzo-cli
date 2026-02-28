@@ -1,0 +1,83 @@
+# sub-workflow.arazzo.yaml
+#
+# Demonstrates parent/child workflow composition with explicit input passing
+# and child output consumption.
+#
+# Features covered:
+#   - Step target via `workflowId`
+#   - Parent input to child parameter mapping
+#   - Child outputs consumed by later parent steps
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/sub-workflow.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/sub-workflow.arazzo.yaml parent-flow --dry-run --input item_name=widget
+
+arazzo: 1.0.0
+info:
+  title: Sub-Workflow Composition
+  version: 1.0.0
+  description: >
+    Runs a child workflow from a parent workflow, then verifies the child
+    output in a follow-up parent step.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  - workflowId: parent-flow
+    summary: Parent workflow invokes child workflow and reuses child outputs
+    inputs:
+      type: object
+      properties:
+        item_name:
+          type: string
+      required:
+        - item_name
+    steps:
+      - stepId: call-child
+        workflowId: child-create
+        parameters:
+          - name: item_name
+            value: $inputs.item_name
+
+      - stepId: verify-child-output
+        operationPath: /get
+        parameters:
+          - name: child_url
+            in: query
+            value: $steps.call-child.outputs.created_url
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          child_url: $response.body.args.child_url
+
+    outputs:
+      created_url: $steps.call-child.outputs.created_url
+      verified_child_url: $steps.verify-child-output.outputs.child_url
+
+  - workflowId: child-create
+    summary: Child workflow posts input-derived payload and returns URL
+    inputs:
+      type: object
+      properties:
+        item_name:
+          type: string
+      required:
+        - item_name
+    steps:
+      - stepId: create-item
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            operation: create
+            name: $inputs.item_name
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          created_url: $response.body.url
+
+    outputs:
+      created_url: $steps.create-item.outputs.created_url

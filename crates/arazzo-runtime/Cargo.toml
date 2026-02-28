@@ -1,10 +1,12 @@
 [package]
 name = "arazzo-runtime"
-description = "Execution engine for Arazzo 1.0.1 API workflow specifications"
+description = "Arazzo workflow execution engine"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [lints]
 workspace = true
@@ -16,7 +18,7 @@ regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 sxd-document = "0.3"
 sxd-xpath = "0.4"
 url = "2"

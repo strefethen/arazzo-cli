@@ -1,12 +1,15 @@
-[
-  {
-    "stepId": "check-status",
-    "method": "GET",
-    "url": "https://httpbin.org/status/429.0"
-  },
-  {
-    "stepId": "handle-error",
-    "method": "GET",
-    "url": "https://httpbin.org/get"
-  }
-]
+{
+  "kind": "dryRun",
+  "requests": [
+    {
+      "stepId": "check-status",
+      "method": "GET",
+      "url": "https://httpbin.org/status/429"
+    },
+    {
+      "stepId": "handle-error",
+      "method": "GET",
+      "url": "https://httpbin.org/get"
+    }
+  ]
+}

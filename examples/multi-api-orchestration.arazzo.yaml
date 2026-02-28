@@ -1,0 +1,64 @@
+# multi-api-orchestration.arazzo.yaml
+#
+# Demonstrates orchestrating calls across multiple source descriptions using
+# `{sourceName}./path` routing and exposing source URLs via `$sourceDescriptions.*`.
+#
+# Features covered:
+#   - Two source descriptions in one spec
+#   - Per-step routing with `{sourceName}./path`
+#   - Cross-step output flow
+#   - `$sourceDescriptions.<name>.url` output expressions
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/multi-api-orchestration.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/multi-api-orchestration.arazzo.yaml cross-source-check --dry-run
+
+arazzo: 1.0.0
+info:
+  title: Multi API Orchestration
+  version: 1.0.0
+  description: >
+    Runs steps against named source descriptions and combines the results into
+    a single workflow output contract.
+
+sourceDescriptions:
+  - name: primary
+    url: https://httpbin.org
+    type: openapi
+  - name: secondary
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  - workflowId: cross-source-check
+    summary: Route steps to named sources and combine outputs
+    steps:
+      - stepId: call-primary
+        operationPath: "{primary}./get"
+        parameters:
+          - name: source
+            in: query
+            value: primary
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          source: $response.body.args.source
+          url: $url
+
+      - stepId: call-secondary
+        operationPath: "{secondary}./response-headers"
+        parameters:
+          - name: X-Trace-Id
+            in: query
+            value: "trace-{$steps.call-primary.outputs.source}"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          trace_id: $response.header.X-Trace-Id
+          url: $url
+
+    outputs:
+      primary_source: $steps.call-primary.outputs.source
+      secondary_trace: $steps.call-secondary.outputs.trace_id
+      primary_url: $sourceDescriptions.primary.url
+      secondary_url: $sourceDescriptions.secondary.url

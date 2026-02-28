@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::cli::ExpressionDiagnosticsMode;
+
 /// Global CLI output and verbosity options shared by all commands.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalOptions {
@@ -13,8 +15,12 @@ pub struct RunOptions {
     pub spec_path: String,
     pub workflow_id: String,
     pub input_flags: Vec<String>,
-    pub timeout: Duration,
+    pub input_json_flags: Vec<String>,
+    pub http_timeout: Duration,
+    pub execution_timeout: Duration,
     pub header_flags: Vec<String>,
+    pub openapi_flags: Vec<String>,
+    pub expr_diagnostics: ExpressionDiagnosticsMode,
     pub parallel: bool,
     pub dry_run: bool,
     pub trace: Option<String>,

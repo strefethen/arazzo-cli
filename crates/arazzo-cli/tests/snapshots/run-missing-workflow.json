@@ -1,4 +1,5 @@
 {
+  "kind": "error",
   "error": "workflow \"missing-workflow\" not found",
   "code": "RUNTIME_WORKFLOW_NOT_FOUND"
 }

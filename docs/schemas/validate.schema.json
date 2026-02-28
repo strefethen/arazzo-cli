@@ -6,7 +6,7 @@
     "errors": {
       "type": "array",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/ValidateIssue"
       }
     },
     "file": {
@@ -47,5 +47,34 @@
   "required": [
     "valid",
     "file"
-  ]
+  ],
+  "$defs": {
+    "ValidateIssue": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "message"
+      ]
+    }
+  }
 }

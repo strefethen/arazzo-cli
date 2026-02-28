@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES};
 
@@ -27,16 +27,36 @@ pub enum Commands {
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
+        #[arg(long = "input-json")]
+        input_json: Vec<String>,
+
         #[arg(
             short = 't',
-            long = "timeout",
+            long = "http-timeout",
             default_value = "30s",
             value_parser = parse_duration_value
         )]
-        timeout: Duration,
+        http_timeout: Duration,
+
+        #[arg(
+            long = "execution-timeout",
+            default_value = "5m",
+            value_parser = parse_duration_value
+        )]
+        execution_timeout: Duration,
 
         #[arg(short = 'H', long = "header")]
         header: Vec<String>,
+
+        #[arg(long = "openapi")]
+        openapi: Vec<String>,
+
+        #[arg(
+            long = "expr-diagnostics",
+            value_enum,
+            default_value_t = ExpressionDiagnosticsMode::Off
+        )]
+        expr_diagnostics: ExpressionDiagnosticsMode,
 
         #[arg(long)]
         parallel: bool,
@@ -73,6 +93,14 @@ pub enum Commands {
         /// Command name (validate, list, catalog, show, run). Omit to list available commands.
         command: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ExpressionDiagnosticsMode {
+    Off,
+    Warn,
+    Error,
 }
 
 pub fn parse_duration_value(raw: &str) -> Result<Duration, String> {

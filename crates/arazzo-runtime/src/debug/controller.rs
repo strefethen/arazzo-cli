@@ -30,6 +30,7 @@ enum RunMode {
 /// Reason the runtime stopped at a debug gate.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum DebugStopReason {
     Breakpoint,
     Pause,

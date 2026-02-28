@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `$request.path.Name` — request path parameter introspection
 - `$request.body` / `$request.body.path` / `$request.body#/pointer` — request body introspection
 - `$outputs.name` — workflow outputs map (within `workflow.outputs`)
-- `$sourceDescriptions.{name}.url` — source description URL lookup
+- `$sourceDescriptions.<name>.url` — source description URL lookup
 - `{$expr}` interpolation in string values
 - `//xpath/expression` — XML/HTML body extraction
 - Condition operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
@@ -72,6 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `unsafe_code = "forbid"` across all crates
 - `unwrap_used = "deny"`, `expect_used = "deny"` via workspace clippy lints
 - Execution trace redaction for Authorization, Cookie, API keys, passwords
-- 227 tests, all hermetic (tiny_http test servers, no external API calls)
+- 228 tests, all hermetic (tiny_http test servers, no external API calls)
 - Proptest fuzzing on expression evaluator
-- CI: format, clippy, test, VS Code extension typecheck + build
+- CI: cross-platform build, Linux test, MSRV, cargo audit, perf baseline, VS Code extension typecheck + build
+- Private-release safeguards: `publish = false` across workspace with CI enforcement script
+- Internal release workflow for tagged binaries + `SHA256SUMS.txt`
+- Release helper scripts for local preflight, tag cutting, and downloaded-asset verification

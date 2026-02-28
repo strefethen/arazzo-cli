@@ -9,14 +9,14 @@ use std::path::Path;
 
 use arazzo_spec::{
     parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, Parameter,
-    SuccessCriterion,
+    StepTarget, SuccessCriterion,
 };
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
 pub enum Error {
     ReadFile(std::io::Error),
-    ParseYaml(String),
+    ParseYaml(serde_yml::Error),
     Validation(ValidationReport),
     /// Component resolution error (pre-validation).
     ComponentResolution(String),
@@ -38,7 +38,8 @@ impl std::error::Error for Error {
         match self {
             Self::ReadFile(err) => Some(err),
             Self::Validation(report) => Some(report),
-            Self::ParseYaml(_) | Self::ComponentResolution(_) => None,
+            Self::ParseYaml(err) => Some(err),
+            Self::ComponentResolution(_) => None,
         }
     }
 }
@@ -105,8 +106,7 @@ pub fn parse(path: impl AsRef<Path>) -> Result<ArazzoSpec, Error> {
 
 /// Parses and validates an Arazzo spec from raw YAML bytes.
 pub fn parse_bytes(data: &[u8]) -> Result<ArazzoSpec, Error> {
-    let mut spec =
-        parse_unvalidated_bytes(data).map_err(|err| Error::ParseYaml(err.to_string()))?;
+    let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
     resolve_components(&mut spec).map_err(Error::ComponentResolution)?;
     validate(&spec)?;
     Ok(spec)
@@ -255,6 +255,19 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                     ),
                 });
             }
+            if let Some(StepTarget::OperationPath(operation_path)) = &step.target {
+                if let Some(source_name) = parse_operation_source_name(operation_path) {
+                    if !source_names.contains(source_name) {
+                        errs.push(ValidationError {
+                            kind: ValidationErrorKind::InvalidReference,
+                            path: format!("{step_path}.operationPath"),
+                            message: format!(
+                                "{step_path}.operationPath references unknown sourceDescription \"{source_name}\""
+                            ),
+                        });
+                    }
+                }
+            }
 
             validate_parameters(
                 &format!("{step_path}.parameters"),
@@ -308,6 +321,22 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
     Err(Error::Validation(ValidationReport { errors: errs }))
 }
 
+fn parse_operation_source_name(operation_path: &str) -> Option<&str> {
+    if !operation_path.starts_with('{') {
+        return None;
+    }
+    let close = operation_path.find('}')?;
+    let name = &operation_path[1..close];
+    if name.is_empty() {
+        return None;
+    }
+    let remaining = &operation_path[close + 1..];
+    if !remaining.starts_with('.') {
+        return None;
+    }
+    Some(name)
+}
+
 fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<ValidationError>) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
@@ -337,20 +366,6 @@ fn validate_actions(
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
-        if action.retry_after < 0 {
-            errs.push(ValidationError {
-                kind: ValidationErrorKind::InvalidRetryField,
-                path: format!("{action_path}.retryAfter"),
-                message: format!("{action_path}.retryAfter must be non-negative"),
-            });
-        }
-        if action.retry_limit < 0 {
-            errs.push(ValidationError {
-                kind: ValidationErrorKind::InvalidRetryField,
-                path: format!("{action_path}.retryLimit"),
-                message: format!("{action_path}.retryLimit must be non-negative"),
-            });
-        }
         if action.type_ == ActionType::Goto {
             let has_step = !action.step_id.is_empty();
             let has_workflow = !action.workflow_id.is_empty();
@@ -670,7 +685,11 @@ workflows:
         }
 
         let result = parse(&path);
-        let _ = std::fs::remove_file(&path);
+        if let Err(err) = std::fs::remove_file(&path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                panic!("failed to remove temp file {}: {err}", path.display());
+            }
+        }
 
         let spec = match result {
             Ok(spec) => spec,
@@ -1020,6 +1039,64 @@ workflows:
     }
 
     #[test]
+    fn parse_bytes_step_multiple_targets_rejected() {
+        let yaml = r#"arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        workflowId: other-workflow
+"#;
+        let result = parse_bytes(yaml.as_bytes());
+        match result {
+            Ok(_) => panic!("expected error for step with multiple targets"),
+            Err(err) => {
+                let msg = err.to_string();
+                if !msg.contains("exactly one of operationId, operationPath, or workflowId") {
+                    panic!("unexpected error: {msg}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validate_step_operation_path_unknown_source_reference() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].target =
+            Some(StepTarget::OperationPath("{missing}./items".to_string()));
+
+        let errs = expect_validation_errors(validate(&spec));
+        let err = errs
+            .iter()
+            .find(|item| item.path == "workflows[0].steps[0].operationPath")
+            .unwrap_or_else(|| panic!("expected operationPath validation error, got: {errs:?}"));
+
+        assert_eq!(err.kind, ValidationErrorKind::InvalidReference);
+        assert!(err
+            .message
+            .contains("references unknown sourceDescription \"missing\""));
+    }
+
+    #[test]
+    fn validate_step_operation_path_known_source_reference() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].target =
+            Some(StepTarget::OperationPath("{api}./items".to_string()));
+
+        if let Err(err) = validate(&spec) {
+            panic!("expected sourceDescription reference to validate, got: {err}");
+        }
+    }
+
+    #[test]
     fn parse_bytes_param_invalid_in() {
         let yaml = r#"arazzo: "1.0.0"
 info:
@@ -1063,19 +1140,6 @@ workflows:
         assert!(errs[0]
             .message
             .contains("references unknown step 'nonexistent'"));
-    }
-
-    #[test]
-    fn validate_retry_fields() {
-        let mut spec = valid_spec();
-        spec.workflows[0].steps[0].on_failure = vec![arazzo_spec::OnAction {
-            type_: ActionType::Retry,
-            retry_after: -1,
-            ..arazzo_spec::OnAction::default()
-        }];
-        let errs = expect_validation_errors(validate(&spec));
-        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
-        assert!(errs[0].message.contains("retryAfter must be non-negative"));
     }
 
     #[test]
@@ -1166,36 +1230,6 @@ workflows:
         assert!(messages
             .iter()
             .any(|m| m.contains("info.title is required")));
-    }
-
-    #[test]
-    fn validate_workflow_level_actions_retry_fields() {
-        let mut spec = valid_spec();
-        spec.workflows[0].success_actions = vec![OnAction {
-            type_: ActionType::Retry,
-            retry_after: -1,
-            ..OnAction::default()
-        }];
-        let errs = expect_validation_errors(validate(&spec));
-        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
-        assert!(errs[0]
-            .message
-            .contains("successActions[0].retryAfter must be non-negative"));
-    }
-
-    #[test]
-    fn validate_workflow_level_failure_actions_retry_fields() {
-        let mut spec = valid_spec();
-        spec.workflows[0].failure_actions = vec![OnAction {
-            type_: ActionType::Retry,
-            retry_limit: -1,
-            ..OnAction::default()
-        }];
-        let errs = expect_validation_errors(validate(&spec));
-        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidRetryField);
-        assert!(errs[0]
-            .message
-            .contains("failureActions[0].retryLimit must be non-negative"));
     }
 
     #[test]

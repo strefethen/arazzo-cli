@@ -1,0 +1,76 @@
+# auth-flow.arazzo.yaml
+#
+# Demonstrates a simple auth workflow where a bearer-auth check feeds a
+# follow-up request, including cookie usage and expression interpolation.
+#
+# Features covered:
+#   - Workflow inputs for auth and session values
+#   - Authorization header interpolation (`{$inputs.token}`)
+#   - Cookie parameters
+#   - Chaining auth-derived outputs into later requests
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/auth-flow.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/auth-flow.arazzo.yaml auth-then-fetch --dry-run --input token=my-token --input session=s-123
+
+arazzo: 1.0.0
+info:
+  title: Authentication Flow
+  version: 1.0.0
+  description: >
+    Executes a bearer-auth check and then reuses auth/session context in a
+    follow-up request.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  - workflowId: auth-then-fetch
+    summary: Authenticate first, then call a dependent endpoint
+    inputs:
+      type: object
+      properties:
+        token:
+          type: string
+        session:
+          type: string
+      required:
+        - token
+        - session
+    steps:
+      - stepId: bearer-check
+        operationPath: /bearer
+        parameters:
+          - name: Authorization
+            in: header
+            value: "Bearer {$inputs.token}"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          authenticated: $response.body.authenticated
+          token: $response.body.token
+
+      - stepId: fetch-profile
+        operationPath: /headers
+        parameters:
+          - name: Authorization
+            in: header
+            value: "Bearer {$steps.bearer-check.outputs.token}"
+          - name: session_id
+            in: cookie
+            value: "{$inputs.session}"
+          - name: auth_state
+            in: query
+            value: $steps.bearer-check.outputs.authenticated
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          echoed_auth_state: $request.query.auth_state
+          echoed_authorization: $response.body.headers.Authorization
+
+    outputs:
+      authenticated: $steps.bearer-check.outputs.authenticated
+      echoed_auth_state: $steps.fetch-profile.outputs.echoed_auth_state
+      echoed_authorization: $steps.fetch-profile.outputs.echoed_authorization

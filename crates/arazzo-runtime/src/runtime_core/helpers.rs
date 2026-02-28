@@ -1,4 +1,11 @@
+use std::sync::LazyLock;
+
 use super::*;
+
+static STEP_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$steps\.([a-zA-Z_][a-zA-Z0-9_-]*)\.")
+        .unwrap_or_else(|err| panic!("failed to compile step-ref regex: {err}"))
+});
 
 #[derive(Debug, Clone)]
 pub(crate) struct CriterionEvaluation {
@@ -118,19 +125,27 @@ pub(crate) fn evaluate_output_expression(
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
 ) -> Value {
+    evaluate_output_expression_detailed(expr, eval, response).0
+}
+
+pub(crate) fn evaluate_output_expression_detailed(
+    expr: &str,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
     if expr.starts_with('/') {
         if let Some(resp) = response {
-            return extract_xpath(&resp.body, expr);
+            return (extract_xpath(&resp.body, expr), Vec::new());
         }
-        return Value::Null;
+        return (Value::Null, Vec::new());
     }
 
     if expr.starts_with('$') {
-        return eval.evaluate(expr);
+        return eval.evaluate_with_diagnostics(expr);
     }
 
     let json_path = to_json_path(expr);
-    eval.evaluate(&format!("$response.body.{json_path}"))
+    eval.evaluate_with_diagnostics(&format!("$response.body.{json_path}"))
 }
 
 fn default_criterion_context(response: Option<&Response>) -> Value {
@@ -589,11 +604,11 @@ pub(super) fn value_to_string(value: &Value) -> String {
     }
 }
 
-pub(super) fn resolve_payload(value: &serde_yaml::Value, eval: &ExpressionEvaluator) -> Value {
+pub(super) fn resolve_payload(value: &serde_yml::Value, eval: &ExpressionEvaluator) -> Value {
     match value {
-        serde_yaml::Value::Null => Value::Null,
-        serde_yaml::Value::Bool(v) => Value::Bool(*v),
-        serde_yaml::Value::Number(v) => {
+        serde_yml::Value::Null => Value::Null,
+        serde_yml::Value::Bool(v) => Value::Bool(*v),
+        serde_yml::Value::Number(v) => {
             if let Some(i) = v.as_i64() {
                 json!(i)
             } else if let Some(f) = v.as_f64() {
@@ -604,7 +619,7 @@ pub(super) fn resolve_payload(value: &serde_yaml::Value, eval: &ExpressionEvalua
                 Value::Null
             }
         }
-        serde_yaml::Value::String(v) => {
+        serde_yml::Value::String(v) => {
             if v.starts_with('$') {
                 eval.evaluate(v)
             } else if v.contains("{$") {
@@ -613,14 +628,14 @@ pub(super) fn resolve_payload(value: &serde_yaml::Value, eval: &ExpressionEvalua
                 Value::String(v.clone())
             }
         }
-        serde_yaml::Value::Sequence(seq) => {
+        serde_yml::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
             for item in seq {
                 out.push(resolve_payload(item, eval));
             }
             Value::Array(out)
         }
-        serde_yaml::Value::Mapping(map) => {
+        serde_yml::Value::Mapping(map) => {
             let mut out = serde_json::Map::new();
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
@@ -768,11 +783,9 @@ pub(crate) fn build_levels(workflow: &Workflow) -> Result<Vec<Vec<usize>>, Runti
 
 pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
     let mut refs = BTreeSet::<String>::new();
-    let pattern = Regex::new(r"\$steps\.([a-zA-Z_][a-zA-Z0-9_-]*)\.")
-        .unwrap_or_else(|err| panic!("failed to compile step-ref regex: {err}"));
 
     let mut scan = |s: &str| {
-        for captures in pattern.captures_iter(s) {
+        for captures in STEP_REF_RE.captures_iter(s) {
             if let Some(m) = captures.get(1) {
                 refs.insert(m.as_str().to_string());
             }
@@ -814,19 +827,19 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
     refs.into_iter().collect()
 }
 
-fn scan_payload_refs(value: &serde_yaml::Value, scan: &mut impl FnMut(&str)) {
+fn scan_payload_refs(value: &serde_yml::Value, scan: &mut impl FnMut(&str)) {
     match value {
-        serde_yaml::Value::String(s) => {
+        serde_yml::Value::String(s) => {
             if s.starts_with('$') {
                 scan(s);
             }
         }
-        serde_yaml::Value::Sequence(seq) => {
+        serde_yml::Value::Sequence(seq) => {
             for item in seq {
                 scan_payload_refs(item, scan);
             }
         }
-        serde_yaml::Value::Mapping(map) => {
+        serde_yml::Value::Mapping(map) => {
             for (_, v) in map {
                 scan_payload_refs(v, scan);
             }

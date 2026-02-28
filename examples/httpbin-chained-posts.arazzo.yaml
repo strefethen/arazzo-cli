@@ -1,0 +1,183 @@
+# httpbin-chained-posts.arazzo.yaml
+#
+# Demonstrates multi-step POST chaining where the output of one POST feeds
+# into the request body of the next. Also shows onSuccess goto actions and
+# workflow-level successActions.
+#
+# Features covered:
+#   - Multi-step POST-to-POST data flow (body output -> body input)
+#   - onSuccess with type: goto to skip steps on success
+#   - Workflow-level successActions for default success behavior
+#   - requestBody with dynamic values from prior step outputs
+#   - Expression interpolation ({$expr}) inside request body payloads
+#   - Workflow inputs feeding into POST bodies
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/httpbin-chained-posts.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/httpbin-chained-posts.arazzo.yaml post-chain --dry-run
+#   cargo run -p arazzo-cli -- run examples/httpbin-chained-posts.arazzo.yaml create-and-update -i name=widget --dry-run
+
+arazzo: 1.0.0
+info:
+  title: HTTPBin Chained POST Workflows
+  version: 1.0.0
+  description: >
+    Demonstrates multi-step POST request chaining where the response body of one
+    step feeds into the request body of the next, along with onSuccess goto actions
+    and workflow-level success actions.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  # -----------------------------------------------------------
+  # Workflow 1: Three-step POST chain passing data forward
+  # -----------------------------------------------------------
+  - workflowId: post-chain
+    summary: Chain three POST requests, each feeding data to the next
+    description: >
+      Step 1 posts initial data. Step 2 takes step 1's echoed URL and origin
+      and posts them as a new payload. Step 3 takes step 2's output and posts
+      a final summary. Demonstrates body-to-body data flow across steps.
+    steps:
+      - stepId: post-initial
+        description: Post the initial payload and capture the echoed data
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            action: "create"
+            resource: "order"
+            quantity: 5
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          origin: $response.body.origin
+          echoed_url: $response.body.url
+
+      - stepId: post-enriched
+        description: Take step 1's outputs and post them as an enriched payload
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            action: "enrich"
+            source_origin: $steps.post-initial.outputs.origin
+            source_url: $steps.post-initial.outputs.echoed_url
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          enriched_action: $response.body.json.action
+          enriched_origin: $response.body.json.source_origin
+
+      - stepId: post-final
+        description: Summarize the chain by posting the enriched data
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            action: "finalize"
+            enriched_action: $steps.post-enriched.outputs.enriched_action
+            original_origin: $steps.post-enriched.outputs.enriched_origin
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          final_action: $response.body.json.action
+    outputs:
+      origin: $steps.post-initial.outputs.origin
+      enriched_action: $steps.post-enriched.outputs.enriched_action
+      final_action: $steps.post-final.outputs.final_action
+
+  # -----------------------------------------------------------
+  # Workflow 2: onSuccess goto to skip to a later step
+  # -----------------------------------------------------------
+  - workflowId: success-goto
+    summary: On success, skip ahead to a later step using onSuccess goto
+    description: >
+      Step 1 succeeds and uses onSuccess goto to jump directly to step 3,
+      skipping step 2 entirely. This demonstrates conditional control flow
+      on the success path.
+    steps:
+      - stepId: check-status
+        description: Check that the service is up; on success skip to the final step
+        operationPath: /status/200
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - type: goto
+            stepId: final-report
+
+      - stepId: fallback-request
+        description: This step is skipped when step 1 succeeds
+        operationPath: /get
+        parameters:
+          - name: fallback
+            in: query
+            value: "true"
+        successCriteria:
+          - condition: $statusCode == 200
+
+      - stepId: final-report
+        description: Final step that runs whether we arrived by skip or normal flow
+        operationPath: /get
+        parameters:
+          - name: status
+            in: query
+            value: "completed"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          status: $response.body.args.status
+    outputs:
+      status: $steps.final-report.outputs.status
+
+  # -----------------------------------------------------------
+  # Workflow 3: Input-driven POST with interpolation in body
+  # -----------------------------------------------------------
+  - workflowId: create-and-update
+    summary: Use workflow inputs in POST bodies, then update with interpolated values
+    description: >
+      Accepts a name input. Step 1 creates a resource using the input.
+      Step 2 updates it using expression interpolation ({$expr}) to build
+      a composite string value in the request body.
+    inputs:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the resource to create
+      required:
+        - name
+    steps:
+      - stepId: create-resource
+        description: Create a new resource with the provided name
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            operation: "create"
+            name: $inputs.name
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          created_name: $response.body.json.name
+
+      - stepId: update-resource
+        description: Update the resource using interpolation to build a descriptive label
+        operationPath: PUT /put
+        requestBody:
+          contentType: application/json
+          payload:
+            operation: "update"
+            label: "{$steps.create-resource.outputs.created_name}-updated"
+            original_name: $steps.create-resource.outputs.created_name
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          updated_label: $response.body.json.label
+          original: $response.body.json.original_name
+    outputs:
+      created_name: $steps.create-resource.outputs.created_name
+      updated_label: $steps.update-resource.outputs.updated_label

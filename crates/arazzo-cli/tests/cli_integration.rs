@@ -91,6 +91,50 @@ fn stdout_json(output: &std::process::Output) -> Value {
     }
 }
 
+fn assert_run_json_kind(body: &Value, expected: &str) {
+    let kind = body.get("kind").and_then(Value::as_str).unwrap_or_default();
+    assert_eq!(kind, expected, "unexpected run JSON envelope: {body}");
+}
+
+fn run_json_requests(body: &Value) -> &Vec<Value> {
+    assert_run_json_kind(body, "dryRun");
+    match body.get("requests").and_then(Value::as_array) {
+        Some(v) => v,
+        None => panic!("expected dryRun.requests array, got: {body}"),
+    }
+}
+
+fn run_json_warnings(body: &Value) -> Vec<String> {
+    let Some(items) = body.get("warnings").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn expression_warning_spec() -> &'static str {
+    r#"
+arazzo: 1.0.0
+info:
+  title: Expression Diagnostics
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        outputs:
+          bad: $steps.missing.outputs.value
+"#
+}
+
 fn read_json_file(path: &Path) -> Value {
     let raw = match fs::read_to_string(path) {
         Ok(value) => value,
@@ -188,6 +232,14 @@ fn catalog_and_show_json_work_with_temp_directory() {
         None => panic!("expected catalog array, got: {catalog_body}"),
     };
     assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0].get("file"),
+        Some(&Value::String("one.yaml".to_string()))
+    );
+    assert_eq!(
+        rows[1].get("file"),
+        Some(&Value::String("two.yaml".to_string()))
+    );
 
     let show = run(
         ["--json", "show", "status-check", "--dir", &dir_str].as_slice(),
@@ -200,6 +252,38 @@ fn catalog_and_show_json_work_with_temp_directory() {
         Some(&Value::String("status-check".to_string()))
     );
     assert_eq!(show_body.get("steps"), Some(&Value::Number(2.into())));
+}
+
+#[test]
+fn catalog_and_show_support_yml_extension() {
+    let temp = TempDir::new("arazzo-catalog-yml");
+    let source = fixture_spec();
+    let mut yml_path = temp.path().to_path_buf();
+    yml_path.push("only.yml");
+
+    if let Err(err) = fs::copy(&source, &yml_path) {
+        panic!("copying fixture to {}: {err}", yml_path.display());
+    }
+
+    let dir_str = temp.path().to_string_lossy().to_string();
+    let catalog = run(["--json", "catalog", &dir_str].as_slice(), None);
+    assert!(catalog.status.success());
+    let catalog_body = stdout_json(&catalog);
+    let rows = match catalog_body.as_array() {
+        Some(v) => v,
+        None => panic!("expected catalog array, got: {catalog_body}"),
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("file"),
+        Some(&Value::String("only.yml".to_string()))
+    );
+
+    let show = run(
+        ["--json", "show", "status-check", "--dir", &dir_str].as_slice(),
+        None,
+    );
+    assert!(show.status.success());
 }
 
 #[test]
@@ -249,10 +333,7 @@ fn run_dry_run_json_returns_request_plan() {
     assert!(output.status.success());
 
     let body = stdout_json(&output);
-    let rows = match body.as_array() {
-        Some(v) => v,
-        None => panic!("expected dry-run array, got: {body}"),
-    };
+    let rows = run_json_requests(&body);
     assert_eq!(rows.len(), 2);
 
     let first = &rows[0];
@@ -278,6 +359,75 @@ fn run_dry_run_json_returns_request_plan() {
         .and_then(Value::as_str)
         .unwrap_or_default();
     assert!(second_url.contains("/get"));
+}
+
+#[test]
+fn run_expr_diagnostics_warn_includes_warnings_in_json() {
+    let temp = TempDir::new("arazzo-expr-diag-warn");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("diag.yaml");
+    write_file(&spec_path, expression_warning_spec());
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--expr-diagnostics",
+            "warn",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1);
+
+    let warnings = run_json_warnings(&body);
+    assert!(!warnings.is_empty(), "expected warnings in warn mode");
+    assert!(warnings[0].contains("step \"step-one\""));
+    assert!(warnings[0].contains("output \"bad\""));
+}
+
+#[test]
+fn run_expr_diagnostics_error_fails_with_code() {
+    let temp = TempDir::new("arazzo-expr-diag-error");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("diag.yaml");
+    write_file(&spec_path, expression_warning_spec());
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--expr-diagnostics",
+            "error",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "error diagnostics mode should fail on expression warnings"
+    );
+
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUNTIME_EXPRESSION_DIAGNOSTICS")
+    );
+    let warnings = run_json_warnings(&body);
+    assert!(!warnings.is_empty(), "error mode should include warnings");
 }
 
 #[test]
@@ -336,6 +486,67 @@ workflows:
         .unwrap_or(&Vec::new())
         .clone();
     assert!(!errors.is_empty());
+    let first = errors[0].as_object().unwrap_or_else(|| {
+        panic!(
+            "expected structured validate error object, got: {}",
+            errors[0]
+        )
+    });
+    assert_eq!(
+        first.get("source"),
+        Some(&Value::String("validation".to_string()))
+    );
+    assert!(first.get("kind").and_then(Value::as_str).is_some());
+    assert!(first.get("message").and_then(Value::as_str).is_some());
+}
+
+#[test]
+fn validate_json_reports_unknown_operation_path_source_reference() {
+    let temp = TempDir::new("arazzo-validate-unknown-source");
+    let mut invalid = temp.path().to_path_buf();
+    invalid.push("unknown-source.yaml");
+    let content = r#"
+arazzo: 1.0.0
+info:
+  title: Unknown Source Validate
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: "{missing}./items"
+"#;
+    write_file(&invalid, content);
+
+    let invalid_str = invalid.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &invalid_str].as_slice(), None);
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or(&Vec::new())
+        .clone();
+    assert!(!errors.is_empty());
+    let issue = errors
+        .iter()
+        .find(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("invalidReference")
+                && item.get("path").and_then(Value::as_str)
+                    == Some("workflows[0].steps[0].operationPath")
+        })
+        .unwrap_or_else(|| panic!("expected invalidReference on operationPath, got: {errors:?}"));
+    assert!(issue
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .contains("unknown sourceDescription"));
 }
 
 #[test]
@@ -372,11 +583,113 @@ fn run_json_reports_error_for_missing_workflow() {
     );
 
     let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
     assert!(body.get("error").is_some());
     assert_eq!(
         body.get("code").and_then(Value::as_str),
         Some("RUNTIME_WORKFLOW_NOT_FOUND")
     );
+}
+
+#[test]
+fn run_json_reports_error_code_for_missing_spec_file() {
+    let output = run(
+        [
+            "--json",
+            "run",
+            "/definitely/missing/spec.yaml",
+            "any-workflow",
+            "--dry-run",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
+
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUN_SPEC_READ_FILE")
+    );
+}
+
+#[test]
+fn run_json_reports_error_code_for_missing_openapi_file() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--openapi",
+            "/definitely/missing/openapi.yaml",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
+
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUN_OPENAPI_READ_FILE")
+    );
+}
+
+#[test]
+fn run_json_reports_validation_error_for_unknown_source_description_reference() {
+    let temp = TempDir::new("arazzo-run-unknown-source");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("unknown-source.yaml");
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Unknown Source Test
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: "{missing}./items"
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        ["--json", "run", &spec_str, "wf", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "JSON error output should exit with non-zero code"
+    );
+
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUN_SPEC_VALIDATION")
+    );
+    let error = body
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(error.contains("unknown sourceDescription"));
 }
 
 #[test]
@@ -431,14 +744,57 @@ fn run_dry_run_expands_env_input_values() {
     assert!(output.status.success());
 
     let body = stdout_json(&output);
-    let rows = match body.as_array() {
-        Some(v) => v,
-        None => panic!("expected dry-run array, got: {body}"),
-    };
+    let rows = run_json_requests(&body);
     assert!(!rows.is_empty());
     let first = &rows[0];
     let url = first.get("url").and_then(Value::as_str).unwrap_or_default();
     assert!(url.contains("/status/204"));
+}
+
+#[test]
+fn run_dry_run_input_json_preserves_integer_type() {
+    let temp = TempDir::new("arazzo-input-json");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input-json",
+            "code=429",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let rows = run_json_requests(&body);
+    assert!(!rows.is_empty());
+    let url = rows[0]
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        url.ends_with("/status/429"),
+        "unexpected request url: {url}"
+    );
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/inputs/code"),
+        Some(&Value::Number(429.into()))
+    );
 }
 
 #[test]
@@ -468,10 +824,7 @@ fn run_trace_writes_file_and_preserves_json_stdout() {
     assert!(output.status.success());
 
     let body = stdout_json(&output);
-    let rows = match body.as_array() {
-        Some(v) => v,
-        None => panic!("expected dry-run array, got: {body}"),
-    };
+    let rows = run_json_requests(&body);
     assert_eq!(rows.len(), 2);
 
     let trace = read_json_file(&trace_path);
@@ -493,6 +846,41 @@ fn run_trace_writes_file_and_preserves_json_stdout() {
         .unwrap_or(&Vec::new())
         .clone();
     assert!(!trace_steps.is_empty());
+}
+
+#[test]
+fn run_trace_honors_execution_timeout_flag() {
+    let temp = TempDir::new("arazzo-trace-timeout");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=429",
+            "--execution-timeout",
+            "2s",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+    assert_eq!(
+        trace.pointer("/run/timeoutMs"),
+        Some(&Value::Number(2000.into()))
+    );
 }
 
 #[test]
@@ -523,6 +911,7 @@ fn run_trace_writes_on_failure() {
     );
 
     let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
     assert!(body.get("error").is_some());
 
     let trace = read_json_file(&trace_path);
@@ -795,10 +1184,7 @@ fn run_parallel_dry_run_json_returns_all_steps() {
     assert!(output.status.success());
 
     let body = stdout_json(&output);
-    let rows = match body.as_array() {
-        Some(v) => v,
-        None => panic!("expected dry-run array, got: {body}"),
-    };
+    let rows = run_json_requests(&body);
     assert_eq!(rows.len(), 2);
 
     let ids: Vec<&str> = rows
@@ -807,6 +1193,84 @@ fn run_parallel_dry_run_json_returns_all_steps() {
         .collect();
     assert!(ids.contains(&"a"));
     assert!(ids.contains(&"b"));
+}
+
+#[test]
+fn run_dry_run_operation_id_resolves_with_openapi_flag() {
+    let temp = TempDir::new("arazzo-opid-openapi");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("opid.arazzo.yaml");
+    let mut openapi_path = temp.path().to_path_buf();
+    openapi_path.push("api.yaml");
+
+    write_file(
+        &spec_path,
+        r#"
+arazzo: 1.0.0
+info:
+  title: OperationId CLI Test
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: opid
+    steps:
+      - stepId: list-widgets
+        operationId: listWidgets
+"#,
+    );
+
+    write_file(
+        &openapi_path,
+        r#"
+openapi: 3.0.3
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      responses:
+        "200":
+          description: ok
+"#,
+    );
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let openapi_str = openapi_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "opid",
+            "--dry-run",
+            "--openapi",
+            &openapi_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let rows = run_json_requests(&body);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("stepId"),
+        Some(&Value::String("list-widgets".to_string()))
+    );
+    assert_eq!(
+        rows[0].get("method"),
+        Some(&Value::String("GET".to_string()))
+    );
+    assert_eq!(
+        rows[0].get("url"),
+        Some(&Value::String("https://example.com/widgets".to_string()))
+    );
 }
 
 #[test]
@@ -956,6 +1420,18 @@ fn validate_json_reports_error_for_unparseable_yaml() {
         .unwrap_or(&Vec::new())
         .clone();
     assert!(!errors.is_empty());
+    let first = errors[0].as_object().unwrap_or_else(|| {
+        panic!(
+            "expected structured validate error object, got: {}",
+            errors[0]
+        )
+    });
+    assert_eq!(
+        first.get("source"),
+        Some(&Value::String("parseYaml".to_string()))
+    );
+    assert!(first.get("kind").is_none() || first.get("kind") == Some(&Value::Null));
+    assert!(first.get("message").and_then(Value::as_str).is_some());
 }
 
 // ---------------------------------------------------------------------------

@@ -142,7 +142,7 @@ pub struct PropertyDef {
     #[serde(default)]
     pub format: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_yaml::Value>,
+    pub default: Option<serde_yml::Value>,
 }
 
 /// Step target discriminator — exactly one of operationId, operationPath, or workflowId.
@@ -223,11 +223,24 @@ impl Serialize for Step {
 impl<'de> Deserialize<'de> for Step {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = StepSerde::deserialize(deserializer)?;
-        let target = if !raw.workflow_id.is_empty() {
+        let has_operation_id = !raw.operation_id.is_empty();
+        let has_operation_path = !raw.operation_path.is_empty();
+        let has_workflow_id = !raw.workflow_id.is_empty();
+        let target_count = usize::from(has_operation_id)
+            + usize::from(has_operation_path)
+            + usize::from(has_workflow_id);
+
+        if target_count > 1 {
+            return Err(serde::de::Error::custom(
+                "step must specify exactly one of operationId, operationPath, or workflowId",
+            ));
+        }
+
+        let target = if has_workflow_id {
             Some(StepTarget::WorkflowId(raw.workflow_id))
-        } else if !raw.operation_path.is_empty() {
+        } else if has_operation_path {
             Some(StepTarget::OperationPath(raw.operation_path))
-        } else if !raw.operation_id.is_empty() {
+        } else if has_operation_id {
             Some(StepTarget::OperationId(raw.operation_id))
         } else {
             None
@@ -265,7 +278,7 @@ pub struct Parameter {
     #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
     pub in_: Option<ParamLocation>,
     #[serde(default)]
-    pub value: serde_yaml::Value,
+    pub value: serde_yml::Value,
     #[serde(default)]
     pub reference: String,
 }
@@ -274,8 +287,8 @@ impl Parameter {
     /// Returns the value as a string suitable for expression evaluation.
     pub fn value_as_str(&self) -> String {
         match &self.value {
-            serde_yaml::Value::String(s) => s.clone(),
-            serde_yaml::Value::Number(n) => {
+            serde_yml::Value::String(s) => s.clone(),
+            serde_yml::Value::Number(n) => {
                 if let Some(u) = n.as_u64() {
                     u.to_string()
                 } else if let Some(i) = n.as_i64() {
@@ -286,17 +299,17 @@ impl Parameter {
                     String::new()
                 }
             }
-            serde_yaml::Value::Bool(b) => b.to_string(),
-            serde_yaml::Value::Null => String::new(),
-            other => serde_yaml::to_string(other).unwrap_or_default(),
+            serde_yml::Value::Bool(b) => b.to_string(),
+            serde_yml::Value::Null => String::new(),
+            other => serde_yml::to_string(other).unwrap_or_default(),
         }
     }
 
     /// Returns true if the value is empty (null or empty string).
     pub fn is_value_empty(&self) -> bool {
         match &self.value {
-            serde_yaml::Value::Null => true,
-            serde_yaml::Value::String(s) => s.is_empty(),
+            serde_yml::Value::Null => true,
+            serde_yml::Value::String(s) => s.is_empty(),
             _ => false,
         }
     }
@@ -309,7 +322,7 @@ pub struct RequestBody {
     #[serde(default)]
     pub content_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_yaml::Value>,
+    pub payload: Option<serde_yml::Value>,
     #[serde(default)]
     pub reference: String,
 }
@@ -403,14 +416,14 @@ pub struct OnAction {
     #[serde(default)]
     pub step_id: String,
     #[serde(default)]
-    pub retry_after: i64,
+    pub retry_after: u64,
     #[serde(default)]
-    pub retry_limit: i64,
+    pub retry_limit: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<SuccessCriterion>,
 }
 
 /// Parses raw YAML bytes into an unvalidated specification model.
-pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml::Error> {
-    serde_yaml::from_slice::<ArazzoSpec>(data)
+pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yml::Error> {
+    serde_yml::from_slice::<ArazzoSpec>(data)
 }

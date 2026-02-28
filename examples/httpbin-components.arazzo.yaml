@@ -1,0 +1,167 @@
+# httpbin-components.arazzo.yaml
+#
+# Demonstrates the Arazzo `components` section for defining reusable parameters
+# and actions that can be referenced across multiple workflows and steps.
+#
+# Features covered:
+#   - components.parameters: reusable parameter definitions
+#   - components.successActions: reusable onSuccess action definitions
+#   - components.failureActions: reusable onFailure action definitions
+#   - $components.parameters.<name> references in step parameters
+#   - $components.successActions.<name> references in onSuccess
+#   - $components.failureActions.<name> references in onFailure
+#   - Parameter override: referencing a component param but overriding its value
+#   - Workflow-level action references (successActions / failureActions on workflow)
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/httpbin-components.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/httpbin-components.arazzo.yaml reuse-params --dry-run
+#   cargo run -p arazzo-cli -- run examples/httpbin-components.arazzo.yaml reuse-actions --dry-run
+
+arazzo: 1.0.0
+info:
+  title: HTTPBin Components and Reuse
+  version: 1.0.0
+  description: >
+    Demonstrates the components section with reusable parameters, success actions,
+    and failure actions. Multiple workflows reference shared definitions to reduce
+    duplication and enforce consistency.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+# -----------------------------------------------------------
+# Reusable components referenced by $components.* expressions
+# -----------------------------------------------------------
+components:
+  # Reusable parameter definitions
+  parameters:
+    apiKeyHeader:
+      name: X-Api-Key
+      in: header
+      value: "shared-api-key-abc123"
+    jsonAcceptHeader:
+      name: Accept
+      in: header
+      value: "application/json"
+    defaultLabel:
+      name: label
+      in: query
+      value: "from-component"
+
+  # Reusable success actions
+  successActions:
+    endAfterSuccess:
+      type: end
+      name: terminate-on-success
+
+  # Reusable failure actions
+  failureActions:
+    standardRetry:
+      type: retry
+      retryAfter: 2
+      retryLimit: 3
+
+workflows:
+  # -----------------------------------------------------------
+  # Workflow 1: Reuse parameter components across steps
+  # -----------------------------------------------------------
+  - workflowId: reuse-params
+    summary: Multiple steps share the same component parameters
+    description: >
+      Both steps reference $components.parameters.apiKeyHeader to send the same
+      API key header. The second step also overrides the default label value
+      to show that component values can be locally customized.
+    steps:
+      - stepId: step-with-shared-key
+        description: Uses the shared API key header and accept header from components
+        operationPath: /headers
+        parameters:
+          # Reference shared API key header
+          - reference: "$components.parameters.apiKeyHeader"
+          # Reference shared Accept header
+          - reference: "$components.parameters.jsonAcceptHeader"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          api_key: $response.body.headers.X-Api-Key
+          accept: $response.body.headers.Accept
+
+      - stepId: step-with-override
+        description: References the default label component but overrides its value
+        operationPath: /get
+        parameters:
+          # Reference shared API key (keeps default value)
+          - reference: "$components.parameters.apiKeyHeader"
+          # Reference shared label but override the value
+          - reference: "$components.parameters.defaultLabel"
+            value: "overridden-value"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          label: $response.body.args.label
+    outputs:
+      api_key: $steps.step-with-shared-key.outputs.api_key
+      accept: $steps.step-with-shared-key.outputs.accept
+      label: $steps.step-with-override.outputs.label
+
+  # -----------------------------------------------------------
+  # Workflow 2: Reuse failure action components on steps
+  # -----------------------------------------------------------
+  - workflowId: reuse-actions
+    summary: Steps reference shared failure actions from components
+    description: >
+      A step that may fail references $components.failureActions.standardRetry
+      to apply a consistent retry policy. Another step references
+      $components.successActions.endAfterSuccess to terminate the workflow early
+      on success.
+    steps:
+      - stepId: might-fail
+        description: Hits a 500 endpoint; the shared retry policy handles failures
+        operationPath: /status/500
+        successCriteria:
+          - condition: $statusCode == 200
+        # Reference the shared retry policy from components
+        onFailure:
+          - name: "$components.failureActions.standardRetry"
+
+      - stepId: will-succeed
+        description: Succeeds and uses the shared success action to end the workflow
+        operationPath: /get
+        successCriteria:
+          - condition: $statusCode == 200
+        # Reference the shared success action from components
+        onSuccess:
+          - name: "$components.successActions.endAfterSuccess"
+        outputs:
+          url: $response.body.url
+    outputs:
+      url: $steps.will-succeed.outputs.url
+
+  # -----------------------------------------------------------
+  # Workflow 3: Workflow-level component action references
+  # -----------------------------------------------------------
+  - workflowId: workflow-level-reuse
+    summary: Workflow-level failureActions referencing a component
+    description: >
+      The workflow itself references a component failure action as its default
+      failure policy. Any step without its own onFailure will fall back to
+      this workflow-level retry policy.
+    # Workflow-level failure action from components
+    failureActions:
+      - name: "$components.failureActions.standardRetry"
+    steps:
+      - stepId: api-call
+        description: Makes a request; failures handled by workflow-level retry policy
+        operationPath: /get
+        parameters:
+          - reference: "$components.parameters.apiKeyHeader"
+          - reference: "$components.parameters.jsonAcceptHeader"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          url: $response.body.url
+    outputs:
+      url: $steps.api-call.outputs.url

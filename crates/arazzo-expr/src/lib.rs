@@ -2,10 +2,12 @@
 
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde_json::{json, Number, Value};
 
@@ -43,7 +45,7 @@ impl std::fmt::Display for ExpressionWarning {
     }
 }
 
-static INTERPOLATE_RE: Lazy<Regex> = Lazy::new(|| {
+static INTERPOLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{(\$[^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_\.]*(?:\[[0-9]+\])*)")
         .unwrap_or_else(|err| panic!("failed to compile interpolate regex: {err}"))
 });
@@ -103,178 +105,168 @@ impl ExpressionEvaluator {
             return (Value::String(expr.to_string()), warnings);
         };
 
-        if let Some(name) = rest.strip_prefix("env.") {
-            return (Value::String(env::var(name).unwrap_or_default()), warnings);
-        }
+        // Split into top-level namespace and remainder after the first `.`.
+        // Standalone keywords (statusCode, method, url) have no remainder.
+        let (namespace, remainder) = match rest.split_once('.') {
+            Some((ns, rem)) => (ns, Some(rem)),
+            None => (rest, None),
+        };
 
-        if let Some(name) = rest.strip_prefix("inputs.") {
-            let value = self.ctx.inputs.get(name).cloned().unwrap_or_else(|| {
+        let value = match namespace {
+            "env" => {
+                let name = remainder.unwrap_or("");
+                Value::String(env::var(name).unwrap_or_default())
+            }
+
+            "inputs" => {
+                let name = remainder.unwrap_or("");
+                self.ctx.inputs.get(name).cloned().unwrap_or_else(|| {
+                    warnings.push(ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: format!("input \"{name}\" not found in context"),
+                    });
+                    Value::Null
+                })
+            }
+
+            "steps" => {
+                let after = remainder.unwrap_or("");
+                if let Some((step_id, output_name)) = after.split_once(".outputs.") {
+                    match self.ctx.steps.get(step_id) {
+                        Some(outputs) => outputs.get(output_name).cloned().unwrap_or_else(|| {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: format!(
+                                    "output \"{output_name}\" not found in step \"{step_id}\""
+                                ),
+                            });
+                            Value::Null
+                        }),
+                        None => {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: format!("step \"{step_id}\" not found in context"),
+                            });
+                            Value::Null
+                        }
+                    }
+                } else {
+                    warnings.push(ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: "invalid $steps expression: expected $steps.<id>.outputs.<key>"
+                            .to_string(),
+                    });
+                    Value::Null
+                }
+            }
+
+            "statusCode" => self
+                .ctx
+                .status_code
+                .map(|code| json!(code))
+                .unwrap_or(Value::Null),
+
+            "method" => self
+                .ctx
+                .method
+                .as_ref()
+                .map(|m| Value::String(m.clone()))
+                .unwrap_or(Value::Null),
+
+            "url" => self
+                .ctx
+                .url
+                .as_ref()
+                .map(|u| Value::String(u.clone()))
+                .unwrap_or(Value::Null),
+
+            "outputs" => {
+                let after = remainder.unwrap_or("");
+                if let Some((name, pointer)) = after.split_once('#') {
+                    self.ctx
+                        .outputs
+                        .get(name)
+                        .and_then(|v| v.pointer(pointer))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                } else {
+                    self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null)
+                }
+            }
+
+            "request" => self.resolve_request(remainder.unwrap_or("")),
+
+            "sourceDescriptions" => {
+                let after = remainder.unwrap_or("");
+                if let Some(name) = after.strip_suffix(".url") {
+                    self.ctx
+                        .source_descriptions
+                        .get(name)
+                        .map(|u| Value::String(u.clone()))
+                        .unwrap_or_else(|| {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: format!(
+                                    "source description \"{name}\" not found in context"
+                                ),
+                            });
+                            Value::Null
+                        })
+                } else {
+                    Value::Null
+                }
+            }
+
+            "response" => self.resolve_response(remainder.unwrap_or("")),
+
+            _ => {
                 warnings.push(ExpressionWarning {
                     expression: expr.to_string(),
-                    message: format!("input \"{name}\" not found in context"),
+                    message: format!("unknown expression namespace \"${rest}\""),
                 });
                 Value::Null
-            });
-            return (value, warnings);
-        }
-
-        if let Some(after) = rest.strip_prefix("steps.") {
-            if let Some((step_id, output_name)) = after.split_once(".outputs.") {
-                let value = match self.ctx.steps.get(step_id) {
-                    Some(outputs) => outputs.get(output_name).cloned().unwrap_or_else(|| {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!(
-                                "output \"{output_name}\" not found in step \"{step_id}\""
-                            ),
-                        });
-                        Value::Null
-                    }),
-                    None => {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!("step \"{step_id}\" not found in context"),
-                        });
-                        Value::Null
-                    }
-                };
-                return (value, warnings);
             }
-            warnings.push(ExpressionWarning {
-                expression: expr.to_string(),
-                message: "invalid $steps expression: expected $steps.<id>.outputs.<key>"
-                    .to_string(),
-            });
-            return (Value::Null, warnings);
-        }
+        };
 
-        if rest == "statusCode" {
-            return (
-                self.ctx
-                    .status_code
-                    .map(|code| json!(code))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
-        }
+        (value, warnings)
+    }
 
-        if rest == "method" {
-            return (
-                self.ctx
-                    .method
-                    .as_ref()
-                    .map(|m| Value::String(m.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
+    /// Dispatch `$request.<sub>` expressions.
+    fn resolve_request(&self, remainder: &str) -> Value {
+        if let Some(name) = remainder.strip_prefix("header.") {
+            get_header_case_insensitive(&self.ctx.request_headers, name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null)
+        } else if let Some(name) = remainder.strip_prefix("query.") {
+            self.ctx
+                .request_query
+                .get(name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null)
+        } else if let Some(name) = remainder.strip_prefix("path.") {
+            self.ctx
+                .request_path
+                .get(name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null)
+        } else if let Some(suffix) = remainder.strip_prefix("body") {
+            resolve_body_access(&self.ctx.request_body, suffix)
+        } else {
+            Value::Null
         }
+    }
 
-        if rest == "url" {
-            return (
-                self.ctx
-                    .url
-                    .as_ref()
-                    .map(|u| Value::String(u.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
+    /// Dispatch `$response.<sub>` expressions.
+    fn resolve_response(&self, remainder: &str) -> Value {
+        if let Some(name) = remainder.strip_prefix("header.") {
+            get_header_case_insensitive(&self.ctx.response_headers, name)
+                .map(|v| Value::String(v.clone()))
+                .unwrap_or(Value::Null)
+        } else if let Some(suffix) = remainder.strip_prefix("body") {
+            resolve_body_access(&self.ctx.response_body, suffix)
+        } else {
+            Value::Null
         }
-
-        if let Some(after) = rest.strip_prefix("outputs.") {
-            if let Some((name, pointer)) = after.split_once('#') {
-                let value = self
-                    .ctx
-                    .outputs
-                    .get(name)
-                    .and_then(|v| v.pointer(pointer))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                return (value, warnings);
-            }
-            return (
-                self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null),
-                warnings,
-            );
-        }
-
-        if let Some(name) = rest.strip_prefix("request.header.") {
-            return (
-                get_header_case_insensitive(&self.ctx.request_headers, name)
-                    .map(|v| Value::String(v.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
-        }
-
-        if let Some(name) = rest.strip_prefix("request.query.") {
-            return (
-                self.ctx
-                    .request_query
-                    .get(name)
-                    .map(|v| Value::String(v.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
-        }
-
-        if let Some(name) = rest.strip_prefix("request.path.") {
-            return (
-                self.ctx
-                    .request_path
-                    .get(name)
-                    .map(|v| Value::String(v.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
-        }
-
-        if let Some(suffix) = rest.strip_prefix("request.body") {
-            return (
-                resolve_body_access(&self.ctx.request_body, suffix),
-                warnings,
-            );
-        }
-
-        if let Some(after) = rest.strip_prefix("sourceDescriptions.") {
-            if let Some(name) = after.strip_suffix(".url") {
-                let value = self
-                    .ctx
-                    .source_descriptions
-                    .get(name)
-                    .map(|u| Value::String(u.clone()))
-                    .unwrap_or_else(|| {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!("source description \"{name}\" not found in context"),
-                        });
-                        Value::Null
-                    });
-                return (value, warnings);
-            }
-            return (Value::Null, warnings);
-        }
-
-        if let Some(name) = rest.strip_prefix("response.header.") {
-            return (
-                get_header_case_insensitive(&self.ctx.response_headers, name)
-                    .map(|v| Value::String(v.clone()))
-                    .unwrap_or(Value::Null),
-                warnings,
-            );
-        }
-
-        if let Some(suffix) = rest.strip_prefix("response.body") {
-            return (
-                resolve_body_access(&self.ctx.response_body, suffix),
-                warnings,
-            );
-        }
-
-        warnings.push(ExpressionWarning {
-            expression: expr.to_string(),
-            message: format!("unknown expression namespace \"${rest}\""),
-        });
-        (Value::Null, warnings)
     }
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.
@@ -347,10 +339,10 @@ impl ExpressionEvaluator {
         match op.as_str() {
             "==" => compare_values(&left, &resolve_operand(self, right)),
             "!=" => !compare_values(&left, &resolve_operand(self, right)),
-            ">" => compare_ordered(&left, &resolve_operand(self, right)) > 0,
-            "<" => compare_ordered(&left, &resolve_operand(self, right)) < 0,
-            ">=" => compare_ordered(&left, &resolve_operand(self, right)) >= 0,
-            "<=" => compare_ordered(&left, &resolve_operand(self, right)) <= 0,
+            ">" => compare_ordered(&left, &resolve_operand(self, right)).is_gt(),
+            "<" => compare_ordered(&left, &resolve_operand(self, right)).is_lt(),
+            ">=" => compare_ordered(&left, &resolve_operand(self, right)).is_ge(),
+            "<=" => compare_ordered(&left, &resolve_operand(self, right)).is_le(),
             " contains " => {
                 let right_val = resolve_operand(self, right);
                 to_string_value(&left).contains(&to_string_value(&right_val))
@@ -573,26 +565,20 @@ fn compare_values(a: &Value, b: &Value) -> bool {
     to_string_value(a) == to_string_value(b)
 }
 
-fn compare_ordered(a: &Value, b: &Value) -> i8 {
+fn compare_ordered(a: &Value, b: &Value) -> Ordering {
     if let (Some(lhs), Some(rhs)) = (to_f64(a), to_f64(b)) {
         if lhs < rhs {
-            return -1;
+            return Ordering::Less;
         }
         if lhs > rhs {
-            return 1;
+            return Ordering::Greater;
         }
-        return 0;
+        return Ordering::Equal;
     }
 
     let lhs = to_string_value(a);
     let rhs = to_string_value(b);
-    if lhs < rhs {
-        -1
-    } else if lhs > rhs {
-        1
-    } else {
-        0
-    }
+    lhs.cmp(&rhs)
 }
 
 fn to_f64(value: &Value) -> Option<f64> {
@@ -798,10 +784,10 @@ fn filter_matches(item: &Value, expr: FilterExpr<'_>) -> bool {
             match op {
                 FilterOp::Eq => compare_values(&left, &right),
                 FilterOp::Ne => !compare_values(&left, &right),
-                FilterOp::Gt => compare_ordered(&left, &right) > 0,
-                FilterOp::Lt => compare_ordered(&left, &right) < 0,
-                FilterOp::Ge => compare_ordered(&left, &right) >= 0,
-                FilterOp::Le => compare_ordered(&left, &right) <= 0,
+                FilterOp::Gt => compare_ordered(&left, &right).is_gt(),
+                FilterOp::Lt => compare_ordered(&left, &right).is_lt(),
+                FilterOp::Ge => compare_ordered(&left, &right).is_ge(),
+                FilterOp::Le => compare_ordered(&left, &right).is_le(),
             }
         }
     }
@@ -998,6 +984,8 @@ fn push_bracket_tokens<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
     use super::{compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator};
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -1221,11 +1209,14 @@ mod tests {
 
     #[test]
     fn compare_ordered_matches_go_rules() {
-        assert_eq!(compare_ordered(&json!(100), &json!(200)), -1);
-        assert_eq!(compare_ordered(&json!(200), &json!(200)), 0);
-        assert_eq!(compare_ordered(&json!(300), &json!(200)), 1);
-        assert_eq!(compare_ordered(&json!("apple"), &json!("banana")), -1);
-        assert_eq!(compare_ordered(&json!(10), &json!(10.0)), 0);
+        assert_eq!(compare_ordered(&json!(100), &json!(200)), Ordering::Less);
+        assert_eq!(compare_ordered(&json!(200), &json!(200)), Ordering::Equal);
+        assert_eq!(compare_ordered(&json!(300), &json!(200)), Ordering::Greater);
+        assert_eq!(
+            compare_ordered(&json!("apple"), &json!("banana")),
+            Ordering::Less
+        );
+        assert_eq!(compare_ordered(&json!(10), &json!(10.0)), Ordering::Equal);
     }
 
     #[test]
@@ -1334,13 +1325,17 @@ mod tests {
         #[test]
         fn evaluate_condition_fuzz_input_does_not_panic(condition in ".{0,96}") {
             let eval = ExpressionEvaluator::new(EvalContext::default());
-            let _ = eval.evaluate_condition(&condition);
+            match eval.evaluate_condition(&condition) {
+                true | false => {}
+            }
         }
 
         #[test]
         fn resolve_dot_path_fuzz_does_not_panic(path in ".{0,128}") {
             let root = json!({"a": [1, {"b": "c"}, [2, 3]], "d": null});
-            let _ = super::resolve_dot_path(&root, &path);
+            match super::resolve_dot_path(&root, &path) {
+                Ok(_) | Err(_) => {}
+            }
         }
 
         #[test]

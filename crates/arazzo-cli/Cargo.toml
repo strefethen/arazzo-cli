@@ -1,16 +1,17 @@
 [package]
 name = "arazzo-cli"
-description = "CLI for executing and debugging Arazzo 1.0.1 API workflow specifications"
+description = "CLI for executing Arazzo 1.0 API workflow specifications"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
-arazzo-debug-adapter = { path = "../arazzo-debug-adapter" }
 arazzo-spec = { path = "../arazzo-spec" }
 arazzo-runtime = { path = "../arazzo-runtime", features = ["schema"] }
 arazzo-validate = { path = "../arazzo-validate" }

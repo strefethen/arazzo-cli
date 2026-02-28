@@ -41,6 +41,11 @@ arazzo-cli/
 
 Toolchain is pinned in `rust-toolchain.toml`.
 
+## Compatibility Policy
+
+- **MSRV:** Rust `1.82`
+- CI validates stable plus an explicit MSRV job on Rust `1.82`
+
 ## Build And Verify
 
 Run from the repository root:
@@ -69,6 +74,19 @@ Optional install:
 cargo install --path ./crates/arazzo-cli --locked
 ```
 
+This project is private-release oriented right now: crates.io publishing is disabled across the workspace (`publish = false` in all manifests).
+
+## Internal Distribution (Private Repo)
+
+- Build and run directly from source:
+  - `cargo run -p arazzo-cli -- --json validate examples/httpbin-get.arazzo.yaml`
+- Install locally from a checked-out repo:
+  - `cargo install --path ./crates/arazzo-cli --locked`
+- For tagged internal releases, prefer release artifacts from your private GitHub release flow.
+- Release playbook: `docs/internal-release.md`
+- Tag helper: `bash scripts/release/cut-tag.sh <tag> [--push] [remote]`
+- Post-release validator: `bash scripts/release/verify-downloaded-release.sh <tag>`
+
 ## CLI Commands
 
 - `run <spec> <workflow-id>`
@@ -87,13 +105,19 @@ Global flags:
 
 - `--input key=value` (repeatable)
 - `--header Name=value` (repeatable)
-- `--timeout <duration>` (for example `30`, `30s`, `500ms`, `2m`)
+- `--http-timeout <duration>` (per-request HTTP timeout; default `30s`)
+- `--execution-timeout <duration>` (overall workflow deadline; default `5m`)
 - `--parallel`
 - `--dry-run`
+- `--openapi <path>` (repeatable operationId source specs)
+- `--input-json key=<json>` (repeatable JSON-typed inputs)
+- `--expr-diagnostics <off|warn|error>` (default `off`)
 - `--trace <path>` (write a `trace.v1` execution artifact)
 - `--trace-max-body-bytes <n>` (default `2048`)
 
 ## Examples
+
+Scenario catalog: see `examples/README.md` for intent-driven examples (`auth-flow`, `error-handling-retry`, `sub-workflow`, `multi-api-orchestration`).
 
 Validate a spec:
 
@@ -334,7 +358,7 @@ Runtime expressions:
 - `$request.query.Name` -> request query parameter
 - `$request.path.Name` -> request path parameter (substituted value)
 - `$request.body` / `$request.body.path` / `$request.body#/pointer` -> request body access
-- `$sourceDescriptions.{name}.url` -> source description URL lookup
+- `$sourceDescriptions.<name>.url` -> source description URL lookup
 - `//xpath/expression` -> XML/HTML extraction
 
 String interpolation:

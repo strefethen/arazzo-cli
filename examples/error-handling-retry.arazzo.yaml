@@ -1,0 +1,61 @@
+# error-handling-retry.arazzo.yaml
+#
+# Demonstrates pragmatic failure handling with retry, criteria-based goto, and
+# workflow-level fallback actions.
+#
+# Features covered:
+#   - `onFailure` retry with `retryAfter` and `retryLimit`
+#   - Criteria-driven `goto` recovery path
+#   - Workflow-level `failureActions` fallback
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/error-handling-retry.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/error-handling-retry.arazzo.yaml retry-then-recover --dry-run
+
+arazzo: 1.0.0
+info:
+  title: Error Handling and Retry
+  version: 1.0.0
+  description: >
+    Shows retry behavior for transient failures and a recovery step when retry
+    criteria still indicate a failing response.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  - workflowId: retry-then-recover
+    summary: Retry on server error, then goto recovery
+    failureActions:
+      - type: end
+    steps:
+      - stepId: unstable-call
+        operationPath: /status/503
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - type: retry
+            retryAfter: 1
+            retryLimit: 2
+            criteria:
+              - condition: $statusCode >= 500
+          - type: goto
+            stepId: recover
+            criteria:
+              - condition: $statusCode >= 500
+
+      - stepId: recover
+        operationPath: /get
+        parameters:
+          - name: recovered
+            in: query
+            value: "true"
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          recovered: $response.body.args.recovered
+
+    outputs:
+      recovered: $steps.recover.outputs.recovered

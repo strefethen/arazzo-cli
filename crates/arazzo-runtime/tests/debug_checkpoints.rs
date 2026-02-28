@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -330,7 +332,7 @@ fn build_failure_engine(base_url: String) -> Engine {
     }
 }
 
-fn build_retry_engine(base_url: String, retry_after: i64, retry_limit: i64) -> Engine {
+fn build_retry_engine(base_url: String, retry_after: u64, retry_limit: u64) -> Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {

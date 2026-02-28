@@ -10,12 +10,16 @@
 //! # Usage
 //!
 //! ```ignore
-//! use arazzo_runtime::{Engine, ClientConfig};
-//! use arazzo_validate::parse_and_validate;
+//! use std::collections::BTreeMap;
+//! use arazzo_runtime::EngineBuilder;
 //!
-//! let spec = parse_and_validate("spec.arazzo.yaml")?;
-//! let engine = Engine::new(&spec, ClientConfig::default());
-//! let result = engine.execute("workflow-id", &inputs)?;
+//! let spec = arazzo_validate::parse("spec.arazzo.yaml")?;
+//! let mut engine = EngineBuilder::new(spec)
+//!     .parallel(true)
+//!     .trace(true)
+//!     .build()?;
+//! let inputs = BTreeMap::new();
+//! let result = engine.execute("workflow-id", inputs)?;
 //! ```
 
 mod debug;
@@ -46,12 +50,13 @@ use runtime_core::{
 };
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::{
         build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
-        ArazzoSpec, ClientConfig, Engine, EvalContext, ExecutionEventKind, ExecutionOptions,
-        ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind, Step, StepEvent,
-        StepTarget, SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
+        ArazzoSpec, ClientConfig, ContentType, Engine, EvalContext, ExecutionEventKind,
+        ExecutionOptions, ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind,
+        Step, StepEvent, StepTarget, SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter,
@@ -104,7 +109,9 @@ mod tests {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Relaxed);
             if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
+                if handle.join().is_err() {
+                    // Test helper shutdown: server thread panic does not affect assertions.
+                }
             }
         }
     }
@@ -138,7 +145,9 @@ mod tests {
                             );
                         }
                         let mut body = String::new();
-                        let _ = request.as_reader().read_to_string(&mut body);
+                        if request.as_reader().read_to_string(&mut body).is_err() {
+                            // Test helper: unreadable request body is treated as empty.
+                        }
 
                         let response_data = handler(method, url, headers, body);
                         let mut response = TinyResponse::from_string(response_data.body)
@@ -150,7 +159,9 @@ mod tests {
                                 response = response.with_header(header);
                             }
                         }
-                        let _ = request.respond(response);
+                        if request.respond(response).is_err() {
+                            // Test helper: client may disconnect before reading response.
+                        }
                     }
                     Ok(None) => {}
                     Err(_) => break,
@@ -196,7 +207,9 @@ mod tests {
                                 );
                             }
                             let mut body = String::new();
-                            let _ = request.as_reader().read_to_string(&mut body);
+                            if request.as_reader().read_to_string(&mut body).is_err() {
+                                // Test helper: unreadable request body is treated as empty.
+                            }
 
                             let response_data = handler(method, url, headers, body);
                             let mut response = TinyResponse::from_string(response_data.body)
@@ -208,7 +221,9 @@ mod tests {
                                     response = response.with_header(header);
                                 }
                             }
-                            let _ = request.respond(response);
+                            if request.respond(response).is_err() {
+                                // Test helper: client may disconnect before reading response.
+                            }
                         });
                     }
                     Ok(None) => {}
@@ -260,8 +275,8 @@ mod tests {
         }]
     }
 
-    fn to_yaml(value: Value) -> serde_yaml::Value {
-        match serde_yaml::to_value(value) {
+    fn to_yaml(value: Value) -> serde_yml::Value {
+        match serde_yml::to_value(value) {
             Ok(v) => v,
             Err(err) => panic!("converting json to yaml: {err}"),
         }
@@ -1155,7 +1170,7 @@ mod tests {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "Authorization".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
+                    value: serde_yml::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
                     ..arazzo_spec::Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1187,20 +1202,23 @@ mod tests {
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml::Value::String("$inputs.q".to_string()),
+                    value: serde_yml::Value::String("$inputs.q".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
                 arazzo_spec::Parameter {
                     name: "tag".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml::Value::String("a=b".to_string()),
+                    value: serde_yml::Value::String("a=b".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
             ],
             ..Step::default()
         };
 
-        let url_result = engine.build_url_from_path("/search", &step, &vars);
+        let url_result = match engine.build_url_from_path("/search", &step, &vars) {
+            Ok(v) => v,
+            Err(err) => panic!("building URL for query encoding test: {err}"),
+        };
         let parsed = match Url::parse(&url_result.url) {
             Ok(v) => v,
             Err(err) => panic!("parsing url {}: {err}", url_result.url),
@@ -1222,9 +1240,32 @@ mod tests {
             ..Step::default()
         };
 
-        let url_result = engine.build_url_from_path("/users", &step, &vars);
+        let url_result = match engine.build_url_from_path("/users", &step, &vars) {
+            Ok(v) => v,
+            Err(err) => panic!("building URL for slash normalization test: {err}"),
+        };
         assert_eq!(url_result.url, "https://api.example.com/users");
         assert!(!url_result.url.contains("//users"));
+    }
+
+    #[test]
+    fn build_url_errors_for_unknown_source_description_prefix() {
+        let engine = new_test_engine("https://api.example.com", make_spec(Vec::new()));
+        let vars = super::VarStore::default();
+        let step = Step {
+            target: Some(StepTarget::OperationPath("{missing}./users".to_string())),
+            ..Step::default()
+        };
+
+        let err = match engine.build_url_from_path("{missing}./users", &step, &vars) {
+            Ok(result) => panic!(
+                "expected unknown sourceDescription error, got URL {}",
+                result.url
+            ),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionNotFound);
+        assert_eq!(err.code(), "RUNTIME_SOURCE_DESCRIPTION_NOT_FOUND");
     }
 
     #[test]
@@ -1447,7 +1488,7 @@ mod tests {
                     target: Some(StepTarget::WorkflowId("child".to_string())),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
-                        value: serde_yaml::Value::String("$inputs.uid".to_string()),
+                        value: serde_yml::Value::String("$inputs.uid".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1462,7 +1503,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: serde_yaml::Value::String("$inputs.userId".to_string()),
+                        value: serde_yml::Value::String("$inputs.userId".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -1724,7 +1765,7 @@ paths:
                 parameters: vec![arazzo_spec::Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml::Value::String("$inputs.userId".to_string()),
+                    value: serde_yml::Value::String("$inputs.userId".to_string()),
                     ..arazzo_spec::Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1841,19 +1882,19 @@ paths:
                     arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: serde_yaml::Value::String("$inputs.userId".to_string()),
+                        value: serde_yml::Value::String("$inputs.userId".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "Authorization".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml::Value::String("$inputs.token".to_string()),
+                        value: serde_yml::Value::String("$inputs.token".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "format".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("json".to_string()),
+                        value: serde_yml::Value::String("json".to_string()),
                         ..arazzo_spec::Parameter::default()
                     },
                 ],
@@ -1903,7 +1944,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -1915,7 +1956,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "X-Custom".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml::Value::String("custom-value".to_string()),
+                        value: serde_yml::Value::String("custom-value".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     request_body: Some(RequestBody {
@@ -2070,7 +2111,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2271,7 +2312,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yml::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2284,7 +2325,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yml::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -2298,13 +2339,13 @@ paths:
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml::Value::String("$steps.b.outputs.y".to_string()),
+                            value: serde_yml::Value::String("$steps.b.outputs.y".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "z".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml::Value::String("$steps.c.outputs.z".to_string()),
+                            value: serde_yml::Value::String("$steps.c.outputs.z".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -2446,7 +2487,9 @@ paths:
         let hook = Arc::new(TestTraceHook::default());
         let mut engine = new_test_engine(&server.base_url, spec);
         engine.set_trace_hook(hook.clone());
-        let _ = engine.execute("parent", BTreeMap::new());
+        if engine.execute("parent", BTreeMap::new()).is_err() {
+            // Intentional: test validates emitted hook events even on execution failure.
+        }
 
         let before = match hook.before_events.lock() {
             Ok(guard) => guard.clone(),
@@ -2916,7 +2959,7 @@ paths:
             body: br#"<?xml version="1.0"?><rss><channel><item><title>Hello</title></item></channel></rss>"#
                 .to_vec(),
             body_json: None,
-            content_type: "xml".to_string(),
+            content_type: ContentType::Xml,
         };
         let eval = ExpressionEvaluator::new(EvalContext::default());
 
@@ -2954,7 +2997,7 @@ paths:
             headers: BTreeMap::new(),
             body: Vec::new(),
             body_json: None,
-            content_type: "json".to_string(),
+            content_type: ContentType::Json,
         };
         let ordered = vec![
             OnAction {
@@ -2983,7 +3026,7 @@ paths:
             headers: BTreeMap::new(),
             body: br#"{"pets":[{"id":1}]}"#.to_vec(),
             body_json: Some(json!({"pets":[{"id":1}]})),
-            content_type: "json".to_string(),
+            content_type: ContentType::Json,
         };
         let typed = vec![OnAction {
             name: "typed".to_string(),
@@ -3039,7 +3082,7 @@ paths:
             parameters: vec![arazzo_spec::Parameter {
                 name: "q".to_string(),
                 in_: Some(ParamLocation::Query),
-                value: serde_yaml::Value::String("$steps.s1.outputs.query".to_string()),
+                value: serde_yml::Value::String("$steps.s1.outputs.query".to_string()),
                 ..arazzo_spec::Parameter::default()
             }],
             outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
@@ -3123,7 +3166,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3145,7 +3188,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.s2.outputs.id".to_string()),
+                        value: serde_yml::Value::String("$steps.s2.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3155,7 +3198,7 @@ paths:
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -3193,13 +3236,13 @@ paths:
                         arazzo_spec::Parameter {
                             name: "x".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml::Value::String("$steps.a.outputs.id".to_string()),
+                            value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml::Value::String("$steps.b.outputs.id".to_string()),
+                            value: serde_yml::Value::String("$steps.b.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -3281,7 +3324,7 @@ paths:
                         parameters.push(arazzo_spec::Parameter {
                             name: format!("p{dep}"),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml::Value::String(format!(
+                            value: serde_yml::Value::String(format!(
                                 "$steps.s{dep}.outputs.value"
                             )),
                             ..arazzo_spec::Parameter::default()
@@ -3562,7 +3605,7 @@ paths:
                 parameters: vec![Parameter {
                     name: "X-Workflow-Header".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml::Value::String("workflow-value".to_string()),
+                    value: serde_yml::Value::String("workflow-value".to_string()),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -3578,7 +3621,9 @@ paths:
             Err(err) => panic!("creating engine: {err}"),
         };
         engine.set_dry_run_mode(true);
-        let _ = engine.execute("wf", BTreeMap::new());
+        if engine.execute("wf", BTreeMap::new()).is_err() {
+            panic!("expected dry-run execution to succeed");
+        }
         let reqs = engine.dry_run_requests();
         assert_eq!(reqs.len(), 1);
         assert_eq!(
@@ -3596,7 +3641,7 @@ paths:
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml::Value::String("default-token".to_string()),
+                    value: serde_yml::Value::String("default-token".to_string()),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -3605,7 +3650,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml::Value::String("step-token".to_string()),
+                        value: serde_yml::Value::String("step-token".to_string()),
                         ..Parameter::default()
                     }],
                     ..Step::default()
@@ -3618,7 +3663,9 @@ paths:
             Err(err) => panic!("creating engine: {err}"),
         };
         engine.set_dry_run_mode(true);
-        let _ = engine.execute("wf", BTreeMap::new());
+        if engine.execute("wf", BTreeMap::new()).is_err() {
+            panic!("expected dry-run execution to succeed");
+        }
         let reqs = engine.dry_run_requests();
         assert_eq!(reqs.len(), 1);
         assert_eq!(
@@ -3637,7 +3684,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Parent".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml::Value::String("parent-val".to_string()),
+                        value: serde_yml::Value::String("parent-val".to_string()),
                         ..Parameter::default()
                     }],
                     steps: vec![Step {
@@ -3645,7 +3692,7 @@ paths:
                         target: Some(StepTarget::WorkflowId("child".to_string())),
                         parameters: vec![Parameter {
                             name: "input_val".to_string(),
-                            value: serde_yaml::Value::String("hello".to_string()),
+                            value: serde_yml::Value::String("hello".to_string()),
                             ..Parameter::default()
                         }],
                         ..Step::default()
@@ -3668,7 +3715,9 @@ paths:
             Err(err) => panic!("creating engine: {err}"),
         };
         engine.set_dry_run_mode(true);
-        let _ = engine.execute("parent", BTreeMap::new());
+        if engine.execute("parent", BTreeMap::new()).is_err() {
+            panic!("expected parent workflow dry-run execution to succeed");
+        }
         let reqs = engine.dry_run_requests();
         // child-step should NOT have the parent's X-Parent header
         assert_eq!(reqs.len(), 1);
@@ -3767,7 +3816,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "X-Auth".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml::Value::String("Bearer token123".to_string()),
+                        value: serde_yml::Value::String("Bearer token123".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -3808,7 +3857,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "page".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml::Value::String("5".to_string()),
+                        value: serde_yml::Value::String("5".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -3851,7 +3900,7 @@ paths:
                     parameters: vec![Parameter {
                         name: "userId".to_string(),
                         in_: Some(ParamLocation::Path),
-                        value: serde_yaml::Value::String("42".to_string()),
+                        value: serde_yml::Value::String("42".to_string()),
                         ..Parameter::default()
                     }],
                     success_criteria: success_200(),
