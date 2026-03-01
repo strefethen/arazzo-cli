@@ -24,6 +24,14 @@ pub enum Commands {
         spec: String,
         workflow_id: String,
 
+        /// Execute a single step within the workflow (auto-resolves dependencies)
+        #[arg(long = "step")]
+        step: Option<String>,
+
+        /// Skip dependency resolution when using --step (isolated execution)
+        #[arg(long = "no-deps", requires = "step")]
+        no_deps: bool,
+
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
@@ -87,6 +95,11 @@ pub enum Commands {
         workflow_id: String,
         #[arg(long = "dir", default_value = ".")]
         dir: String,
+    },
+    /// List steps within a workflow
+    Steps {
+        spec: String,
+        workflow_id: String,
     },
     /// Print JSON Schema for a command's --json output
     Schema {

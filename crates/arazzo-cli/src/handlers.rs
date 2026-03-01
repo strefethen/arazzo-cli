@@ -101,11 +101,21 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
 
     let run_started_at = SystemTime::now();
     let run_started_inst = std::time::Instant::now();
-    let outputs_result = engine.execute_with_options(
-        &run.workflow_id,
-        inputs.clone(),
-        ExecutionOptions::with_timeout(execution_timeout),
-    );
+    let outputs_result = if let Some(step_id) = &run.step_id {
+        engine.execute_step(
+            &run.workflow_id,
+            step_id,
+            inputs.clone(),
+            ExecutionOptions::with_timeout(execution_timeout),
+            run.no_deps,
+        )
+    } else {
+        engine.execute_with_options(
+            &run.workflow_id,
+            inputs.clone(),
+            ExecutionOptions::with_timeout(execution_timeout),
+        )
+    };
     let run_finished_at = SystemTime::now();
     let run_duration = run_started_inst.elapsed();
 
@@ -265,6 +275,16 @@ pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String>
     output::emit_catalog(&catalog, global.json)
 }
 
+pub fn list_steps(path: &str, workflow_id: &str, global: GlobalOptions) -> Result<(), String> {
+    let spec = arazzo_validate::parse(path).map_err(|err| err.to_string())?;
+    let workflow = spec
+        .workflows
+        .iter()
+        .find(|wf| wf.workflow_id == workflow_id)
+        .ok_or_else(|| format!("workflow \"{workflow_id}\" not found in {path}"))?;
+    output::emit_step_list(path, workflow, global.json)
+}
+
 pub fn show_workflow(workflow_id: &str, dir: &str, global: GlobalOptions) -> Result<(), String> {
     let (spec, file) = find_workflow(dir, workflow_id)?;
     let workflow = spec
@@ -379,18 +399,21 @@ fn parse_input_kv(raw: &str) -> Result<(String, &str), String> {
 pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
-    use crate::output::{CatalogEntry, RunOutput, ValidateResult, WorkflowDetail, WorkflowInfo};
+    use crate::output::{
+        CatalogEntry, RunOutput, StepInfo, ValidateResult, WorkflowDetail, WorkflowInfo,
+    };
 
     match command {
         Some("validate") => output::output_json(&schema_for!(ValidateResult)),
         Some("list") => output::output_json(&schema_for!(Vec<WorkflowInfo>)),
         Some("catalog") => output::output_json(&schema_for!(Vec<CatalogEntry>)),
         Some("show") => output::output_json(&schema_for!(WorkflowDetail)),
+        Some("steps") => output::output_json(&schema_for!(Vec<StepInfo>)),
         Some("run") => output::output_json(&schema_for!(RunOutput)),
         Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, run"
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run"
         )),
-        None => output::output_json(&["validate", "list", "catalog", "show", "run"]),
+        None => output::output_json(&["validate", "list", "catalog", "show", "steps", "run"]),
     }
 }
 

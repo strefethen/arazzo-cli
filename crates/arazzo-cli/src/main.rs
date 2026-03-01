@@ -41,6 +41,8 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Run {
             spec,
             workflow_id,
+            step,
+            no_deps,
             input,
             input_json,
             http_timeout,
@@ -58,6 +60,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 RunOptions {
                     spec_path: spec,
                     workflow_id,
+                    step_id: step,
+                    no_deps,
                     input_flags: input,
                     input_json_flags: input_json,
                     http_timeout,
@@ -77,6 +81,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::List { spec } => handlers::list_workflows(&spec, global),
         Commands::Catalog { dir } => handlers::catalog_workflows(&dir, global),
         Commands::Show { workflow_id, dir } => handlers::show_workflow(&workflow_id, &dir, global),
+        Commands::Steps { spec, workflow_id } => handlers::list_steps(&spec, &workflow_id, global),
         Commands::Schema { command } => handlers::schema(command.as_deref()),
     }
 }

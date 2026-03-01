@@ -1,11 +1,40 @@
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{DryRunRequest, TraceStepRecord};
-use arazzo_spec::{ArazzoSpec, Workflow};
+use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Error as ValidateError, ValidationErrorKind};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StepInfo {
+    pub step_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referenced_workflow: Option<String>,
+    pub position: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StepSummary {
+    pub step_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +81,8 @@ pub struct WorkflowDetail {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
-    pub steps: usize,
+    pub step_count: usize,
+    pub steps: Vec<StepSummary>,
     pub inputs: BTreeMap<String, InputDetail>,
     pub outputs: Vec<String>,
     pub sources: Vec<SourceInfo>,
@@ -285,12 +315,15 @@ pub fn emit_workflow_detail(
             }
         }
 
+        let step_summaries = workflow.steps.iter().map(build_step_summary).collect();
+
         return output_json(&WorkflowDetail {
             id: workflow.workflow_id.clone(),
             file,
             title: spec.info.title.clone(),
             summary: workflow.summary.clone(),
-            steps: workflow.steps.len(),
+            step_count: workflow.steps.len(),
+            steps: step_summaries,
             inputs,
             outputs: workflow.outputs.keys().cloned().collect(),
             sources: build_sources(spec),
@@ -473,4 +506,103 @@ pub fn build_workflow_info(wf: &Workflow) -> WorkflowInfo {
         inputs,
         outputs,
     }
+}
+
+/// Extract method and URL from a step's target using static analysis only.
+///
+/// `OperationPath` strings like `"POST /post"` are split on the first space.
+/// If no explicit HTTP verb is found, the method defaults to `GET` (no body)
+/// or `POST` (has body).
+fn parse_step_target(
+    step: &Step,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    match &step.target {
+        Some(StepTarget::OperationPath(path)) => {
+            let (method, url) = parse_operation_path(path, step.request_body.is_some());
+            (Some(method), Some(url), None, None)
+        }
+        Some(StepTarget::OperationId(id)) => (None, None, Some(id.clone()), None),
+        Some(StepTarget::WorkflowId(id)) => (None, None, None, Some(id.clone())),
+        None => (None, None, None, None),
+    }
+}
+
+fn parse_operation_path(path: &str, has_body: bool) -> (String, String) {
+    let known_methods = [
+        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE",
+    ];
+    if let Some((first, rest)) = path.split_once(' ') {
+        let upper = first.to_uppercase();
+        if known_methods.contains(&upper.as_str()) {
+            return (upper, rest.to_string());
+        }
+    }
+    let method = if has_body { "POST" } else { "GET" };
+    (method.to_string(), path.to_string())
+}
+
+pub fn build_step_info(step: &Step, position: usize) -> StepInfo {
+    let (method, url, operation_id, referenced_workflow) = parse_step_target(step);
+    StepInfo {
+        step_id: step.step_id.clone(),
+        description: step.description.clone(),
+        method,
+        url,
+        operation_id,
+        referenced_workflow,
+        position,
+    }
+}
+
+pub fn build_step_summary(step: &Step) -> StepSummary {
+    let (method, url, _, _) = parse_step_target(step);
+    StepSummary {
+        step_id: step.step_id.clone(),
+        description: step.description.clone(),
+        method,
+        url,
+    }
+}
+
+pub fn emit_step_list(spec_file: &str, workflow: &Workflow, json: bool) -> Result<(), String> {
+    let steps: Vec<StepInfo> = workflow
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| build_step_info(step, i))
+        .collect();
+
+    if json {
+        return output_json(&steps);
+    }
+
+    println!(
+        "Steps in workflow \"{}\" ({}):\n",
+        workflow.workflow_id, spec_file
+    );
+    println!(
+        "  {:<4} {:<16} {:<16} Description",
+        "#", "Step ID", "Target"
+    );
+    for info in &steps {
+        let target = if let (Some(m), Some(u)) = (&info.method, &info.url) {
+            format!("{m} {u}")
+        } else if let Some(wf) = &info.referenced_workflow {
+            format!("workflow:{wf}")
+        } else if let Some(op) = &info.operation_id {
+            format!("op:{op}")
+        } else {
+            "---".to_string()
+        };
+        println!(
+            "  {:<4} {:<16} {:<16} {}",
+            info.position, info.step_id, target, info.description
+        );
+    }
+    Ok(())
 }

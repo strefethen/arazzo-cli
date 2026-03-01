@@ -251,7 +251,9 @@ fn catalog_and_show_json_work_with_temp_directory() {
         show_body.get("id"),
         Some(&Value::String("status-check".to_string()))
     );
-    assert_eq!(show_body.get("steps"), Some(&Value::Number(2.into())));
+    assert_eq!(show_body.get("step_count"), Some(&Value::Number(2.into())));
+    let steps_arr = show_body.get("steps").and_then(|v| v.as_array());
+    assert_eq!(steps_arr.map(|a| a.len()), Some(2));
 }
 
 #[test]

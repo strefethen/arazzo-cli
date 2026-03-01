@@ -14,6 +14,8 @@ pub struct GlobalOptions {
 pub struct RunOptions {
     pub spec_path: String,
     pub workflow_id: String,
+    pub step_id: Option<String>,
+    pub no_deps: bool,
     pub input_flags: Vec<String>,
     pub input_json_flags: Vec<String>,
     pub http_timeout: Duration,

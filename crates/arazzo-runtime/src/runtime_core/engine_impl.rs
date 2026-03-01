@@ -186,6 +186,135 @@ impl Engine {
         self.execute_inner(workflow_id, inputs, 0, &options)
     }
 
+    /// Execute a single step (and optionally its transitive dependencies) within a workflow.
+    ///
+    /// When `no_deps` is false (default), computes transitive step dependencies via
+    /// `$steps.*` references and executes them in workflow order before the target.
+    /// When `no_deps` is true, executes only the target step — failing early if it
+    /// references outputs from steps that have not been executed.
+    pub fn execute_step(
+        &mut self,
+        workflow_id: &str,
+        step_id: &str,
+        inputs: BTreeMap<String, Value>,
+        options: ExecutionOptions,
+        no_deps: bool,
+    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        if self.dry_run_mode {
+            if let Ok(mut guard) = self.dry_run_reqs.lock() {
+                guard.clear();
+            }
+        }
+        self.clear_trace_state();
+
+        let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
+            RuntimeError::new(
+                RuntimeErrorKind::WorkflowNotFound,
+                format!("workflow \"{workflow_id}\" not found"),
+            )
+        })?;
+
+        let target_idx = workflow
+            .steps
+            .iter()
+            .position(|s| s.step_id == step_id)
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::StepNotFound,
+                    format!("step \"{step_id}\" not found in workflow \"{workflow_id}\""),
+                )
+            })?;
+
+        let steps_to_run: Vec<usize> = if no_deps {
+            // Check for missing dependencies and fail early with a clear message
+            let direct_refs = extract_step_refs(&workflow.steps[target_idx]);
+            if !direct_refs.is_empty() {
+                let dep_names = direct_refs.join(", ");
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::StepMissingDependency,
+                    format!(
+                        "step \"{step_id}\" references outputs from step(s) [{dep_names}] which were not executed (use without --no-deps to auto-resolve)"
+                    ),
+                ));
+            }
+            vec![target_idx]
+        } else {
+            let mut deps = compute_transitive_deps(&workflow, step_id)?;
+            deps.insert(target_idx);
+            deps.into_iter().collect()
+        };
+
+        let mut vars = VarStore::default();
+        for (k, v) in inputs {
+            vars.set_input(&k, v);
+        }
+
+        for &idx in &steps_to_run {
+            options.check()?;
+            let step = {
+                let mut s = workflow.steps[idx].clone();
+                merge_workflow_params(&workflow.parameters, &mut s);
+                s
+            };
+
+            let start = std::time::Instant::now();
+            let attempt = if self.trace_enabled {
+                self.next_attempt(workflow_id, &step.step_id)
+            } else {
+                0
+            };
+
+            let execution =
+                match self.execute_step_with_result(workflow_id, &step, &mut vars, 0, &options) {
+                    Ok(exec) => exec,
+                    Err(err) => {
+                        let duration = start.elapsed();
+                        if self.trace_enabled {
+                            let record = self.build_step_trace_record(
+                                workflow_id,
+                                &step,
+                                attempt,
+                                duration,
+                                &StepTraceData::default(),
+                                TraceDecision::with_path(TraceDecisionPath::Error),
+                                BTreeMap::new(),
+                                Some(err.message.clone()),
+                            );
+                            self.push_trace_record(record);
+                        }
+                        return Err(err);
+                    }
+                };
+            let duration = start.elapsed();
+            let step_outputs = vars.step_outputs(&step.step_id);
+
+            if self.trace_enabled {
+                let trace_err = execution.result.err.clone();
+                let record = self.build_step_trace_record(
+                    workflow_id,
+                    &step,
+                    attempt,
+                    duration,
+                    &execution.trace,
+                    TraceDecision::with_path(TraceDecisionPath::Next),
+                    step_outputs,
+                    trace_err,
+                );
+                self.push_trace_record(record);
+            }
+
+            if !execution.result.success {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::SuccessCriteriaFailed,
+                    format!("step \"{}\" failed success criteria", step.step_id),
+                ));
+            }
+        }
+
+        // Return the target step's outputs
+        Ok(vars.step_outputs(step_id))
+    }
+
     fn execute_inner(
         &mut self,
         workflow_id: &str,

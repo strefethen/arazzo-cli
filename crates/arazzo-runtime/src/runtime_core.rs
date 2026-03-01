@@ -47,6 +47,7 @@ pub enum RuntimeErrorKind {
     SubWorkflowFailed,
     SuccessCriteriaFailed,
     DebugController,
+    StepMissingDependency,
 }
 
 impl RuntimeErrorKind {
@@ -75,6 +76,7 @@ impl RuntimeErrorKind {
             Self::SubWorkflowFailed => "RUNTIME_SUB_WORKFLOW_FAILED",
             Self::SuccessCriteriaFailed => "RUNTIME_SUCCESS_CRITERIA_FAILED",
             Self::DebugController => "RUNTIME_DEBUG_CONTROLLER",
+            Self::StepMissingDependency => "STEP_MISSING_DEPENDENCY",
         }
     }
 }
@@ -875,13 +877,14 @@ use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
 
 use helpers::{
-    can_execute_parallel, parse_source_prefix, replace_path_params, resolve_payload,
-    sleep_with_checks, step_result_error, value_to_string,
+    can_execute_parallel, compute_transitive_deps, parse_source_prefix, replace_path_params,
+    resolve_payload, sleep_with_checks, step_result_error, value_to_string,
 };
 
+#[cfg(test)]
+pub(crate) use helpers::has_control_flow;
 pub(crate) use helpers::{
     build_levels, evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
-    evaluate_output_expression_detailed, extract_xpath, parse_method, CriterionEvaluation,
+    evaluate_output_expression_detailed, extract_step_refs, extract_xpath, parse_method,
+    CriterionEvaluation,
 };
-#[cfg(test)]
-pub(crate) use helpers::{extract_step_refs, has_control_flow};

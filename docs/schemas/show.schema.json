@@ -27,10 +27,16 @@
         "$ref": "#/$defs/SourceInfo"
       }
     },
-    "steps": {
+    "step_count": {
       "type": "integer",
       "format": "uint",
       "minimum": 0
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StepSummary"
+      }
     },
     "summary": {
       "type": "string"
@@ -43,6 +49,7 @@
     "id",
     "file",
     "title",
+    "step_count",
     "steps",
     "inputs",
     "outputs",
@@ -84,6 +91,32 @@
         "name",
         "url",
         "type"
+      ]
+    },
+    "StepSummary": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stepId": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "stepId"
       ]
     }
   }

@@ -847,3 +847,44 @@ fn scan_payload_refs(value: &serde_yml::Value, scan: &mut impl FnMut(&str)) {
         _ => {}
     }
 }
+
+/// Compute the transitive set of step indices that `target_step_id` depends on
+/// (via `$steps.*` references). Returns a `BTreeSet` of step indices that must
+/// execute before the target, **not** including the target itself.
+pub(crate) fn compute_transitive_deps(
+    workflow: &Workflow,
+    target_step_id: &str,
+) -> Result<BTreeSet<usize>, RuntimeError> {
+    let mut id_to_idx = BTreeMap::<&str, usize>::new();
+    for (idx, step) in workflow.steps.iter().enumerate() {
+        id_to_idx.insert(&step.step_id, idx);
+    }
+
+    let target_idx = *id_to_idx.get(target_step_id).ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::StepNotFound,
+            format!(
+                "step \"{}\" not found in workflow \"{}\"",
+                target_step_id, workflow.workflow_id
+            ),
+        )
+    })?;
+
+    // BFS from target step over extract_step_refs edges
+    let mut visited = BTreeSet::<usize>::new();
+    let mut queue = std::collections::VecDeque::<usize>::new();
+    queue.push_back(target_idx);
+
+    while let Some(idx) = queue.pop_front() {
+        let refs = extract_step_refs(&workflow.steps[idx]);
+        for ref_id in &refs {
+            if let Some(&dep_idx) = id_to_idx.get(ref_id.as_str()) {
+                if dep_idx != target_idx && visited.insert(dep_idx) {
+                    queue.push_back(dep_idx);
+                }
+            }
+        }
+    }
+
+    Ok(visited)
+}
