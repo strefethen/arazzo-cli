@@ -1,0 +1,4 @@
+{
+  "scopeName": "source.arazzo",
+  "patterns": [{ "include": "source.yaml" }]
+}

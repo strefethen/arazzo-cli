@@ -35,14 +35,29 @@
     "Debuggers"
   ],
   "activationEvents": [
-    "onDebug",
-    "onDebugResolve:arazzo"
+    "onDebugResolve:arazzo",
+    "onLanguage:arazzo"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "languages": [
+      {
+        "id": "arazzo",
+        "aliases": ["Arazzo", "arazzo"],
+        "extensions": [".arazzo.yaml", ".arazzo.yml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "arazzo",
+        "scopeName": "source.arazzo",
+        "path": "./syntaxes/arazzo.tmLanguage.json"
+      }
+    ],
     "breakpoints": [
       {
-        "language": "yaml"
+        "language": "arazzo"
       }
     ],
     "debuggers": [
@@ -50,7 +65,7 @@
         "type": "arazzo",
         "label": "Arazzo",
         "languages": [
-          "yaml"
+          "arazzo"
         ],
         "configurationAttributes": {
           "launch": {
@@ -103,6 +118,33 @@
             "spec": "${file}",
             "workflowId": "",
             "inputs": {}
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Arazzo: Debug Workflow",
+            "description": "Debug an Arazzo workflow spec.",
+            "body": {
+              "type": "arazzo",
+              "request": "launch",
+              "name": "Debug ${1:workflow-name}",
+              "spec": "^\"\\${file}\"",
+              "workflowId": "${2:workflow-id}",
+              "inputs": {}
+            }
+          },
+          {
+            "label": "Arazzo: Debug with Stop on Entry",
+            "description": "Debug an Arazzo workflow, pausing at entry.",
+            "body": {
+              "type": "arazzo",
+              "request": "launch",
+              "name": "Debug ${1:workflow-name} (stop on entry)",
+              "spec": "^\"\\${file}\"",
+              "workflowId": "${2:workflow-id}",
+              "inputs": {},
+              "stopOnEntry": true
+            }
           }
         ]
       }
