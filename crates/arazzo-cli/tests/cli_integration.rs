@@ -1596,3 +1596,339 @@ fn catalog_json_entries_have_expected_fields() {
         "catalog entry should have 'workflows' array"
     );
 }
+
+// ---------------------------------------------------------------------------
+// steps --json tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn steps_json_returns_step_array_with_expected_fields() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "steps", &spec_str, "get-origin"].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    let steps = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected steps array, got: {body}"),
+    };
+    assert_eq!(steps.len(), 1);
+
+    let step = &steps[0];
+    assert_eq!(
+        step.get("stepId"),
+        Some(&Value::String("fetch-ip".to_string()))
+    );
+    assert_eq!(step.get("method"), Some(&Value::String("GET".to_string())));
+    assert_eq!(step.get("url"), Some(&Value::String("/get".to_string())));
+    assert_eq!(step.get("position"), Some(&Value::Number(0.into())));
+}
+
+#[test]
+fn steps_json_chained_workflow_returns_multiple_steps() {
+    let mut spec = repo_root();
+    spec.push("examples/httpbin-chained-posts.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "steps", &spec_str, "post-chain"].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    let steps = match body.as_array() {
+        Some(v) => v,
+        None => panic!("expected steps array, got: {body}"),
+    };
+    assert_eq!(steps.len(), 3);
+
+    let ids: Vec<&str> = steps
+        .iter()
+        .filter_map(|s| s.get("stepId").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["post-initial", "post-enriched", "post-final"]);
+
+    // All steps should have POST method (operationPath starts with "POST ")
+    for step in steps {
+        assert_eq!(
+            step.get("method"),
+            Some(&Value::String("POST".to_string())),
+            "expected POST for step {:?}",
+            step.get("stepId")
+        );
+    }
+
+    // Positions should be sequential
+    let positions: Vec<u64> = steps
+        .iter()
+        .filter_map(|s| s.get("position").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(positions, vec![0, 1, 2]);
+}
+
+#[test]
+fn steps_json_missing_workflow_fails() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "steps", &spec_str, "nonexistent"].as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+}
+
+#[test]
+fn steps_human_output_includes_header() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["steps", &spec_str, "get-origin"].as_slice(), None);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("get-origin"), "should mention workflow ID");
+    assert!(stdout.contains("fetch-ip"), "should mention step ID");
+}
+
+#[test]
+fn steps_schema_is_available() {
+    let output = run(["schema", "steps"].as_slice(), None);
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_eq!(
+        body.get("title"),
+        Some(&Value::String("Array_of_StepInfo".to_string()))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// show --json step detail tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn show_json_includes_step_details() {
+    let temp = TempDir::new("arazzo-show-steps");
+    let source = fixture_spec();
+    let mut dest = temp.path().to_path_buf();
+    dest.push("spec.yaml");
+    if let Err(err) = fs::copy(&source, &dest) {
+        panic!("copying fixture: {err}");
+    }
+
+    let dir_str = temp.path().to_string_lossy().to_string();
+    let output = run(
+        ["--json", "show", "get-origin", "--dir", &dir_str].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+
+    // step_count should match steps array length
+    let step_count = body.get("step_count").and_then(Value::as_u64).unwrap_or(0);
+    let steps = match body.get("steps").and_then(Value::as_array) {
+        Some(s) => s,
+        None => panic!("show should include steps array"),
+    };
+    assert_eq!(step_count as usize, steps.len());
+
+    // Verify step content
+    let step = &steps[0];
+    assert_eq!(
+        step.get("stepId"),
+        Some(&Value::String("fetch-ip".to_string()))
+    );
+    assert_eq!(step.get("method"), Some(&Value::String("GET".to_string())));
+    assert_eq!(step.get("url"), Some(&Value::String("/get".to_string())));
+}
+
+// ---------------------------------------------------------------------------
+// run --step tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_step_json_single_step_no_deps() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "fetch-ip",
+            &spec_str,
+            "get-origin",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "success");
+    let outputs = match body.get("outputs") {
+        Some(o) => o,
+        None => panic!("should have outputs field"),
+    };
+    assert!(outputs.get("origin").is_some(), "should have origin output");
+    assert!(outputs.get("url").is_some(), "should have url output");
+}
+
+#[test]
+fn run_step_json_with_dependency_resolution() {
+    let mut spec = repo_root();
+    spec.push("examples/httpbin-chained-posts.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    // post-enriched depends on post-initial — should auto-resolve
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "post-enriched",
+            &spec_str,
+            "post-chain",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "success");
+    let outputs = match body.get("outputs") {
+        Some(o) => o,
+        None => panic!("should have outputs field"),
+    };
+    assert!(
+        outputs.get("enriched_action").is_some(),
+        "should have enriched_action output"
+    );
+}
+
+#[test]
+fn run_step_no_deps_succeeds_for_standalone_step() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "fetch-ip",
+            "--no-deps",
+            &spec_str,
+            "get-origin",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "success");
+}
+
+#[test]
+fn run_step_no_deps_fails_when_deps_exist() {
+    let mut spec = repo_root();
+    spec.push("examples/httpbin-chained-posts.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "post-enriched",
+            "--no-deps",
+            &spec_str,
+            "post-chain",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
+    assert_eq!(code, "STEP_MISSING_DEPENDENCY");
+    let error = body
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        error.contains("post-initial"),
+        "error should mention the missing dep: {error}"
+    );
+}
+
+#[test]
+fn run_step_dry_run_returns_request() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "fetch-ip",
+            "--dry-run",
+            &spec_str,
+            "get-origin",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "dryRun");
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].get("stepId"),
+        Some(&Value::String("fetch-ip".to_string()))
+    );
+}
+
+#[test]
+fn run_step_missing_step_id_fails() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        [
+            "--json",
+            "run",
+            "--step",
+            "nonexistent",
+            &spec_str,
+            "get-origin",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+}
+
+#[test]
+fn run_no_deps_without_step_fails() {
+    // --no-deps requires --step
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "run", "--no-deps", &spec_str, "get-origin"].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "--no-deps without --step should be rejected by clap"
+    );
+}

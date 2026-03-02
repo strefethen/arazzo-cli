@@ -45,18 +45,19 @@ use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{ArazzoSpec, OnAction, Step, StepTarget, SuccessCriterion, Workflow};
 #[cfg(test)]
 use runtime_core::{
-    build_levels, evaluate_criterion, extract_step_refs, extract_xpath, has_control_flow,
-    parse_method, VarStore,
+    build_levels, compute_transitive_deps, evaluate_criterion, extract_step_refs, extract_xpath,
+    has_control_flow, parse_method, VarStore,
 };
 
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
     use super::{
-        build_levels, evaluate_criterion, extract_step_refs, has_control_flow, parse_method,
-        ArazzoSpec, ClientConfig, ContentType, Engine, EvalContext, ExecutionEventKind,
-        ExecutionOptions, ExpressionEvaluator, OnAction, Response, RuntimeError, RuntimeErrorKind,
-        Step, StepEvent, StepTarget, SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
+        build_levels, compute_transitive_deps, evaluate_criterion, extract_step_refs,
+        has_control_flow, parse_method, ArazzoSpec, ClientConfig, ContentType, Engine, EvalContext,
+        ExecutionEventKind, ExecutionOptions, ExpressionEvaluator, OnAction, Response,
+        RuntimeError, RuntimeErrorKind, Step, StepEvent, StepTarget, SuccessCriterion,
+        TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter,
@@ -4168,6 +4169,446 @@ paths:
             };
         assert_eq!(result.get("method"), Some(&json!("GET")));
         assert_eq!(result.get("input"), Some(&json!("Alice")));
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_transitive_deps unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compute_transitive_deps_no_deps_returns_empty() {
+        let workflow = Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        };
+
+        let deps = match compute_transitive_deps(&workflow, "a") {
+            Ok(d) => d,
+            Err(e) => panic!("no-deps step a should resolve: {e}"),
+        };
+        assert!(deps.is_empty(), "step with no refs should have no deps");
+
+        let deps = match compute_transitive_deps(&workflow, "b") {
+            Ok(d) => d,
+            Err(e) => panic!("no-deps step b should resolve: {e}"),
+        };
+        assert!(deps.is_empty(), "step with no refs should have no deps");
+    }
+
+    #[test]
+    fn compute_transitive_deps_direct_dependency() {
+        let workflow = Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    outputs: BTreeMap::from([(
+                        "val".to_string(),
+                        "$steps.a.outputs.result".to_string(),
+                    )]),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        };
+
+        let deps = match compute_transitive_deps(&workflow, "b") {
+            Ok(d) => d,
+            Err(e) => panic!("direct dep should resolve: {e}"),
+        };
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&0), "b depends on a (index 0)");
+    }
+
+    #[test]
+    fn compute_transitive_deps_transitive_chain() {
+        // c -> b -> a (transitive)
+        let workflow = Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    outputs: BTreeMap::from([(
+                        "val".to_string(),
+                        "$steps.a.outputs.result".to_string(),
+                    )]),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "c".to_string(),
+                    target: Some(StepTarget::OperationPath("/c".to_string())),
+                    outputs: BTreeMap::from([(
+                        "val".to_string(),
+                        "$steps.b.outputs.val".to_string(),
+                    )]),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        };
+
+        let deps = match compute_transitive_deps(&workflow, "c") {
+            Ok(d) => d,
+            Err(e) => panic!("transitive chain should resolve: {e}"),
+        };
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&0), "c transitively depends on a");
+        assert!(deps.contains(&1), "c directly depends on b");
+    }
+
+    #[test]
+    fn compute_transitive_deps_diamond() {
+        // d -> b, d -> c, b -> a, c -> a
+        let workflow = Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    parameters: vec![arazzo_spec::Parameter {
+                        name: "x".to_string(),
+                        in_: Some(ParamLocation::Query),
+                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                        ..arazzo_spec::Parameter::default()
+                    }],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "c".to_string(),
+                    parameters: vec![arazzo_spec::Parameter {
+                        name: "y".to_string(),
+                        in_: Some(ParamLocation::Query),
+                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                        ..arazzo_spec::Parameter::default()
+                    }],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "d".to_string(),
+                    outputs: BTreeMap::from([
+                        ("v1".to_string(), "$steps.b.outputs.r".to_string()),
+                        ("v2".to_string(), "$steps.c.outputs.r".to_string()),
+                    ]),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        };
+
+        let deps = match compute_transitive_deps(&workflow, "d") {
+            Ok(d) => d,
+            Err(e) => panic!("diamond deps should resolve: {e}"),
+        };
+        assert_eq!(deps.len(), 3, "d depends on a, b, c");
+        assert!(deps.contains(&0));
+        assert!(deps.contains(&1));
+        assert!(deps.contains(&2));
+    }
+
+    #[test]
+    fn compute_transitive_deps_unknown_step_errors() {
+        let workflow = Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "a".to_string(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        };
+
+        let err = match compute_transitive_deps(&workflow, "missing") {
+            Ok(_) => panic!("unknown step should error"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::StepNotFound);
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_step integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn execute_step_standalone_no_deps() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"v":42}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
+                        success_criteria: success_200(),
+                        outputs: BTreeMap::from([(
+                            "v".to_string(),
+                            "$response.body.v".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        target: Some(StepTarget::OperationPath("/b".to_string())),
+                        success_criteria: success_200(),
+                        outputs: BTreeMap::from([(
+                            "v".to_string(),
+                            "$response.body.v".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        // Execute only s1 — no deps, should succeed
+        let result = engine.execute_step(
+            "wf",
+            "s1",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            false,
+        );
+        let outputs = match result {
+            Ok(o) => o,
+            Err(e) => panic!("standalone step should execute: {e}"),
+        };
+        assert_eq!(outputs.get("v"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn execute_step_with_transitive_deps() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&call_count);
+        let server = start_server(move |_m, url, _h, _b| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            if url.contains("/a") {
+                MockHttpResponse::json(200, r#"{"id":"abc"}"#)
+            } else {
+                MockHttpResponse::json(200, r#"{"result":"ok"}"#)
+            }
+        });
+
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
+                        success_criteria: success_200(),
+                        outputs: BTreeMap::from([(
+                            "id".to_string(),
+                            "$response.body.id".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        target: Some(StepTarget::OperationPath("/b".to_string())),
+                        success_criteria: success_200(),
+                        parameters: vec![arazzo_spec::Parameter {
+                            name: "ref_id".to_string(),
+                            in_: Some(ParamLocation::Query),
+                            value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
+                            ..arazzo_spec::Parameter::default()
+                        }],
+                        outputs: BTreeMap::from([(
+                            "result".to_string(),
+                            "$response.body.result".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        let result = engine.execute_step(
+            "wf",
+            "s2",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            false,
+        );
+        let outputs = match result {
+            Ok(o) => o,
+            Err(e) => panic!("step with deps should execute: {e}"),
+        };
+        assert_eq!(outputs.get("result"), Some(&json!("ok")));
+        // Both s1 and s2 should have been executed
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn execute_step_no_deps_flag_standalone_succeeds() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"v":1}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    success_criteria: success_200(),
+                    outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string())]),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        let result = engine.execute_step(
+            "wf",
+            "s1",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            true,
+        );
+        let outputs = match result {
+            Ok(o) => o,
+            Err(e) => panic!("no_deps standalone should succeed: {e}"),
+        };
+        assert_eq!(outputs.get("v"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn execute_step_no_deps_flag_with_refs_fails() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        target: Some(StepTarget::OperationPath("/a".to_string())),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        target: Some(StepTarget::OperationPath("/b".to_string())),
+                        outputs: BTreeMap::from([(
+                            "val".to_string(),
+                            "$steps.s1.outputs.id".to_string(),
+                        )]),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        let result = engine.execute_step(
+            "wf",
+            "s2",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            true,
+        );
+        let err = match result {
+            Ok(_) => panic!("no_deps with refs should fail"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::StepMissingDependency);
+        assert!(
+            err.message.contains("s1"),
+            "error should mention the missing dep"
+        );
+    }
+
+    #[test]
+    fn execute_step_unknown_step_errors() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        let result = engine.execute_step(
+            "wf",
+            "missing",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            false,
+        );
+        let err = match result {
+            Ok(_) => panic!("unknown step should fail"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::StepNotFound);
+    }
+
+    #[test]
+    fn execute_step_unknown_workflow_errors() {
+        let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "wf".to_string(),
+                steps: vec![Step {
+                    step_id: "s1".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            }],
+        );
+        let mut engine = new_test_engine(&server.base_url, spec);
+
+        let result = engine.execute_step(
+            "bad",
+            "s1",
+            BTreeMap::new(),
+            ExecutionOptions::default(),
+            false,
+        );
+        let err = match result {
+            Ok(_) => panic!("unknown workflow should fail"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::WorkflowNotFound);
     }
 
     fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
