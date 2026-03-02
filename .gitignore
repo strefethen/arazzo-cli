@@ -37,6 +37,8 @@ docs/future-diagnostics.md
 docs/debugger-architecture.md
 docs/arazzo-tui-design.md
 docs/roadmap-close-spec-coverage.md
+docs/internal-release.md
+docs/vscode-marketplace-release-plan.md
 
 # OS
 .DS_Store
