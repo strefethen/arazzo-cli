@@ -362,13 +362,14 @@ impl HttpClient {
             })?
             .to_vec();
 
-        let content_type = headers
+        let content_type_raw = headers
             .get("content-type")
             .or_else(|| headers.get("Content-Type"))
             .map(|s| s.to_lowercase())
             .unwrap_or_default();
 
-        let is_xml = content_type.contains("xml") || content_type.contains("rss");
+        let is_xml = content_type_raw.contains("xml") || content_type_raw.contains("rss");
+        let is_json = content_type_raw.contains("json");
         // Intentional: response body may not be valid JSON (e.g. HTML, plain text).
         // We attempt parsing and store None if it fails — expressions that reference
         // $response.body will fall back to the raw bytes.
@@ -378,16 +379,21 @@ impl HttpClient {
             serde_json::from_slice::<Value>(&body).ok()
         };
 
+        let classified_type = if is_xml {
+            ContentType::Xml
+        } else if is_json || content_type_raw.is_empty() {
+            // Treat missing content-type as JSON (common in APIs)
+            ContentType::Json
+        } else {
+            ContentType::Other(content_type_raw)
+        };
+
         Ok(Response {
             status_code,
             headers,
             body,
             body_json,
-            content_type: if is_xml {
-                ContentType::Xml
-            } else {
-                ContentType::Json
-            },
+            content_type: classified_type,
         })
     }
 
