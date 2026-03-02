@@ -376,7 +376,7 @@ fn validate_actions(
                     message: format!("{action_path} goto action must specify stepId or workflowId"),
                 });
             }
-            if has_step && !step_ids.contains(&action.step_id) {
+            if has_step && !action.step_id.starts_with('$') && !step_ids.contains(&action.step_id) {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::InvalidReference,
                     path: format!("{action_path}.stepId"),
@@ -1444,6 +1444,20 @@ workflows:
         assert!(
             validate(&spec).is_ok(),
             "runtime expression workflowId should not be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_goto_runtime_expression_step_id() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_success = vec![OnAction {
+            type_: ActionType::Goto,
+            step_id: "$steps.decide.outputs.nextStep".to_string(),
+            ..OnAction::default()
+        }];
+        assert!(
+            validate(&spec).is_ok(),
+            "runtime expression stepId should not be rejected"
         );
     }
 
