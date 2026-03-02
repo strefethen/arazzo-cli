@@ -104,7 +104,12 @@ pub(crate) fn evaluate_criterion_detailed(
             context_value = Value::String(xml_text.clone());
             is_truthy(&extract_xpath(xml_text.as_bytes(), &criterion.condition))
         }
-        _ => eval.evaluate_condition(&criterion.condition),
+        _ => {
+            let (result, cond_warnings) =
+                eval.evaluate_condition_with_diagnostics(&criterion.condition);
+            expr_warnings.extend(cond_warnings);
+            result
+        }
     };
 
     CriterionEvaluation {

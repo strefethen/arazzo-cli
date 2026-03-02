@@ -276,30 +276,45 @@ impl ExpressionEvaluator {
 
     /// Evaluate a condition expression with `||` and `&&` precedence.
     pub fn evaluate_condition(&self, condition: &str) -> bool {
+        self.evaluate_condition_with_diagnostics(condition).0
+    }
+
+    /// Evaluate a condition expression, returning both the boolean result and
+    /// any diagnostic warnings from expression resolution.
+    pub fn evaluate_condition_with_diagnostics(
+        &self,
+        condition: &str,
+    ) -> (bool, Vec<ExpressionWarning>) {
         let condition = condition.trim();
         if condition.is_empty() {
-            return false;
+            return (false, Vec::new());
         }
+
+        let mut warnings = Vec::new();
 
         if let Some(parts) = split_outside_quotes(condition, "||") {
             for part in parts {
-                if self.evaluate_condition(part) {
-                    return true;
+                let (result, w) = self.evaluate_condition_with_diagnostics(part);
+                warnings.extend(w);
+                if result {
+                    return (true, warnings);
                 }
             }
-            return false;
+            return (false, warnings);
         }
 
         if let Some(parts) = split_outside_quotes(condition, "&&") {
             for part in parts {
-                if !self.evaluate_condition(part) {
-                    return false;
+                let (result, w) = self.evaluate_condition_with_diagnostics(part);
+                warnings.extend(w);
+                if !result {
+                    return (false, warnings);
                 }
             }
-            return true;
+            return (true, warnings);
         }
 
-        self.evaluate_comparison(condition)
+        self.evaluate_comparison_with_diagnostics(condition)
     }
 
     /// Interpolate `{$expr}` and `$inputs.foo` style segments in a string.
@@ -327,37 +342,75 @@ impl ExpressionEvaluator {
         out
     }
 
-    fn evaluate_comparison(&self, condition: &str) -> bool {
+    fn evaluate_comparison_with_diagnostics(
+        &self,
+        condition: &str,
+    ) -> (bool, Vec<ExpressionWarning>) {
+        let mut warnings = Vec::new();
         let (op, idx) = find_operator(condition);
         if op.is_empty() {
-            return is_truthy(&resolve_operand(self, condition));
+            let (val, w) = resolve_operand_with_diagnostics(self, condition);
+            warnings.extend(w);
+            return (is_truthy(&val), warnings);
         }
 
-        let left = resolve_operand(self, &condition[..idx]);
+        let (left, left_w) = resolve_operand_with_diagnostics(self, &condition[..idx]);
+        warnings.extend(left_w);
         let right = condition[idx + op.len()..].trim();
 
-        match op.as_str() {
-            "==" => compare_values(&left, &resolve_operand(self, right)),
-            "!=" => !compare_values(&left, &resolve_operand(self, right)),
-            ">" => compare_ordered(&left, &resolve_operand(self, right)).is_gt(),
-            "<" => compare_ordered(&left, &resolve_operand(self, right)).is_lt(),
-            ">=" => compare_ordered(&left, &resolve_operand(self, right)).is_ge(),
-            "<=" => compare_ordered(&left, &resolve_operand(self, right)).is_le(),
+        let result = match op.as_str() {
+            "==" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                compare_values(&left, &rv)
+            }
+            "!=" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                !compare_values(&left, &rv)
+            }
+            ">" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                compare_ordered(&left, &rv).is_gt()
+            }
+            "<" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                compare_ordered(&left, &rv).is_lt()
+            }
+            ">=" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                compare_ordered(&left, &rv).is_ge()
+            }
+            "<=" => {
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                compare_ordered(&left, &rv).is_le()
+            }
             " contains " => {
-                let right_val = resolve_operand(self, right);
-                to_string_value(&left).contains(&to_string_value(&right_val))
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                to_string_value(&left).contains(&to_string_value(&rv))
             }
             " matches " => {
-                let right_val = resolve_operand(self, right);
-                let pattern = to_string_value(&right_val);
+                let (rv, w) = resolve_operand_with_diagnostics(self, right);
+                warnings.extend(w);
+                let pattern = to_string_value(&rv);
                 match Regex::new(&pattern) {
                     Ok(re) => re.is_match(&to_string_value(&left)),
                     Err(_) => false,
                 }
             }
-            " in " => eval_in(self, &left, right),
+            " in " => {
+                let (result, w) = eval_in_with_diagnostics(self, &left, right);
+                warnings.extend(w);
+                result
+            }
             _ => false,
-        }
+        };
+        (result, warnings)
     }
 }
 
@@ -374,12 +427,15 @@ fn get_header_case_insensitive<'a>(
         .map(|(_, value)| value)
 }
 
-fn resolve_operand(eval: &ExpressionEvaluator, raw: &str) -> Value {
+fn resolve_operand_with_diagnostics(
+    eval: &ExpressionEvaluator,
+    raw: &str,
+) -> (Value, Vec<ExpressionWarning>) {
     let token = raw.trim();
     if token.starts_with('$') {
-        eval.evaluate(token)
+        eval.evaluate_with_diagnostics(token)
     } else {
-        parse_value(token)
+        (parse_value(token), Vec::new())
     }
 }
 
@@ -479,22 +535,29 @@ fn index_outside_quotes(input: &str, needle: &str) -> Option<usize> {
     None
 }
 
-fn eval_in(eval: &ExpressionEvaluator, left: &Value, list_expr: &str) -> bool {
+fn eval_in_with_diagnostics(
+    eval: &ExpressionEvaluator,
+    left: &Value,
+    list_expr: &str,
+) -> (bool, Vec<ExpressionWarning>) {
     let list_expr = list_expr.trim();
+    let mut warnings = Vec::new();
     if !(list_expr.starts_with('[') && list_expr.ends_with(']')) {
-        return false;
+        return (false, warnings);
     }
     let inner = &list_expr[1..list_expr.len() - 1];
     if inner.trim().is_empty() {
-        return false;
+        return (false, warnings);
     }
 
     for token in split_list_elements(inner) {
-        if compare_values(left, &resolve_operand(eval, token)) {
-            return true;
+        let (val, w) = resolve_operand_with_diagnostics(eval, token);
+        warnings.extend(w);
+        if compare_values(left, &val) {
+            return (true, warnings);
         }
     }
-    false
+    (false, warnings)
 }
 
 fn split_list_elements(input: &str) -> Vec<&str> {
@@ -1184,6 +1247,39 @@ mod tests {
         ctx.inputs.insert("expected".to_string(), json!(200));
         let eval = ExpressionEvaluator::new(ctx);
         assert!(eval.evaluate_condition("$statusCode == $inputs.expected"));
+    }
+
+    #[test]
+    fn evaluate_condition_with_diagnostics_surfaces_warnings() {
+        let ctx = EvalContext {
+            status_code: Some(200),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+
+        // Known expression — no warnings
+        let (result, warnings) = eval.evaluate_condition_with_diagnostics("$statusCode == 200");
+        assert!(result);
+        assert!(warnings.is_empty());
+
+        // Unknown step reference — should produce a warning (resolves to null)
+        let (result, warnings) =
+            eval.evaluate_condition_with_diagnostics("$steps.missing.outputs.x == 42");
+        assert!(!result);
+        assert!(!warnings.is_empty());
+        assert!(
+            warnings.iter().any(|w| w.message.contains("missing")),
+            "expected warning about missing step, got: {warnings:?}"
+        );
+
+        // Compound condition with one unknown — warnings from both branches collected
+        let (_, warnings) = eval.evaluate_condition_with_diagnostics(
+            "$statusCode == 200 && $inputs.nonexistent == true",
+        );
+        assert!(
+            warnings.iter().any(|w| w.message.contains("nonexistent")),
+            "expected warning about nonexistent input, got: {warnings:?}"
+        );
     }
 
     #[test]
