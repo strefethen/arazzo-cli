@@ -19,7 +19,7 @@ mod requests;
 #[path = "dap/responses.rs"]
 mod responses;
 
-use events::{initialized_event, stopped_event, terminated_event};
+use events::{initialized_event, output_event, stopped_event, terminated_event};
 use requests::{DapBreakpoint, DapRequest};
 use responses::{
     continue_body, empty_body, error_response, evaluate_body, initialize_capabilities,
@@ -358,9 +358,18 @@ where
                     }
                     "configurationDone" => {
                         if let Err(err) = ensure_runtime_started(&mut state, &event_tx) {
+                            let msg = format!("Arazzo debug: {err}\n");
+                            write_dap_message(
+                                writer,
+                                &output_event(outbound.alloc(), "console", &msg),
+                            )?;
                             let response =
                                 error_response(outbound.alloc(), &command, request.seq, err);
                             write_dap_message(writer, &response)?;
+                            write_dap_message(
+                                writer,
+                                &terminated_event(outbound.alloc()),
+                            )?;
                             continue;
                         }
                         let response = response_with_body(
@@ -1364,7 +1373,9 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             continue;
         }
 
-        if indent <= workflows_indent && trimmed != "workflows:" {
+        if indent < workflows_indent
+            || (indent == workflows_indent && !trimmed.starts_with("- "))
+        {
             in_workflows = false;
             in_steps = false;
             current_workflow_id.clear();
@@ -1417,7 +1428,10 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             continue;
         }
 
-        if in_steps && indent <= steps_indent && trimmed != "steps:" {
+        if in_steps
+            && (indent < steps_indent
+                || (indent == steps_indent && !trimmed.starts_with("- ")))
+        {
             in_steps = false;
             current_step_id.clear();
             in_success_criteria = false;
@@ -1502,7 +1516,9 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
         }
 
         if in_success_criteria {
-            if indent <= success_criteria_indent {
+            if indent < success_criteria_indent
+                || (indent == success_criteria_indent && !trimmed.starts_with("- "))
+            {
                 in_success_criteria = false;
             } else if trimmed.starts_with("- ") {
                 checkpoints.push(IndexedCheckpoint {
@@ -1558,7 +1574,10 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             continue;
         }
 
-        if in_on_success && indent <= on_success_indent {
+        if in_on_success
+            && (indent < on_success_indent
+                || (indent == on_success_indent && !trimmed.starts_with("- ")))
+        {
             in_on_success = false;
             if action_criteria_section == Some(ActionSection::OnSuccess) {
                 in_action_criteria = false;
@@ -1570,7 +1589,10 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             }
         }
 
-        if in_on_failure && indent <= on_failure_indent {
+        if in_on_failure
+            && (indent < on_failure_indent
+                || (indent == on_failure_indent && !trimmed.starts_with("- ")))
+        {
             in_on_failure = false;
             if action_criteria_section == Some(ActionSection::OnFailure) {
                 in_action_criteria = false;
@@ -1607,7 +1629,10 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             }
         }
 
-        if in_action_criteria && indent <= action_criteria_indent {
+        if in_action_criteria
+            && (indent < action_criteria_indent
+                || (indent == action_criteria_indent && !trimmed.starts_with("- ")))
+        {
             in_action_criteria = false;
             action_criteria_section = None;
         }
@@ -1685,7 +1710,9 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
         }
 
         if in_outputs {
-            if indent <= outputs_indent {
+            if indent < outputs_indent
+                || (indent == outputs_indent && !trimmed.contains(':'))
+            {
                 in_outputs = false;
             } else if let Some((name, expression)) = parse_output_entry(trimmed) {
                 checkpoints.push(IndexedCheckpoint {

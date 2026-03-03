@@ -30,3 +30,15 @@ pub fn terminated_event(seq: u64) -> Value {
         "body": {}
     })
 }
+
+pub fn output_event(seq: u64, category: &str, output: &str) -> Value {
+    json!({
+        "type": "event",
+        "seq": seq,
+        "event": "output",
+        "body": {
+            "category": category,
+            "output": output
+        }
+    })
+}
