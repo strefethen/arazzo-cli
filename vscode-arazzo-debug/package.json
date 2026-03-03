@@ -70,8 +70,7 @@
         "configurationAttributes": {
           "launch": {
             "required": [
-              "spec",
-              "workflowId"
+              "spec"
             ],
             "properties": {
               "spec": {
