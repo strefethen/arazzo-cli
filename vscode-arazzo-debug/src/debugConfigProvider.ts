@@ -27,9 +27,9 @@ export class ArazzoDebugConfigurationProvider
       resolved.stopOnEntry = false;
     }
 
-    if (!resolved.spec || !resolved.workflowId) {
+    if (!resolved.spec) {
       void vscode.window.showErrorMessage(
-        "Arazzo debug config requires both 'spec' and 'workflowId'."
+        "Arazzo debug config requires 'spec'."
       );
       return undefined;
     }
