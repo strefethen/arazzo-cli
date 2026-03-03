@@ -101,9 +101,23 @@ pub enum Commands {
         spec: String,
         workflow_id: String,
     },
+    /// Generate Arazzo workflows from an OpenAPI specification
+    Generate {
+        /// Path to the OpenAPI 3.x spec (YAML or JSON)
+        #[arg(long = "spec")]
+        spec: String,
+
+        /// Generation scenario
+        #[arg(long = "scenario", default_value = "crud")]
+        scenario: String,
+
+        /// Write YAML to file instead of stdout
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+    },
     /// Print JSON Schema for a command's --json output
     Schema {
-        /// Command name (validate, list, catalog, show, run). Omit to list available commands.
+        /// Command name (validate, list, catalog, show, run, generate). Omit to list available commands.
         command: Option<String>,
     },
 }

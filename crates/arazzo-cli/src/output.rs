@@ -144,6 +144,50 @@ pub enum RunOutput {
     },
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateResult {
+    pub file: String,
+    pub workflows: usize,
+    pub steps: usize,
+    pub resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_detected: Option<String>,
+}
+
+pub fn emit_generate_result(
+    path: &str,
+    result: &crate::generate::GenerateOutput,
+    json: bool,
+) -> Result<(), String> {
+    let total_steps: usize = result.spec.workflows.iter().map(|wf| wf.steps.len()).sum();
+
+    if json {
+        return output_json(&GenerateResult {
+            file: path.to_string(),
+            workflows: result.spec.workflows.len(),
+            steps: total_steps,
+            resources: result.resources.clone(),
+            warnings: result.warnings.clone(),
+            auth_detected: result.auth_type.clone(),
+        });
+    }
+
+    println!("Generated: {path}");
+    println!("  Workflows: {}", result.spec.workflows.len());
+    println!("  Steps: {total_steps}");
+    println!("  Resources: {}", result.resources.join(", "));
+    if let Some(ref auth) = result.auth_type {
+        println!("  Auth: {auth}");
+    }
+    if !result.warnings.is_empty() {
+        println!("  Warnings: {}", result.warnings.len());
+    }
+    Ok(())
+}
+
 pub fn output_json<T: Serialize + ?Sized>(value: &T) -> Result<(), String> {
     serde_json::to_writer_pretty(std::io::stdout(), value)
         .map_err(|err| format!("writing JSON: {err}"))?;

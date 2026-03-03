@@ -207,6 +207,40 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     output::emit_run_outputs(&outputs, global.json, &expression_warnings)
 }
 
+pub fn generate_workflow(
+    spec_path: &str,
+    scenario: &str,
+    output_path: Option<&str>,
+    global: GlobalOptions,
+) -> Result<(), String> {
+    let bytes = fs::read(spec_path)
+        .map_err(|err| format!("reading OpenAPI spec \"{spec_path}\": {err}"))?;
+
+    let openapi: openapiv3::OpenAPI =
+        serde_yml::from_slice(&bytes).map_err(|err| format!("parsing OpenAPI spec: {err}"))?;
+
+    if scenario != "crud" {
+        return Err(format!("unknown scenario \"{scenario}\"; available: crud"));
+    }
+
+    let result = crate::generate::generate_crud(&openapi, spec_path)?;
+
+    let yaml = serde_yml::to_string(&result.spec)
+        .map_err(|err| format!("serializing Arazzo spec: {err}"))?;
+
+    for warning in &result.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    if let Some(path) = output_path {
+        fs::write(path, &yaml).map_err(|err| format!("writing output file \"{path}\": {err}"))?;
+        output::emit_generate_result(path, &result, global.json)
+    } else {
+        print!("{yaml}");
+        Ok(())
+    }
+}
+
 pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), String> {
     match arazzo_validate::parse(path) {
         Ok(spec) => output::emit_validate_result(path, &spec, global.json),
@@ -400,7 +434,8 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
     use crate::output::{
-        CatalogEntry, RunOutput, StepInfo, ValidateResult, WorkflowDetail, WorkflowInfo,
+        CatalogEntry, GenerateResult, RunOutput, StepInfo, ValidateResult, WorkflowDetail,
+        WorkflowInfo,
     };
 
     match command {
@@ -410,10 +445,13 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         Some("show") => output::output_json(&schema_for!(WorkflowDetail)),
         Some("steps") => output::output_json(&schema_for!(Vec<StepInfo>)),
         Some("run") => output::output_json(&schema_for!(RunOutput)),
+        Some("generate") => output::output_json(&schema_for!(GenerateResult)),
         Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run"
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, generate"
         )),
-        None => output::output_json(&["validate", "list", "catalog", "show", "steps", "run"]),
+        None => output::output_json(&[
+            "validate", "list", "catalog", "show", "steps", "run", "generate",
+        ]),
     }
 }
 

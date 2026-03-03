@@ -1,0 +1,125 @@
+arazzo: '1.0.0'
+info:
+  title: Petstore Workflows
+  summary: Auto-generated CRUD workflows for Petstore
+  version: '1.0.0'
+  description: ''
+sourceDescriptions:
+- name: petstore
+  url: https://petstore.example.com/v1
+  type: openapi
+workflows:
+- workflowId: crud-pets
+  summary: CRUD operations for pets
+  description: ''
+  inputs:
+    type: object
+    properties:
+      ApiKeyAuth:
+        type: string
+        description: Authentication value for X-API-Key
+        format: ''
+    required:
+    - ApiKeyAuth
+  steps:
+  - stepId: create-pets
+    description: Create a new pets
+    operationPath: POST {petstore}./pets
+    requestBody:
+      contentType: application/json
+      payload:
+        name: example-name
+        tag: example-tag
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 201
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+    outputs:
+      petId: $response.body.petId
+  - stepId: list-pets
+    description: List all pets
+    operationPath: GET {petstore}./pets
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: read-pets
+    description: Get a single pets
+    operationPath: GET {petstore}./pets/{petId}
+    parameters:
+    - name: petId
+      in: path
+      value: $steps.create-pets.outputs.petId
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: update-pets
+    description: Update a pets
+    operationPath: PUT {petstore}./pets/{petId}
+    parameters:
+    - name: petId
+      in: path
+      value: $steps.create-pets.outputs.petId
+      reference: ''
+    requestBody:
+      contentType: application/json
+      payload:
+        name: example-name
+        tag: example-tag
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: delete-pets
+    description: Delete a pets
+    operationPath: DELETE {petstore}./pets/{petId}
+    parameters:
+    - name: petId
+      in: path
+      value: $steps.create-pets.outputs.petId
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 204
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  outputs:
+    created_id: $steps.create-pets.outputs.petId
+  parameters:
+  - name: X-API-Key
+    in: header
+    value: $inputs.ApiKeyAuth
+    reference: ''

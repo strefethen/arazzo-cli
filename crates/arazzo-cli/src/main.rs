@@ -6,6 +6,7 @@
 //! All commands support `--json` for structured output.
 
 mod cli;
+mod generate;
 mod handlers;
 mod output;
 mod run_context;
@@ -82,6 +83,11 @@ fn run(cli: Cli) -> Result<(), String> {
         Commands::Catalog { dir } => handlers::catalog_workflows(&dir, global),
         Commands::Show { workflow_id, dir } => handlers::show_workflow(&workflow_id, &dir, global),
         Commands::Steps { spec, workflow_id } => handlers::list_steps(&spec, &workflow_id, global),
+        Commands::Generate {
+            spec,
+            scenario,
+            output,
+        } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global),
         Commands::Schema { command } => handlers::schema(command.as_deref()),
     }
 }

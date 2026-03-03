@@ -1,0 +1,242 @@
+arazzo: '1.0.0'
+info:
+  title: Swagger Petstore - OpenAPI 3.0 Workflows
+  summary: Auto-generated CRUD workflows for Swagger Petstore - OpenAPI 3.0
+  version: '1.0.0'
+  description: ''
+sourceDescriptions:
+- name: swagger-petstore-openapi-3-0
+  url: https://petstore3.swagger.io/api/v3
+  type: openapi
+workflows:
+- workflowId: crud-pet
+  summary: CRUD operations for pet
+  description: ''
+  steps:
+  - stepId: create-pet
+    description: Create a new pet
+    operationPath: POST {swagger-petstore-openapi-3-0}./pet
+    requestBody:
+      contentType: application/json
+      payload:
+        category:
+          id: 1
+          name: Dogs
+        id: 10
+        name: doggie
+        photoUrls:
+        - example-item
+        status: example-status
+        tags:
+        - id: 1
+          name: example-name
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+    outputs:
+      id: $response.body.id
+  - stepId: read-pet
+    description: Get a single pet
+    operationPath: GET {swagger-petstore-openapi-3-0}./pet/{petId}
+    parameters:
+    - name: petId
+      in: path
+      value: $steps.create-pet.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: delete-pet
+    description: Delete a pet
+    operationPath: DELETE {swagger-petstore-openapi-3-0}./pet/{petId}
+    parameters:
+    - name: petId
+      in: path
+      value: $steps.create-pet.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  outputs:
+    created_id: $steps.create-pet.outputs.id
+- workflowId: crud-order
+  summary: CRUD operations for order
+  description: ''
+  steps:
+  - stepId: create-order
+    description: Create a new order
+    operationPath: POST {swagger-petstore-openapi-3-0}./store/order
+    requestBody:
+      contentType: application/json
+      payload:
+        id: 10
+        petId: 198772
+        quantity: 7
+        shipDate: '2024-01-01T00:00:00Z'
+        status: approved
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+    outputs:
+      id: $response.body.id
+  - stepId: read-order
+    description: Get a single order
+    operationPath: GET {swagger-petstore-openapi-3-0}./store/order/{orderId}
+    parameters:
+    - name: orderId
+      in: path
+      value: $steps.create-order.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: delete-order
+    description: Delete a order
+    operationPath: DELETE {swagger-petstore-openapi-3-0}./store/order/{orderId}
+    parameters:
+    - name: orderId
+      in: path
+      value: $steps.create-order.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  outputs:
+    created_id: $steps.create-order.outputs.id
+- workflowId: crud-user
+  summary: CRUD operations for user
+  description: ''
+  steps:
+  - stepId: create-user
+    description: Create a new user
+    operationPath: POST {swagger-petstore-openapi-3-0}./user
+    requestBody:
+      contentType: application/json
+      payload:
+        email: john@email.com
+        firstName: John
+        id: 10
+        lastName: James
+        username: theUser
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+    outputs:
+      id: $response.body.id
+  - stepId: read-user
+    description: Get a single user
+    operationPath: GET {swagger-petstore-openapi-3-0}./user/{username}
+    parameters:
+    - name: username
+      in: path
+      value: $steps.create-user.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: update-user
+    description: Update a user
+    operationPath: PUT {swagger-petstore-openapi-3-0}./user/{username}
+    parameters:
+    - name: username
+      in: path
+      value: $steps.create-user.outputs.id
+      reference: ''
+    requestBody:
+      contentType: application/json
+      payload:
+        email: john@email.com
+        firstName: John
+        id: 10
+        lastName: James
+        username: theUser
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  - stepId: delete-user
+    description: Delete a user
+    operationPath: DELETE {swagger-petstore-openapi-3-0}./user/{username}
+    parameters:
+    - name: username
+      in: path
+      value: $steps.create-user.outputs.id
+      reference: ''
+    successCriteria:
+    - condition: $statusCode == 200
+      context: ''
+    onFailure:
+    - name: fail-fast
+      type: end
+      workflowId: ''
+      stepId: ''
+      retryAfter: 0
+      retryLimit: 0
+  outputs:
+    created_id: $steps.create-user.outputs.id
