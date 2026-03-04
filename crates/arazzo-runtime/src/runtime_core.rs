@@ -992,8 +992,6 @@ use helpers::{
     sleep_with_checks, step_result_error, value_to_string,
 };
 
-#[cfg(test)]
-pub(crate) use helpers::has_control_flow;
 pub(crate) use helpers::{
     build_levels, compute_transitive_deps, evaluate_criterion, evaluate_criterion_detailed,
     evaluate_output_expression, evaluate_output_expression_detailed, extract_step_refs,

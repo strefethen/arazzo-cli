@@ -1,7 +1,7 @@
 use super::*;
 
 impl Engine {
-    pub(crate) fn resolve_operation_id(
+    pub fn resolve_operation_id(
         &self,
         operation_id: &str,
     ) -> Result<(String, String), RuntimeError> {
