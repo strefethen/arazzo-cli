@@ -14,6 +14,13 @@ impl Engine {
             err: None,
             duration_ns: 0,
         });
+
+        self.emit_observer_event(ObserverEvent::StepStarted {
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            operation_path: step_operation_path(step),
+            workflow_id_ref: step_workflow_id_ref(step),
+        });
     }
 
     pub(super) fn debug_gate_step(
@@ -320,6 +327,13 @@ impl Engine {
         });
     }
 
+    /// Dispatch an event to the registered observer, if any.
+    pub(super) fn emit_observer_event(&self, event: ObserverEvent) {
+        if let Some(observer) = &self.observer {
+            observer.on_event(&event);
+        }
+    }
+
     fn emit_execution_event(&self, event: ExecutionEvent) {
         if let Ok(mut guard) = self.execution_events.lock() {
             guard.push(event.clone());
@@ -340,6 +354,28 @@ impl Engine {
                 ExecutionEventKind::AfterStep => hook.after_step(&step_event),
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn emit_step_completed_event(
+        &self,
+        workflow_id: &str,
+        step: &Step,
+        status_code: i64,
+        duration: Duration,
+        outputs: BTreeMap<String, Value>,
+        error: Option<String>,
+        criteria_passed: bool,
+    ) {
+        self.emit_observer_event(ObserverEvent::StepCompleted {
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            status_code,
+            duration,
+            outputs,
+            error,
+            criteria_passed,
+        });
     }
 
     pub(super) fn clear_trace_state(&mut self) {

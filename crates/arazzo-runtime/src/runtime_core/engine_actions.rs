@@ -284,6 +284,15 @@ impl Engine {
                         },
                     };
                 }
+
+                self.emit_observer_event(ObserverEvent::RetryScheduled {
+                    workflow_id: ctx.workflow.workflow_id.to_string(),
+                    step_id: ctx.workflow.steps[ctx.current_idx].step_id.clone(),
+                    attempt: current + 1,
+                    max_attempts: limit,
+                    delay_seconds: action.retry_after,
+                });
+
                 if action.retry_after > 0 {
                     if let Some(debug) = debug_ctx {
                         if let Err(err) = self.debug_gate_retry_delay(debug, action, current, limit)

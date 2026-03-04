@@ -144,8 +144,32 @@ impl Engine {
         let prep = self.prepare_http_request(step, vars)?;
 
         if self.dry_run_mode {
+            self.emit_observer_event(ObserverEvent::RequestPrepared {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                method: prep.method.clone(),
+                url: prep.url_result.url.clone(),
+                headers: prep.headers.clone(),
+                has_body: prep.body.is_some(),
+            });
             return self.execute_dry_run_step(step, vars, prep);
         }
+
+        self.emit_observer_event(ObserverEvent::RequestPrepared {
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            method: prep.method.clone(),
+            url: prep.url_result.url.clone(),
+            headers: prep.headers.clone(),
+            has_body: prep.body.is_some(),
+        });
+
+        self.emit_observer_event(ObserverEvent::RequestSent {
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            method: prep.method.clone(),
+            url: prep.url_result.url.clone(),
+        });
 
         let response = self.client.request(
             RequestConfig {
@@ -242,6 +266,14 @@ impl Engine {
                 result: evaluation.matched,
                 warnings: evaluation.warnings.iter().map(|w| w.to_string()).collect(),
             });
+            self.emit_observer_event(ObserverEvent::CriterionEvaluated {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                index,
+                condition: evaluation.condition.clone(),
+                passed: evaluation.matched,
+            });
+
             let gate = DebugGateContext {
                 workflow_id,
                 step_id: &step.step_id,

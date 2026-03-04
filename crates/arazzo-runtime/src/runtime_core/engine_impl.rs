@@ -349,6 +349,7 @@ impl Engine {
             return self.execute_parallel(workflow_id, &workflow, &mut vars, options);
         }
 
+        let workflow_start = Instant::now();
         let mut step_index: usize = 0;
         let mut retry_count = BTreeMap::<usize, usize>::new();
         let max_iterations = workflow.steps.len().saturating_mul(10);
@@ -398,24 +399,42 @@ impl Engine {
                         );
                         self.push_trace_record(record);
                     }
+                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+                        workflow_id: workflow_id.to_string(),
+                        outputs: BTreeMap::new(),
+                        duration: workflow_start.elapsed(),
+                        error: Some(err.message.clone()),
+                    });
                     return Err(err);
                 }
             };
             let duration = start.elapsed();
             let step_outputs = vars.step_outputs(&step.step_id);
 
+            let step_status_code = execution
+                .result
+                .response
+                .as_ref()
+                .map(|r| r.status_code)
+                .unwrap_or(0);
+
             self.emit_after_step_event(
                 workflow_id,
                 &step,
-                execution
-                    .result
-                    .response
-                    .as_ref()
-                    .map(|r| r.status_code)
-                    .unwrap_or(0),
+                step_status_code,
                 step_outputs.clone(),
                 execution.result.err.clone(),
                 duration,
+            );
+
+            self.emit_step_completed_event(
+                workflow_id,
+                &step,
+                step_status_code,
+                duration,
+                step_outputs.clone(),
+                execution.result.err.clone(),
+                execution.result.success,
             );
 
             let action = self.handle_step_result(StepDecisionContext {
@@ -466,11 +485,26 @@ impl Engine {
                 FlowDecision::GotoWorkflow(next_wf) => {
                     return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1, options);
                 }
-                FlowDecision::Error(err) => return Err(err),
+                FlowDecision::Error(err) => {
+                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+                        workflow_id: workflow_id.to_string(),
+                        outputs: BTreeMap::new(),
+                        duration: workflow_start.elapsed(),
+                        error: Some(err.message.clone()),
+                    });
+                    return Err(err);
+                }
             }
         }
 
-        Ok(self.build_outputs(&workflow, &vars))
+        let workflow_outputs = self.build_outputs(&workflow, &vars);
+        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+            workflow_id: workflow_id.to_string(),
+            outputs: workflow_outputs.clone(),
+            duration: workflow_start.elapsed(),
+            error: None,
+        });
+        Ok(workflow_outputs)
     }
 
     fn get_workflow(&self, workflow_id: &str) -> Option<&Workflow> {
@@ -489,6 +523,16 @@ impl Engine {
         options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
         if matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
+            let child_wf_id = match &step.target {
+                Some(StepTarget::WorkflowId(id)) => id.clone(),
+                _ => String::new(),
+            };
+            self.emit_observer_event(ObserverEvent::SubWorkflowStarted {
+                parent_workflow_id: workflow_id.to_string(),
+                parent_step_id: step.step_id.clone(),
+                child_workflow_id: child_wf_id,
+                depth: depth + 1,
+            });
             let result = self.execute_subworkflow_step(step, vars, depth, options)?;
             return Ok(StepExecution {
                 result,

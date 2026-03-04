@@ -8,6 +8,7 @@ impl Engine {
         vars: &mut VarStore,
         options: &ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        let workflow_start = Instant::now();
         let levels = build_levels(workflow)?;
         for mut level in levels {
             options.check()?;
@@ -81,6 +82,12 @@ impl Engine {
                             );
                             self.push_trace_record(record);
                         }
+                        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+                            workflow_id: workflow_id.to_string(),
+                            outputs: BTreeMap::new(),
+                            duration: workflow_start.elapsed(),
+                            error: Some(err.message.clone()),
+                        });
                         return Err(err);
                     }
                 };
@@ -88,18 +95,30 @@ impl Engine {
                 let execution = execution.execution;
 
                 let outputs_for_trace = execution.outputs.clone();
+                let par_status_code = execution
+                    .result
+                    .response
+                    .as_ref()
+                    .map(|r| r.status_code)
+                    .unwrap_or(0);
+
                 self.emit_after_step_event(
                     workflow_id,
                     &step,
-                    execution
-                        .result
-                        .response
-                        .as_ref()
-                        .map(|r| r.status_code)
-                        .unwrap_or(0),
+                    par_status_code,
                     outputs_for_trace.clone(),
                     execution.result.err.clone(),
                     duration,
+                );
+
+                self.emit_step_completed_event(
+                    workflow_id,
+                    &step,
+                    par_status_code,
+                    duration,
+                    outputs_for_trace.clone(),
+                    execution.result.err.clone(),
+                    execution.result.success,
                 );
 
                 if !execution.result.success {
@@ -117,6 +136,12 @@ impl Engine {
                         );
                         self.push_trace_record(record);
                     }
+                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+                        workflow_id: workflow_id.to_string(),
+                        outputs: BTreeMap::new(),
+                        duration: workflow_start.elapsed(),
+                        error: Some(err.message.clone()),
+                    });
                     return Err(err);
                 }
                 if let Some(req) = execution.dry_run_request.clone() {
@@ -142,7 +167,14 @@ impl Engine {
                 }
             }
         }
-        Ok(self.build_outputs(workflow, vars))
+        let workflow_outputs = self.build_outputs(workflow, vars);
+        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
+            workflow_id: workflow_id.to_string(),
+            outputs: workflow_outputs.clone(),
+            duration: workflow_start.elapsed(),
+            error: None,
+        });
+        Ok(workflow_outputs)
     }
 
     fn execute_parallel_step(

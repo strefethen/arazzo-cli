@@ -635,6 +635,101 @@ pub trait TraceHook: Send + Sync {
     fn after_step(&self, event: &StepEvent);
 }
 
+/// Rich execution event for TUI/observer integration.
+///
+/// Each variant captures a specific lifecycle moment during workflow execution,
+/// carrying the relevant data for that moment. Observers receive these events
+/// via [`ExecutionObserver::on_event`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ObserverEvent {
+    /// Step is about to begin execution.
+    StepStarted {
+        workflow_id: String,
+        step_id: String,
+        operation_path: String,
+        workflow_id_ref: String,
+    },
+
+    /// HTTP request has been resolved and is about to be sent.
+    RequestPrepared {
+        workflow_id: String,
+        step_id: String,
+        method: String,
+        url: String,
+        headers: BTreeMap<String, String>,
+        has_body: bool,
+    },
+
+    /// HTTP request has been dispatched, awaiting response.
+    RequestSent {
+        workflow_id: String,
+        step_id: String,
+        method: String,
+        url: String,
+    },
+
+    /// A single success criterion has been evaluated.
+    CriterionEvaluated {
+        workflow_id: String,
+        step_id: String,
+        index: usize,
+        condition: String,
+        passed: bool,
+    },
+
+    /// A retry action has been selected; about to wait.
+    RetryScheduled {
+        workflow_id: String,
+        step_id: String,
+        attempt: usize,
+        max_attempts: usize,
+        delay_seconds: u64,
+    },
+
+    /// Step completed (success or failure).
+    /// Fires BEFORE the action handler decides retry/goto/end.
+    StepCompleted {
+        workflow_id: String,
+        step_id: String,
+        status_code: i64,
+        duration: Duration,
+        outputs: BTreeMap<String, Value>,
+        error: Option<String>,
+        criteria_passed: bool,
+    },
+
+    /// Sub-workflow invocation starting.
+    SubWorkflowStarted {
+        parent_workflow_id: String,
+        parent_step_id: String,
+        child_workflow_id: String,
+        depth: usize,
+    },
+
+    /// Workflow execution finished.
+    WorkflowCompleted {
+        workflow_id: String,
+        outputs: BTreeMap<String, Value>,
+        duration: Duration,
+        error: Option<String>,
+    },
+}
+
+/// Observer trait for rich execution event streaming.
+///
+/// Unlike [`TraceHook`] (which provides only before/after step),
+/// `ExecutionObserver` receives fine-grained events including
+/// request preparation, HTTP dispatch, criterion evaluation,
+/// retry scheduling, and sub-workflow invocation.
+///
+/// Implementations must be `Send + Sync` (called from parallel threads).
+/// Callbacks should be non-blocking — do not perform I/O or heavy
+/// computation. Send events to a channel and process on another thread.
+pub trait ExecutionObserver: Send + Sync {
+    fn on_event(&self, event: &ObserverEvent);
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OperationEntry {
     method: String,
@@ -735,6 +830,7 @@ pub struct Engine {
     execution_event_seq: Arc<Mutex<u64>>,
     step_attempts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
     trace_hook: Option<Arc<dyn TraceHook>>,
+    observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
 }
 
@@ -762,6 +858,7 @@ pub struct EngineBuilder {
     dry_run: bool,
     trace: bool,
     trace_hook: Option<Arc<dyn TraceHook>>,
+    observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
 }
 
@@ -776,6 +873,7 @@ impl EngineBuilder {
             dry_run: false,
             trace: false,
             trace_hook: None,
+            observer: None,
             debug_controller: None,
         }
     }
@@ -807,6 +905,12 @@ impl EngineBuilder {
     /// Registers a trace hook that receives step lifecycle events during execution.
     pub fn trace_hook(mut self, hook: Arc<dyn TraceHook>) -> Self {
         self.trace_hook = Some(hook);
+        self
+    }
+
+    /// Registers an execution observer for rich event streaming during execution.
+    pub fn observer(mut self, observer: Arc<dyn ExecutionObserver>) -> Self {
+        self.observer = Some(observer);
         self
     }
 
@@ -866,6 +970,7 @@ impl EngineBuilder {
             execution_event_seq: Arc::new(Mutex::new(0)),
             step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
             trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
+            observer: self.observer,
             debug_controller: self.debug_controller,
         })
     }

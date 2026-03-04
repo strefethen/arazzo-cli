@@ -34,8 +34,9 @@ pub const INTERNAL_RUNTIME_API_VERSION: &str = "v1";
 /// Frozen v1 runtime-facing models used by CLI trace/replay/debugger plumbing.
 pub mod api_v1 {
     pub use crate::{
-        ExecutionEvent, ExecutionEventKind, RuntimeError, RuntimeErrorKind, TraceCriterionResult,
-        TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, TraceStepRecord,
+        ExecutionEvent, ExecutionEventKind, ExecutionObserver, ObserverEvent, RuntimeError,
+        RuntimeErrorKind, TraceCriterionResult, TraceDecision, TraceDecisionPath, TraceRequest,
+        TraceResponse, TraceStepRecord,
     };
 }
 
@@ -54,10 +55,10 @@ use runtime_core::{
 mod tests {
     use super::{
         build_levels, compute_transitive_deps, evaluate_criterion, extract_step_refs,
-        has_control_flow, parse_method, ArazzoSpec, ClientConfig, ContentType, Engine, EvalContext,
-        ExecutionEventKind, ExecutionOptions, ExpressionEvaluator, OnAction, Response,
-        RuntimeError, RuntimeErrorKind, Step, StepEvent, StepTarget, SuccessCriterion,
-        TraceDecisionPath, TraceHook, Workflow,
+        has_control_flow, parse_method, ArazzoSpec, ClientConfig, ContentType, Engine,
+        EngineBuilder, EvalContext, ExecutionEventKind, ExecutionObserver, ExecutionOptions,
+        ExpressionEvaluator, ObserverEvent, OnAction, Response, RuntimeError, RuntimeErrorKind,
+        Step, StepEvent, StepTarget, SuccessCriterion, TraceDecisionPath, TraceHook, Workflow,
     };
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, ParamLocation, Parameter,
@@ -4609,6 +4610,294 @@ paths:
             Err(e) => e,
         };
         assert_eq!(err.kind, RuntimeErrorKind::WorkflowNotFound);
+    }
+
+    // ── Observer tests ──────────────────────────────────────────────
+
+    #[derive(Default)]
+    struct TestObserver {
+        events: Mutex<Vec<String>>,
+    }
+
+    impl ExecutionObserver for TestObserver {
+        fn on_event(&self, event: &ObserverEvent) {
+            // non_exhaustive: wildcard needed for forward compat, but all current
+            // variants are matched — allow the unreachable_patterns warning.
+            #[allow(unreachable_patterns)]
+            let tag = match event {
+                ObserverEvent::StepStarted { step_id, .. } => {
+                    format!("StepStarted:{step_id}")
+                }
+                ObserverEvent::RequestPrepared {
+                    step_id, method, ..
+                } => {
+                    format!("RequestPrepared:{step_id}:{method}")
+                }
+                ObserverEvent::RequestSent {
+                    step_id, method, ..
+                } => {
+                    format!("RequestSent:{step_id}:{method}")
+                }
+                ObserverEvent::CriterionEvaluated {
+                    step_id,
+                    index,
+                    passed,
+                    ..
+                } => {
+                    format!("CriterionEvaluated:{step_id}:{index}:{passed}")
+                }
+                ObserverEvent::RetryScheduled {
+                    step_id,
+                    attempt,
+                    max_attempts,
+                    ..
+                } => {
+                    format!("RetryScheduled:{step_id}:{attempt}/{max_attempts}")
+                }
+                ObserverEvent::StepCompleted {
+                    step_id,
+                    criteria_passed,
+                    ..
+                } => {
+                    format!("StepCompleted:{step_id}:{criteria_passed}")
+                }
+                ObserverEvent::SubWorkflowStarted {
+                    child_workflow_id, ..
+                } => {
+                    format!("SubWorkflowStarted:{child_workflow_id}")
+                }
+                ObserverEvent::WorkflowCompleted {
+                    workflow_id, error, ..
+                } => {
+                    let status = if error.is_some() { "error" } else { "ok" };
+                    format!("WorkflowCompleted:{workflow_id}:{status}")
+                }
+                _ => "Unknown".to_string(),
+            };
+            if let Ok(mut guard) = self.events.lock() {
+                guard.push(tag);
+            }
+        }
+    }
+
+    impl TestObserver {
+        fn events(&self) -> Vec<String> {
+            match self.events.lock() {
+                Ok(guard) => guard.clone(),
+                Err(_) => panic!("TestObserver events lock poisoned"),
+            }
+        }
+    }
+
+    fn build_observer_engine(spec: ArazzoSpec, observer: Arc<dyn ExecutionObserver>) -> Engine {
+        match EngineBuilder::new(spec).observer(observer).build() {
+            Ok(engine) => engine,
+            Err(err) => panic!("building observer engine: {err}"),
+        }
+    }
+
+    fn find_event_pos(events: &[String], needle: &str) -> usize {
+        match events.iter().position(|e| e == needle) {
+            Some(pos) => pos,
+            None => panic!("event {needle:?} not found in {events:?}"),
+        }
+    }
+
+    #[test]
+    fn observer_receives_full_event_sequence() {
+        let server = start_server(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+        let observer = Arc::new(TestObserver::default());
+        let mut engine =
+            build_observer_engine(spec, Arc::clone(&observer) as Arc<dyn ExecutionObserver>);
+        engine
+            .index
+            .source_descriptions_map
+            .insert("test".to_string(), server.base_url.clone());
+        engine.index.base_url = server.base_url.clone();
+
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok(), "execution failed: {result:?}");
+
+        let events = observer.events();
+        assert!(events.contains(&"StepStarted:s1".to_string()));
+        assert!(events.contains(&"RequestPrepared:s1:GET".to_string()));
+        assert!(events.contains(&"RequestSent:s1:GET".to_string()));
+        assert!(events.contains(&"CriterionEvaluated:s1:0:true".to_string()));
+        assert!(events.contains(&"StepCompleted:s1:true".to_string()));
+        assert!(events.contains(&"WorkflowCompleted:wf:ok".to_string()));
+
+        // Verify ordering: StepStarted before RequestPrepared before StepCompleted
+        let start_pos = find_event_pos(&events, "StepStarted:s1");
+        let prep_pos = find_event_pos(&events, "RequestPrepared:s1:GET");
+        let sent_pos = find_event_pos(&events, "RequestSent:s1:GET");
+        let complete_pos = find_event_pos(&events, "StepCompleted:s1:true");
+        let wf_pos = find_event_pos(&events, "WorkflowCompleted:wf:ok");
+        assert!(start_pos < prep_pos);
+        assert!(prep_pos < sent_pos);
+        assert!(sent_pos < complete_pos);
+        assert!(complete_pos < wf_pos);
+    }
+
+    #[test]
+    fn observer_and_trace_hook_coexist() {
+        let server = start_server(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+        let observer = Arc::new(TestObserver::default());
+        let trace_hook = Arc::new(TestTraceHook::default());
+        let mut engine = match EngineBuilder::new(spec)
+            .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+            .trace_hook(Arc::clone(&trace_hook) as Arc<dyn TraceHook>)
+            .build()
+        {
+            Ok(e) => e,
+            Err(err) => panic!("building engine: {err}"),
+        };
+        engine
+            .index
+            .source_descriptions_map
+            .insert("test".to_string(), server.base_url.clone());
+        engine.index.base_url = server.base_url.clone();
+
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok());
+
+        // Observer got events
+        assert!(!observer.events().is_empty());
+        // TraceHook also got events
+        let before_count = match trace_hook.before_events.lock() {
+            Ok(guard) => guard.len(),
+            Err(_) => panic!("before_events lock poisoned"),
+        };
+        let after_count = match trace_hook.after_events.lock() {
+            Ok(guard) => guard.len(),
+            Err(_) => panic!("after_events lock poisoned"),
+        };
+        assert!(before_count > 0);
+        assert!(after_count > 0);
+    }
+
+    #[test]
+    fn observer_receives_dry_run_request_prepared() {
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+        let observer = Arc::new(TestObserver::default());
+        let mut engine = match EngineBuilder::new(spec)
+            .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+            .dry_run(true)
+            .build()
+        {
+            Ok(e) => e,
+            Err(err) => panic!("building engine: {err}"),
+        };
+
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok());
+
+        let events = observer.events();
+        // In dry-run mode: RequestPrepared fires but NOT RequestSent
+        assert!(events.contains(&"RequestPrepared:s1:GET".to_string()));
+        assert!(!events.iter().any(|e| e.starts_with("RequestSent:")));
+    }
+
+    #[test]
+    fn observer_no_events_without_observer() {
+        let server = start_server(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+        // Build WITHOUT observer — verify no panics and existing behavior preserved
+        let mut engine = new_test_engine(&server.base_url, spec);
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn observer_parallel_receives_events_for_all_steps() {
+        let server = start_server_concurrent(|_method, _url, _headers, _body| {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        });
+        let spec = make_spec(vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }]);
+        let observer = Arc::new(TestObserver::default());
+        let mut engine = match EngineBuilder::new(spec)
+            .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+            .parallel(true)
+            .build()
+        {
+            Ok(e) => e,
+            Err(err) => panic!("building engine: {err}"),
+        };
+        engine
+            .index
+            .source_descriptions_map
+            .insert("test".to_string(), server.base_url.clone());
+        engine.index.base_url = server.base_url.clone();
+
+        let result = engine.execute("wf", BTreeMap::new());
+        assert!(result.is_ok(), "execution failed: {result:?}");
+
+        let events = observer.events();
+        // Both steps received StepStarted and StepCompleted
+        assert!(events.contains(&"StepStarted:a".to_string()));
+        assert!(events.contains(&"StepStarted:b".to_string()));
+        assert!(events.contains(&"StepCompleted:a:true".to_string()));
+        assert!(events.contains(&"StepCompleted:b:true".to_string()));
+        assert!(events.contains(&"WorkflowCompleted:wf:ok".to_string()));
     }
 
     fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
