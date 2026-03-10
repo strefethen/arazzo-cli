@@ -7,10 +7,11 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{
-    DebugController, DebugScopes, DebugStopEvent, DebugStopReason, Engine, ExecutionOptions,
-    RuntimeError, StepBreakpoint, StepCheckpoint,
+    DebugController, DebugScopes, DebugStopEvent, DebugStopReason, EngineBuilder, RuntimeError,
+    StepBreakpoint, StepCheckpoint,
 };
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 #[path = "dap/events.rs"]
 mod events;
@@ -102,7 +103,7 @@ impl BreakpointArea {
 #[derive(Debug)]
 struct RuntimeSession {
     controller: Arc<DebugController>,
-    cancel_flag: Arc<AtomicBool>,
+    cancel_token: Option<CancellationToken>,
     monitor_handle: Option<thread::JoinHandle<()>>,
     last_stop: Option<DebugStopEvent>,
     terminated: bool,
@@ -366,10 +367,7 @@ where
                             let response =
                                 error_response(outbound.alloc(), &command, request.seq, err);
                             write_dap_message(writer, &response)?;
-                            write_dap_message(
-                                writer,
-                                &terminated_event(outbound.alloc()),
-                            )?;
+                            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
                             continue;
                         }
                         let response = response_with_body(
@@ -574,23 +572,41 @@ fn ensure_runtime_started(
             .map_err(|err| format!("requesting initial pause: {err}"))?;
     }
 
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    let mut engine = Engine::new(spec).map_err(|err| format!("creating runtime engine: {err}"))?;
-    engine.set_debug_controller(Arc::clone(&controller));
-    engine.set_dry_run_mode(launch.dry_run);
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<CancellationToken>();
+    let engine = EngineBuilder::new(spec)
+        .debug_controller(Arc::clone(&controller))
+        .dry_run(launch.dry_run)
+        .build()
+        .map_err(|err| format!("creating runtime engine: {err}"))?;
     let inputs = launch.inputs.clone();
-    let engine_cancel = Arc::clone(&cancel_flag);
+    let engine_done = Arc::new(AtomicBool::new(false));
+    let done_flag = Arc::clone(&engine_done);
     let engine_handle = thread::spawn(move || {
-        engine.execute_with_options(
-            &workflow_id,
-            inputs,
-            ExecutionOptions::with_cancel_flag(engine_cancel),
-        )
+        let rt = tokio::runtime::Runtime::new().map_err(|err| {
+            RuntimeError::new(
+                arazzo_runtime::RuntimeErrorKind::InternalError,
+                format!("creating tokio runtime: {err}"),
+            )
+        })?;
+        let result = rt.block_on(async {
+            let handle = engine.execute(&workflow_id, inputs);
+            let _ = cancel_tx.send(handle.cancel_token().clone());
+            handle.collect().await.outputs
+        });
+        // Signal completion BEFORE runtime shutdown so the monitor detects
+        // it immediately via the flag, not via is_finished() (which waits
+        // for Runtime::drop to complete).
+        done_flag.store(true, Ordering::Release);
+        rt.shutdown_timeout(Duration::from_millis(50));
+        result
     });
+
+    // Receive the CancellationToken from the engine thread (blocks briefly).
+    let cancel_token = cancel_rx.recv().ok();
 
     // Thread C: monitors engine stop events and thread completion.
     let monitor_controller = Arc::clone(&controller);
-    let monitor_cancel = Arc::clone(&cancel_flag);
+    let monitor_cancel = cancel_token.clone();
     let monitor_event_tx = event_tx.clone();
     let monitor_handle = thread::spawn(move || {
         engine_event_monitor(
@@ -598,12 +614,13 @@ fn ensure_runtime_started(
             monitor_event_tx,
             monitor_cancel,
             engine_handle,
+            engine_done,
         )
     });
 
     state.runtime = Some(RuntimeSession {
         controller,
-        cancel_flag,
+        cancel_token,
         monitor_handle: Some(monitor_handle),
         last_stop: None,
         terminated: false,
@@ -649,27 +666,30 @@ fn rebuild_runtime_breakpoints(state: &mut SessionState) {
 /// Thread C: monitors the engine's debug controller for stop events and thread
 /// completion, forwarding them to the coordinator via the `event_tx` channel.
 /// Owns the engine `JoinHandle` exclusively—joins it when the engine finishes
-/// or when the cancel flag is set.
+/// or when the cancel token is cancelled.
+///
+/// NOTE: The cancel token is also cancelled on *normal* completion —
+/// `ExecutionHandle::drop` cancels it after `collect()` returns.  So we
+/// must treat cancellation as "engine finished" rather than "abort", drain
+/// any remaining stop events, and still emit the Terminated event.
 fn engine_event_monitor(
     controller: Arc<DebugController>,
     event_tx: mpsc::Sender<EngineEvent>,
-    cancel_flag: Arc<AtomicBool>,
+    cancel_token: Option<CancellationToken>,
     engine_handle: thread::JoinHandle<Result<BTreeMap<String, Value>, RuntimeError>>,
+    engine_done: Arc<AtomicBool>,
 ) {
     let mut delivered = 0usize;
     let mut handle = Some(engine_handle);
 
     loop {
-        if cancel_flag.load(Ordering::Relaxed) {
-            if let Some(h) = handle.take() {
-                // Intentional: join can only fail if engine thread panicked;
-                // we're shutting down regardless.
-                if h.join().is_err() {
-                    // Engine thread panicked during cancellation; monitor exits anyway.
-                }
-            }
-            return;
-        }
+        // Detect completion: the done flag (set right after block_on returns)
+        // or thread finished or cancellation token fired.  The cancel token
+        // fires on BOTH external abort AND normal completion (ExecutionHandle
+        // Drop cancels the token), so we treat all three as "engine done".
+        let finished = engine_done.load(Ordering::Acquire)
+            || cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
+            || handle.as_ref().is_some_and(|h| h.is_finished());
 
         // Drain any new stop events from the controller.
         if let Ok(stop_events) = controller.stop_events() {
@@ -682,39 +702,26 @@ fn engine_event_monitor(
             }
         }
 
-        // Check if the engine thread has finished.
-        if let Some(ref h) = handle {
-            if h.is_finished() {
-                // Final drain—engine wrote all stop events before exiting.
-                if let Ok(stop_events) = controller.stop_events() {
-                    while delivered < stop_events.len() {
-                        let stop = stop_events[delivered].clone();
-                        delivered += 1;
-                        if event_tx.send(EngineEvent::Stopped(stop)).is_err() {
-                            return;
-                        }
-                    }
-                }
-                let Some(h) = handle.take() else {
-                    return;
-                };
-                // Intentional: monitor is exiting; if main loop already
-                // dropped the receiver, this send failing is harmless.
-                match h.join() {
-                    Ok(_) => {
-                        if event_tx.send(EngineEvent::Terminated).is_err() {
-                            // Coordinator already exited.
-                        }
-                    }
-                    Err(_) => {
-                        if event_tx.send(EngineEvent::Panicked).is_err() {
-                            // Coordinator already exited.
-                        }
-                    }
-                }
+        if finished {
+            let Some(h) = handle.take() else {
                 return;
+            };
+            // join() may block briefly while the tokio runtime shuts down
+            // (bounded by shutdown_timeout(50ms) in the engine thread).
+            match h.join() {
+                Ok(_) => {
+                    if event_tx.send(EngineEvent::Terminated).is_err() {
+                        // Coordinator already exited.
+                    }
+                }
+                Err(_) => {
+                    if event_tx.send(EngineEvent::Panicked).is_err() {
+                        // Coordinator already exited.
+                    }
+                }
             }
-        } else {
+            return;
+        } else if handle.is_none() {
             return;
         }
 
@@ -741,17 +748,14 @@ where
 {
     match event {
         EngineEvent::Stopped(stop) => {
+            let reason = stop_reason_name(stop.reason.clone());
             if let Some(runtime) = state.runtime.as_mut() {
-                runtime.last_stop = Some(stop.clone());
+                runtime.last_stop = Some(stop);
                 runtime.variable_store.reset();
             }
             write_dap_message(
                 writer,
-                &stopped_event(
-                    outbound.alloc(),
-                    MAIN_THREAD_ID,
-                    stop_reason_name(stop.reason.clone()),
-                ),
+                &stopped_event(outbound.alloc(), MAIN_THREAD_ID, reason),
             )?;
         }
         EngineEvent::Terminated | EngineEvent::Panicked => {
@@ -781,9 +785,10 @@ where
 
 fn cleanup_runtime(state: &mut SessionState) {
     if let Some(runtime) = state.runtime.as_mut() {
-        runtime.cancel_flag.store(true, Ordering::Relaxed);
-        // Intentional: force_resume unblocks the engine thread so it can observe
-        // the cancel flag; if the controller is already resumed, this is a no-op.
+        if let Some(token) = &runtime.cancel_token {
+            token.cancel();
+        }
+        // force_resume still needed — unblocks spawn_blocking debug gates after cancel.
         if runtime.controller.force_resume().is_err() {
             // Controller unavailable during teardown; continue cleanup.
         }
@@ -1373,9 +1378,7 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
             continue;
         }
 
-        if indent < workflows_indent
-            || (indent == workflows_indent && !trimmed.starts_with("- "))
-        {
+        if indent < workflows_indent || (indent == workflows_indent && !trimmed.starts_with("- ")) {
             in_workflows = false;
             in_steps = false;
             current_workflow_id.clear();
@@ -1429,8 +1432,7 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
         }
 
         if in_steps
-            && (indent < steps_indent
-                || (indent == steps_indent && !trimmed.starts_with("- ")))
+            && (indent < steps_indent || (indent == steps_indent && !trimmed.starts_with("- ")))
         {
             in_steps = false;
             current_step_id.clear();
@@ -1710,9 +1712,7 @@ fn extract_source_metadata(text: &str) -> SourceMetadata {
         }
 
         if in_outputs {
-            if indent < outputs_indent
-                || (indent == outputs_indent && !trimmed.contains(':'))
-            {
+            if indent < outputs_indent || (indent == outputs_indent && !trimmed.contains(':')) {
                 in_outputs = false;
             } else if let Some((name, expression)) = parse_output_entry(trimmed) {
                 checkpoints.push(IndexedCheckpoint {

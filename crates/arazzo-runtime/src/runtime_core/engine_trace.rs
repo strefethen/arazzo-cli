@@ -1,30 +1,47 @@
 use super::*;
 
 impl Engine {
-    pub(super) fn emit_before_step_event(&self, workflow_id: &str, step: &Step) {
-        self.emit_execution_event(ExecutionEvent {
-            seq: self.next_execution_event_seq(),
-            kind: ExecutionEventKind::BeforeStep,
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            operation_path: step_operation_path(step),
-            workflow_id_ref: step_workflow_id_ref(step),
-            status_code: 0,
-            outputs: BTreeMap::new(),
-            err: None,
-            duration_ns: 0,
-        });
+    pub(super) async fn emit_before_step_event(
+        &self,
+        ctx: &ExecutionContext,
+        workflow_id: &str,
+        step: &Step,
+    ) {
+        self.emit_execution_event(
+            ctx,
+            ExecutionEvent {
+                seq: ctx
+                    .execution_event_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1,
+                kind: ExecutionEventKind::BeforeStep,
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                operation_path: step_operation_path(step),
+                workflow_id_ref: step_workflow_id_ref(step),
+                status_code: 0,
+                outputs: BTreeMap::new(),
+                err: None,
+                duration_ns: 0,
+            },
+        )
+        .await;
 
-        self.emit_observer_event(ObserverEvent::StepStarted {
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            operation_path: step_operation_path(step),
-            workflow_id_ref: step_workflow_id_ref(step),
-        });
+        self.emit_observer_event(
+            ctx,
+            ObserverEvent::StepStarted {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                operation_path: step_operation_path(step),
+                workflow_id_ref: step_workflow_id_ref(step),
+            },
+        )
+        .await;
     }
 
-    pub(super) fn debug_gate_step(
+    pub(super) async fn debug_gate_step(
         &self,
+        _ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
@@ -41,9 +58,10 @@ impl Engine {
             depth,
         };
         self.debug_gate_checkpoint(&gate, StepCheckpoint::Step, BTreeMap::new())
+            .await
     }
 
-    pub(super) fn debug_gate_success_criterion(
+    pub(super) async fn debug_gate_success_criterion(
         &self,
         gate: &DebugGateContext<'_>,
         index: usize,
@@ -65,9 +83,10 @@ impl Engine {
         }
 
         self.debug_gate_checkpoint(gate, StepCheckpoint::SuccessCriterion { index }, locals)
+            .await
     }
 
-    pub(super) fn debug_gate_output(
+    pub(super) async fn debug_gate_output(
         &self,
         gate: &DebugGateContext<'_>,
         output_name: &str,
@@ -104,9 +123,10 @@ impl Engine {
             },
             locals,
         )
+        .await
     }
 
-    pub(super) fn debug_gate_action(
+    pub(super) async fn debug_gate_action(
         &self,
         gate: &DebugGateContext<'_>,
         branch: ActionBranch,
@@ -142,17 +162,18 @@ impl Engine {
         if action.retry_after != 0 {
             locals.insert("actionRetryAfter".to_string(), json!(action.retry_after));
         }
-        if action.retry_limit != 0 {
-            locals.insert("actionRetryLimit".to_string(), json!(action.retry_limit));
+        if let Some(rl) = action.retry_limit {
+            locals.insert("actionRetryLimit".to_string(), json!(rl));
         }
         if let Some(response) = gate.response {
             insert_response_locals(&mut locals, response);
         }
 
         self.debug_gate_checkpoint(gate, branch.action_checkpoint(action_index), locals)
+            .await
     }
 
-    pub(super) fn debug_gate_action_criterion(
+    pub(super) async fn debug_gate_action_criterion(
         &self,
         gate: &DebugGateContext<'_>,
         branch: ActionBranch,
@@ -178,9 +199,10 @@ impl Engine {
             branch.criterion_checkpoint(action_index, criterion_index),
             locals,
         )
+        .await
     }
 
-    pub(super) fn debug_gate_retry_selected(
+    pub(super) async fn debug_gate_retry_selected(
         &self,
         debug: SelectedActionDebugContext<'_>,
         action: &OnAction,
@@ -219,9 +241,10 @@ impl Engine {
             debug.branch.retry_selected_checkpoint(debug.action_index),
             locals,
         )
+        .await
     }
 
-    pub(super) fn debug_gate_retry_delay(
+    pub(super) async fn debug_gate_retry_delay(
         &self,
         debug: SelectedActionDebugContext<'_>,
         action: &OnAction,
@@ -258,15 +281,16 @@ impl Engine {
             debug.branch.retry_delay_checkpoint(debug.action_index),
             locals,
         )
+        .await
     }
 
-    fn debug_gate_checkpoint(
+    async fn debug_gate_checkpoint(
         &self,
         gate: &DebugGateContext<'_>,
         checkpoint: StepCheckpoint,
         locals: BTreeMap<String, Value>,
     ) -> Result<(), RuntimeError> {
-        let Some(controller) = &self.debug_controller else {
+        let Some(controller) = &self.inner.debug_controller else {
             return Ok(());
         };
 
@@ -287,25 +311,35 @@ impl Engine {
         }
         scopes.locals = locals;
 
-        controller
-            .gate_step(
-                gate.workflow_id,
-                gate.step_id,
-                checkpoint,
-                gate.depth,
-                &eval_ctx,
-                scopes,
-            )
-            .map_err(|err| {
-                RuntimeError::new(
-                    RuntimeErrorKind::DebugController,
-                    format!("debug controller: {err}"),
-                )
-            })
+        let controller = Arc::clone(controller);
+        let workflow_id = gate.workflow_id.to_string();
+        let step_id = gate.step_id.to_string();
+        let depth = gate.depth;
+
+        // DebugController uses Condvar::wait(), so we bridge via spawn_blocking
+        tokio::task::spawn_blocking(move || {
+            controller
+                .gate_step(&workflow_id, &step_id, checkpoint, depth, &eval_ctx, scopes)
+                .map_err(|err| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::DebugController,
+                        format!("debug controller: {err}"),
+                    )
+                })
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(RuntimeError::new(
+                RuntimeErrorKind::DebugController,
+                "debug controller task panicked",
+            ))
+        })
     }
 
-    pub(super) fn emit_after_step_event(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn emit_after_step_event(
         &self,
+        ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         status_code: i64,
@@ -313,32 +347,41 @@ impl Engine {
         err: Option<String>,
         duration: Duration,
     ) {
-        self.emit_execution_event(ExecutionEvent {
-            seq: self.next_execution_event_seq(),
-            kind: ExecutionEventKind::AfterStep,
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            operation_path: step_operation_path(step),
-            workflow_id_ref: step_workflow_id_ref(step),
-            status_code,
-            outputs,
-            err,
-            duration_ns: duration_ns_u64(duration),
-        });
+        self.emit_execution_event(
+            ctx,
+            ExecutionEvent {
+                seq: ctx
+                    .execution_event_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1,
+                kind: ExecutionEventKind::AfterStep,
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                operation_path: step_operation_path(step),
+                workflow_id_ref: step_workflow_id_ref(step),
+                status_code,
+                outputs,
+                err,
+                duration_ns: duration_ns_u64(duration),
+            },
+        )
+        .await;
     }
 
-    /// Dispatch an event to the registered observer, if any.
-    pub(super) fn emit_observer_event(&self, event: ObserverEvent) {
-        if let Some(observer) = &self.observer {
+    /// Dispatch an event to the registered observer, if any, and stream it.
+    pub(super) async fn emit_observer_event(&self, ctx: &ExecutionContext, event: ObserverEvent) {
+        if let Some(observer) = &self.inner.observer {
             observer.on_event(&event);
         }
+        let _ = ctx.event_tx.send(EngineEvent::Observer(event)).await;
     }
 
-    fn emit_execution_event(&self, event: ExecutionEvent) {
-        if let Ok(mut guard) = self.execution_events.lock() {
-            guard.push(event.clone());
-        }
-        if let Some(hook) = &self.trace_hook {
+    async fn emit_execution_event(&self, ctx: &ExecutionContext, event: ExecutionEvent) {
+        let _ = ctx
+            .event_tx
+            .send(EngineEvent::Execution(event.clone()))
+            .await;
+        if let Some(hook) = &self.inner.trace_hook {
             let step_event = StepEvent {
                 workflow_id: event.workflow_id.clone(),
                 step_id: event.step_id.clone(),
@@ -357,8 +400,9 @@ impl Engine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn emit_step_completed_event(
+    pub(super) async fn emit_step_completed_event(
         &self,
+        ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         status_code: i64,
@@ -367,57 +411,29 @@ impl Engine {
         error: Option<String>,
         criteria_passed: bool,
     ) {
-        self.emit_observer_event(ObserverEvent::StepCompleted {
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            status_code,
-            duration,
-            outputs,
-            error,
-            criteria_passed,
-        });
+        self.emit_observer_event(
+            ctx,
+            ObserverEvent::StepCompleted {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
+                status_code,
+                duration,
+                outputs,
+                error,
+                criteria_passed,
+            },
+        )
+        .await;
     }
 
-    pub(super) fn clear_trace_state(&mut self) {
-        if let Ok(mut guard) = self.trace_steps.lock() {
-            guard.clear();
-        }
-        if let Ok(mut guard) = self.trace_seq.lock() {
-            *guard = 0;
-        }
-        if let Ok(mut guard) = self.execution_events.lock() {
-            guard.clear();
-        }
-        if let Ok(mut guard) = self.execution_event_seq.lock() {
-            *guard = 0;
-        }
-        if let Ok(mut guard) = self.step_attempts.lock() {
-            guard.clear();
-        }
+    pub(super) fn next_trace_seq(ctx: &ExecutionContext) -> u64 {
+        ctx.trace_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
     }
 
-    pub(super) fn next_trace_seq(&self) -> u64 {
-        match self.trace_seq.lock() {
-            Ok(mut guard) => {
-                *guard = guard.saturating_add(1);
-                *guard
-            }
-            Err(_) => 0,
-        }
-    }
-
-    fn next_execution_event_seq(&self) -> u64 {
-        match self.execution_event_seq.lock() {
-            Ok(mut guard) => {
-                *guard = guard.saturating_add(1);
-                *guard
-            }
-            Err(_) => 0,
-        }
-    }
-
-    pub(super) fn next_attempt(&self, workflow_id: &str, step_id: &str) -> u32 {
-        match self.step_attempts.lock() {
+    pub(super) fn next_attempt(ctx: &ExecutionContext, workflow_id: &str, step_id: &str) -> u32 {
+        match ctx.step_attempts.lock() {
             Ok(mut guard) => {
                 let key = (workflow_id.to_string(), step_id.to_string());
                 let next = guard.get(&key).copied().unwrap_or(0).saturating_add(1);
@@ -430,7 +446,7 @@ impl Engine {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_step_trace_record(
-        &self,
+        ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         attempt: u32,
@@ -441,7 +457,7 @@ impl Engine {
         error: Option<String>,
     ) -> TraceStepRecord {
         TraceStepRecord {
-            seq: self.next_trace_seq(),
+            seq: Self::next_trace_seq(ctx),
             workflow_id: workflow_id.to_string(),
             step_id: step.step_id.clone(),
             attempt,
@@ -459,10 +475,8 @@ impl Engine {
         }
     }
 
-    pub(super) fn push_trace_record(&self, record: TraceStepRecord) {
-        if let Ok(mut guard) = self.trace_steps.lock() {
-            guard.push(record);
-        }
+    pub(super) async fn push_trace_record(ctx: &ExecutionContext, record: TraceStepRecord) {
+        let _ = ctx.event_tx.send(EngineEvent::TraceStep(record)).await;
     }
 }
 

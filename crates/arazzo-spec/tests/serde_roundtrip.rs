@@ -151,6 +151,6 @@ workflows:
     assert_eq!(step.on_success[0].workflow_id, "");
     assert_eq!(step.on_success[0].step_id, "");
     assert_eq!(step.on_success[0].retry_after, 0);
-    assert_eq!(step.on_success[0].retry_limit, 0);
+    assert_eq!(step.on_success[0].retry_limit, None);
     assert!(step.on_success[0].criteria.is_empty());
 }

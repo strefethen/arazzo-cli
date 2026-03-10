@@ -1,6 +1,6 @@
 mod common;
 
-use arazzo_runtime::{ExecutionOptions, RuntimeError, RuntimeErrorKind};
+use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
 use arazzo_spec::{
     ActionType, OnAction, ParamLocation, Parameter, RequestBody, Step, StepTarget,
     SuccessCriterion, Workflow,
@@ -8,14 +8,14 @@ use arazzo_spec::{
 use common::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 // ── Basic execution tests ─────────────────────────────────────────
 
-#[test]
-fn execute_sequential_steps() {
+#[tokio::test]
+async fn execute_sequential_steps() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {
         "/step1" => MockHttpResponse::json(200, r#"{"value":"hello"}"#),
         "/step2" => MockHttpResponse::json(200, r#"{"result":"world"}"#),
@@ -41,16 +41,19 @@ fn execute_sequential_steps() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("sequential", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("sequential", BTreeMap::new())
+        .await
+        .outputs;
     match result {
         Ok(outputs) => assert!(outputs.is_empty()),
         Err(err) => panic!("expected success, got: {err}"),
     }
 }
 
-#[test]
-fn execute_failure_no_handler() {
+#[tokio::test]
+async fn execute_failure_no_handler() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(500, r#"{"error":"server error"}"#)
     });
@@ -66,8 +69,11 @@ fn execute_failure_no_handler() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("fail-no-handler", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("fail-no-handler", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected error for unhandled failure"),
         Err(err) => err,
@@ -79,8 +85,8 @@ fn execute_failure_no_handler() {
     );
 }
 
-#[test]
-fn execute_on_failure_end() {
+#[tokio::test]
+async fn execute_on_failure_end() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
 
     let spec = make_spec(vec![Workflow {
@@ -105,8 +111,11 @@ fn execute_on_failure_end() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("fail-end", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("fail-end", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected error from onFailure end action"),
         Err(err) => err,
@@ -114,8 +123,8 @@ fn execute_on_failure_end() {
     assert_eq!(err.message, "step s1: workflow ended by onFailure action");
 }
 
-#[test]
-fn execute_on_success_end() {
+#[tokio::test]
+async fn execute_on_success_end() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -148,8 +157,11 @@ fn execute_on_success_end() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("success-end", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("success-end", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -161,8 +173,8 @@ fn execute_on_success_end() {
     assert_eq!(observed, vec!["/ok".to_string()]);
 }
 
-#[test]
-fn execute_on_failure_goto() {
+#[tokio::test]
+async fn execute_on_failure_goto() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -206,8 +218,11 @@ fn execute_on_failure_goto() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("fail-goto", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("fail-goto", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -222,8 +237,8 @@ fn execute_on_failure_goto() {
     assert!(!observed.iter().any(|p| p == "/should-not-reach"));
 }
 
-#[test]
-fn execute_on_success_goto() {
+#[tokio::test]
+async fn execute_on_success_goto() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -263,8 +278,11 @@ fn execute_on_success_goto() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("success-goto", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("success-goto", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -277,8 +295,8 @@ fn execute_on_success_goto() {
     assert_eq!(observed, vec!["/start".to_string(), "/target".to_string()]);
 }
 
-#[test]
-fn execute_on_failure_retry() {
+#[tokio::test]
+async fn execute_on_failure_retry() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -304,16 +322,19 @@ fn execute_on_failure_retry() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("retry", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("retry", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success after retries, got: {err}");
     }
     assert_eq!(calls.load(Ordering::Relaxed), 3);
 }
 
-#[test]
-fn execute_retry_exceeds_max() {
+#[tokio::test]
+async fn execute_retry_exceeds_max() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
 
     let spec = make_spec(vec![Workflow {
@@ -331,8 +352,11 @@ fn execute_retry_exceeds_max() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("retry-max", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("retry-max", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected max-retries error"),
         Err(err) => err,
@@ -340,8 +364,8 @@ fn execute_retry_exceeds_max() {
     assert_eq!(err.message, "step s1: max retries (3) exceeded");
 }
 
-#[test]
-fn execute_retry_custom_limit() {
+#[tokio::test]
+async fn execute_retry_custom_limit() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -368,16 +392,19 @@ fn execute_retry_custom_limit() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("retry-limit", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("retry-limit", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
     assert_eq!(calls.load(Ordering::Relaxed), 6);
 }
 
-#[test]
-fn execute_retry_custom_limit_exceeded() {
+#[tokio::test]
+async fn execute_retry_custom_limit_exceeded() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
 
     let spec = make_spec(vec![Workflow {
@@ -396,8 +423,11 @@ fn execute_retry_custom_limit_exceeded() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("retry-limit-exceeded", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("retry-limit-exceeded", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected retry limit exceeded error"),
         Err(err) => err,
@@ -405,8 +435,8 @@ fn execute_retry_custom_limit_exceeded() {
     assert_eq!(err.message, "step s1: max retries (2) exceeded");
 }
 
-#[test]
-fn execute_retry_limit_zero_means_no_retries() {
+#[tokio::test]
+async fn execute_retry_limit_zero_means_no_retries() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -430,8 +460,11 @@ fn execute_retry_limit_zero_means_no_retries() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("zero-retry", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("zero-retry", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected retry limit exceeded error"),
         Err(err) => err,
@@ -441,8 +474,8 @@ fn execute_retry_limit_zero_means_no_retries() {
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
-#[test]
-fn execute_retry_with_delay() {
+#[tokio::test]
+async fn execute_retry_with_delay() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -469,9 +502,12 @@ fn execute_retry_with_delay() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
     let started = Instant::now();
-    let result = engine.execute("retry-delay", BTreeMap::new());
+    let result = engine
+        .execute_collect("retry-delay", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success with retry delay, got: {err}");
     }
@@ -479,8 +515,8 @@ fn execute_retry_with_delay() {
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
 
-#[test]
-fn execute_retry_delay_honors_execution_timeout() {
+#[tokio::test]
+async fn execute_retry_delay_honors_execution_timeout() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -504,13 +540,17 @@ fn execute_retry_delay_honors_execution_timeout() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
     let started = Instant::now();
-    let result = engine.execute_with_options(
-        "retry-delay-timeout",
-        BTreeMap::new(),
-        ExecutionOptions::with_timeout(Duration::from_millis(120)),
-    );
+    let result = engine
+        .execute_with_timeout(
+            "retry-delay-timeout",
+            BTreeMap::new(),
+            Duration::from_millis(120),
+        )
+        .collect()
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected execution timeout"),
         Err(err) => err,
@@ -521,8 +561,8 @@ fn execute_retry_delay_honors_execution_timeout() {
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
-#[test]
-fn execute_honors_external_cancel_flag() {
+#[tokio::test]
+async fn execute_honors_external_cancel_flag() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_ref = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -541,13 +581,11 @@ fn execute_honors_external_cancel_flag() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let cancel_flag = Arc::new(AtomicBool::new(true));
-    let result = engine.execute_with_options(
-        "cancelled",
-        BTreeMap::new(),
-        ExecutionOptions::with_cancel_flag(cancel_flag),
-    );
+    let engine = new_test_engine(&server.base_url, spec);
+    let handle = engine.execute("cancelled", BTreeMap::new());
+    handle.cancel_token().cancel();
+    let exec_result = handle.collect().await;
+    let result = exec_result.outputs;
     let err = match result {
         Ok(_) => panic!("expected execution cancellation"),
         Err(err) => err,
@@ -557,8 +595,8 @@ fn execute_honors_external_cancel_flag() {
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 
-#[test]
-fn execute_on_failure_criteria_matching() {
+#[tokio::test]
+async fn execute_on_failure_criteria_matching() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -621,8 +659,11 @@ fn execute_on_failure_criteria_matching() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("criteria-match", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("criteria-match", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -635,8 +676,8 @@ fn execute_on_failure_criteria_matching() {
     assert!(observed.iter().any(|path| path == "/rate-limit-handler"));
 }
 
-#[test]
-fn execute_on_failure_criteria_none_match() {
+#[tokio::test]
+async fn execute_on_failure_criteria_none_match() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(418));
 
     let spec = make_spec(vec![Workflow {
@@ -669,8 +710,11 @@ fn execute_on_failure_criteria_none_match() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("no-criteria-match", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("no-criteria-match", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected error when no criteria match"),
         Err(err) => err,
@@ -680,8 +724,8 @@ fn execute_on_failure_criteria_none_match() {
         .contains("step s1: success criteria not met (status=418"));
 }
 
-#[test]
-fn execute_goto_errors() {
+#[tokio::test]
+async fn execute_goto_errors() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
 
     let bad_goto_spec = make_spec(vec![Workflow {
@@ -699,8 +743,11 @@ fn execute_goto_errors() {
         }],
         ..Workflow::default()
     }]);
-    let mut bad_goto_engine = new_test_engine(&server.base_url, bad_goto_spec);
-    let bad_goto_result = bad_goto_engine.execute("bad-goto", BTreeMap::new());
+    let bad_goto_engine = new_test_engine(&server.base_url, bad_goto_spec);
+    let bad_goto_result = bad_goto_engine
+        .execute_collect("bad-goto", BTreeMap::new())
+        .await
+        .outputs;
     let bad_goto_err = match bad_goto_result {
         Ok(_) => panic!("expected error for goto to missing step"),
         Err(err) => err,
@@ -725,8 +772,11 @@ fn execute_goto_errors() {
         }],
         ..Workflow::default()
     }]);
-    let mut empty_goto_engine = new_test_engine(&server.base_url, empty_goto_spec);
-    let empty_goto_result = empty_goto_engine.execute("goto-no-target", BTreeMap::new());
+    let empty_goto_engine = new_test_engine(&server.base_url, empty_goto_spec);
+    let empty_goto_result = empty_goto_engine
+        .execute_collect("goto-no-target", BTreeMap::new())
+        .await
+        .outputs;
     let empty_goto_err = match empty_goto_result {
         Ok(_) => panic!("expected error for goto without step/workflow target"),
         Err(err) => err,
@@ -738,11 +788,14 @@ fn execute_goto_errors() {
     assert_eq!(empty_goto_err.kind, RuntimeErrorKind::GotoTargetMissing);
 }
 
-#[test]
-fn execute_workflow_not_found() {
+#[tokio::test]
+async fn execute_workflow_not_found() {
     let spec = make_spec(Vec::new());
-    let mut engine = new_test_engine("http://localhost", spec);
-    let result = engine.execute("nonexistent", BTreeMap::new());
+    let engine = new_test_engine("http://localhost", spec);
+    let result = engine
+        .execute_collect("nonexistent", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected workflow-not-found error"),
         Err(err) => err,
@@ -751,8 +804,8 @@ fn execute_workflow_not_found() {
     assert_eq!(err.kind, RuntimeErrorKind::WorkflowNotFound);
 }
 
-#[test]
-fn execute_default_sequential_without_on_success() {
+#[tokio::test]
+async fn execute_default_sequential_without_on_success() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -788,8 +841,11 @@ fn execute_default_sequential_without_on_success() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("default-seq", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("default-seq", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -806,8 +862,8 @@ fn execute_default_sequential_without_on_success() {
 
 // ── Sub-workflow tests ────────────────────────────────────────────
 
-#[test]
-fn execute_sub_workflow_step() {
+#[tokio::test]
+async fn execute_sub_workflow_step() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"token":"xyz-789"}"#)
     });
@@ -846,8 +902,11 @@ fn execute_sub_workflow_step() {
         },
     ]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("parent", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -855,8 +914,8 @@ fn execute_sub_workflow_step() {
     assert_eq!(outputs.get("token"), Some(&json!("xyz-789")));
 }
 
-#[test]
-fn execute_sub_workflow_with_inputs() {
+#[tokio::test]
+async fn execute_sub_workflow_with_inputs() {
     let got_path = Arc::new(Mutex::new(String::new()));
     let got_path_ref = Arc::clone(&got_path);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -900,9 +959,10 @@ fn execute_sub_workflow_with_inputs() {
         },
     ]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
     let inputs = BTreeMap::from([("uid".to_string(), json!("42"))]);
-    let result = engine.execute("parent", inputs);
+    let exec_result = engine.execute_collect("parent", inputs).await;
+    let result = exec_result.outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -913,8 +973,8 @@ fn execute_sub_workflow_with_inputs() {
     assert_eq!(observed, "/users/42");
 }
 
-#[test]
-fn execute_sub_workflow_failure() {
+#[tokio::test]
+async fn execute_sub_workflow_failure() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(500, r#"{"error":"fail"}"#)
     });
@@ -941,8 +1001,11 @@ fn execute_sub_workflow_failure() {
         },
     ]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("parent", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected child workflow failure"),
         Err(err) => err,
@@ -950,8 +1013,8 @@ fn execute_sub_workflow_failure() {
     assert!(err.message.contains("sub-workflow child"));
 }
 
-#[test]
-fn execute_goto_workflow() {
+#[tokio::test]
+async fn execute_goto_workflow() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {
         "/main" => MockHttpResponse::json(500, "{}"),
         "/fallback" => MockHttpResponse::json(200, r#"{"fallback":true}"#),
@@ -991,8 +1054,11 @@ fn execute_goto_workflow() {
         },
     ]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("main-wf", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("main-wf", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -1000,8 +1066,8 @@ fn execute_goto_workflow() {
     assert_eq!(outputs.get("ok"), Some(&json!(true)));
 }
 
-#[test]
-fn execute_recursion_guard() {
+#[tokio::test]
+async fn execute_recursion_guard() {
     let spec = make_spec(vec![
         Workflow {
             workflow_id: "wf-a".to_string(),
@@ -1023,8 +1089,11 @@ fn execute_recursion_guard() {
         },
     ]);
 
-    let mut engine = new_test_engine("http://localhost", spec);
-    let result = engine.execute("wf-a", BTreeMap::new());
+    let engine = new_test_engine("http://localhost", spec);
+    let result = engine
+        .execute_collect("wf-a", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected recursion guard error"),
         Err(err) => err,
@@ -1032,8 +1101,8 @@ fn execute_recursion_guard() {
     assert!(err.message.contains("max call depth"));
 }
 
-#[test]
-fn execute_sub_workflow_not_found() {
+#[tokio::test]
+async fn execute_sub_workflow_not_found() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "parent".to_string(),
         steps: vec![Step {
@@ -1044,8 +1113,11 @@ fn execute_sub_workflow_not_found() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine("http://localhost", spec);
-    let result = engine.execute("parent", BTreeMap::new());
+    let engine = new_test_engine("http://localhost", spec);
+    let result = engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected missing sub-workflow error"),
         Err(err) => err,
@@ -1053,14 +1125,12 @@ fn execute_sub_workflow_not_found() {
     assert!(err.message.contains(r#"workflow "nonexistent" not found"#));
 }
 
-#[test]
-fn load_openapi_spec_and_resolve_operation_ids() {
+#[tokio::test]
+async fn load_openapi_spec_and_resolve_operation_ids() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         ..Workflow::default()
     }]);
-    let mut engine = new_test_engine("http://localhost", spec);
-
     let openapi = br#"
 openapi: "3.0.0"
 paths:
@@ -1074,9 +1144,13 @@ paths:
       operationId: deleteUser
 "#;
 
-    if let Err(err) = engine.load_openapi_spec(openapi) {
-        panic!("failed loading OpenAPI: {err}");
-    }
+    let engine = match EngineBuilder::new(spec)
+        .openapi_spec(openapi.to_vec())
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
 
     let list = match engine.resolve_operation_id("listUsers") {
         Ok(v) => v,
@@ -1097,11 +1171,9 @@ paths:
     assert_eq!(delete, ("DELETE".to_string(), "/users/{id}".to_string()));
 }
 
-#[test]
-fn load_openapi_spec_not_found_and_skips_non_http_fields() {
+#[tokio::test]
+async fn load_openapi_spec_not_found_and_skips_non_http_fields() {
     let spec = make_spec(Vec::new());
-    let mut engine = new_test_engine("http://localhost", spec);
-
     let openapi = br#"
 openapi: "3.0.0"
 paths:
@@ -1112,9 +1184,13 @@ paths:
       operationId: listItems
 "#;
 
-    if let Err(err) = engine.load_openapi_spec(openapi) {
-        panic!("failed loading OpenAPI: {err}");
-    }
+    let engine = match EngineBuilder::new(spec)
+        .openapi_spec(openapi.to_vec())
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
 
     let list = match engine.resolve_operation_id("listItems") {
         Ok(v) => v,
@@ -1126,8 +1202,8 @@ paths:
     assert!(missing.is_err());
 }
 
-#[test]
-fn execute_operation_id_and_path_params() {
+#[tokio::test]
+async fn execute_operation_id_and_path_params() {
     let got_method = Arc::new(Mutex::new(String::new()));
     let got_path = Arc::new(Mutex::new(String::new()));
     let got_method_ref = Arc::clone(&got_method);
@@ -1144,32 +1220,40 @@ fn execute_operation_id_and_path_params() {
         MockHttpResponse::json(200, r#"{"users":[]}"#)
     });
 
-    let spec = make_spec(vec![Workflow {
-        workflow_id: "wf".to_string(),
-        steps: vec![Step {
-            step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationId("getUser".to_string())),
-            parameters: vec![Parameter {
-                name: "id".to_string(),
-                in_: Some(ParamLocation::Path),
-                value: serde_yml::Value::String("$inputs.userId".to_string()),
-                ..Parameter::default()
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationId("getUser".to_string())),
+                parameters: vec![Parameter {
+                    name: "id".to_string(),
+                    in_: Some(ParamLocation::Path),
+                    value: serde_yml::Value::String("$inputs.userId".to_string()),
+                    ..Parameter::default()
+                }],
+                success_criteria: success_200(),
+                ..Step::default()
             }],
-            success_criteria: success_200(),
-            ..Step::default()
+            ..Workflow::default()
         }],
-        ..Workflow::default()
-    }]);
+    );
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let openapi =
-        br#"{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"getUser"}}}}"#;
-    if let Err(err) = engine.load_openapi_spec(openapi) {
-        panic!("loading OpenAPI: {err}");
-    }
+    let engine = match EngineBuilder::new(spec)
+        .openapi_spec(
+            br#"{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"getUser"}}}}"#
+                .to_vec(),
+        )
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
 
     let inputs = BTreeMap::from([("userId".to_string(), json!("42"))]);
-    let result = engine.execute("wf", inputs);
+    let exec_result = engine.execute_collect("wf", inputs).await;
+    let result = exec_result.outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -1186,8 +1270,8 @@ fn execute_operation_id_and_path_params() {
     assert_eq!(path, "/users/42");
 }
 
-#[test]
-fn execute_operation_id_not_loaded() {
+#[tokio::test]
+async fn execute_operation_id_not_loaded() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
@@ -1198,8 +1282,8 @@ fn execute_operation_id_not_loaded() {
         }],
         ..Workflow::default()
     }]);
-    let mut engine = new_test_engine("http://localhost", spec);
-    let result = engine.execute("wf", BTreeMap::new());
+    let engine = new_test_engine("http://localhost", spec);
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     let err = match result {
         Ok(_) => panic!("expected unresolved operationId error"),
         Err(err) => err,
@@ -1209,9 +1293,9 @@ fn execute_operation_id_not_loaded() {
 
 // ── Dry-run tests ─────────────────────────────────────────────────
 
-#[test]
+#[tokio::test]
 #[allow(deprecated)]
-fn dry_run_captures_requests_and_headers() {
+async fn dry_run_captures_requests_and_headers() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![
@@ -1235,14 +1319,16 @@ fn dry_run_captures_requests_and_headers() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine("http://localhost", spec);
-    engine.set_dry_run_mode(true);
-    let result = engine.execute("wf", BTreeMap::new());
-    if let Err(err) = result {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 2);
     assert_eq!(reqs[0].method, "GET");
     assert!(reqs[0].url.ends_with("/users"));
@@ -1254,12 +1340,12 @@ fn dry_run_captures_requests_and_headers() {
     assert_eq!(reqs[1].body, Some(json!({"name":"test"})));
 }
 
-#[test]
+#[tokio::test]
 #[allow(deprecated)]
-fn dry_run_resolves_expressions_and_skips_http_calls() {
+async fn dry_run_resolves_expressions_and_skips_http_calls() {
     let hit_count = Arc::new(AtomicUsize::new(0));
     let hit_count_ref = Arc::clone(&hit_count);
-    let server = start_server(move |_method, _url, _headers, _body| {
+    let _server = start_server(move |_method, _url, _headers, _body| {
         hit_count_ref.fetch_add(1, Ordering::Relaxed);
         MockHttpResponse::empty(500)
     });
@@ -1295,19 +1381,21 @@ fn dry_run_resolves_expressions_and_skips_http_calls() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    engine.set_dry_run_mode(true);
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
     let inputs = BTreeMap::from([
         ("userId".to_string(), json!("42")),
         ("token".to_string(), json!("Bearer secret")),
     ]);
-    let result = engine.execute("wf", inputs);
-    if let Err(err) = result {
+    let exec_result = engine.execute_collect("wf", inputs).await;
+    if let Err(err) = &exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
     assert_eq!(hit_count.load(Ordering::Relaxed), 0);
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 1);
     assert!(reqs[0].url.contains("/users/42"));
     assert!(reqs[0].url.contains("format=json"));
@@ -1317,9 +1405,9 @@ fn dry_run_resolves_expressions_and_skips_http_calls() {
     );
 }
 
-#[test]
+#[tokio::test]
 #[allow(deprecated)]
-fn dry_run_multi_step_and_custom_headers() {
+async fn dry_run_multi_step_and_custom_headers() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![
@@ -1363,14 +1451,16 @@ fn dry_run_multi_step_and_custom_headers() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine("http://localhost", spec);
-    engine.set_dry_run_mode(true);
-    let result = engine.execute("wf", BTreeMap::new());
-    if let Err(err) = result {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 3);
     assert_eq!(reqs[0].step_id, "s1");
     assert_eq!(reqs[1].step_id, "s2");
@@ -1388,8 +1478,8 @@ fn dry_run_multi_step_and_custom_headers() {
 
 // ── execute_step tests ────────────────────────────────────────────
 
-#[test]
-fn execute_step_standalone_no_deps() {
+#[tokio::test]
+async fn execute_step_standalone_no_deps() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"v":42}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -1414,16 +1504,14 @@ fn execute_step_standalone_no_deps() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
     // Execute only s1 — no deps, should succeed
-    let result = engine.execute_step(
-        "wf",
-        "s1",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        false,
-    );
+    let exec_result = engine
+        .execute_step("wf", "s1", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let outputs = match result {
         Ok(o) => o,
         Err(e) => panic!("standalone step should execute: {e}"),
@@ -1431,8 +1519,8 @@ fn execute_step_standalone_no_deps() {
     assert_eq!(outputs.get("v"), Some(&json!(42)));
 }
 
-#[test]
-fn execute_step_with_transitive_deps() {
+#[tokio::test]
+async fn execute_step_with_transitive_deps() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&call_count);
     let server = start_server(move |_m, url, _h, _b| {
@@ -1476,15 +1564,13 @@ fn execute_step_with_transitive_deps() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
-    let result = engine.execute_step(
-        "wf",
-        "s2",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        false,
-    );
+    let exec_result = engine
+        .execute_step("wf", "s2", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let outputs = match result {
         Ok(o) => o,
         Err(e) => panic!("step with deps should execute: {e}"),
@@ -1494,8 +1580,8 @@ fn execute_step_with_transitive_deps() {
     assert_eq!(call_count.load(Ordering::SeqCst), 2);
 }
 
-#[test]
-fn execute_step_no_deps_flag_standalone_succeeds() {
+#[tokio::test]
+async fn execute_step_no_deps_flag_standalone_succeeds() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"v":1}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -1511,15 +1597,13 @@ fn execute_step_no_deps_flag_standalone_succeeds() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
-    let result = engine.execute_step(
-        "wf",
-        "s1",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        true,
-    );
+    let exec_result = engine
+        .execute_step("wf", "s1", BTreeMap::new(), true)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let outputs = match result {
         Ok(o) => o,
         Err(e) => panic!("no_deps standalone should succeed: {e}"),
@@ -1527,8 +1611,8 @@ fn execute_step_no_deps_flag_standalone_succeeds() {
     assert_eq!(outputs.get("v"), Some(&json!(1)));
 }
 
-#[test]
-fn execute_step_no_deps_flag_with_refs_fails() {
+#[tokio::test]
+async fn execute_step_no_deps_flag_with_refs_fails() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -1553,15 +1637,13 @@ fn execute_step_no_deps_flag_with_refs_fails() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
-    let result = engine.execute_step(
-        "wf",
-        "s2",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        true,
-    );
+    let exec_result = engine
+        .execute_step("wf", "s2", BTreeMap::new(), true)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let err = match result {
         Ok(_) => panic!("no_deps with refs should fail"),
         Err(e) => e,
@@ -1573,8 +1655,8 @@ fn execute_step_no_deps_flag_with_refs_fails() {
     );
 }
 
-#[test]
-fn execute_step_unknown_step_errors() {
+#[tokio::test]
+async fn execute_step_unknown_step_errors() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -1588,15 +1670,13 @@ fn execute_step_unknown_step_errors() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
-    let result = engine.execute_step(
-        "wf",
-        "missing",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        false,
-    );
+    let exec_result = engine
+        .execute_step("wf", "missing", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let err = match result {
         Ok(_) => panic!("unknown step should fail"),
         Err(e) => e,
@@ -1604,8 +1684,8 @@ fn execute_step_unknown_step_errors() {
     assert_eq!(err.kind, RuntimeErrorKind::StepNotFound);
 }
 
-#[test]
-fn execute_step_unknown_workflow_errors() {
+#[tokio::test]
+async fn execute_step_unknown_workflow_errors() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -1619,15 +1699,13 @@ fn execute_step_unknown_workflow_errors() {
             ..Workflow::default()
         }],
     );
-    let mut engine = new_test_engine(&server.base_url, spec);
+    let engine = new_test_engine(&server.base_url, spec);
 
-    let result = engine.execute_step(
-        "bad",
-        "s1",
-        BTreeMap::new(),
-        ExecutionOptions::default(),
-        false,
-    );
+    let exec_result = engine
+        .execute_step("bad", "s1", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
     let err = match result {
         Ok(_) => panic!("unknown workflow should fail"),
         Err(e) => e,

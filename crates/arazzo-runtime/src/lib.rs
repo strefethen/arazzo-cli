@@ -14,12 +14,12 @@
 //! use arazzo_runtime::EngineBuilder;
 //!
 //! let spec = arazzo_validate::parse("spec.arazzo.yaml")?;
-//! let mut engine = EngineBuilder::new(spec)
+//! let engine = EngineBuilder::new(spec)
 //!     .parallel(true)
 //!     .trace(true)
 //!     .build()?;
 //! let inputs = BTreeMap::new();
-//! let result = engine.execute("workflow-id", inputs)?;
+//! let result = engine.execute_collect("workflow-id", inputs).await;
 //! ```
 
 mod debug;
@@ -34,9 +34,9 @@ pub const INTERNAL_RUNTIME_API_VERSION: &str = "v1";
 /// Frozen v1 runtime-facing models used by CLI trace/replay/debugger plumbing.
 pub mod api_v1 {
     pub use crate::{
-        ExecutionEvent, ExecutionEventKind, ExecutionObserver, ObserverEvent, RuntimeError,
-        RuntimeErrorKind, TraceCriterionResult, TraceDecision, TraceDecisionPath, TraceRequest,
-        TraceResponse, TraceStepRecord,
+        EngineEvent, ExecutionEvent, ExecutionEventKind, ExecutionHandle, ExecutionObserver,
+        ExecutionResult, ObserverEvent, RuntimeError, RuntimeErrorKind, TraceCriterionResult,
+        TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, TraceStepRecord,
     };
 }
 
@@ -298,8 +298,27 @@ mod tests {
         assert_eq!(outputs.get("stepResult"), Some(&json!("hello")));
     }
 
-    #[test]
-    fn execute_respects_client_rate_limit() {
+    fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
+        ArazzoSpec {
+            arazzo: "1.0.0".to_string(),
+            info: Info {
+                title: "test".to_string(),
+                summary: String::new(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+            },
+            source_descriptions: vec![SourceDescription {
+                name: "test".to_string(),
+                url: base_url.to_string(),
+                type_: SourceType::OpenApi,
+            }],
+            workflows,
+            components: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_respects_client_rate_limit() {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_ref = Arc::clone(&calls);
         let server = start_server(move |_method, _url, _headers, _body| {
@@ -307,38 +326,40 @@ mod tests {
             MockHttpResponse::empty(200)
         });
 
-        let spec = make_spec(vec![Workflow {
-            workflow_id: "rate-limit".to_string(),
-            steps: vec![
-                Step {
-                    step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/one".to_string())),
-                    success_criteria: success_200(),
-                    ..Step::default()
-                },
-                Step {
-                    step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/two".to_string())),
-                    success_criteria: success_200(),
-                    ..Step::default()
-                },
-            ],
-            ..Workflow::default()
-        }]);
+        let spec = make_spec_with_base(
+            &server.base_url,
+            vec![Workflow {
+                workflow_id: "rate-limit".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "s1".to_string(),
+                        target: Some(StepTarget::OperationPath("/one".to_string())),
+                        success_criteria: success_200(),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "s2".to_string(),
+                        target: Some(StepTarget::OperationPath("/two".to_string())),
+                        success_criteria: success_200(),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            }],
+        );
 
         let mut cfg = ClientConfig::default();
         cfg.rate_limit.requests_per_second = 1.0;
         cfg.rate_limit.burst = 1;
 
-        let mut engine = match Engine::with_client_config(spec, cfg) {
+        let engine = match Engine::with_client_config(spec, cfg) {
             Ok(engine) => engine,
             Err(err) => panic!("creating engine: {err}"),
         };
-        engine.index.base_url = server.base_url.clone();
 
         let started = Instant::now();
-        let result = engine.execute("rate-limit", BTreeMap::new());
-        if let Err(err) = result {
+        let result = engine.execute_collect("rate-limit", BTreeMap::new()).await;
+        if let Err(err) = result.outputs {
             panic!("expected success, got: {err}");
         }
         assert!(started.elapsed() >= Duration::from_millis(850));

@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 // ── Parallel execution tests ────────────────────────────────────────
 
-#[test]
-fn execute_parallel_independent_steps() {
+#[tokio::test]
+async fn execute_parallel_independent_steps() {
     let hits = Arc::new(AtomicUsize::new(0));
     let hits_ref = Arc::clone(&hits);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -51,19 +51,22 @@ fn execute_parallel_independent_steps() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("parallel-ind", BTreeMap::new());
+    let result = engine
+        .execute_collect("parallel-ind", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
     assert_eq!(hits.load(Ordering::Relaxed), 3);
 }
 
-#[test]
-fn execute_parallel_runs_independent_steps_concurrently() {
+#[tokio::test]
+async fn execute_parallel_runs_independent_steps_concurrently() {
     let delay = Duration::from_millis(300);
     let server = start_server_concurrent(move |_method, _url, _headers, _body| {
         std::thread::sleep(delay);
@@ -92,20 +95,26 @@ fn execute_parallel_runs_independent_steps_concurrently() {
         }],
     );
 
-    let mut sequential = new_test_engine(&server.base_url, spec.clone());
+    let sequential = new_test_engine(&server.base_url, spec.clone());
     let seq_started = Instant::now();
-    let seq_result = sequential.execute("parallel-speed", BTreeMap::new());
+    let seq_result = sequential
+        .execute_collect("parallel-speed", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = seq_result {
         panic!("expected sequential success, got: {err}");
     }
     let seq_elapsed = seq_started.elapsed();
 
-    let mut parallel = match EngineBuilder::new(spec).parallel(true).build() {
+    let parallel = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
     let par_started = Instant::now();
-    let par_result = parallel.execute("parallel-speed", BTreeMap::new());
+    let par_result = parallel
+        .execute_collect("parallel-speed", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = par_result {
         panic!("expected parallel success, got: {err}");
     }
@@ -117,8 +126,8 @@ fn execute_parallel_runs_independent_steps_concurrently() {
     );
 }
 
-#[test]
-fn execute_parallel_with_dependencies() {
+#[tokio::test]
+async fn execute_parallel_with_dependencies() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {
         "/a" => MockHttpResponse::json(200, r#"{"id":"42"}"#),
         "/b?id=42" => MockHttpResponse::json(200, r#"{"name":"Alice"}"#),
@@ -159,11 +168,14 @@ fn execute_parallel_with_dependencies() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("parallel-dep", BTreeMap::new());
+    let result = engine
+        .execute_collect("parallel-dep", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -171,8 +183,8 @@ fn execute_parallel_with_dependencies() {
     assert_eq!(outputs.get("name"), Some(&json!("Alice")));
 }
 
-#[test]
-fn execute_parallel_fallback_on_control_flow() {
+#[tokio::test]
+async fn execute_parallel_fallback_on_control_flow() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -209,11 +221,14 @@ fn execute_parallel_fallback_on_control_flow() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("cf-fallback", BTreeMap::new());
+    let result = engine
+        .execute_collect("cf-fallback", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -225,8 +240,8 @@ fn execute_parallel_fallback_on_control_flow() {
     assert_eq!(observed, vec!["/a".to_string()]);
 }
 
-#[test]
-fn execute_parallel_fallback_on_subworkflow() {
+#[tokio::test]
+async fn execute_parallel_fallback_on_subworkflow() {
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let paths_ref = Arc::clone(&paths);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -270,11 +285,14 @@ fn execute_parallel_fallback_on_subworkflow() {
         ],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("parent", BTreeMap::new());
+    let result = engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = result {
         panic!("expected success, got: {err}");
     }
@@ -286,8 +304,8 @@ fn execute_parallel_fallback_on_subworkflow() {
     assert_eq!(observed, vec!["/child".to_string(), "/after".to_string()]);
 }
 
-#[test]
-fn execute_parallel_step_failure() {
+#[tokio::test]
+async fn execute_parallel_step_failure() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {
         "/ok" => MockHttpResponse::json(200, r#"{"ok":true}"#),
         "/fail" => MockHttpResponse::json(500, r#"{"error":"boom"}"#),
@@ -316,11 +334,14 @@ fn execute_parallel_step_failure() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("parallel-fail", BTreeMap::new());
+    let result = engine
+        .execute_collect("parallel-fail", BTreeMap::new())
+        .await
+        .outputs;
     let err = match result {
         Ok(_) => panic!("expected failure"),
         Err(err) => err,
@@ -328,8 +349,8 @@ fn execute_parallel_step_failure() {
     assert!(err.message.contains("step fail"));
 }
 
-#[test]
-fn execute_parallel_outputs_preserved_and_diamond_dependency() {
+#[tokio::test]
+async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
     let request_order = Arc::new(Mutex::new(Vec::<String>::new()));
     let request_order_ref = Arc::clone(&request_order);
     let server = start_server(move |_method, url, _headers, _body| {
@@ -414,11 +435,14 @@ fn execute_parallel_outputs_preserved_and_diamond_dependency() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("diamond", BTreeMap::new());
+    let result = engine
+        .execute_collect("diamond", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -441,8 +465,8 @@ fn execute_parallel_outputs_preserved_and_diamond_dependency() {
 
 // ── Trace hook tests ────────────────────────────────────────────────
 
-#[test]
-fn trace_hook_invoked_and_captures_fields() {
+#[tokio::test]
+async fn trace_hook_invoked_and_captures_fields() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -470,15 +494,15 @@ fn trace_hook_invoked_and_captures_fields() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
     {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("wf", BTreeMap::new());
-    if let Err(err) = result {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
@@ -497,7 +521,7 @@ fn trace_hook_invoked_and_captures_fields() {
     assert_eq!(after[0].status_code, 200);
     assert!(after[0].duration > Duration::from_nanos(0));
 
-    let events = engine.execution_events();
+    let events = exec_result.execution_events();
     assert_eq!(events.len(), 4);
     assert_eq!(events[0].seq, 1);
     assert_eq!(events[1].seq, 2);
@@ -511,8 +535,8 @@ fn trace_hook_invoked_and_captures_fields() {
     assert_eq!(events[3].step_id, "s2".to_string());
 }
 
-#[test]
-fn trace_hook_workflow_id_subworkflow_and_error_capture() {
+#[tokio::test]
+async fn trace_hook_workflow_id_subworkflow_and_error_capture() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {
         "/api" => MockHttpResponse::json(200, r#"{"ok":true}"#),
         "/fail" => MockHttpResponse::json(500, r#"{"error":"fail"}"#),
@@ -553,14 +577,19 @@ fn trace_hook_workflow_id_subworkflow_and_error_capture() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
     {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    if engine.execute("parent", BTreeMap::new()).is_err() {
+    if engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs
+        .is_err()
+    {
         // Intentional: test validates emitted hook events even on execution failure.
     }
 
@@ -579,8 +608,8 @@ fn trace_hook_workflow_id_subworkflow_and_error_capture() {
     assert!(after.iter().any(|ev| ev.status_code == 500));
 }
 
-#[test]
-fn trace_hook_parallel_events_are_deterministic() {
+#[tokio::test]
+async fn trace_hook_parallel_events_are_deterministic() {
     let server = start_server_concurrent(|_method, url, _headers, _body| {
         match url.as_str() {
             "/slow" => thread::sleep(Duration::from_millis(60)),
@@ -620,7 +649,7 @@ fn trace_hook_parallel_events_are_deterministic() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .parallel(true)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
@@ -628,7 +657,7 @@ fn trace_hook_parallel_events_are_deterministic() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+    if let Err(err) = engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         panic!("expected success, got: {err}");
     }
 
@@ -656,8 +685,8 @@ fn trace_hook_parallel_events_are_deterministic() {
     );
 }
 
-#[test]
-fn trace_records_sequential_include_request_response_criteria_decision() {
+#[tokio::test]
+async fn trace_records_sequential_include_request_response_criteria_decision() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true,"value":7}"#)
     });
@@ -681,17 +710,17 @@ fn trace_records_sequential_include_request_response_criteria_decision() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let outputs = match engine.execute("wf", BTreeMap::new()) {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    let trace = exec_result.trace_steps();
+    let outputs = match &exec_result.outputs {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
     };
     assert_eq!(outputs.get("value"), Some(&json!(7)));
-
-    let trace = engine.trace_steps();
     assert_eq!(trace.len(), 1);
     let record = &trace[0];
     assert_eq!(record.seq, 1);
@@ -726,8 +755,8 @@ fn trace_records_sequential_include_request_response_criteria_decision() {
     assert_eq!(record.error, None);
 }
 
-#[test]
-fn trace_records_retry_attempts_increment() {
+#[tokio::test]
+async fn trace_records_retry_attempts_increment() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -758,15 +787,16 @@ fn trace_records_retry_attempts_increment() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
-    let trace = engine.trace_steps();
+    let trace = exec_result.trace_steps();
     assert_eq!(trace.len(), 2);
     assert_eq!(trace[0].seq, 1);
     assert_eq!(trace[1].seq, 2);
@@ -790,8 +820,8 @@ fn trace_records_retry_attempts_increment() {
     );
 }
 
-#[test]
-fn trace_records_capture_step_error() {
+#[tokio::test]
+async fn trace_records_capture_step_error() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
@@ -803,14 +833,13 @@ fn trace_records_capture_step_error() {
         ..Workflow::default()
     }]);
 
-    let mut engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine.execute("wf", BTreeMap::new());
-    assert!(result.is_err());
-
-    let trace = engine.trace_steps();
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    let trace = exec_result.trace_steps();
+    assert!(exec_result.outputs.is_err());
     assert_eq!(trace.len(), 1);
     assert_eq!(trace[0].step_id, "broken");
     assert_eq!(trace[0].decision.path, TraceDecisionPath::Error);
@@ -819,8 +848,8 @@ fn trace_records_capture_step_error() {
     assert_eq!(trace[0].response, None);
 }
 
-#[test]
-fn trace_records_subworkflow_parent_and_child_workflow_ids() {
+#[tokio::test]
+async fn trace_records_subworkflow_parent_and_child_workflow_ids() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -850,15 +879,16 @@ fn trace_records_subworkflow_parent_and_child_workflow_ids() {
         ],
     );
 
-    let mut engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    if let Err(err) = engine.execute("parent", BTreeMap::new()) {
+    let exec_result = engine.execute_collect("parent", BTreeMap::new()).await;
+    if let Err(err) = exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
-    let trace = engine.trace_steps();
+    let trace = exec_result.trace_steps();
     assert_eq!(trace.len(), 2);
 
     let parent_record = match trace.iter().find(|record| record.step_id == "call-child") {
@@ -889,8 +919,8 @@ fn trace_records_subworkflow_parent_and_child_workflow_ids() {
     );
 }
 
-#[test]
-fn trace_records_parallel_order_is_deterministic_by_seq() {
+#[tokio::test]
+async fn trace_records_parallel_order_is_deterministic_by_seq() {
     let server = start_server_concurrent(|_method, url, _headers, _body| {
         match url.as_str() {
             "/slow" => thread::sleep(Duration::from_millis(60)),
@@ -929,15 +959,16 @@ fn trace_records_parallel_order_is_deterministic_by_seq() {
         }],
     );
 
-    let mut engine = match EngineBuilder::new(spec).parallel(true).trace(true).build() {
+    let engine = match EngineBuilder::new(spec).parallel(true).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    if let Err(err) = engine.execute("wf", BTreeMap::new()) {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = exec_result.outputs {
         panic!("expected success, got: {err}");
     }
 
-    let trace = engine.trace_steps();
+    let trace = exec_result.trace_steps();
     assert_eq!(trace.len(), 3);
     assert_eq!(trace[0].seq, 1);
     assert_eq!(trace[1].seq, 2);
@@ -955,8 +986,8 @@ fn trace_records_parallel_order_is_deterministic_by_seq() {
 
 // ── Observer tests ──────────────────────────────────────────────────
 
-#[test]
-fn observer_receives_full_event_sequence() {
+#[tokio::test]
+async fn observer_receives_full_event_sequence() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -974,10 +1005,9 @@ fn observer_receives_full_event_sequence() {
         }],
     );
     let observer = Arc::new(TestObserver::default());
-    let mut engine =
-        build_observer_engine(spec, Arc::clone(&observer) as Arc<dyn ExecutionObserver>);
+    let engine = build_observer_engine(spec, Arc::clone(&observer) as Arc<dyn ExecutionObserver>);
 
-    let result = engine.execute("wf", BTreeMap::new());
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok(), "execution failed: {result:?}");
 
     let events = observer.events();
@@ -1000,8 +1030,8 @@ fn observer_receives_full_event_sequence() {
     assert!(complete_pos < wf_pos);
 }
 
-#[test]
-fn observer_and_trace_hook_coexist() {
+#[tokio::test]
+async fn observer_and_trace_hook_coexist() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -1020,7 +1050,7 @@ fn observer_and_trace_hook_coexist() {
     );
     let observer = Arc::new(TestObserver::default());
     let trace_hook = Arc::new(TestTraceHook::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .trace_hook(Arc::clone(&trace_hook) as Arc<dyn TraceHook>)
         .build()
@@ -1029,7 +1059,7 @@ fn observer_and_trace_hook_coexist() {
         Err(err) => panic!("building engine: {err}"),
     };
 
-    let result = engine.execute("wf", BTreeMap::new());
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok());
 
     // Observer got events
@@ -1047,8 +1077,8 @@ fn observer_and_trace_hook_coexist() {
     assert!(after_count > 0);
 }
 
-#[test]
-fn observer_receives_dry_run_request_prepared() {
+#[tokio::test]
+async fn observer_receives_dry_run_request_prepared() {
     let spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
@@ -1059,7 +1089,7 @@ fn observer_receives_dry_run_request_prepared() {
         ..Workflow::default()
     }]);
     let observer = Arc::new(TestObserver::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .dry_run(true)
         .build()
@@ -1068,7 +1098,7 @@ fn observer_receives_dry_run_request_prepared() {
         Err(err) => panic!("building engine: {err}"),
     };
 
-    let result = engine.execute("wf", BTreeMap::new());
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok());
 
     let events = observer.events();
@@ -1077,8 +1107,8 @@ fn observer_receives_dry_run_request_prepared() {
     assert!(!events.iter().any(|e| e.starts_with("RequestSent:")));
 }
 
-#[test]
-fn observer_no_events_without_observer() {
+#[tokio::test]
+async fn observer_no_events_without_observer() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -1093,13 +1123,13 @@ fn observer_no_events_without_observer() {
         ..Workflow::default()
     }]);
     // Build WITHOUT observer — verify no panics and existing behavior preserved
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("wf", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok());
 }
 
-#[test]
-fn observer_parallel_receives_events_for_all_steps() {
+#[tokio::test]
+async fn observer_parallel_receives_events_for_all_steps() {
     let server = start_server_concurrent(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
@@ -1125,7 +1155,7 @@ fn observer_parallel_receives_events_for_all_steps() {
         }],
     );
     let observer = Arc::new(TestObserver::default());
-    let mut engine = match EngineBuilder::new(spec)
+    let engine = match EngineBuilder::new(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .parallel(true)
         .build()
@@ -1134,7 +1164,7 @@ fn observer_parallel_receives_events_for_all_steps() {
         Err(err) => panic!("building engine: {err}"),
     };
 
-    let result = engine.execute("wf", BTreeMap::new());
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok(), "execution failed: {result:?}");
 
     let events = observer.events();

@@ -15,12 +15,14 @@ workspace = true
 arazzo-expr = { path = "../arazzo-expr" }
 arazzo-spec = { path = "../arazzo-spec" }
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yml = "0.0.12"
 sxd-document = "0.3"
 sxd-xpath = "0.4"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio-util = "0.7"
 url = "2"
 schemars = { version = "1", optional = true }
 
@@ -30,3 +32,4 @@ schema = ["schemars"]
 [dev-dependencies]
 proptest = "1"
 tiny_http = "0.12"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

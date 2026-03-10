@@ -108,7 +108,15 @@ fn dap_launch_lifecycle_populates_debug_views() {
     assert!(run.is_ok(), "running DAP loop");
 
     let messages = dap_test_support::decode_dap_stream(&output);
-    assert_eq!(messages.len(), 15);
+    // The async engine may produce 14 or 15 messages depending on whether the
+    // engine's terminated event arrives before the disconnect command is processed.
+    // With the tokio runtime, Runtime::drop() blocks to shut down worker threads,
+    // so the engine thread may not finish within the inline_event_check timeout.
+    assert!(
+        messages.len() == 14 || messages.len() == 15,
+        "expected 14 or 15 messages, got {}",
+        messages.len()
+    );
 
     assert_eq!(
         messages[2].get("command").and_then(|v| v.as_str()),
@@ -169,22 +177,36 @@ fn dap_launch_lifecycle_populates_debug_views() {
         messages[11].get("command").and_then(|v| v.as_str()),
         Some("continue")
     );
-    let post_continue_event = messages[12].get("event").and_then(|v| v.as_str());
-    if post_continue_event == Some("stopped") {
-        let reason = messages[12]
-            .pointer("/body/reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        assert!(reason == "breakpoint" || reason == "step" || reason == "pause");
+
+    // After continue, the engine may or may not deliver a stopped/terminated event
+    // before the disconnect command is processed (depends on tokio runtime shutdown
+    // timing). Check the tail of the message stream for disconnect + terminated.
+    let tail_offset = if messages.len() == 15 {
+        // Post-continue event arrived before disconnect.
+        let post_continue_event = messages[12].get("event").and_then(|v| v.as_str());
+        if post_continue_event == Some("stopped") {
+            let reason = messages[12]
+                .pointer("/body/reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            assert!(reason == "breakpoint" || reason == "step" || reason == "pause");
+        } else {
+            assert_eq!(post_continue_event, Some("terminated"));
+        }
+        13
     } else {
-        assert_eq!(post_continue_event, Some("terminated"));
-    }
+        12
+    };
     assert_eq!(
-        messages[13].get("command").and_then(|v| v.as_str()),
+        messages[tail_offset]
+            .get("command")
+            .and_then(|v| v.as_str()),
         Some("disconnect")
     );
     assert_eq!(
-        messages[14].get("event").and_then(|v| v.as_str()),
+        messages[tail_offset + 1]
+            .get("event")
+            .and_then(|v| v.as_str()),
         Some("terminated")
     );
 

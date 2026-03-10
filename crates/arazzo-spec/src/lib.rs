@@ -123,6 +123,8 @@ impl std::fmt::Display for JsonSchemaType {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaObject {
+    #[serde(rename = "$ref", default, skip_serializing_if = "String::is_empty")]
+    pub ref_: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub type_: Option<JsonSchemaType>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -417,8 +419,8 @@ pub struct OnAction {
     pub step_id: String,
     #[serde(default)]
     pub retry_after: u64,
-    #[serde(default)]
-    pub retry_limit: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<SuccessCriterion>,
 }

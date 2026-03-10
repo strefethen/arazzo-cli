@@ -1,28 +1,25 @@
-#![allow(deprecated)]
-
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, Engine, StepBreakpoint};
+use arazzo_runtime::{DebugController, EngineBuilder, StepBreakpoint};
 use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::json;
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
-#[test]
-fn evaluate_and_watch_expressions_at_pause() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn evaluate_and_watch_expressions_at_pause() {
     let server = start_server();
-    let mut engine = build_engine(server.base_url.clone());
     let controller = Arc::new(DebugController::new());
+    let engine = build_engine(server.base_url.clone(), Arc::clone(&controller));
     if let Err(err) = controller.set_breakpoints(vec![StepBreakpoint::new("wf", "s2")]) {
         panic!("setting breakpoints: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
     let inputs = BTreeMap::from([(String::from("code"), json!(429))]);
-    let handle = thread::spawn(move || engine.execute("wf", inputs));
+    let handle = engine.execute("wf", inputs);
 
     let waited = match controller.wait_for_stop_count(1, Duration::from_secs(1)) {
         Ok(value) => value,
@@ -30,7 +27,7 @@ fn evaluate_and_watch_expressions_at_pause() {
     };
     if !waited {
         let _ = controller.continue_execution();
-        let _ = handle.join();
+        let _ = handle.collect().await;
         panic!("timed out waiting for pause at s2");
     }
 
@@ -68,16 +65,13 @@ fn evaluate_and_watch_expressions_at_pause() {
     if let Err(err) = controller.continue_execution() {
         panic!("continuing execution: {err}");
     }
-    let joined = match handle.join() {
-        Ok(value) => value,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    if let Err(err) = joined {
+    let result = handle.collect().await;
+    if let Err(err) = result.outputs {
         panic!("workflow execution failed: {err}");
     }
 }
 
-fn build_engine(url: String) -> Engine {
+fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -110,7 +104,10 @@ fn build_engine(url: String) -> Engine {
         components: None,
     };
 
-    match Engine::new(spec) {
+    match EngineBuilder::new(spec)
+        .debug_controller(controller)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }

@@ -87,6 +87,20 @@ impl ExpressionEvaluator {
         &mut self.ctx
     }
 
+    /// Resolve a value string using the canonical three-way dispatch:
+    /// - `$...` full expression → [`evaluate`](Self::evaluate)
+    /// - contains `{$...}` → [`interpolate_string`](Self::interpolate_string)
+    /// - otherwise → literal string
+    pub fn resolve_value(&self, value: &str) -> Value {
+        if value.starts_with('$') {
+            self.evaluate(value)
+        } else if value.contains("{$") {
+            Value::String(self.interpolate_string(value))
+        } else {
+            Value::String(value.to_string())
+        }
+    }
+
     /// Evaluate an expression and return a dynamic JSON value.
     ///
     /// Missing keys and unknown namespaces silently return `Value::Null`.
@@ -1059,6 +1073,26 @@ mod tests {
         let eval = ExpressionEvaluator::new(EvalContext::default());
         assert_eq!(eval.evaluate("hello"), json!("hello"));
         assert_eq!(eval.evaluate("$unknown.thing"), Value::Null);
+    }
+
+    #[test]
+    fn resolve_value_dispatches_correctly() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("name".to_string(), json!("Alice"));
+        ctx.inputs.insert("token".to_string(), json!("xyz"));
+        let eval = ExpressionEvaluator::new(ctx);
+
+        // Full expression → evaluate
+        assert_eq!(eval.resolve_value("$inputs.name"), json!("Alice"));
+
+        // Interpolated → interpolate_string
+        assert_eq!(
+            eval.resolve_value("Bearer {$inputs.token}"),
+            json!("Bearer xyz")
+        );
+
+        // Literal → as-is string
+        assert_eq!(eval.resolve_value("literal"), json!("literal"));
     }
 
     #[test]

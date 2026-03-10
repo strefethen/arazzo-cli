@@ -1,12 +1,12 @@
-#![allow(deprecated)]
-
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint, StepCheckpoint};
+use arazzo_runtime::{
+    DebugController, DebugStopReason, EngineBuilder, StepBreakpoint, StepCheckpoint,
+};
 use arazzo_spec::{
     ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, StepTarget,
     SuccessCriterion, Workflow,
@@ -14,19 +14,18 @@ use arazzo_spec::{
 use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
-#[test]
-fn step_over_enters_success_criteria_and_outputs_with_locals() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn step_over_enters_success_criteria_and_outputs_with_locals() {
     let server = start_server();
-    let mut engine = build_engine(server.base_url.clone());
     let controller = Arc::new(DebugController::new());
+    let engine = build_engine(server.base_url.clone(), Arc::clone(&controller));
     if let Err(err) = controller.set_breakpoints(vec![StepBreakpoint::new("wf", "fetch-rss")]) {
         panic!("setting breakpoints: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
-    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+    let handle = engine.execute("wf", BTreeMap::new());
 
-    wait_for_stop(&controller, 1, &handle);
+    wait_for_stop(&controller, 1);
     let events = read_stop_events(&controller);
     assert_eq!(events[0].step_id, "fetch-rss");
     assert_eq!(events[0].checkpoint, StepCheckpoint::Step);
@@ -35,7 +34,7 @@ fn step_over_enters_success_criteria_and_outputs_with_locals() {
     if let Err(err) = controller.step_over() {
         panic!("step_over to success criterion: {err}");
     }
-    wait_for_stop(&controller, 2, &handle);
+    wait_for_stop(&controller, 2);
     let events = read_stop_events(&controller);
     assert_eq!(
         events[1].checkpoint,
@@ -67,7 +66,7 @@ fn step_over_enters_success_criteria_and_outputs_with_locals() {
     if let Err(err) = controller.step_over() {
         panic!("step_over to output checkpoint: {err}");
     }
-    wait_for_stop(&controller, 3, &handle);
+    wait_for_stop(&controller, 3);
     let events = read_stop_events(&controller);
     assert_eq!(
         events[2].checkpoint,
@@ -107,24 +106,26 @@ fn step_over_enters_success_criteria_and_outputs_with_locals() {
     if let Err(err) = controller.continue_execution() {
         panic!("continuing execution: {err}");
     }
-    join_success(handle);
+    let result = handle.collect().await;
+    if let Err(err) = result.outputs {
+        panic!("workflow execution failed: {err}");
+    }
 }
 
-#[test]
-fn on_failure_action_breakpoint_hits_with_failure_locals() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_failure_action_breakpoint_hits_with_failure_locals() {
     let server = start_server_with_status(502);
-    let mut engine = build_failure_engine(server.base_url.clone());
     let controller = Arc::new(DebugController::new());
+    let engine = build_failure_engine(server.base_url.clone(), Arc::clone(&controller));
     if let Err(err) = controller.set_breakpoints(vec![
         StepBreakpoint::new("wf", "fetch-rss").at_on_failure_action(0)
     ]) {
         panic!("setting breakpoints: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
-    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+    let handle = engine.execute("wf", BTreeMap::new());
 
-    wait_for_stop(&controller, 1, &handle);
+    wait_for_stop(&controller, 1);
     let events = read_stop_events(&controller);
     assert_eq!(
         events[0].checkpoint,
@@ -143,11 +144,8 @@ fn on_failure_action_breakpoint_hits_with_failure_locals() {
     if let Err(err) = controller.continue_execution() {
         panic!("continue execution: {err}");
     }
-    let joined = match handle.join() {
-        Ok(result) => result,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    match joined {
+    let result = handle.collect().await;
+    match result.outputs {
         Ok(_) => panic!("expected workflow execution to fail"),
         Err(err) => {
             assert!(
@@ -159,22 +157,21 @@ fn on_failure_action_breakpoint_hits_with_failure_locals() {
     }
 }
 
-#[test]
-fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     let server = start_server_with_status(503);
-    let mut engine = build_retry_engine(server.base_url.clone(), 1, 1);
     let controller = Arc::new(DebugController::new());
+    let engine = build_retry_engine(server.base_url.clone(), 1, Some(1), Arc::clone(&controller));
     if let Err(err) = controller.set_breakpoints(vec![
         StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_selected(0),
         StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_delay(0),
     ]) {
         panic!("setting breakpoints: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
-    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+    let handle = engine.execute("wf", BTreeMap::new());
 
-    wait_for_stop(&controller, 1, &handle);
+    wait_for_stop(&controller, 1);
     let events = read_stop_events(&controller);
     assert_eq!(
         events[0].checkpoint,
@@ -205,7 +202,7 @@ fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
         panic!("continuing after retry selected: {err}");
     }
 
-    wait_for_stop(&controller, 2, &handle);
+    wait_for_stop(&controller, 2);
     let events = read_stop_events(&controller);
     assert_eq!(
         events[1].checkpoint,
@@ -227,11 +224,8 @@ fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     if let Err(err) = controller.continue_execution() {
         panic!("continuing after retry delay: {err}");
     }
-    let joined = match handle.join() {
-        Ok(result) => result,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    match joined {
+    let result = handle.collect().await;
+    match result.outputs {
         Ok(_) => panic!("expected workflow execution to fail after retry limit"),
         Err(err) => {
             assert!(
@@ -243,7 +237,7 @@ fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     }
 }
 
-fn build_engine(base_url: String) -> Engine {
+fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -273,13 +267,19 @@ fn build_engine(base_url: String) -> Engine {
         components: None,
     };
 
-    match Engine::new(spec) {
+    match EngineBuilder::new(spec)
+        .debug_controller(controller)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }
 }
 
-fn build_failure_engine(base_url: String) -> Engine {
+fn build_failure_engine(
+    base_url: String,
+    controller: Arc<DebugController>,
+) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -326,13 +326,21 @@ fn build_failure_engine(base_url: String) -> Engine {
         components: None,
     };
 
-    match Engine::new(spec) {
+    match EngineBuilder::new(spec)
+        .debug_controller(controller)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }
 }
 
-fn build_retry_engine(base_url: String, retry_after: u64, retry_limit: u64) -> Engine {
+fn build_retry_engine(
+    base_url: String,
+    retry_after: u64,
+    retry_limit: Option<u64>,
+    controller: Arc<DebugController>,
+) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -371,7 +379,10 @@ fn build_retry_engine(base_url: String, retry_after: u64, retry_limit: u64) -> E
         components: None,
     };
 
-    match Engine::new(spec) {
+    match EngineBuilder::new(spec)
+        .debug_controller(controller)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }
@@ -440,41 +451,19 @@ fn start_server_with_status(status: u16) -> TestServer {
     }
 }
 
-fn wait_for_stop(
-    controller: &Arc<DebugController>,
-    count: usize,
-    handle: &thread::JoinHandle<Result<BTreeMap<String, Value>, arazzo_runtime::RuntimeError>>,
-) {
+fn wait_for_stop(controller: &Arc<DebugController>, count: usize) {
     let waited = match controller.wait_for_stop_count(count, Duration::from_secs(2)) {
         Ok(value) => value,
         Err(err) => panic!("waiting for stop count {count}: {err}"),
     };
-    if waited {
-        return;
+    if !waited {
+        panic!("timed out waiting for stop count {count}");
     }
-    let _ = controller.continue_execution();
-    assert!(
-        !handle.is_finished(),
-        "execution ended unexpectedly while waiting for stop {count}"
-    );
-    panic!("timed out waiting for stop count {count}");
 }
 
 fn read_stop_events(controller: &Arc<DebugController>) -> Vec<arazzo_runtime::DebugStopEvent> {
     match controller.stop_events() {
         Ok(events) => events,
         Err(err) => panic!("reading stop events: {err}"),
-    }
-}
-
-fn join_success(
-    handle: thread::JoinHandle<Result<BTreeMap<String, Value>, arazzo_runtime::RuntimeError>>,
-) {
-    let joined = match handle.join() {
-        Ok(result) => result,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    if let Err(err) = joined {
-        panic!("workflow execution failed: {err}");
     }
 }

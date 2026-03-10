@@ -25,13 +25,17 @@ pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
         Ok(t) => t,
         Err(_) => return Value::Null,
     };
-    // Strip default namespace declarations so simple XPath expressions
-    // work on both RSS 2.0 (no namespace) and Atom (xmlns="...") feeds.
-    // Preserves prefixed namespaces like xmlns:media="...".
-    let Ok(re) = Regex::new(r#"xmlns="[^"]*""#) else {
+    // Strip all namespace declarations (default xmlns="..." and prefixed xmlns:foo="...")
+    // so that simple XPath expressions work on namespaced XML (RSS, Atom, SOAP, etc.).
+    let Ok(ns_re) = Regex::new(r#"xmlns(?::\w+)?="[^"]*""#) else {
         return Value::Null;
     };
-    let text = re.replace_all(text, "");
+    let text = ns_re.replace_all(text, "");
+    // Strip namespace prefixes from element names so <cust:Name> becomes <Name>.
+    let Ok(prefix_re) = Regex::new(r"<(/?)[\w-]+:") else {
+        return Value::Null;
+    };
+    let text = prefix_re.replace_all(&text, "<$1");
     let package = match sxd_document::parser::parse(&text) {
         Ok(p) => p,
         Err(_) => return Value::Null,
@@ -681,23 +685,30 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
     )
 }
 
-pub(super) fn sleep_with_checks(
+pub(super) async fn sleep_with_cancel(
     delay: Duration,
-    options: &ExecutionOptions,
+    cancel: &CancellationToken,
+    is_timeout: &AtomicBool,
 ) -> Result<(), RuntimeError> {
     if delay.is_zero() {
         return Ok(());
     }
 
-    let start = Instant::now();
-    loop {
-        options.check()?;
-        let elapsed = start.elapsed();
-        if elapsed >= delay {
-            return Ok(());
-        }
-        let remaining = delay - elapsed;
-        std::thread::sleep(remaining.min(SLEEP_CHECK_INTERVAL));
+    tokio::select! {
+        () = tokio::time::sleep(delay) => Ok(()),
+        () = cancel.cancelled() => {
+            if is_timeout.load(Ordering::Acquire) {
+                Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionTimeout,
+                    "execution timeout exceeded",
+                ))
+            } else {
+                Err(RuntimeError::new(
+                    RuntimeErrorKind::ExecutionCancelled,
+                    "execution cancelled",
+                ))
+            }
+        },
     }
 }
 

@@ -1,8 +1,6 @@
-#![allow(deprecated)]
-
 mod common;
 
-use arazzo_runtime::Engine;
+use arazzo_runtime::{Engine, EngineBuilder};
 use arazzo_spec::{
     ActionType, Info, OnAction, ParamLocation, Parameter, RequestBody, SourceDescription,
     SourceType, Step, StepTarget, SuccessCriterion, Workflow,
@@ -19,8 +17,8 @@ use std::sync::Mutex;
 // Expression/config tests
 // -----------------------------------------------------------------------
 
-#[test]
-fn execute_response_header_expression() {
+#[tokio::test]
+async fn execute_response_header_expression() {
     let server = start_server(|_method, _url, _headers, _body| {
         let mut response = MockHttpResponse::json(200, r#"{"ok":true}"#);
         response
@@ -48,8 +46,11 @@ fn execute_response_header_expression() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("header-extract", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("header-extract", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -57,8 +58,8 @@ fn execute_response_header_expression() {
     assert_eq!(outputs.get("request_id"), Some(&json!("abc-123")));
 }
 
-#[test]
-fn execute_env_expression() {
+#[tokio::test]
+async fn execute_env_expression() {
     std::env::set_var("ARAZZO_RUNTIME_TEST_TOKEN", "secret-42");
     let server = start_server(|_method, _url, headers, _body| {
         let auth = header_value(&headers, "Authorization").unwrap_or_default();
@@ -84,8 +85,11 @@ fn execute_env_expression() {
         ..Workflow::default()
     }]);
 
-    let mut engine = new_test_engine(&server.base_url, spec);
-    let result = engine.execute("env-test", BTreeMap::new());
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("env-test", BTreeMap::new())
+        .await
+        .outputs;
     let outputs = match result {
         Ok(outputs) => outputs,
         Err(err) => panic!("expected success, got: {err}"),
@@ -93,8 +97,8 @@ fn execute_env_expression() {
     assert_eq!(outputs.get("auth"), Some(&json!("secret-42")));
 }
 
-#[test]
-fn execute_request_body_content_type_and_method_selection() {
+#[tokio::test]
+async fn execute_request_body_content_type_and_method_selection() {
     let put_method = Arc::new(Mutex::new(String::new()));
     let put_method_ref = Arc::clone(&put_method);
     let put_content_type = Arc::new(Mutex::new(String::new()));
@@ -127,8 +131,11 @@ fn execute_request_body_content_type_and_method_selection() {
         }],
         ..Workflow::default()
     }]);
-    let mut put_engine = new_test_engine(&put_server.base_url, put_spec);
-    let put_result = put_engine.execute("put", BTreeMap::new());
+    let put_engine = new_test_engine(&put_server.base_url, put_spec);
+    let put_result = put_engine
+        .execute_collect("put", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = put_result {
         panic!("expected PUT workflow success, got: {err}");
     }
@@ -168,8 +175,11 @@ fn execute_request_body_content_type_and_method_selection() {
         }],
         ..Workflow::default()
     }]);
-    let mut delete_engine = new_test_engine(&delete_server.base_url, delete_spec);
-    let delete_result = delete_engine.execute("delete", BTreeMap::new());
+    let delete_engine = new_test_engine(&delete_server.base_url, delete_spec);
+    let delete_result = delete_engine
+        .execute_collect("delete", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = delete_result {
         panic!("expected DELETE workflow success, got: {err}");
     }
@@ -202,8 +212,11 @@ fn execute_request_body_content_type_and_method_selection() {
         }],
         ..Workflow::default()
     }]);
-    let mut patch_engine = new_test_engine(&patch_server.base_url, patch_spec);
-    let patch_result = patch_engine.execute("patch", BTreeMap::new());
+    let patch_engine = new_test_engine(&patch_server.base_url, patch_spec);
+    let patch_result = patch_engine
+        .execute_collect("patch", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = patch_result {
         panic!("expected PATCH workflow success, got: {err}");
     }
@@ -232,8 +245,11 @@ fn execute_request_body_content_type_and_method_selection() {
         }],
         ..Workflow::default()
     }]);
-    let mut get_engine = new_test_engine(&get_server.base_url, get_spec);
-    let get_result = get_engine.execute("fallback-get", BTreeMap::new());
+    let get_engine = new_test_engine(&get_server.base_url, get_spec);
+    let get_result = get_engine
+        .execute_collect("fallback-get", BTreeMap::new())
+        .await
+        .outputs;
     if let Err(err) = get_result {
         panic!("expected fallback GET success, got: {err}");
     }
@@ -248,8 +264,8 @@ fn execute_request_body_content_type_and_method_selection() {
 // Workflow behavior tests
 // -----------------------------------------------------------------------
 
-#[test]
-fn workflow_level_success_actions_as_default() {
+#[tokio::test]
+async fn workflow_level_success_actions_as_default() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -278,17 +294,17 @@ fn workflow_level_success_actions_as_default() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
     // Workflow-level end action should stop after s1, so s2 never runs
-    let result = engine.execute("wf", BTreeMap::new());
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
     assert!(result.is_ok());
 }
 
-#[test]
-fn workflow_level_actions_ignored_when_step_has_own() {
+#[tokio::test]
+async fn workflow_level_actions_ignored_when_step_has_own() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -328,11 +344,11 @@ fn workflow_level_actions_ignored_when_step_has_own() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -340,8 +356,8 @@ fn workflow_level_actions_ignored_when_step_has_own() {
     assert_eq!(result.get("s2_reached"), Some(&json!(200)));
 }
 
-#[test]
-fn workflow_level_failure_actions_as_default() {
+#[tokio::test]
+async fn workflow_level_failure_actions_as_default() {
     let server =
         start_server(|_m, _u, _h, _b| MockHttpResponse::json(500, r#"{"error":"internal"}"#));
     let spec = make_spec_with_base(
@@ -364,12 +380,12 @@ fn workflow_level_failure_actions_as_default() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
     // Workflow-level "end" on failure should produce an error (end on failure path = error)
-    match engine.execute("wf", BTreeMap::new()) {
+    match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(_) => panic!("expected workflow to fail"),
         Err(err) => assert!(
             err.message.contains("workflow ended by onFailure action"),
@@ -378,8 +394,8 @@ fn workflow_level_failure_actions_as_default() {
     }
 }
 
-#[test]
-fn workflow_level_parameters_merge_into_steps() {
+#[tokio::test]
+async fn workflow_level_parameters_merge_into_steps() {
     let spec = make_spec_with_base(
         "http://localhost",
         vec![Workflow {
@@ -398,15 +414,15 @@ fn workflow_level_parameters_merge_into_steps() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    if engine.execute("wf", BTreeMap::new()).is_err() {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if exec_result.outputs.is_err() {
         panic!("expected dry-run execution to succeed");
     }
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 1);
     assert_eq!(
         reqs[0].headers.get("X-Workflow-Header"),
@@ -414,8 +430,8 @@ fn workflow_level_parameters_merge_into_steps() {
     );
 }
 
-#[test]
-fn step_params_override_workflow_params() {
+#[tokio::test]
+async fn step_params_override_workflow_params() {
     let spec = make_spec_with_base(
         "http://localhost",
         vec![Workflow {
@@ -440,15 +456,15 @@ fn step_params_override_workflow_params() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    if engine.execute("wf", BTreeMap::new()).is_err() {
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if exec_result.outputs.is_err() {
         panic!("expected dry-run execution to succeed");
     }
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 1);
     assert_eq!(
         reqs[0].headers.get("X-Auth"),
@@ -456,8 +472,8 @@ fn step_params_override_workflow_params() {
     );
 }
 
-#[test]
-fn workflow_params_not_merged_into_subworkflow_steps() {
+#[tokio::test]
+async fn workflow_params_not_merged_into_subworkflow_steps() {
     let spec = make_spec_with_base(
         "http://localhost",
         vec![
@@ -492,22 +508,22 @@ fn workflow_params_not_merged_into_subworkflow_steps() {
             },
         ],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    if engine.execute("parent", BTreeMap::new()).is_err() {
+    let exec_result = engine.execute_collect("parent", BTreeMap::new()).await;
+    if exec_result.outputs.is_err() {
         panic!("expected parent workflow dry-run execution to succeed");
     }
-    let reqs = engine.dry_run_requests();
+    let reqs = exec_result.dry_run_requests();
     // child-step should NOT have the parent's X-Parent header
     assert_eq!(reqs.len(), 1);
     assert_eq!(reqs[0].headers.get("X-Parent"), None);
 }
 
-#[test]
-fn build_outputs_with_interpolation_and_outputs_ref() {
+#[tokio::test]
+async fn build_outputs_with_interpolation_and_outputs_ref() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"total":42}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -529,11 +545,11 @@ fn build_outputs_with_interpolation_and_outputs_ref() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -543,8 +559,8 @@ fn build_outputs_with_interpolation_and_outputs_ref() {
 
 // --- Phase 3: Request Introspection + Multiple Source Descriptions ---
 
-#[test]
-fn url_expression_in_outputs() {
+#[tokio::test]
+async fn url_expression_in_outputs() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -567,11 +583,11 @@ fn url_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -585,8 +601,8 @@ fn url_expression_in_outputs() {
     );
 }
 
-#[test]
-fn request_header_expression_in_outputs() {
+#[tokio::test]
+async fn request_header_expression_in_outputs() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -612,19 +628,19 @@ fn request_header_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
     assert_eq!(result.get("auth"), Some(&json!("Bearer token123")));
 }
 
-#[test]
-fn request_query_expression_in_outputs() {
+#[tokio::test]
+async fn request_query_expression_in_outputs() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -647,19 +663,19 @@ fn request_query_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
     assert_eq!(result.get("page"), Some(&json!("5")));
 }
 
-#[test]
-fn request_path_expression_in_outputs() {
+#[tokio::test]
+async fn request_path_expression_in_outputs() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -690,19 +706,19 @@ fn request_path_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
     assert_eq!(result.get("user_id"), Some(&json!("42")));
 }
 
-#[test]
-fn request_body_expression_in_outputs() {
+#[tokio::test]
+async fn request_body_expression_in_outputs() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"created":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
@@ -744,11 +760,11 @@ fn request_body_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match Engine::new(spec) {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -764,8 +780,8 @@ fn request_body_expression_in_outputs() {
 // Source description tests
 // -----------------------------------------------------------------------
 
-#[test]
-fn source_descriptions_url_expression() {
+#[tokio::test]
+async fn source_descriptions_url_expression() {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -811,12 +827,11 @@ fn source_descriptions_url_expression() {
         }],
         components: None,
     };
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -828,8 +843,8 @@ fn source_descriptions_url_expression() {
     assert_eq!(result.get("missing_url"), Some(&Value::Null));
 }
 
-#[test]
-fn multiple_source_descriptions_routing() {
+#[tokio::test]
+async fn multiple_source_descriptions_routing() {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -881,12 +896,11 @@ fn multiple_source_descriptions_routing() {
         }],
         components: None,
     };
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    let result = match engine.execute("wf", BTreeMap::new()) {
+    let result = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
@@ -904,8 +918,8 @@ fn multiple_source_descriptions_routing() {
     );
 }
 
-#[test]
-fn evaluate_output_expression_routes_dollar_expressions_correctly() {
+#[tokio::test]
+async fn evaluate_output_expression_routes_dollar_expressions_correctly() {
     let spec = make_spec_with_base(
         "http://localhost",
         vec![Workflow {
@@ -932,12 +946,14 @@ fn evaluate_output_expression_routes_dollar_expressions_correctly() {
             ..Workflow::default()
         }],
     );
-    let mut engine = match Engine::new(spec) {
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
-    engine.set_dry_run_mode(true);
-    let result = match engine.execute("wf", BTreeMap::from([("name".to_string(), json!("Alice"))]))
+    let result = match engine
+        .execute_collect("wf", BTreeMap::from([("name".to_string(), json!("Alice"))]))
+        .await
+        .outputs
     {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),

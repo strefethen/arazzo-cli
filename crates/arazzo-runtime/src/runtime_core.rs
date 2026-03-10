@@ -1,7 +1,7 @@
 //! Workflow execution runtime for the Rust implementation.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,10 +14,12 @@ use arazzo_spec::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 const MAX_RETRIES_PER_STEP: usize = 3;
 const MAX_CALL_DEPTH: usize = 10;
-const SLEEP_CHECK_INTERVAL: Duration = Duration::from_millis(25);
+const DEFAULT_CHANNEL_CAPACITY: usize = 1024;
 pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
 
 /// Runtime error.
@@ -48,6 +50,8 @@ pub enum RuntimeErrorKind {
     SuccessCriteriaFailed,
     DebugController,
     StepMissingDependency,
+    InputValidation,
+    InternalError,
 }
 
 impl RuntimeErrorKind {
@@ -77,6 +81,8 @@ impl RuntimeErrorKind {
             Self::SuccessCriteriaFailed => "RUNTIME_SUCCESS_CRITERIA_FAILED",
             Self::DebugController => "RUNTIME_DEBUG_CONTROLLER",
             Self::StepMissingDependency => "STEP_MISSING_DEPENDENCY",
+            Self::InputValidation => "RUNTIME_INPUT_VALIDATION",
+            Self::InternalError => "RUNTIME_INTERNAL_ERROR",
         }
     }
 }
@@ -153,52 +159,189 @@ impl From<serde_json::Error> for RuntimeError {
     }
 }
 
-/// Per-execution controls for deadline and external cancellation.
-#[derive(Debug, Clone, Default)]
-pub struct ExecutionOptions {
-    pub deadline: Option<Instant>,
-    pub cancel_flag: Option<Arc<AtomicBool>>,
+// ── Streamed event types ────────────────────────────────────────────
+
+/// Event streamed from the engine during execution via the mpsc channel.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+#[allow(clippy::large_enum_variant)]
+pub enum EngineEvent {
+    TraceStep(TraceStepRecord),
+    DryRunRequest(DryRunRequest),
+    Execution(ExecutionEvent),
+    Observer(ObserverEvent),
 }
 
-impl ExecutionOptions {
-    pub fn with_deadline(deadline: Instant) -> Self {
-        Self {
-            deadline: Some(deadline),
-            cancel_flag: None,
-        }
-    }
+/// Handle returned by [`Engine::execute`] for streaming execution results.
+///
+/// The spawned task drops the event sender before sending the final result
+/// via the oneshot channel, guaranteeing that `collect()` can drain all
+/// events before awaiting the result.
+///
+/// Dropping the handle cancels the running task via the `CancellationToken`.
+pub struct ExecutionHandle {
+    events: Option<mpsc::Receiver<EngineEvent>>,
+    result: Option<oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>>,
+    cancel: CancellationToken,
+    is_timeout: Arc<AtomicBool>,
+}
 
-    pub fn with_timeout(timeout: Duration) -> Self {
-        Self::with_deadline(Instant::now() + timeout)
-    }
-
-    pub fn with_cancel_flag(cancel_flag: Arc<AtomicBool>) -> Self {
-        Self {
-            deadline: None,
-            cancel_flag: Some(cancel_flag),
-        }
-    }
-
-    fn check(&self) -> Result<(), RuntimeError> {
-        if let Some(deadline) = self.deadline {
-            if Instant::now() >= deadline {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::ExecutionTimeout,
-                    "execution timeout exceeded",
-                ));
-            }
-        }
-        if let Some(flag) = &self.cancel_flag {
-            if flag.load(Ordering::Relaxed) {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::ExecutionCancelled,
-                    "execution cancelled",
-                ));
-            }
-        }
-        Ok(())
+impl Drop for ExecutionHandle {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
+
+impl ExecutionHandle {
+    pub(crate) fn new(
+        events: mpsc::Receiver<EngineEvent>,
+        result: oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>,
+        cancel: CancellationToken,
+        is_timeout: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            events: Some(events),
+            result: Some(result),
+            cancel,
+            is_timeout,
+        }
+    }
+
+    /// Access the cancellation token to cancel the running task.
+    pub fn cancel_token(&self) -> &CancellationToken {
+        &self.cancel
+    }
+
+    /// Access the timeout flag (set by `execute_with_timeout` watchdog).
+    pub fn timeout_flag(&self) -> &Arc<AtomicBool> {
+        &self.is_timeout
+    }
+
+    /// Drain all events and await the final result.
+    #[allow(clippy::missing_panics_doc)]
+    pub async fn collect(mut self) -> ExecutionResult {
+        let mut events_rx = self
+            .events
+            .take()
+            .unwrap_or_else(|| panic!("events already consumed"));
+        let result_rx = self
+            .result
+            .take()
+            .unwrap_or_else(|| panic!("result already consumed"));
+        let mut events = Vec::new();
+        while let Some(event) = events_rx.recv().await {
+            events.push(event);
+        }
+        let outputs = result_rx.await.unwrap_or_else(|_| {
+            Err(RuntimeError::new(
+                RuntimeErrorKind::InternalError,
+                "execution task completed without sending result",
+            ))
+        });
+        ExecutionResult { outputs, events }
+        // Drop runs here, calling cancel() — task already finished, no-op
+    }
+
+    /// Discard events and return only the workflow result.
+    #[allow(clippy::missing_panics_doc)]
+    pub async fn result_only(mut self) -> Result<BTreeMap<String, Value>, RuntimeError> {
+        drop(self.events.take()); // unblock event sends immediately
+        let result_rx = self
+            .result
+            .take()
+            .unwrap_or_else(|| panic!("result already consumed"));
+        result_rx.await.unwrap_or_else(|_| {
+            Err(RuntimeError::new(
+                RuntimeErrorKind::InternalError,
+                "execution task completed without sending result",
+            ))
+        })
+    }
+
+    /// Detach the handle: the task continues running even if this
+    /// handle is dropped. Returns a standalone CancellationToken.
+    pub fn detach(self) -> CancellationToken {
+        let cancel = self.cancel.clone();
+        std::mem::forget(self); // skip Drop to avoid cancellation
+        cancel
+    }
+}
+
+/// Collected execution output from a completed workflow.
+pub struct ExecutionResult {
+    pub outputs: Result<BTreeMap<String, Value>, RuntimeError>,
+    pub events: Vec<EngineEvent>,
+}
+
+impl ExecutionResult {
+    /// Filter trace step records from the event stream.
+    pub fn trace_steps(&self) -> Vec<&TraceStepRecord> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::TraceStep(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Filter dry-run requests from the event stream.
+    pub fn dry_run_requests(&self) -> Vec<&DryRunRequest> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::DryRunRequest(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Filter execution lifecycle events from the event stream.
+    pub fn execution_events(&self) -> Vec<&ExecutionEvent> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::Execution(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+// ── Per-execution context ───────────────────────────────────────────
+
+/// Per-execution mutable state, shared across tasks via `Arc`.
+pub(super) struct ExecutionContext {
+    pub event_tx: mpsc::Sender<EngineEvent>,
+    pub trace_seq: AtomicU64,
+    pub execution_event_seq: AtomicU64,
+    pub step_attempts: Mutex<BTreeMap<(String, String), u32>>,
+    pub cancel: CancellationToken,
+    pub is_timeout: Arc<AtomicBool>,
+}
+
+impl ExecutionContext {
+    fn check_cancelled(&self) -> Result<(), RuntimeError> {
+        if self.cancel.is_cancelled() {
+            Err(self.cancelled_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn cancelled_error(&self) -> RuntimeError {
+        if self.is_timeout.load(Ordering::Acquire) {
+            RuntimeError::new(
+                RuntimeErrorKind::ExecutionTimeout,
+                "execution timeout exceeded",
+            )
+        } else {
+            RuntimeError::new(RuntimeErrorKind::ExecutionCancelled, "execution cancelled")
+        }
+    }
+}
+
+// ── Rate limiter ────────────────────────────────────────────────────
 
 /// Runtime rate limiter settings.
 #[derive(Debug, Clone)]
@@ -289,14 +432,14 @@ impl RateLimiterState {
 
 #[derive(Debug, Clone)]
 struct HttpClient {
-    inner: reqwest::blocking::Client,
+    inner: reqwest::Client,
     default_headers: BTreeMap<String, String>,
-    rate_limiter: Arc<Mutex<RateLimiterState>>,
+    rate_limiter: Arc<tokio::sync::Mutex<RateLimiterState>>,
 }
 
 impl HttpClient {
     fn new(config: &ClientConfig) -> Result<Self, RuntimeError> {
-        let inner = reqwest::blocking::Client::builder()
+        let inner = reqwest::Client::builder()
             .timeout(config.timeout)
             .build()
             .map_err(|err| {
@@ -309,16 +452,19 @@ impl HttpClient {
         Ok(Self {
             inner,
             default_headers: config.default_headers.clone(),
-            rate_limiter: Arc::new(Mutex::new(RateLimiterState::new(&config.rate_limit))),
+            rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiterState::new(
+                &config.rate_limit,
+            ))),
         })
     }
 
-    fn request(
+    async fn request(
         &self,
         cfg: RequestConfig,
-        options: &ExecutionOptions,
+        cancel: &CancellationToken,
+        is_timeout: &AtomicBool,
     ) -> Result<Response, RuntimeError> {
-        self.wait_for_rate_limit(options)?;
+        self.wait_for_rate_limit(cancel, is_timeout).await?;
         let method = reqwest::Method::from_bytes(cfg.method.as_bytes()).map_err(|err| {
             RuntimeError::new(
                 RuntimeErrorKind::InvalidHttpMethod,
@@ -337,7 +483,7 @@ impl HttpClient {
             req = req.body(body);
         }
 
-        let resp = req.send().map_err(|err| {
+        let resp = req.send().await.map_err(|err| {
             RuntimeError::with_source(
                 RuntimeErrorKind::HttpRequest,
                 format!("executing request: {err}"),
@@ -353,6 +499,7 @@ impl HttpClient {
         }
         let body = resp
             .bytes()
+            .await
             .map_err(|err| {
                 RuntimeError::with_source(
                     RuntimeErrorKind::HttpResponseRead,
@@ -397,22 +544,33 @@ impl HttpClient {
         })
     }
 
-    fn wait_for_rate_limit(&self, options: &ExecutionOptions) -> Result<(), RuntimeError> {
+    async fn wait_for_rate_limit(
+        &self,
+        cancel: &CancellationToken,
+        is_timeout: &AtomicBool,
+    ) -> Result<(), RuntimeError> {
         loop {
-            options.check()?;
+            if cancel.is_cancelled() {
+                return if is_timeout.load(Ordering::Acquire) {
+                    Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionTimeout,
+                        "execution timeout exceeded",
+                    ))
+                } else {
+                    Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionCancelled,
+                        "execution cancelled",
+                    ))
+                };
+            }
             let wait = {
                 let now = Instant::now();
-                let mut limiter = self.rate_limiter.lock().map_err(|_| {
-                    RuntimeError::new(
-                        RuntimeErrorKind::RateLimiterLockPoisoned,
-                        "rate limiter lock poisoned",
-                    )
-                })?;
+                let mut limiter = self.rate_limiter.lock().await;
                 limiter.acquire_wait(now)
             };
             match wait {
                 None => return Ok(()),
-                Some(delay) => sleep_with_checks(delay, options)?,
+                Some(delay) => sleep_with_cancel(delay, cancel, is_timeout).await?,
             }
         }
     }
@@ -723,9 +881,9 @@ pub enum ObserverEvent {
 /// request preparation, HTTP dispatch, criterion evaluation,
 /// retry scheduling, and sub-workflow invocation.
 ///
-/// Implementations must be `Send + Sync` (called from parallel threads).
+/// Implementations must be `Send + Sync` (called from async tasks).
 /// Callbacks should be non-blocking — do not perform I/O or heavy
-/// computation. Send events to a channel and process on another thread.
+/// computation. Send events to a channel and process on another task.
 pub trait ExecutionObserver: Send + Sync {
     fn on_event(&self, event: &ObserverEvent);
 }
@@ -804,9 +962,7 @@ impl VarStore {
     }
 }
 
-/// Immutable index built once from the parsed spec. Holds the data that does
-/// not change after construction (except `op_index` which is populated lazily
-/// via [`Engine::load_openapi_spec`]).
+/// Immutable index built once from the parsed spec.
 pub(crate) struct WorkflowIndex {
     pub spec: ArazzoSpec,
     pub base_url: String,
@@ -816,22 +972,27 @@ pub(crate) struct WorkflowIndex {
     pub op_index: BTreeMap<String, OperationEntry>,
 }
 
-/// Runtime engine for executing Arazzo workflows.
-pub struct Engine {
-    pub(crate) index: WorkflowIndex,
+/// Shared immutable core of the engine, wrapped in `Arc`.
+struct EngineInner {
+    index: WorkflowIndex,
     client: HttpClient,
     parallel_mode: bool,
     dry_run_mode: bool,
     trace_enabled: bool,
-    dry_run_reqs: Arc<Mutex<Vec<DryRunRequest>>>,
-    trace_steps: Arc<Mutex<Vec<TraceStepRecord>>>,
-    trace_seq: Arc<Mutex<u64>>,
-    execution_events: Arc<Mutex<Vec<ExecutionEvent>>>,
-    execution_event_seq: Arc<Mutex<u64>>,
-    step_attempts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
+    strict_inputs: bool,
+    channel_capacity: usize,
     trace_hook: Option<Arc<dyn TraceHook>>,
     observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
+}
+
+/// Runtime engine for executing Arazzo workflows.
+///
+/// `Engine` is cheaply cloneable (wraps `Arc<EngineInner>`) and can be
+/// shared across tasks for concurrent workflow execution.
+#[derive(Clone)]
+pub struct Engine {
+    inner: Arc<EngineInner>,
 }
 
 /// Builder for constructing a fully configured [`Engine`] instance.
@@ -857,9 +1018,12 @@ pub struct EngineBuilder {
     parallel: bool,
     dry_run: bool,
     trace: bool,
+    strict_inputs: bool,
+    channel_capacity: usize,
     trace_hook: Option<Arc<dyn TraceHook>>,
     observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
+    openapi_specs: Vec<Vec<u8>>,
 }
 
 impl EngineBuilder {
@@ -872,9 +1036,12 @@ impl EngineBuilder {
             parallel: false,
             dry_run: false,
             trace: false,
+            strict_inputs: false,
+            channel_capacity: DEFAULT_CHANNEL_CAPACITY,
             trace_hook: None,
             observer: None,
             debug_controller: None,
+            openapi_specs: Vec::new(),
         }
     }
 
@@ -902,6 +1069,20 @@ impl EngineBuilder {
         self
     }
 
+    /// Enables or disables strict input validation. When enabled, missing required
+    /// inputs and type mismatches cause a fatal `InputValidation` error. When
+    /// disabled (default), validation issues are printed as warnings to stderr.
+    pub fn strict_inputs(mut self, enabled: bool) -> Self {
+        self.strict_inputs = enabled;
+        self
+    }
+
+    /// Sets the bounded channel capacity for event streaming. Default: 1024.
+    pub fn channel_capacity(mut self, cap: usize) -> Self {
+        self.channel_capacity = cap;
+        self
+    }
+
     /// Registers a trace hook that receives step lifecycle events during execution.
     pub fn trace_hook(mut self, hook: Arc<dyn TraceHook>) -> Self {
         self.trace_hook = Some(hook);
@@ -917,6 +1098,13 @@ impl EngineBuilder {
     /// Attaches a debug controller for breakpoint-driven step-through execution.
     pub fn debug_controller(mut self, controller: Arc<DebugController>) -> Self {
         self.debug_controller = Some(controller);
+        self
+    }
+
+    /// Adds an OpenAPI spec to be parsed and indexed during build.
+    /// Call multiple times for multiple specs. Replaces `Engine::load_openapi_spec`.
+    pub fn openapi_spec(mut self, data: Vec<u8>) -> Self {
+        self.openapi_specs.push(data);
         self
     }
 
@@ -950,30 +1138,94 @@ impl EngineBuilder {
             step_indexes.insert(wf.workflow_id.clone(), step_idx_map);
         }
 
+        let mut op_index = BTreeMap::new();
+        for spec_data in &self.openapi_specs {
+            parse_openapi_into_index(spec_data, &mut op_index)?;
+        }
+
         Ok(Engine {
-            index: WorkflowIndex {
-                spec: self.spec,
-                base_url,
-                source_descriptions_map,
-                workflow_index,
-                step_indexes,
-                op_index: BTreeMap::new(),
-            },
-            client,
-            parallel_mode: self.parallel,
-            dry_run_mode: self.dry_run,
-            trace_enabled: self.trace,
-            dry_run_reqs: Arc::new(Mutex::new(Vec::new())),
-            trace_steps: Arc::new(Mutex::new(Vec::new())),
-            trace_seq: Arc::new(Mutex::new(0)),
-            execution_events: Arc::new(Mutex::new(Vec::new())),
-            execution_event_seq: Arc::new(Mutex::new(0)),
-            step_attempts: Arc::new(Mutex::new(BTreeMap::new())),
-            trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
-            observer: self.observer,
-            debug_controller: self.debug_controller,
+            inner: Arc::new(EngineInner {
+                index: WorkflowIndex {
+                    spec: self.spec,
+                    base_url,
+                    source_descriptions_map,
+                    workflow_index,
+                    step_indexes,
+                    op_index,
+                },
+                client,
+                parallel_mode: self.parallel,
+                dry_run_mode: self.dry_run,
+                trace_enabled: self.trace,
+                strict_inputs: self.strict_inputs,
+                channel_capacity: self.channel_capacity,
+                trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
+                observer: self.observer,
+                debug_controller: self.debug_controller,
+            }),
         })
     }
+}
+
+/// Parses an OpenAPI spec and populates the operation index.
+fn parse_openapi_into_index(
+    data: &[u8],
+    op_index: &mut BTreeMap<String, OperationEntry>,
+) -> Result<(), RuntimeError> {
+    let root: serde_yml::Value = serde_yml::from_slice(data).map_err(|err| {
+        RuntimeError::new(
+            RuntimeErrorKind::SourceDescriptionParse,
+            format!("parsing OpenAPI spec: {err}"),
+        )
+    })?;
+    let Some(paths) = root.get("paths") else {
+        return Ok(());
+    };
+    let Some(paths_map) = paths.as_mapping() else {
+        return Ok(());
+    };
+
+    let http_methods: BTreeSet<&str> = BTreeSet::from([
+        "get", "post", "put", "patch", "delete", "head", "options", "trace",
+    ]);
+
+    for (path_key, methods_value) in paths_map {
+        let Some(path) = path_key.as_str() else {
+            continue;
+        };
+        let Some(methods_map) = methods_value.as_mapping() else {
+            continue;
+        };
+
+        for (method_key, operation_value) in methods_map {
+            let Some(method) = method_key.as_str() else {
+                continue;
+            };
+            let method_l = method.to_lowercase();
+            if !http_methods.contains(method_l.as_str()) {
+                continue;
+            }
+            let Some(operation_map) = operation_value.as_mapping() else {
+                continue;
+            };
+            let op_id = operation_map
+                .get(serde_yml::Value::String("operationId".to_string()))
+                .and_then(serde_yml::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if op_id.is_empty() {
+                continue;
+            }
+            op_index.insert(
+                op_id,
+                OperationEntry {
+                    method: method.to_uppercase(),
+                    path: path.to_string(),
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 mod engine_actions;
@@ -982,14 +1234,16 @@ mod engine_impl;
 mod engine_parallel;
 mod engine_trace;
 mod helpers;
+mod input_validation;
 
 use engine_actions::{ActionBranch, FlowDecision, SelectedActionDebugContext, StepDecisionContext};
 use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
+use input_validation::{validate_inputs, InputIssueSeverity};
 
 use helpers::{
     can_execute_parallel, parse_source_prefix, replace_path_params, resolve_payload,
-    sleep_with_checks, step_result_error, value_to_string,
+    sleep_with_cancel, step_result_error, value_to_string,
 };
 
 pub(crate) use helpers::{

@@ -179,7 +179,11 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         .collect();
 
     for (wf_idx, wf) in spec.workflows.iter().enumerate() {
-        let path = format!("workflows[{wf_idx}]");
+        let path = if wf.workflow_id.is_empty() {
+            format!("workflows[{wf_idx}]")
+        } else {
+            format!("workflow \"{}\"", wf.workflow_id)
+        };
 
         if wf.workflow_id.is_empty() {
             errs.push(ValidationError {
@@ -230,7 +234,11 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
 
         let mut seen_step_ids = HashSet::<String>::new();
         for (step_idx, step) in wf.steps.iter().enumerate() {
-            let step_path = format!("{path}.steps[{step_idx}]");
+            let step_path = if step.step_id.is_empty() {
+                format!("{path} > steps[{step_idx}]")
+            } else {
+                format!("{path} > step \"{}\"", step.step_id)
+            };
 
             if step.step_id.is_empty() {
                 errs.push(ValidationError {
@@ -491,8 +499,49 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
     }
 }
 
+/// Resolves `$ref` in workflow inputs against `components.inputs`.
+fn resolve_input_refs(spec: &mut ArazzoSpec) -> Result<(), String> {
+    let input_map = spec
+        .components
+        .as_ref()
+        .map(|c| c.inputs.clone())
+        .unwrap_or_default();
+    if input_map.is_empty() {
+        return Ok(());
+    }
+
+    for workflow in &mut spec.workflows {
+        let Some(schema) = &mut workflow.inputs else {
+            continue;
+        };
+        if schema.ref_.is_empty() {
+            continue;
+        }
+        let name = schema
+            .ref_
+            .strip_prefix("#/components/inputs/")
+            .ok_or_else(|| {
+                format!(
+                    "workflow {}: unsupported input $ref: {} \
+                     (expected #/components/inputs/<name>)",
+                    workflow.workflow_id, schema.ref_
+                )
+            })?;
+        let resolved = input_map.get(name).ok_or_else(|| {
+            format!(
+                "workflow {}: component input \"{}\" not found",
+                workflow.workflow_id, name
+            )
+        })?;
+        *schema = resolved.clone();
+    }
+    Ok(())
+}
+
 /// Resolves `$components.*` references to inline step definitions.
 fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
+    resolve_input_refs(spec)?;
+
     let Some(components) = spec.components.clone() else {
         return Ok(());
     };
@@ -575,18 +624,21 @@ fn resolve_param_refs(
 }
 
 fn resolve_action_ref(
-    actions: &mut Vec<OnAction>,
+    actions: &mut [OnAction],
     component_map: &std::collections::BTreeMap<String, OnAction>,
     prefix: &str,
     kind: &str,
     entity: &str,
 ) -> Result<(), String> {
-    if actions.len() == 1 && !actions[0].name.is_empty() {
-        if let Some(name) = actions[0].name.strip_prefix(prefix) {
+    for action in actions.iter_mut() {
+        if action.name.is_empty() {
+            continue;
+        }
+        if let Some(name) = action.name.strip_prefix(prefix) {
             let Some(resolved) = component_map.get(name) else {
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
-            *actions = vec![resolved.clone()];
+            *action = resolved.clone();
         }
     }
     Ok(())
@@ -918,7 +970,49 @@ workflows:
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].type_, ActionType::Retry);
         assert_eq!(actions[0].retry_after, 2);
-        assert_eq!(actions[0].retry_limit, 5);
+        assert_eq!(actions[0].retry_limit, Some(5));
+    }
+
+    #[test]
+    fn parse_bytes_component_failure_actions_multi() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  failureActions:
+    retryPolicy:
+      type: retry
+      retryAfter: 2
+      retryLimit: 5
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onFailure:
+          - name: "$components.failureActions.retryPolicy"
+          - type: end
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        let actions = &spec.workflows[0].steps[0].on_failure;
+        assert_eq!(actions.len(), 2);
+        // First action: resolved from component ref
+        assert_eq!(actions[0].type_, ActionType::Retry);
+        assert_eq!(actions[0].retry_after, 2);
+        assert_eq!(actions[0].retry_limit, Some(5));
+        // Second action: inline end
+        assert_eq!(actions[1].type_, ActionType::End);
     }
 
     #[test]
@@ -1076,7 +1170,7 @@ workflows:
         let errs = expect_validation_errors(validate(&spec));
         let err = errs
             .iter()
-            .find(|item| item.path == "workflows[0].steps[0].operationPath")
+            .find(|item| item.path.contains("operationPath"))
             .unwrap_or_else(|| panic!("expected operationPath validation error, got: {errs:?}"));
 
         assert_eq!(err.kind, ValidationErrorKind::InvalidReference);
@@ -1474,5 +1568,171 @@ workflows:
             .any(|e| e.kind == ValidationErrorKind::MissingRequiredField
                 && e.message
                     .contains("goto action must specify stepId or workflowId")));
+    }
+
+    #[test]
+    fn parse_bytes_component_inputs_ref() {
+        let spec_yaml = r##"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    shared:
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+        - name
+workflows:
+  - workflowId: wf1
+    inputs:
+      $ref: "#/components/inputs/shared"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"##;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let inputs = match spec.workflows[0].inputs.as_ref() {
+            Some(i) => i,
+            None => panic!("inputs should be present"),
+        };
+        assert!(
+            inputs.ref_.is_empty(),
+            "ref_ should be cleared after resolution"
+        );
+        assert!(inputs.properties.contains_key("name"));
+        assert_eq!(inputs.required, vec!["name".to_string()]);
+    }
+
+    #[test]
+    fn parse_bytes_component_inputs_ref_not_found() {
+        let spec_yaml = r##"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    other:
+      type: object
+workflows:
+  - workflowId: wf1
+    inputs:
+      $ref: "#/components/inputs/missing"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"##;
+
+        let result = parse_bytes(spec_yaml.as_bytes());
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err
+                    .to_string()
+                    .contains("component input \"missing\" not found")
+                {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_bytes_component_inputs_ref_invalid_prefix() {
+        let spec_yaml = r##"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    foo:
+      type: object
+workflows:
+  - workflowId: wf1
+    inputs:
+      $ref: "http://external/schema"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"##;
+
+        let result = parse_bytes(spec_yaml.as_bytes());
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(err) => {
+                if !err.to_string().contains("unsupported input $ref") {
+                    panic!("unexpected error: {err}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_bytes_component_inputs_ref_full_replacement() {
+        let spec_yaml = r##"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    shared:
+      type: object
+      properties:
+        age:
+          type: integer
+      required:
+        - age
+workflows:
+  - workflowId: wf1
+    inputs:
+      type: string
+      $ref: "#/components/inputs/shared"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"##;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let inputs = match spec.workflows[0].inputs.as_ref() {
+            Some(i) => i,
+            None => panic!("inputs should be present"),
+        };
+        // The inline `type: string` should be fully replaced by the component
+        assert_eq!(
+            inputs.type_,
+            Some(arazzo_spec::JsonSchemaType::Object),
+            "inline type should be replaced by component's type"
+        );
+        assert!(inputs.properties.contains_key("age"));
+        assert_eq!(inputs.required, vec!["age".to_string()]);
     }
 }

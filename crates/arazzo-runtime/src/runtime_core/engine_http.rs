@@ -5,7 +5,8 @@ impl Engine {
         &self,
         operation_id: &str,
     ) -> Result<(String, String), RuntimeError> {
-        self.index
+        self.inner
+            .index
             .op_index
             .get(operation_id)
             .map(|entry| (entry.method.clone(), entry.path.clone()))
@@ -56,11 +57,21 @@ impl Engine {
         } else {
             None
         };
-        // Intentional: body_json is already a valid serde_json::Value, so serialization
-        // should not fail. If it does, the request proceeds without a body.
-        let body = body_json
-            .as_ref()
-            .and_then(|value| serde_json::to_vec(value).ok());
+        // Content-type-aware serialization: non-JSON string payloads (e.g. XML/SOAP)
+        // are sent as raw bytes instead of being JSON-serialized (which would double-quote them).
+        let body = body_json.as_ref().map(|value| {
+            let ct = step
+                .request_body
+                .as_ref()
+                .map(|rb| rb.content_type.as_str())
+                .unwrap_or("application/json");
+            if !ct.contains("json") {
+                if let Value::String(s) = value {
+                    return s.as_bytes().to_vec();
+                }
+            }
+            serde_json::to_vec(value).unwrap_or_default()
+        });
 
         let mut headers = BTreeMap::new();
         if body.is_some() {
@@ -79,19 +90,11 @@ impl Engine {
         for param in &step.parameters {
             if param.in_ == Some(ParamLocation::Header) {
                 let value_str = param.value_as_str();
-                let resolved = if value_str.starts_with('$') {
-                    value_to_string(&eval.evaluate(&value_str))
-                } else {
-                    eval.interpolate_string(&value_str)
-                };
+                let resolved = value_to_string(&eval.resolve_value(&value_str));
                 headers.insert(param.name.clone(), resolved);
             } else if param.in_ == Some(ParamLocation::Cookie) {
                 let value_str = param.value_as_str();
-                let resolved = if value_str.starts_with('$') {
-                    value_to_string(&eval.evaluate(&value_str))
-                } else {
-                    eval.interpolate_string(&value_str)
-                };
+                let resolved = value_to_string(&eval.resolve_value(&value_str));
                 cookie_parts.push(format!("{}={}", param.name, resolved));
             }
         }
@@ -132,56 +135,74 @@ impl Engine {
         ctx
     }
 
-    pub(super) fn execute_http_step(
+    pub(super) async fn execute_http_step(
         &self,
+        exec_ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
         depth: usize,
-        options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
-        options.check()?;
+        exec_ctx.check_cancelled()?;
         let prep = self.prepare_http_request(step, vars)?;
 
-        if self.dry_run_mode {
-            self.emit_observer_event(ObserverEvent::RequestPrepared {
+        if self.inner.dry_run_mode {
+            self.emit_observer_event(
+                exec_ctx,
+                ObserverEvent::RequestPrepared {
+                    workflow_id: workflow_id.to_string(),
+                    step_id: step.step_id.clone(),
+                    method: prep.method.clone(),
+                    url: prep.url_result.url.clone(),
+                    headers: prep.headers.clone(),
+                    has_body: prep.body.is_some(),
+                },
+            )
+            .await;
+            return self.execute_dry_run_step(step, vars, prep);
+        }
+
+        self.emit_observer_event(
+            exec_ctx,
+            ObserverEvent::RequestPrepared {
                 workflow_id: workflow_id.to_string(),
                 step_id: step.step_id.clone(),
                 method: prep.method.clone(),
                 url: prep.url_result.url.clone(),
                 headers: prep.headers.clone(),
                 has_body: prep.body.is_some(),
-            });
-            return self.execute_dry_run_step(step, vars, prep);
-        }
+            },
+        )
+        .await;
 
-        self.emit_observer_event(ObserverEvent::RequestPrepared {
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            method: prep.method.clone(),
-            url: prep.url_result.url.clone(),
-            headers: prep.headers.clone(),
-            has_body: prep.body.is_some(),
-        });
-
-        self.emit_observer_event(ObserverEvent::RequestSent {
-            workflow_id: workflow_id.to_string(),
-            step_id: step.step_id.clone(),
-            method: prep.method.clone(),
-            url: prep.url_result.url.clone(),
-        });
-
-        let response = self.client.request(
-            RequestConfig {
+        self.emit_observer_event(
+            exec_ctx,
+            ObserverEvent::RequestSent {
+                workflow_id: workflow_id.to_string(),
+                step_id: step.step_id.clone(),
                 method: prep.method.clone(),
                 url: prep.url_result.url.clone(),
-                headers: prep.headers.clone(),
-                body: prep.body.clone(),
             },
-            options,
-        )?;
+        )
+        .await;
 
-        self.evaluate_step_response(workflow_id, step, vars, depth, &response, &prep)
+        let response = self
+            .inner
+            .client
+            .request(
+                RequestConfig {
+                    method: prep.method.clone(),
+                    url: prep.url_result.url.clone(),
+                    headers: prep.headers.clone(),
+                    body: prep.body.clone(),
+                },
+                &exec_ctx.cancel,
+                &exec_ctx.is_timeout,
+            )
+            .await?;
+
+        self.evaluate_step_response(exec_ctx, workflow_id, step, vars, depth, &response, &prep)
+            .await
     }
 
     fn execute_dry_run_step(
@@ -239,8 +260,10 @@ impl Engine {
         })
     }
 
-    fn evaluate_step_response(
+    #[allow(clippy::too_many_arguments)]
+    async fn evaluate_step_response(
         &self,
+        exec_ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
@@ -266,13 +289,17 @@ impl Engine {
                 result: evaluation.matched,
                 warnings: evaluation.warnings.iter().map(|w| w.to_string()).collect(),
             });
-            self.emit_observer_event(ObserverEvent::CriterionEvaluated {
-                workflow_id: workflow_id.to_string(),
-                step_id: step.step_id.clone(),
-                index,
-                condition: evaluation.condition.clone(),
-                passed: evaluation.matched,
-            });
+            self.emit_observer_event(
+                exec_ctx,
+                ObserverEvent::CriterionEvaluated {
+                    workflow_id: workflow_id.to_string(),
+                    step_id: step.step_id.clone(),
+                    index,
+                    condition: evaluation.condition.clone(),
+                    passed: evaluation.matched,
+                },
+            )
+            .await;
 
             let gate = DebugGateContext {
                 workflow_id,
@@ -283,7 +310,8 @@ impl Engine {
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
-            self.debug_gate_success_criterion(&gate, index, &evaluation)?;
+            self.debug_gate_success_criterion(&gate, index, &evaluation)
+                .await?;
             if !evaluation.matched {
                 let trace_response = build_trace_response(response);
                 return Ok(StepExecution {
@@ -322,7 +350,7 @@ impl Engine {
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
-            self.debug_gate_output(&gate, name, expr)?;
+            self.debug_gate_output(&gate, name, expr).await?;
         }
 
         let trace_response = build_trace_response(response);
@@ -352,7 +380,7 @@ impl Engine {
         let (resolved_base, resolved_path) = if let Some((name, path)) =
             parse_source_prefix(op_path)
         {
-            if let Some(source_url) = self.index.source_descriptions_map.get(name) {
+            if let Some(source_url) = self.inner.index.source_descriptions_map.get(name) {
                 (source_url.as_str(), path)
             } else {
                 return Err(RuntimeError::new(
@@ -363,7 +391,7 @@ impl Engine {
                     ));
             }
         } else {
-            (self.index.base_url.as_str(), op_path)
+            (self.inner.index.base_url.as_str(), op_path)
         };
 
         let mut target =
@@ -379,11 +407,7 @@ impl Engine {
 
         for param in &step.parameters {
             let value_str = param.value_as_str();
-            let value = if value_str.contains("{$") {
-                Value::String(eval.interpolate_string(&value_str))
-            } else {
-                eval.evaluate(&value_str)
-            };
+            let value = eval.resolve_value(&value_str);
             match param.in_ {
                 Some(ParamLocation::Path) => {
                     path_params.insert(param.name.clone(), value_to_string(&value));

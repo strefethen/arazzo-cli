@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use super::*;
 
 impl Engine {
@@ -19,81 +22,15 @@ impl Engine {
         EngineBuilder::new(spec).client_config(config).build()
     }
 
-    /// Registers a trace hook that receives step lifecycle events during execution.
-    #[deprecated(note = "Use EngineBuilder::trace_hook() instead")]
-    pub fn set_trace_hook(&mut self, hook: Arc<dyn TraceHook>) {
-        self.trace_hook = Some(hook);
-    }
-
-    /// Attaches a debug controller for breakpoint-driven step-through execution.
-    #[deprecated(note = "Use EngineBuilder::debug_controller() instead")]
-    pub fn set_debug_controller(&mut self, controller: Arc<DebugController>) {
-        self.debug_controller = Some(controller);
-    }
-
-    /// Enables or disables parallel execution of independent steps within a workflow.
-    #[deprecated(note = "Use EngineBuilder::parallel() instead")]
-    pub fn set_parallel_mode(&mut self, enabled: bool) {
-        self.parallel_mode = enabled;
-    }
-
-    /// Enables or disables dry-run mode, which resolves requests without sending them.
-    #[deprecated(note = "Use EngineBuilder::dry_run() instead")]
-    pub fn set_dry_run_mode(&mut self, enabled: bool) {
-        self.dry_run_mode = enabled;
-    }
-
-    /// Enables or disables detailed per-step trace recording during execution.
-    #[deprecated(note = "Use EngineBuilder::trace() instead")]
-    pub fn set_trace_enabled(&mut self, enabled: bool) {
-        self.trace_enabled = enabled;
-    }
-
-    /// Returns the captured requests from the most recent dry-run execution.
-    pub fn dry_run_requests(&self) -> Vec<DryRunRequest> {
-        match self.dry_run_reqs.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => {
-                // Intentional: recover partial data from poisoned mutex (thread panicked)
-                eprintln!("WARNING: dry_run_reqs mutex poisoned, returning partial data");
-                poisoned.into_inner().clone()
-            }
-        }
-    }
-
-    /// Returns the per-step trace records from the most recent execution.
-    /// Only populated when trace is enabled via [`Engine::set_trace_enabled`].
-    pub fn trace_steps(&self) -> Vec<TraceStepRecord> {
-        match self.trace_steps.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => {
-                // Intentional: recover partial data from poisoned mutex (thread panicked)
-                eprintln!("WARNING: trace_steps mutex poisoned, returning partial data");
-                poisoned.into_inner().clone()
-            }
-        }
-    }
-
-    /// Returns all execution lifecycle events from the most recent execution.
-    pub fn execution_events(&self) -> Vec<ExecutionEvent> {
-        match self.execution_events.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => {
-                // Intentional: recover partial data from poisoned mutex (thread panicked)
-                eprintln!("WARNING: execution_events mutex poisoned, returning partial data");
-                poisoned.into_inner().clone()
-            }
-        }
-    }
-
     /// Returns a reference to the underlying Arazzo spec.
     pub fn spec(&self) -> &ArazzoSpec {
-        &self.index.spec
+        &self.inner.index.spec
     }
 
     /// Returns the workflow IDs defined in the spec.
     pub fn workflows(&self) -> Vec<String> {
-        self.index
+        self.inner
+            .index
             .spec
             .workflows
             .iter()
@@ -101,89 +38,67 @@ impl Engine {
             .collect()
     }
 
-    /// Parses an OpenAPI spec and indexes its operations by `operationId`.
+    /// Spawns an async task that executes the workflow and returns a handle
+    /// for streaming events and awaiting the final result.
     ///
-    /// Must be called before [`Engine::execute`] if any workflow steps reference operations by ID.
-    pub fn load_openapi_spec(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
-        let root: serde_yml::Value = serde_yml::from_slice(data).map_err(|err| {
-            RuntimeError::new(
-                RuntimeErrorKind::SourceDescriptionParse,
-                format!("parsing OpenAPI spec: {err}"),
-            )
-        })?;
-        let Some(paths) = root.get("paths") else {
-            return Ok(());
-        };
-        let Some(paths_map) = paths.as_mapping() else {
-            return Ok(());
-        };
+    /// A Tokio runtime must be active when calling this method.
+    pub fn execute(&self, workflow_id: &str, inputs: BTreeMap<String, Value>) -> ExecutionHandle {
+        let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
+        let (result_tx, result_rx) = oneshot::channel();
+        let cancel = CancellationToken::new();
+        let is_timeout = Arc::new(AtomicBool::new(false));
 
-        let http_methods: BTreeSet<&str> = BTreeSet::from([
-            "get", "post", "put", "patch", "delete", "head", "options", "trace",
-        ]);
+        let engine = self.clone();
+        let wf_id = workflow_id.to_string();
+        let cancel_clone = cancel.clone();
+        let timeout_clone = Arc::clone(&is_timeout);
 
-        for (path_key, methods_value) in paths_map {
-            let Some(path) = path_key.as_str() else {
-                continue;
-            };
-            let Some(methods_map) = methods_value.as_mapping() else {
-                continue;
-            };
+        tokio::spawn(async move {
+            let ctx = Arc::new(ExecutionContext {
+                event_tx,
+                trace_seq: AtomicU64::new(0),
+                execution_event_seq: AtomicU64::new(0),
+                step_attempts: Mutex::new(BTreeMap::new()),
+                cancel: cancel_clone,
+                is_timeout: timeout_clone,
+            });
 
-            for (method_key, operation_value) in methods_map {
-                let Some(method) = method_key.as_str() else {
-                    continue;
-                };
-                let method_l = method.to_lowercase();
-                if !http_methods.contains(method_l.as_str()) {
-                    continue;
-                }
-                let Some(operation_map) = operation_value.as_mapping() else {
-                    continue;
-                };
-                let op_id = operation_map
-                    .get(serde_yml::Value::String("operationId".to_string()))
-                    .and_then(serde_yml::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if op_id.is_empty() {
-                    continue;
-                }
-                self.index.op_index.insert(
-                    op_id,
-                    OperationEntry {
-                        method: method.to_uppercase(),
-                        path: path.to_string(),
-                    },
-                );
-            }
-        }
-        Ok(())
+            let result = engine.execute_inner(&ctx, &wf_id, inputs, 0).await;
+
+            // Drop event_tx (held inside ctx) BEFORE sending result.
+            // This guarantees collect() drains all events before getting the result.
+            drop(ctx);
+            let _ = result_tx.send(result);
+        });
+
+        ExecutionHandle::new(event_rx, result_rx, cancel, is_timeout)
     }
 
-    /// Executes a workflow by ID with the given inputs, returning its outputs.
-    pub fn execute(
-        &mut self,
+    /// Spawns execution with a timeout watchdog that cancels after `timeout`.
+    pub fn execute_with_timeout(
+        &self,
         workflow_id: &str,
         inputs: BTreeMap<String, Value>,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        self.execute_with_options(workflow_id, inputs, ExecutionOptions::default())
+        timeout: Duration,
+    ) -> ExecutionHandle {
+        let handle = self.execute(workflow_id, inputs);
+        let cancel = handle.cancel_token().clone();
+        let timeout_flag = handle.timeout_flag().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            timeout_flag.store(true, Ordering::Release);
+            cancel.cancel();
+        });
+        handle
     }
 
-    /// Executes a workflow by ID with the given inputs and execution options (deadline, cancellation).
-    pub fn execute_with_options(
-        &mut self,
+    /// Convenience: collects all events and the final result.
+    pub async fn execute_collect(
+        &self,
         workflow_id: &str,
         inputs: BTreeMap<String, Value>,
-        options: ExecutionOptions,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        if self.dry_run_mode {
-            if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                guard.clear();
-            }
-        }
-        self.clear_trace_state();
-        self.execute_inner(workflow_id, inputs, 0, &options)
+    ) -> ExecutionResult {
+        self.execute(workflow_id, inputs).collect().await
     }
 
     /// Execute a single step (and optionally its transitive dependencies) within a workflow.
@@ -193,20 +108,52 @@ impl Engine {
     /// When `no_deps` is true, executes only the target step — failing early if it
     /// references outputs from steps that have not been executed.
     pub fn execute_step(
-        &mut self,
+        &self,
         workflow_id: &str,
         step_id: &str,
         inputs: BTreeMap<String, Value>,
-        options: ExecutionOptions,
+        no_deps: bool,
+    ) -> ExecutionHandle {
+        let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
+        let (result_tx, result_rx) = oneshot::channel();
+        let cancel = CancellationToken::new();
+        let is_timeout = Arc::new(AtomicBool::new(false));
+
+        let engine = self.clone();
+        let wf_id = workflow_id.to_string();
+        let s_id = step_id.to_string();
+        let cancel_clone = cancel.clone();
+        let timeout_clone = Arc::clone(&is_timeout);
+
+        tokio::spawn(async move {
+            let ctx = Arc::new(ExecutionContext {
+                event_tx,
+                trace_seq: AtomicU64::new(0),
+                execution_event_seq: AtomicU64::new(0),
+                step_attempts: Mutex::new(BTreeMap::new()),
+                cancel: cancel_clone,
+                is_timeout: timeout_clone,
+            });
+
+            let result = engine
+                .execute_step_inner(&ctx, &wf_id, &s_id, inputs, no_deps)
+                .await;
+
+            drop(ctx);
+            let _ = result_tx.send(result);
+        });
+
+        ExecutionHandle::new(event_rx, result_rx, cancel, is_timeout)
+    }
+
+    async fn execute_step_inner(
+        &self,
+        exec_ctx: &ExecutionContext,
+        workflow_id: &str,
+        step_id: &str,
+        inputs: BTreeMap<String, Value>,
         no_deps: bool,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        if self.dry_run_mode {
-            if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                guard.clear();
-            }
-        }
-        self.clear_trace_state();
-
         let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
             RuntimeError::new(
                 RuntimeErrorKind::WorkflowNotFound,
@@ -226,7 +173,6 @@ impl Engine {
             })?;
 
         let steps_to_run: Vec<usize> = if no_deps {
-            // Check for missing dependencies and fail early with a clear message
             let direct_refs = extract_step_refs(&workflow.steps[target_idx]);
             if !direct_refs.is_empty() {
                 let dep_names = direct_refs.join(", ");
@@ -244,13 +190,10 @@ impl Engine {
             deps.into_iter().collect()
         };
 
-        let mut vars = VarStore::default();
-        for (k, v) in inputs {
-            vars.set_input(&k, v);
-        }
+        let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
         for &idx in &steps_to_run {
-            options.check()?;
+            exec_ctx.check_cancelled()?;
             let step = {
                 let mut s = workflow.steps[idx].clone();
                 merge_workflow_params(&workflow.parameters, &mut s);
@@ -258,39 +201,43 @@ impl Engine {
             };
 
             let start = std::time::Instant::now();
-            let attempt = if self.trace_enabled {
-                self.next_attempt(workflow_id, &step.step_id)
+            let attempt = if self.inner.trace_enabled {
+                Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
             } else {
                 0
             };
 
-            let execution =
-                match self.execute_step_with_result(workflow_id, &step, &mut vars, 0, &options) {
-                    Ok(exec) => exec,
-                    Err(err) => {
-                        let duration = start.elapsed();
-                        if self.trace_enabled {
-                            let record = self.build_step_trace_record(
-                                workflow_id,
-                                &step,
-                                attempt,
-                                duration,
-                                &StepTraceData::default(),
-                                TraceDecision::with_path(TraceDecisionPath::Error),
-                                BTreeMap::new(),
-                                Some(err.message.clone()),
-                            );
-                            self.push_trace_record(record);
-                        }
-                        return Err(err);
+            let execution = match self
+                .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, 0)
+                .await
+            {
+                Ok(exec) => exec,
+                Err(err) => {
+                    let duration = start.elapsed();
+                    if self.inner.trace_enabled {
+                        let record = Engine::build_step_trace_record(
+                            exec_ctx,
+                            workflow_id,
+                            &step,
+                            attempt,
+                            duration,
+                            &StepTraceData::default(),
+                            TraceDecision::with_path(TraceDecisionPath::Error),
+                            BTreeMap::new(),
+                            Some(err.message.clone()),
+                        );
+                        Engine::push_trace_record(exec_ctx, record).await;
                     }
-                };
+                    return Err(err);
+                }
+            };
             let duration = start.elapsed();
             let step_outputs = vars.step_outputs(&step.step_id);
 
-            if self.trace_enabled {
+            if self.inner.trace_enabled {
                 let trace_err = execution.result.err.clone();
-                let record = self.build_step_trace_record(
+                let record = Engine::build_step_trace_record(
+                    exec_ctx,
                     workflow_id,
                     &step,
                     attempt,
@@ -300,7 +247,7 @@ impl Engine {
                     step_outputs,
                     trace_err,
                 );
-                self.push_trace_record(record);
+                Engine::push_trace_record(exec_ctx, record).await;
             }
 
             if !execution.result.success {
@@ -311,229 +258,281 @@ impl Engine {
             }
         }
 
-        // Return the target step's outputs
         Ok(vars.step_outputs(step_id))
     }
 
-    fn execute_inner(
-        &mut self,
-        workflow_id: &str,
+    /// Core recursive execution loop. Uses `Box::pin` for async recursion
+    /// (GotoWorkflow and sub-workflow calls recurse back into this method).
+    #[allow(clippy::type_complexity)]
+    fn execute_inner<'a>(
+        &'a self,
+        exec_ctx: &'a ExecutionContext,
+        workflow_id: &'a str,
         inputs: BTreeMap<String, Value>,
         depth: usize,
-        options: &ExecutionOptions,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        options.check()?;
-        if depth >= MAX_CALL_DEPTH {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::MaxCallDepthExceeded,
-                format!(
-                    "max call depth ({MAX_CALL_DEPTH}) exceeded calling workflow \"{workflow_id}\""
-                ),
-            ));
-        }
-
-        let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
-            RuntimeError::new(
-                RuntimeErrorKind::WorkflowNotFound,
-                format!("workflow \"{workflow_id}\" not found"),
-            )
-        })?;
-
-        let mut vars = VarStore::default();
-        for (k, v) in inputs {
-            vars.set_input(&k, v);
-        }
-
-        if self.parallel_mode && self.debug_controller.is_none() && can_execute_parallel(&workflow)
-        {
-            return self.execute_parallel(workflow_id, &workflow, &mut vars, options);
-        }
-
-        let workflow_start = Instant::now();
-        let mut step_index: usize = 0;
-        let mut retry_count = BTreeMap::<usize, usize>::new();
-        let max_iterations = workflow.steps.len().saturating_mul(10);
-
-        for _ in 0..max_iterations {
-            options.check()?;
-            if step_index >= workflow.steps.len() {
-                break;
+    ) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Value>, RuntimeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            exec_ctx.check_cancelled()?;
+            if depth >= MAX_CALL_DEPTH {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::MaxCallDepthExceeded,
+                    format!(
+                        "max call depth ({MAX_CALL_DEPTH}) exceeded calling workflow \"{workflow_id}\""
+                    ),
+                ));
             }
 
-            let step = {
-                let mut s = workflow.steps[step_index].clone();
-                merge_workflow_params(&workflow.parameters, &mut s);
-                s
-            };
-            self.debug_gate_step(workflow_id, &step, &vars, depth)?;
+            let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::WorkflowNotFound,
+                    format!("workflow \"{workflow_id}\" not found"),
+                )
+            })?;
 
-            self.emit_before_step_event(workflow_id, &step);
+            let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
-            let attempt = if self.trace_enabled {
-                self.next_attempt(workflow_id, &step.step_id)
-            } else {
-                0
-            };
+            if self.inner.parallel_mode
+                && self.inner.debug_controller.is_none()
+                && can_execute_parallel(&workflow)
+            {
+                return self
+                    .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
+                    .await;
+            }
 
-            let start = Instant::now();
-            let execution = match self.execute_step_with_result(
-                workflow_id,
-                &step,
-                &mut vars,
-                depth,
-                options,
-            ) {
-                Ok(execution) => execution,
-                Err(err) => {
-                    let duration = start.elapsed();
-                    if self.trace_enabled {
-                        let record = self.build_step_trace_record(
-                            workflow_id,
-                            &step,
-                            attempt,
-                            duration,
-                            &StepTraceData::default(),
-                            TraceDecision::with_path(TraceDecisionPath::Error),
-                            BTreeMap::new(),
-                            Some(err.message.clone()),
-                        );
-                        self.push_trace_record(record);
-                    }
-                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-                        workflow_id: workflow_id.to_string(),
-                        outputs: BTreeMap::new(),
-                        duration: workflow_start.elapsed(),
-                        error: Some(err.message.clone()),
-                    });
-                    return Err(err);
+            let workflow_start = Instant::now();
+            let mut step_index: usize = 0;
+            let mut retry_count = BTreeMap::<usize, usize>::new();
+            let max_iterations = workflow.steps.len().saturating_mul(10);
+
+            for _ in 0..max_iterations {
+                exec_ctx.check_cancelled()?;
+                if step_index >= workflow.steps.len() {
+                    break;
                 }
-            };
-            let duration = start.elapsed();
-            let step_outputs = vars.step_outputs(&step.step_id);
 
-            let step_status_code = execution
-                .result
-                .response
-                .as_ref()
-                .map(|r| r.status_code)
-                .unwrap_or(0);
+                let step = {
+                    let mut s = workflow.steps[step_index].clone();
+                    merge_workflow_params(&workflow.parameters, &mut s);
+                    s
+                };
+                self.debug_gate_step(exec_ctx, workflow_id, &step, &vars, depth)
+                    .await?;
 
-            self.emit_after_step_event(
-                workflow_id,
-                &step,
-                step_status_code,
-                step_outputs.clone(),
-                execution.result.err.clone(),
-                duration,
-            );
+                self.emit_before_step_event(exec_ctx, workflow_id, &step)
+                    .await;
 
-            self.emit_step_completed_event(
-                workflow_id,
-                &step,
-                step_status_code,
-                duration,
-                step_outputs.clone(),
-                execution.result.err.clone(),
-                execution.result.success,
-            );
+                let attempt = if self.inner.trace_enabled {
+                    Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
+                } else {
+                    0
+                };
 
-            let action = self.handle_step_result(StepDecisionContext {
-                workflow_id,
-                workflow: &workflow,
-                step_idx: step_index,
-                result: &execution.result,
-                vars: &vars,
-                depth,
-                retry_count: &retry_count,
-                options,
-            });
+                let start = Instant::now();
+                let execution = match self
+                    .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, depth)
+                    .await
+                {
+                    Ok(execution) => execution,
+                    Err(err) => {
+                        let duration = start.elapsed();
+                        if self.inner.trace_enabled {
+                            let record = Engine::build_step_trace_record(
+                                exec_ctx,
+                                workflow_id,
+                                &step,
+                                attempt,
+                                duration,
+                                &StepTraceData::default(),
+                                TraceDecision::with_path(TraceDecisionPath::Error),
+                                BTreeMap::new(),
+                                Some(err.message.clone()),
+                            );
+                            Engine::push_trace_record(exec_ctx, record).await;
+                        }
+                        self.emit_observer_event(
+                            exec_ctx,
+                            ObserverEvent::WorkflowCompleted {
+                                workflow_id: workflow_id.to_string(),
+                                outputs: BTreeMap::new(),
+                                duration: workflow_start.elapsed(),
+                                error: Some(err.message.clone()),
+                            },
+                        )
+                        .await;
+                        return Err(err);
+                    }
+                };
+                let duration = start.elapsed();
+                let step_outputs = vars.step_outputs(&step.step_id);
 
-            let trace_err = match &action.flow {
-                FlowDecision::Error(err) => Some(err.message.clone()),
-                _ => execution.result.err.clone(),
-            };
-            if self.trace_enabled {
-                let record = self.build_step_trace_record(
+                let step_status_code = execution
+                    .result
+                    .response
+                    .as_ref()
+                    .map(|r| r.status_code)
+                    .unwrap_or(0);
+
+                self.emit_after_step_event(
+                    exec_ctx,
                     workflow_id,
                     &step,
-                    attempt,
+                    step_status_code,
+                    step_outputs.clone(),
+                    execution.result.err.clone(),
                     duration,
-                    &execution.trace,
-                    action.trace.clone(),
-                    step_outputs,
-                    trace_err,
-                );
-                self.push_trace_record(record);
-            }
+                )
+                .await;
 
-            match action.flow {
-                FlowDecision::Done => break,
-                FlowDecision::Next(idx) => {
-                    if idx == step_index {
-                        let value = retry_count.entry(step_index).or_insert(0);
-                        *value += 1;
-                    } else {
-                        retry_count.remove(&step_index);
+                self.emit_step_completed_event(
+                    exec_ctx,
+                    workflow_id,
+                    &step,
+                    step_status_code,
+                    duration,
+                    step_outputs.clone(),
+                    execution.result.err.clone(),
+                    execution.result.success,
+                )
+                .await;
+
+                let action = self
+                    .handle_step_result(StepDecisionContext {
+                        workflow_id,
+                        workflow: &workflow,
+                        step_idx: step_index,
+                        result: &execution.result,
+                        vars: &vars,
+                        depth,
+                        retry_count: &retry_count,
+                        cancel: &exec_ctx.cancel,
+                        is_timeout: &exec_ctx.is_timeout,
+                    })
+                    .await;
+
+                let trace_err = match &action.flow {
+                    FlowDecision::Error(err) => Some(err.message.clone()),
+                    _ => execution.result.err.clone(),
+                };
+                if self.inner.trace_enabled {
+                    let record = Engine::build_step_trace_record(
+                        exec_ctx,
+                        workflow_id,
+                        &step,
+                        attempt,
+                        duration,
+                        &execution.trace,
+                        action.trace.clone(),
+                        step_outputs,
+                        trace_err,
+                    );
+                    Engine::push_trace_record(exec_ctx, record).await;
+                }
+
+                match action.flow {
+                    FlowDecision::Done => break,
+                    FlowDecision::Next(idx) => {
+                        if idx == step_index {
+                            let value = retry_count.entry(step_index).or_insert(0);
+                            *value += 1;
+                        } else {
+                            retry_count.remove(&step_index);
+                        }
+                        step_index = idx;
                     }
-                    step_index = idx;
-                }
-                FlowDecision::Retry(idx) => {
-                    let value = retry_count.entry(idx).or_insert(0);
-                    *value += 1;
-                    step_index = idx;
-                }
-                FlowDecision::GotoWorkflow(next_wf) => {
-                    return self.execute_inner(&next_wf, vars.inputs.clone(), depth + 1, options);
-                }
-                FlowDecision::Error(err) => {
-                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-                        workflow_id: workflow_id.to_string(),
-                        outputs: BTreeMap::new(),
-                        duration: workflow_start.elapsed(),
-                        error: Some(err.message.clone()),
-                    });
-                    return Err(err);
+                    FlowDecision::Retry(idx) => {
+                        let value = retry_count.entry(idx).or_insert(0);
+                        *value += 1;
+                        // Emit retry event for observers
+                        let retry_step = &workflow.steps[idx];
+                        let retry_trace = action.trace.clone();
+                        self.emit_observer_event(
+                            exec_ctx,
+                            ObserverEvent::RetryScheduled {
+                                workflow_id: workflow_id.to_string(),
+                                step_id: retry_step.step_id.clone(),
+                                attempt: *value,
+                                max_attempts: retry_trace
+                                    .retry_limit
+                                    .map(|v| v as usize)
+                                    .unwrap_or(MAX_RETRIES_PER_STEP),
+                                delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
+                            },
+                        )
+                        .await;
+                        step_index = idx;
+                    }
+                    FlowDecision::GotoWorkflow(next_wf) => {
+                        return self
+                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), depth + 1)
+                            .await;
+                    }
+                    FlowDecision::Error(err) => {
+                        self.emit_observer_event(
+                            exec_ctx,
+                            ObserverEvent::WorkflowCompleted {
+                                workflow_id: workflow_id.to_string(),
+                                outputs: BTreeMap::new(),
+                                duration: workflow_start.elapsed(),
+                                error: Some(err.message.clone()),
+                            },
+                        )
+                        .await;
+                        return Err(err);
+                    }
                 }
             }
-        }
 
-        let workflow_outputs = self.build_outputs(&workflow, &vars);
-        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-            workflow_id: workflow_id.to_string(),
-            outputs: workflow_outputs.clone(),
-            duration: workflow_start.elapsed(),
-            error: None,
-        });
-        Ok(workflow_outputs)
+            let workflow_outputs = self.build_outputs(&workflow, &vars);
+            self.emit_observer_event(
+                exec_ctx,
+                ObserverEvent::WorkflowCompleted {
+                    workflow_id: workflow_id.to_string(),
+                    outputs: workflow_outputs.clone(),
+                    duration: workflow_start.elapsed(),
+                    error: None,
+                },
+            )
+            .await;
+            Ok(workflow_outputs)
+        })
     }
 
     fn get_workflow(&self, workflow_id: &str) -> Option<&Workflow> {
-        self.index
+        self.inner
+            .index
             .workflow_index
             .get(workflow_id)
-            .and_then(|idx| self.index.spec.workflows.get(*idx))
+            .and_then(|idx| self.inner.index.spec.workflows.get(*idx))
     }
 
-    fn execute_step_with_result(
-        &mut self,
+    async fn execute_step_with_result(
+        &self,
+        exec_ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
-        options: &ExecutionOptions,
     ) -> Result<StepExecution, RuntimeError> {
         if matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
             let child_wf_id = match &step.target {
                 Some(StepTarget::WorkflowId(id)) => id.clone(),
                 _ => String::new(),
             };
-            self.emit_observer_event(ObserverEvent::SubWorkflowStarted {
-                parent_workflow_id: workflow_id.to_string(),
-                parent_step_id: step.step_id.clone(),
-                child_workflow_id: child_wf_id,
-                depth: depth + 1,
-            });
-            let result = self.execute_subworkflow_step(step, vars, depth, options)?;
+            self.emit_observer_event(
+                exec_ctx,
+                ObserverEvent::SubWorkflowStarted {
+                    parent_workflow_id: workflow_id.to_string(),
+                    parent_step_id: step.step_id.clone(),
+                    child_workflow_id: child_wf_id,
+                    depth: depth + 1,
+                },
+            )
+            .await;
+            let result = self
+                .execute_subworkflow_step(exec_ctx, step, vars, depth)
+                .await?;
             return Ok(StepExecution {
                 result,
                 outputs: vars.step_outputs(&step.step_id),
@@ -542,11 +541,14 @@ impl Engine {
             });
         }
 
-        let execution = self.execute_http_step(workflow_id, step, vars, depth, options)?;
+        let execution = self
+            .execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+            .await?;
         if let Some(req) = execution.dry_run_request.clone() {
-            if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                guard.push(req);
-            }
+            let _ = exec_ctx
+                .event_tx
+                .send(EngineEvent::DryRunRequest(req))
+                .await;
         }
         for (name, value) in &execution.outputs {
             vars.set_step_output(&step.step_id, name, value.clone());
@@ -554,14 +556,14 @@ impl Engine {
         Ok(execution)
     }
 
-    fn execute_subworkflow_step(
-        &mut self,
+    async fn execute_subworkflow_step(
+        &self,
+        exec_ctx: &ExecutionContext,
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
-        options: &ExecutionOptions,
     ) -> Result<StepResult, RuntimeError> {
-        options.check()?;
+        exec_ctx.check_cancelled()?;
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
@@ -579,7 +581,8 @@ impl Engine {
             _ => "",
         };
         let outputs = self
-            .execute_inner(wf_id, sub_inputs, depth + 1, options)
+            .execute_inner(exec_ctx, wf_id, sub_inputs, depth + 1)
+            .await
             .map_err(|err| {
                 let msg = format!("sub-workflow {wf_id}: {}", err.message);
                 RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
@@ -607,13 +610,50 @@ impl Engine {
         })
     }
 
+    fn validate_and_populate_inputs(
+        &self,
+        workflow: &Workflow,
+        mut inputs: BTreeMap<String, Value>,
+    ) -> Result<VarStore, RuntimeError> {
+        if let Some(schema) = &workflow.inputs {
+            let issues = validate_inputs(schema, &mut inputs);
+            if !issues.is_empty() {
+                let has_errors = issues
+                    .iter()
+                    .any(|i| i.severity == InputIssueSeverity::Error);
+
+                if self.inner.strict_inputs && has_errors {
+                    let msgs: Vec<String> = issues.iter().map(ToString::to_string).collect();
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InputValidation,
+                        format!(
+                            "input validation failed for workflow \"{}\": {}",
+                            workflow.workflow_id,
+                            msgs.join("; ")
+                        ),
+                    ));
+                }
+
+                for issue in &issues {
+                    eprintln!("warning: {issue}");
+                }
+            }
+        }
+
+        let mut vars = VarStore::default();
+        for (k, v) in inputs {
+            vars.set_input(&k, v);
+        }
+        Ok(vars)
+    }
+
     pub(super) fn make_eval_context(
         &self,
         vars: &VarStore,
         response: Option<&Response>,
     ) -> EvalContext {
         let mut ctx = vars.eval_context(response);
-        ctx.source_descriptions = self.index.source_descriptions_map.clone();
+        ctx.source_descriptions = self.inner.index.source_descriptions_map.clone();
         ctx
     }
 
@@ -626,13 +666,7 @@ impl Engine {
         let mut computed_outputs = BTreeMap::new();
         for (name, expr) in &workflow.outputs {
             let eval = ExpressionEvaluator::new(ctx.clone());
-            let value = if expr.starts_with('$') {
-                eval.evaluate(expr)
-            } else if expr.contains("{$") {
-                Value::String(eval.interpolate_string(expr))
-            } else {
-                Value::String(expr.clone())
-            };
+            let value = eval.resolve_value(expr);
             computed_outputs.insert(name.clone(), value);
             ctx.outputs = computed_outputs.clone();
         }

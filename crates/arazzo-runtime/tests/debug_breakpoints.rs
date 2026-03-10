@@ -1,18 +1,15 @@
-#![allow(deprecated)]
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, DebugStopReason, Engine, StepBreakpoint};
+use arazzo_runtime::{DebugController, DebugStopReason, EngineBuilder, StepBreakpoint};
 use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
-#[test]
-fn breakpoint_hits_follow_step_order() {
-    let mut engine = build_engine();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn breakpoint_hits_follow_step_order() {
     let controller = Arc::new(DebugController::new());
+    let engine = build_engine(Arc::clone(&controller));
     let set_res = controller.set_breakpoints(vec![
         StepBreakpoint::new("wf", "s1"),
         StepBreakpoint::new("wf", "s2"),
@@ -20,9 +17,8 @@ fn breakpoint_hits_follow_step_order() {
     if let Err(err) = set_res {
         panic!("setting breakpoints: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
-    let handle = thread::spawn(move || engine.execute("wf", BTreeMap::new()));
+    let handle = engine.execute("wf", BTreeMap::new());
 
     let waited = match controller.wait_for_stop_count(1, Duration::from_secs(1)) {
         Ok(value) => value,
@@ -30,7 +26,7 @@ fn breakpoint_hits_follow_step_order() {
     };
     if !waited {
         let _ = controller.resume();
-        let _ = handle.join();
+        let _ = handle.collect().await;
         panic!("timed out waiting for first stop event");
     }
 
@@ -54,7 +50,7 @@ fn breakpoint_hits_follow_step_order() {
     };
     if !waited {
         let _ = controller.resume();
-        let _ = handle.join();
+        let _ = handle.collect().await;
         panic!("timed out waiting for second stop event");
     }
 
@@ -72,29 +68,26 @@ fn breakpoint_hits_follow_step_order() {
         panic!("resuming after second stop: {err}");
     }
 
-    let execution = match handle.join() {
-        Ok(result) => result,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    if let Err(err) = execution {
+    let result = handle.collect().await;
+    if let Err(err) = result.outputs {
         panic!("workflow execution failed: {err}");
     }
 }
 
-#[test]
-fn conditional_breakpoint_respects_expression() {
-    let mut engine = build_engine();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conditional_breakpoint_respects_expression() {
     let controller = Arc::new(DebugController::new());
+    let engine = build_engine(Arc::clone(&controller));
     let set_res = controller.set_breakpoints(vec![
         StepBreakpoint::new("wf", "s1").with_condition("$inputs.code == 429")
     ]);
     if let Err(err) = set_res {
         panic!("setting conditional breakpoint: {err}");
     }
-    engine.set_debug_controller(Arc::clone(&controller));
 
-    let false_result = engine.execute("wf", inputs_with_code(200));
-    if let Err(err) = false_result {
+    // First run: condition is false (code=200), no breakpoint fires
+    let result = engine.execute_collect("wf", inputs_with_code(200)).await;
+    if let Err(err) = result.outputs {
         panic!("expected run with code=200 to succeed: {err}");
     }
     let no_stops = match controller.stop_events() {
@@ -110,14 +103,15 @@ fn conditional_breakpoint_respects_expression() {
         panic!("clearing stop events: {err}");
     }
 
-    let handle = thread::spawn(move || engine.execute("wf", inputs_with_code(429)));
+    // Second run: condition is true (code=429), breakpoint fires
+    let handle = engine.execute("wf", inputs_with_code(429));
     let waited = match controller.wait_for_stop_count(1, Duration::from_secs(1)) {
         Ok(value) => value,
         Err(err) => panic!("waiting for conditional stop event: {err}"),
     };
     if !waited {
         let _ = controller.resume();
-        let _ = handle.join();
+        let _ = handle.collect().await;
         panic!("timed out waiting for conditional stop event");
     }
 
@@ -138,16 +132,13 @@ fn conditional_breakpoint_respects_expression() {
         panic!("resuming after conditional stop: {err}");
     }
 
-    let execution = match handle.join() {
-        Ok(result) => result,
-        Err(_) => panic!("execution thread panicked"),
-    };
-    if let Err(err) = execution {
+    let result = handle.collect().await;
+    if let Err(err) = result.outputs {
         panic!("workflow execution failed: {err}");
     }
 }
 
-fn build_engine() -> Engine {
+fn build_engine(controller: Arc<DebugController>) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -179,12 +170,14 @@ fn build_engine() -> Engine {
         components: None,
     };
 
-    let mut engine = match Engine::new(spec) {
+    match EngineBuilder::new(spec)
+        .dry_run(true)
+        .debug_controller(controller)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
-    };
-    engine.set_dry_run_mode(true);
-    engine
+    }
 }
 
 fn inputs_with_code(code: i64) -> BTreeMap<String, Value> {

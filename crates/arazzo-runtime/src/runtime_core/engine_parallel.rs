@@ -1,17 +1,17 @@
 use super::*;
 
 impl Engine {
-    pub(super) fn execute_parallel(
+    pub(super) async fn execute_parallel(
         &self,
+        exec_ctx: &ExecutionContext,
         workflow_id: &str,
         workflow: &Workflow,
         vars: &mut VarStore,
-        options: &ExecutionOptions,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let workflow_start = Instant::now();
         let levels = build_levels(workflow)?;
         for mut level in levels {
-            options.check()?;
+            exec_ctx.check_cancelled()?;
             level.sort_unstable();
             let level_vars = vars.clone();
             let mut level_results =
@@ -21,47 +21,49 @@ impl Engine {
                 let step = workflow.steps.get(idx).cloned().ok_or_else(|| {
                     RuntimeError::new(RuntimeErrorKind::StepNotFound, "invalid step index")
                 })?;
-                self.emit_before_step_event(workflow_id, &step);
+                self.emit_before_step_event(exec_ctx, workflow_id, &step)
+                    .await;
             }
 
-            std::thread::scope(|scope| -> Result<(), RuntimeError> {
-                let mut handles = Vec::new();
+            // Spawn parallel steps via JoinSet
+            let mut join_set = tokio::task::JoinSet::new();
+            for idx in level.iter().copied() {
+                let step = {
+                    let mut s = workflow.steps.get(idx).cloned().ok_or_else(|| {
+                        RuntimeError::new(RuntimeErrorKind::StepNotFound, "invalid step index")
+                    })?;
+                    merge_workflow_params(&workflow.parameters, &mut s);
+                    s
+                };
+                let engine = self.clone();
+                let step_vars = level_vars.clone();
+                let wf_id = workflow_id.to_string();
+                let cancel = exec_ctx.cancel.clone();
+                let is_timeout = Arc::clone(&exec_ctx.is_timeout);
+                join_set.spawn(async move {
+                    let result = engine
+                        .execute_parallel_step(&wf_id, &step, &step_vars, &cancel, &is_timeout)
+                        .await;
+                    (idx, step, result)
+                });
+            }
 
-                for idx in level.iter().copied() {
-                    let step = {
-                        let mut s = workflow.steps.get(idx).cloned().ok_or_else(|| {
-                            RuntimeError::new(RuntimeErrorKind::StepNotFound, "invalid step index")
-                        })?;
-                        merge_workflow_params(&workflow.parameters, &mut s);
-                        s
-                    };
-                    let step_vars = level_vars.clone();
-                    let opts = options.clone();
-                    handles.push(scope.spawn(move || {
-                        let result =
-                            self.execute_parallel_step(workflow_id, &step, &step_vars, &opts);
-                        (idx, step, result)
-                    }));
-                }
-
-                for handle in handles {
-                    match handle.join() {
-                        Ok(value) => level_results.push(value),
-                        Err(_) => {
-                            return Err(RuntimeError::new(
-                                RuntimeErrorKind::ParallelThreadPanic,
-                                "parallel step thread panicked",
-                            ));
-                        }
+            while let Some(join_result) = join_set.join_next().await {
+                match join_result {
+                    Ok(value) => level_results.push(value),
+                    Err(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::ParallelThreadPanic,
+                            "parallel step task panicked",
+                        ));
                     }
                 }
-                Ok(())
-            })?;
+            }
 
             level_results.sort_by_key(|(idx, _, _)| *idx);
             for (_idx, step, execution_result) in level_results {
-                let attempt = if self.trace_enabled {
-                    self.next_attempt(workflow_id, &step.step_id)
+                let attempt = if self.inner.trace_enabled {
+                    Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
                 } else {
                     0
                 };
@@ -69,8 +71,9 @@ impl Engine {
                 let execution = match execution_result {
                     Ok(execution) => execution,
                     Err(err) => {
-                        if self.trace_enabled {
-                            let record = self.build_step_trace_record(
+                        if self.inner.trace_enabled {
+                            let record = Engine::build_step_trace_record(
+                                exec_ctx,
                                 workflow_id,
                                 &step,
                                 attempt,
@@ -80,14 +83,18 @@ impl Engine {
                                 BTreeMap::new(),
                                 Some(err.message.clone()),
                             );
-                            self.push_trace_record(record);
+                            Engine::push_trace_record(exec_ctx, record).await;
                         }
-                        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-                            workflow_id: workflow_id.to_string(),
-                            outputs: BTreeMap::new(),
-                            duration: workflow_start.elapsed(),
-                            error: Some(err.message.clone()),
-                        });
+                        self.emit_observer_event(
+                            exec_ctx,
+                            ObserverEvent::WorkflowCompleted {
+                                workflow_id: workflow_id.to_string(),
+                                outputs: BTreeMap::new(),
+                                duration: workflow_start.elapsed(),
+                                error: Some(err.message.clone()),
+                            },
+                        )
+                        .await;
                         return Err(err);
                     }
                 };
@@ -103,15 +110,18 @@ impl Engine {
                     .unwrap_or(0);
 
                 self.emit_after_step_event(
+                    exec_ctx,
                     workflow_id,
                     &step,
                     par_status_code,
                     outputs_for_trace.clone(),
                     execution.result.err.clone(),
                     duration,
-                );
+                )
+                .await;
 
                 self.emit_step_completed_event(
+                    exec_ctx,
                     workflow_id,
                     &step,
                     par_status_code,
@@ -119,12 +129,14 @@ impl Engine {
                     outputs_for_trace.clone(),
                     execution.result.err.clone(),
                     execution.result.success,
-                );
+                )
+                .await;
 
                 if !execution.result.success {
                     let err = step_result_error(&step.step_id, &execution.result);
-                    if self.trace_enabled {
-                        let record = self.build_step_trace_record(
+                    if self.inner.trace_enabled {
+                        let record = Engine::build_step_trace_record(
+                            exec_ctx,
                             workflow_id,
                             &step,
                             attempt,
@@ -134,26 +146,32 @@ impl Engine {
                             outputs_for_trace,
                             Some(err.message.clone()),
                         );
-                        self.push_trace_record(record);
+                        Engine::push_trace_record(exec_ctx, record).await;
                     }
-                    self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-                        workflow_id: workflow_id.to_string(),
-                        outputs: BTreeMap::new(),
-                        duration: workflow_start.elapsed(),
-                        error: Some(err.message.clone()),
-                    });
+                    self.emit_observer_event(
+                        exec_ctx,
+                        ObserverEvent::WorkflowCompleted {
+                            workflow_id: workflow_id.to_string(),
+                            outputs: BTreeMap::new(),
+                            duration: workflow_start.elapsed(),
+                            error: Some(err.message.clone()),
+                        },
+                    )
+                    .await;
                     return Err(err);
                 }
                 if let Some(req) = execution.dry_run_request.clone() {
-                    if let Ok(mut guard) = self.dry_run_reqs.lock() {
-                        guard.push(req);
-                    }
+                    let _ = exec_ctx
+                        .event_tx
+                        .send(EngineEvent::DryRunRequest(req))
+                        .await;
                 }
                 for (name, value) in &execution.outputs {
                     vars.set_step_output(&step.step_id, name, value.clone());
                 }
-                if self.trace_enabled {
-                    let record = self.build_step_trace_record(
+                if self.inner.trace_enabled {
+                    let record = Engine::build_step_trace_record(
+                        exec_ctx,
                         workflow_id,
                         &step,
                         attempt,
@@ -163,31 +181,57 @@ impl Engine {
                         outputs_for_trace,
                         execution.result.err.clone(),
                     );
-                    self.push_trace_record(record);
+                    Engine::push_trace_record(exec_ctx, record).await;
                 }
             }
         }
         let workflow_outputs = self.build_outputs(workflow, vars);
-        self.emit_observer_event(ObserverEvent::WorkflowCompleted {
-            workflow_id: workflow_id.to_string(),
-            outputs: workflow_outputs.clone(),
-            duration: workflow_start.elapsed(),
-            error: None,
-        });
+        self.emit_observer_event(
+            exec_ctx,
+            ObserverEvent::WorkflowCompleted {
+                workflow_id: workflow_id.to_string(),
+                outputs: workflow_outputs.clone(),
+                duration: workflow_start.elapsed(),
+                error: None,
+            },
+        )
+        .await;
         Ok(workflow_outputs)
     }
 
-    fn execute_parallel_step(
+    async fn execute_parallel_step(
         &self,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
-        options: &ExecutionOptions,
+        cancel: &CancellationToken,
+        is_timeout: &Arc<AtomicBool>,
     ) -> Result<ParallelStepExecution, RuntimeError> {
-        options.check()?;
+        if cancel.is_cancelled() {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::ExecutionCancelled,
+                "execution cancelled",
+            ));
+        }
+
+        // Parallel steps don't get a full ExecutionContext with event_tx because
+        // they run independently. Create a minimal context for the HTTP call.
+        // Events from parallel steps are collected after join and emitted by the
+        // caller (execute_parallel) which has access to the real exec_ctx.
+        let (tx, _) = mpsc::channel(1);
+        let minimal_ctx = ExecutionContext {
+            event_tx: tx,
+            trace_seq: AtomicU64::new(0),
+            execution_event_seq: AtomicU64::new(0),
+            step_attempts: Mutex::new(BTreeMap::new()),
+            cancel: cancel.clone(),
+            is_timeout: Arc::clone(is_timeout),
+        };
 
         let start = Instant::now();
-        let execution = self.execute_http_step(workflow_id, step, vars, 0, options)?;
+        let execution = self
+            .execute_http_step(&minimal_ctx, workflow_id, step, vars, 0)
+            .await?;
         let duration = start.elapsed();
 
         Ok(ParallelStepExecution {
