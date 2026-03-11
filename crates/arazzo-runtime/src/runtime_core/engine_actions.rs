@@ -17,7 +17,7 @@ impl Engine {
                         step,
                         branch: ActionBranch::Success,
                         vars: ctx.vars,
-                        response: ctx.result.response.as_ref(),
+                        response: ctx.result.response.as_deref(),
                         depth: ctx.depth,
                     },
                     success_actions,
@@ -43,7 +43,7 @@ impl Engine {
                             workflow_id: ctx.workflow_id,
                             step,
                             vars: ctx.vars,
-                            response: ctx.result.response.as_ref(),
+                            response: ctx.result.response.as_deref(),
                             depth: ctx.depth,
                             branch: ActionBranch::Success,
                             action_index: action.index,
@@ -69,7 +69,7 @@ impl Engine {
                     step,
                     branch: ActionBranch::Failure,
                     vars: ctx.vars,
-                    response: ctx.result.response.as_ref(),
+                    response: ctx.result.response.as_deref(),
                     depth: ctx.depth,
                 },
                 failure_actions,
@@ -95,7 +95,7 @@ impl Engine {
                         workflow_id: ctx.workflow_id,
                         step,
                         vars: ctx.vars,
-                        response: ctx.result.response.as_ref(),
+                        response: ctx.result.response.as_deref(),
                         depth: ctx.depth,
                         branch: ActionBranch::Failure,
                         action_index: action.index,
@@ -162,7 +162,12 @@ impl Engine {
 
             let mut all_match = true;
             for (criterion_index, criterion) in action.criteria.iter().enumerate() {
-                let evaluation = evaluate_criterion_detailed(criterion, &eval, ctx.response, &self.inner.regex_cache);
+                let evaluation = evaluate_criterion_detailed(
+                    criterion,
+                    &eval,
+                    ctx.response,
+                    &self.inner.regex_cache,
+                );
                 self.debug_gate_action_criterion(
                     &gate,
                     ctx.branch,

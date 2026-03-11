@@ -1115,7 +1115,12 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(EvalContext::default());
 
-        assert!(evaluate_criterion(&criterion, &eval, Some(&response), &cache));
+        assert!(evaluate_criterion(
+            &criterion,
+            &eval,
+            Some(&response),
+            &cache
+        ));
     }
 
     #[test]

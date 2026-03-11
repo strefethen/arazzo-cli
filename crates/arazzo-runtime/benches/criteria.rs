@@ -14,9 +14,10 @@ fn bench_evaluator() -> ExpressionEvaluator {
         response_body: Some(json!({
             "data": { "id": 42, "name": "Alice", "active": true }
         })),
-        response_headers: BTreeMap::from([
-            ("content-type".to_string(), "application/json".to_string()),
-        ]),
+        response_headers: BTreeMap::from([(
+            "content-type".to_string(),
+            "application/json".to_string(),
+        )]),
         ..Default::default()
     };
     ExpressionEvaluator::new(ctx)
@@ -32,9 +33,15 @@ fn bench_regex_compilation(c: &mut Criterion) {
     let patterns = [
         ("simple_literal", r"Alice"),
         ("char_class", r"^[A-Za-z]+$"),
-        ("email_pattern", r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"),
+        (
+            "email_pattern",
+            r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
+        ),
         ("url_pattern", r"https?://[^\s/$.?#].[^\s]*"),
-        ("complex_alternation", r"^(GET|POST|PUT|DELETE|PATCH)\s+/api/v[0-9]+/"),
+        (
+            "complex_alternation",
+            r"^(GET|POST|PUT|DELETE|PATCH)\s+/api/v[0-9]+/",
+        ),
     ];
 
     for (name, pattern) in &patterns {
@@ -61,11 +68,9 @@ fn bench_regex_compilation(c: &mut Criterion) {
     // Measure match-only (what it would cost with caching)
     for (name, pattern) in &patterns {
         let re = regex::Regex::new(pattern).unwrap();
-        group.bench_with_input(
-            BenchmarkId::new("match_only", name),
-            pattern,
-            |b, _pat| b.iter(|| re.is_match(black_box(text))),
-        );
+        group.bench_with_input(BenchmarkId::new("match_only", name), pattern, |b, _pat| {
+            b.iter(|| re.is_match(black_box(text)))
+        });
     }
 
     group.finish();
@@ -80,31 +85,23 @@ fn bench_regex_repeated(c: &mut Criterion) {
     let text = "alice@example.com";
 
     for count in [1, 5, 10, 25, 50] {
-        group.bench_with_input(
-            BenchmarkId::new("uncached", count),
-            &count,
-            |b, &n| {
-                b.iter(|| {
-                    for _ in 0..n {
-                        let re = regex::Regex::new(black_box(pattern)).unwrap();
-                        let _ = re.is_match(black_box(text));
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("uncached", count), &count, |b, &n| {
+            b.iter(|| {
+                for _ in 0..n {
+                    let re = regex::Regex::new(black_box(pattern)).unwrap();
+                    let _ = re.is_match(black_box(text));
+                }
+            })
+        });
 
         let cached_re = regex::Regex::new(pattern).unwrap();
-        group.bench_with_input(
-            BenchmarkId::new("cached", count),
-            &count,
-            |b, &n| {
-                b.iter(|| {
-                    for _ in 0..n {
-                        let _ = cached_re.is_match(black_box(text));
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("cached", count), &count, |b, &n| {
+            b.iter(|| {
+                for _ in 0..n {
+                    let _ = cached_re.is_match(black_box(text));
+                }
+            })
+        });
     }
 
     group.finish();
@@ -130,11 +127,7 @@ fn bench_condition_evaluation(c: &mut Criterion) {
     });
 
     group.bench_function("string_comparison", |b| {
-        b.iter(|| {
-            eval.evaluate_condition(black_box(
-                "$response.body.data.name == \"Alice\"",
-            ))
-        })
+        b.iter(|| eval.evaluate_condition(black_box("$response.body.data.name == \"Alice\"")))
     });
 
     group.finish();
@@ -155,27 +148,22 @@ fn bench_response_body_clone(c: &mut Criterion) {
                 "updated": "2024-06-01", "score": 95.5, "level": 3, "verified": true
             }),
         ),
-        (
-            "medium_nested",
-            {
-                let items: Vec<Value> = (0..50)
-                    .map(|i| {
-                        json!({
-                            "id": i,
-                            "name": format!("Item {i}"),
-                            "price": i as f64 * 1.99,
-                            "tags": ["electronics", "sale"],
-                            "metadata": {"weight": 0.5, "dimensions": "10x10x10"}
-                        })
+        ("medium_nested", {
+            let items: Vec<Value> = (0..50)
+                .map(|i| {
+                    json!({
+                        "id": i,
+                        "name": format!("Item {i}"),
+                        "price": i as f64 * 1.99,
+                        "tags": ["electronics", "sale"],
+                        "metadata": {"weight": 0.5, "dimensions": "10x10x10"}
                     })
-                    .collect();
-                json!({"data": {"items": items, "total": 50, "page": 1}})
-            },
-        ),
-        (
-            "large_100_items",
-            {
-                let items: Vec<Value> = (0..100)
+                })
+                .collect();
+            json!({"data": {"items": items, "total": 50, "page": 1}})
+        }),
+        ("large_100_items", {
+            let items: Vec<Value> = (0..100)
                     .map(|i| {
                         json!({
                             "id": i,
@@ -192,9 +180,8 @@ fn bench_response_body_clone(c: &mut Criterion) {
                         })
                     })
                     .collect();
-                json!({"data": items, "pagination": {"page": 1, "total": 1000}})
-            },
-        ),
+            json!({"data": items, "pagination": {"page": 1, "total": 1000}})
+        }),
     ];
 
     for (name, value) in &sizes {

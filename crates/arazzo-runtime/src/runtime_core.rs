@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::{DebugController, DebugScopes, StepCheckpoint};
@@ -897,7 +897,7 @@ pub(crate) struct OperationEntry {
 #[derive(Debug, Clone)]
 struct StepResult {
     success: bool,
-    response: Option<Response>,
+    response: Option<Arc<Response>>,
     err: Option<String>,
 }
 
@@ -969,7 +969,8 @@ pub(crate) struct WorkflowIndex {
     pub source_descriptions_map: BTreeMap<String, String>,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
-    pub op_index: BTreeMap<String, OperationEntry>,
+    openapi_specs_raw: Vec<Vec<u8>>,
+    op_index: OnceLock<BTreeMap<String, OperationEntry>>,
 }
 
 /// Shared immutable core of the engine, wrapped in `Arc`.
@@ -1139,11 +1140,6 @@ impl EngineBuilder {
             step_indexes.insert(wf.workflow_id.clone(), step_idx_map);
         }
 
-        let mut op_index = BTreeMap::new();
-        for spec_data in &self.openapi_specs {
-            parse_openapi_into_index(spec_data, &mut op_index)?;
-        }
-
         Ok(Engine {
             inner: Arc::new(EngineInner {
                 index: WorkflowIndex {
@@ -1152,7 +1148,8 @@ impl EngineBuilder {
                     source_descriptions_map,
                     workflow_index,
                     step_indexes,
-                    op_index,
+                    openapi_specs_raw: self.openapi_specs,
+                    op_index: OnceLock::new(),
                 },
                 client,
                 parallel_mode: self.parallel,

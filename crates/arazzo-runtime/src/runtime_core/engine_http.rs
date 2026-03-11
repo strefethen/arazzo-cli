@@ -5,9 +5,24 @@ impl Engine {
         &self,
         operation_id: &str,
     ) -> Result<(String, String), RuntimeError> {
-        self.inner
-            .index
-            .op_index
+        let index = &self.inner.index;
+        // Lazy-init: parse OpenAPI specs on first access (stable OnceLock pattern).
+        // If two threads race, both compute the same deterministic index and one
+        // `set()` silently no-ops — OnceLock guarantees a single stored value.
+        if index.op_index.get().is_none() {
+            let mut idx = BTreeMap::new();
+            for spec_data in &index.openapi_specs_raw {
+                parse_openapi_into_index(spec_data, &mut idx)?;
+            }
+            let _ = index.op_index.set(idx);
+        }
+        let op_index = index.op_index.get().ok_or_else(|| {
+            RuntimeError::new(
+                RuntimeErrorKind::InternalError,
+                "operation index initialization failed unexpectedly",
+            )
+        })?;
+        op_index
             .get(operation_id)
             .map(|entry| (entry.method.clone(), entry.path.clone()))
             .ok_or_else(|| {
@@ -201,6 +216,7 @@ impl Engine {
             )
             .await?;
 
+        let response = Arc::new(response);
         self.evaluate_step_response(exec_ctx, workflow_id, step, vars, depth, &response, &prep)
             .await
     }
@@ -240,7 +256,7 @@ impl Engine {
         Ok(StepExecution {
             result: StepResult {
                 success: true,
-                response: Some(fake),
+                response: Some(Arc::new(fake)),
                 err: None,
             },
             outputs,
@@ -268,7 +284,7 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
         depth: usize,
-        response: &Response,
+        response: &Arc<Response>,
         prep: &PreparedRequest,
     ) -> Result<StepExecution, RuntimeError> {
         let post_ctx = self.make_post_request_eval_context(vars, Some(response), prep);
@@ -277,7 +293,12 @@ impl Engine {
         let mut criteria = Vec::new();
         let mut step_warnings = Vec::<String>::new();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
-            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(response), &self.inner.regex_cache);
+            let evaluation = evaluate_criterion_detailed(
+                criterion,
+                &eval,
+                Some(response),
+                &self.inner.regex_cache,
+            );
             for warning in &evaluation.warnings {
                 step_warnings.push(format!("successCriteria[{index}]: {warning}"));
             }
@@ -317,7 +338,7 @@ impl Engine {
                 return Ok(StepExecution {
                     result: StepResult {
                         success: false,
-                        response: Some(response.clone()),
+                        response: Some(Arc::clone(response)),
                         err: None,
                     },
                     outputs: BTreeMap::new(),
@@ -357,7 +378,7 @@ impl Engine {
         Ok(StepExecution {
             result: StepResult {
                 success: true,
-                response: Some(response.clone()),
+                response: Some(Arc::clone(response)),
                 err: None,
             },
             outputs,

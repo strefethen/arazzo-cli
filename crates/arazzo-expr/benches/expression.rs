@@ -57,10 +57,7 @@ fn rich_context() -> EvalContext {
     let mut response_headers = BTreeMap::new();
     response_headers.insert("content-type".to_string(), "application/json".to_string());
     response_headers.insert("x-request-id".to_string(), "abc-123-def".to_string());
-    response_headers.insert(
-        "x-rate-limit-remaining".to_string(),
-        "42".to_string(),
-    );
+    response_headers.insert("x-rate-limit-remaining".to_string(), "42".to_string());
 
     EvalContext {
         inputs,
@@ -101,9 +98,7 @@ fn bench_evaluate(c: &mut Criterion) {
         b.iter(|| eval.evaluate(black_box("$statusCode")))
     });
 
-    group.bench_function("method", |b| {
-        b.iter(|| eval.evaluate(black_box("$method")))
-    });
+    group.bench_function("method", |b| b.iter(|| eval.evaluate(black_box("$method"))));
 
     // Step output lookup (common hot path)
     group.bench_function("steps_output", |b| {
@@ -121,11 +116,7 @@ fn bench_evaluate(c: &mut Criterion) {
 
     // Array index access
     group.bench_function("array_index", |b| {
-        b.iter(|| {
-            eval.evaluate(black_box(
-                "$steps.getUser.outputs.body.data.items[0].name",
-            ))
-        })
+        b.iter(|| eval.evaluate(black_box("$steps.getUser.outputs.body.data.items[0].name")))
     });
 
     // Response body access
@@ -194,19 +185,13 @@ fn bench_evaluate_condition(c: &mut Criterion) {
     // Boolean AND
     group.bench_function("and_condition", |b| {
         b.iter(|| {
-            eval.evaluate_condition(black_box(
-                "$statusCode == 200 && $inputs.verbose == true",
-            ))
+            eval.evaluate_condition(black_box("$statusCode == 200 && $inputs.verbose == true"))
         })
     });
 
     // Boolean OR
     group.bench_function("or_condition", |b| {
-        b.iter(|| {
-            eval.evaluate_condition(black_box(
-                "$statusCode == 200 || $statusCode == 201",
-            ))
-        })
+        b.iter(|| eval.evaluate_condition(black_box("$statusCode == 200 || $statusCode == 201")))
     });
 
     group.finish();
@@ -229,11 +214,7 @@ fn bench_interpolate_string(c: &mut Criterion) {
 
     // Multiple expressions
     group.bench_function("three_exprs", |b| {
-        b.iter(|| {
-            eval.interpolate_string(black_box(
-                "{$method} {$url} => {$statusCode}",
-            ))
-        })
+        b.iter(|| eval.interpolate_string(black_box("{$method} {$url} => {$statusCode}")))
     });
 
     group.finish();
