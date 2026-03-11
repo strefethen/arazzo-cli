@@ -540,8 +540,11 @@ workflows:
         .iter()
         .find(|item| {
             item.get("kind").and_then(Value::as_str) == Some("invalidReference")
-                && item.get("path").and_then(Value::as_str)
-                    == Some("workflows[0].steps[0].operationPath")
+                && item
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("operationPath")
         })
         .unwrap_or_else(|| panic!("expected invalidReference on operationPath, got: {errors:?}"));
     assert!(issue

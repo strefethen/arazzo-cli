@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use arazzo_runtime::{ClientConfig, EngineBuilder, ExecutionOptions, TraceStepRecord};
+use arazzo_runtime::{ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord};
 use arazzo_spec::ArazzoSpec;
 use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use crate::trace::{
     build_trace_file, prepare_trace_for_write, write_trace_file_atomic, TraceRunMetadata,
 };
 
-pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
+pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
     let run = ctx.run;
     let global = ctx.global;
@@ -67,13 +67,12 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
         }
     }
 
-    let mut engine = EngineBuilder::new(spec)
+    let mut builder = EngineBuilder::new(spec)
         .client_config(cfg)
         .parallel(run.parallel)
         .dry_run(run.dry_run)
-        .trace(trace_enabled)
-        .build()
-        .map_err(|err| format!("creating runtime engine: {err}"))?;
+        .strict_inputs(run.strict_inputs)
+        .trace(trace_enabled);
 
     for openapi_path in &run.openapi_flags {
         let bytes = match fs::read(openapi_path) {
@@ -87,44 +86,61 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 };
             }
         };
-        if let Err(err) = engine.load_openapi_spec(&bytes) {
-            let msg = format!("loading OpenAPI file \"{openapi_path}\": {err}");
-            return if global.json {
-                output::emit_run_error(true, &msg, Some(err.code()), &[])
-            } else {
-                Err(msg)
-            };
-        }
+        builder = builder.openapi_spec(bytes);
     }
+
+    let engine = builder
+        .build()
+        .map_err(|err| format!("creating runtime engine: {err}"))?;
 
     let execution_timeout = run.execution_timeout;
 
     let run_started_at = SystemTime::now();
     let run_started_inst = std::time::Instant::now();
-    let outputs_result = if let Some(step_id) = &run.step_id {
-        engine.execute_step(
-            &run.workflow_id,
-            step_id,
-            inputs.clone(),
-            ExecutionOptions::with_timeout(execution_timeout),
-            run.no_deps,
-        )
+    let exec_result = if let Some(step_id) = &run.step_id {
+        let handle = engine.execute_step(&run.workflow_id, step_id, inputs.clone(), run.no_deps);
+        let cancel = handle.cancel_token().clone();
+        let timeout_flag = handle.timeout_flag().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(execution_timeout).await;
+            timeout_flag.store(true, std::sync::atomic::Ordering::Release);
+            cancel.cancel();
+        });
+        handle.collect().await
     } else {
-        engine.execute_with_options(
-            &run.workflow_id,
-            inputs.clone(),
-            ExecutionOptions::with_timeout(execution_timeout),
-        )
+        engine
+            .execute_with_timeout(&run.workflow_id, inputs.clone(), execution_timeout)
+            .collect()
+            .await
     };
     let run_finished_at = SystemTime::now();
     let run_duration = run_started_inst.elapsed();
 
-    let run_error_text = outputs_result.as_ref().err().map(ToString::to_string);
-    let run_error_code = outputs_result
+    let run_error_text = exec_result.outputs.as_ref().err().map(ToString::to_string);
+    let run_error_code = exec_result
+        .outputs
         .as_ref()
         .err()
         .map(|e| e.kind.code().to_string());
-    let trace_steps = engine.trace_steps();
+
+    let trace_steps: Vec<TraceStepRecord> = exec_result
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::TraceStep(r) => Some(r.clone()),
+            _ => None,
+        })
+        .collect();
+
+    let dry_run_requests: Vec<arazzo_runtime::DryRunRequest> = exec_result
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::DryRunRequest(r) => Some(r.clone()),
+            _ => None,
+        })
+        .collect();
+
     let expression_warnings = if run.expr_diagnostics == ExpressionDiagnosticsMode::Off {
         Vec::new()
     } else {
@@ -193,14 +209,10 @@ pub fn run_workflow(ctx: RunContext) -> Result<(), String> {
     }
 
     if run.dry_run {
-        return output::emit_dry_run_requests(
-            global.json,
-            engine.dry_run_requests(),
-            &expression_warnings,
-        );
+        return output::emit_dry_run_requests(global.json, dry_run_requests, &expression_warnings);
     }
 
-    let outputs = outputs_result.unwrap_or_default();
+    let outputs = exec_result.outputs.unwrap_or_default();
     if global.verbose && !global.json {
         output::emit_run_steps(&trace_steps);
     }
@@ -456,6 +468,11 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
 }
 
 fn parse_input_value(raw: &str) -> Value {
+    // Single-quoted values bypass coercion: 'true' → String("true")
+    if let Some(inner) = raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        return Value::String(inner.to_string());
+    }
+
     let mut value = raw.to_string();
     if value.starts_with('$') {
         let var_name = value
@@ -485,4 +502,45 @@ fn parse_input_value(raw: &str) -> Value {
         return serde_json::json!(v);
     }
     Value::String(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_input_value_coerces_bool() {
+        assert_eq!(parse_input_value("true"), Value::Bool(true));
+        assert_eq!(parse_input_value("false"), Value::Bool(false));
+    }
+
+    #[test]
+    fn parse_input_value_coerces_number() {
+        assert_eq!(parse_input_value("123"), serde_json::json!(123));
+    }
+
+    #[test]
+    fn parse_input_value_single_quotes_bypass_coercion() {
+        assert_eq!(
+            parse_input_value("'true'"),
+            Value::String("true".to_string())
+        );
+        assert_eq!(
+            parse_input_value("'false'"),
+            Value::String("false".to_string())
+        );
+        assert_eq!(parse_input_value("'123'"), Value::String("123".to_string()));
+        assert_eq!(
+            parse_input_value("'null'"),
+            Value::String("null".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_input_value_plain_string_unchanged() {
+        assert_eq!(
+            parse_input_value("hello"),
+            Value::String("hello".to_string())
+        );
+    }
 }

@@ -25,6 +25,7 @@ pub struct RunOptions {
     pub expr_diagnostics: ExpressionDiagnosticsMode,
     pub parallel: bool,
     pub dry_run: bool,
+    pub strict_inputs: bool,
     pub trace: Option<String>,
     pub trace_max_body_bytes: usize,
 }

@@ -72,6 +72,10 @@ pub enum Commands {
         #[arg(long = "dry-run")]
         dry_run: bool,
 
+        /// Make input validation errors fatal (missing required fields, type mismatches)
+        #[arg(long = "strict-inputs")]
+        strict_inputs: bool,
+
         #[arg(long = "trace")]
         trace: Option<String>,
 

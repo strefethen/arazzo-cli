@@ -835,6 +835,7 @@ fn build_workflow(
             type_: Some(JsonSchemaType::Object),
             properties,
             required,
+            ..SchemaObject::default()
         })
     };
 

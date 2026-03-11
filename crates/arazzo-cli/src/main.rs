@@ -21,10 +21,11 @@ use clap::Parser;
 use crate::cli::{Cli, Commands};
 use crate::run_context::{GlobalOptions, RunContext, RunOptions};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     load_env_file(".env");
     let cli = Cli::parse();
-    if let Err(err) = run(cli) {
+    if let Err(err) = run(cli).await {
         if !err.is_empty() {
             eprintln!("{err}");
         }
@@ -32,7 +33,7 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+async fn run(cli: Cli) -> Result<(), String> {
     let global = GlobalOptions {
         json: cli.json,
         verbose: cli.verbose,
@@ -53,6 +54,7 @@ fn run(cli: Cli) -> Result<(), String> {
             expr_diagnostics,
             parallel,
             dry_run,
+            strict_inputs,
             trace,
             trace_max_body_bytes,
         } => {
@@ -72,11 +74,12 @@ fn run(cli: Cli) -> Result<(), String> {
                     expr_diagnostics,
                     parallel,
                     dry_run,
+                    strict_inputs,
                     trace,
                     trace_max_body_bytes,
                 },
             );
-            handlers::run_workflow(context)
+            handlers::run_workflow(context).await
         }
         Commands::Validate { spec } => handlers::validate_spec(&spec, global),
         Commands::List { spec } => handlers::list_workflows(&spec, global),
