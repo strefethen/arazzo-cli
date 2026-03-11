@@ -594,7 +594,7 @@ impl Engine {
 
         let eval_post = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         for criterion in &step.success_criteria {
-            if !evaluate_criterion(criterion, &eval_post, None) {
+            if !evaluate_criterion(criterion, &eval_post, None, &self.inner.regex_cache) {
                 return Ok(StepResult {
                     success: false,
                     response: None,

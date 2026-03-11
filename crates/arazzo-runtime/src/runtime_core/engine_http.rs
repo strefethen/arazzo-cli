@@ -277,7 +277,7 @@ impl Engine {
         let mut criteria = Vec::new();
         let mut step_warnings = Vec::<String>::new();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
-            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(response));
+            let evaluation = evaluate_criterion_detailed(criterion, &eval, Some(response), &self.inner.regex_cache);
             for warning in &evaluation.warnings {
                 step_warnings.push(format!("successCriteria[{index}]: {warning}"));
             }

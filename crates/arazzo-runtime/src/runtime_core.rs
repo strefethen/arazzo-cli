@@ -984,6 +984,7 @@ struct EngineInner {
     trace_hook: Option<Arc<dyn TraceHook>>,
     observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
+    regex_cache: helpers::RegexCache,
 }
 
 /// Runtime engine for executing Arazzo workflows.
@@ -1161,6 +1162,7 @@ impl EngineBuilder {
                 channel_capacity: self.channel_capacity,
                 trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
                 observer: self.observer,
+                regex_cache: helpers::RegexCache::new(),
                 debug_controller: self.debug_controller,
             }),
         })

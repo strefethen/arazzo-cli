@@ -121,7 +121,7 @@ impl Engine {
             }
             let mut all_match = true;
             for criterion in &action.criteria {
-                if !evaluate_criterion(criterion, &eval, response) {
+                if !evaluate_criterion(criterion, &eval, response, &self.inner.regex_cache) {
                     all_match = false;
                     break;
                 }
@@ -162,7 +162,7 @@ impl Engine {
 
             let mut all_match = true;
             for (criterion_index, criterion) in action.criteria.iter().enumerate() {
-                let evaluation = evaluate_criterion_detailed(criterion, &eval, ctx.response);
+                let evaluation = evaluate_criterion_detailed(criterion, &eval, ctx.response, &self.inner.regex_cache);
                 self.debug_gate_action_criterion(
                     &gate,
                     ctx.branch,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use super::*;
@@ -6,6 +7,48 @@ static STEP_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\$steps\.([a-zA-Z_][a-zA-Z0-9_-]*)\.")
         .unwrap_or_else(|err| panic!("failed to compile step-ref regex: {err}"))
 });
+
+static XMLNS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"xmlns(?::\w+)?="[^"]*""#)
+        .unwrap_or_else(|err| panic!("failed to compile xmlns regex: {err}"))
+});
+
+static NS_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<(/?)[\w-]+:")
+        .unwrap_or_else(|err| panic!("failed to compile ns-prefix regex: {err}"))
+});
+
+/// Cache for compiled regular expressions used in criterion evaluation.
+///
+/// Wraps a `Mutex<HashMap>` for safe concurrent access from parallel steps.
+/// Regex compilation is expensive (µs) while matching is cheap (ns), so
+/// caching yields 100–500x speedup for repeated evaluations of the same pattern.
+pub(crate) struct RegexCache {
+    cache: Mutex<HashMap<String, Regex>>,
+}
+
+impl RegexCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Compile a regex (or return cached) and test whether it matches `text`.
+    ///
+    /// The lock is held for the duration of the match, but matching takes
+    /// nanoseconds so contention is negligible.
+    pub(crate) fn is_match(&self, pattern: &str, text: &str) -> Result<bool, regex::Error> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(re) = cache.get(pattern) {
+            return Ok(re.is_match(text));
+        }
+        let re = Regex::new(pattern)?;
+        let result = re.is_match(text);
+        cache.insert(pattern.to_string(), re);
+        Ok(result)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CriterionEvaluation {
@@ -25,17 +68,8 @@ pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
         Ok(t) => t,
         Err(_) => return Value::Null,
     };
-    // Strip all namespace declarations (default xmlns="..." and prefixed xmlns:foo="...")
-    // so that simple XPath expressions work on namespaced XML (RSS, Atom, SOAP, etc.).
-    let Ok(ns_re) = Regex::new(r#"xmlns(?::\w+)?="[^"]*""#) else {
-        return Value::Null;
-    };
-    let text = ns_re.replace_all(text, "");
-    // Strip namespace prefixes from element names so <cust:Name> becomes <Name>.
-    let Ok(prefix_re) = Regex::new(r"<(/?)[\w-]+:") else {
-        return Value::Null;
-    };
-    let text = prefix_re.replace_all(&text, "<$1");
+    let text = XMLNS_RE.replace_all(text, "");
+    let text = NS_PREFIX_RE.replace_all(&text, "<$1");
     let package = match sxd_document::parser::parse(&text) {
         Ok(p) => p,
         Err(_) => return Value::Null,
@@ -58,14 +92,16 @@ pub(crate) fn evaluate_criterion(
     criterion: &SuccessCriterion,
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
+    regex_cache: &RegexCache,
 ) -> bool {
-    evaluate_criterion_detailed(criterion, eval, response).matched
+    evaluate_criterion_detailed(criterion, eval, response, regex_cache).matched
 }
 
 pub(crate) fn evaluate_criterion_detailed(
     criterion: &SuccessCriterion,
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
+    regex_cache: &RegexCache,
 ) -> CriterionEvaluation {
     let type_name = criterion.resolved_type_name();
     let mut expr_warnings = Vec::new();
@@ -81,8 +117,8 @@ pub(crate) fn evaluate_criterion_detailed(
     let condition_result = match type_name.as_str() {
         "regex" => {
             let context_text = value_to_string(&context_value);
-            match Regex::new(&criterion.condition) {
-                Ok(re) => re.is_match(&context_text),
+            match regex_cache.is_match(&criterion.condition, &context_text) {
+                Ok(matched) => matched,
                 Err(err) => {
                     error = Some(format!("invalid regex: {err}"));
                     false
@@ -919,6 +955,7 @@ mod tests {
 
     #[test]
     fn evaluate_criterion_modes() {
+        let cache = RegexCache::new();
         let eval = ExpressionEvaluator::new(EvalContext {
             status_code: Some(200),
             response_body: Some(json!({
@@ -937,14 +974,14 @@ mod tests {
             condition: "$statusCode == 200".to_string(),
             ..SuccessCriterion::default()
         };
-        assert!(evaluate_criterion(&plain, &eval, None));
+        assert!(evaluate_criterion(&plain, &eval, None, &cache));
 
         let regex = SuccessCriterion {
             type_: Some(CriterionType::Name("regex".to_string())),
             context: "$response.body.name".to_string(),
             condition: "^[a-z]+$".to_string(),
         };
-        assert!(evaluate_criterion(&regex, &eval, None));
+        assert!(evaluate_criterion(&regex, &eval, None, &cache));
 
         let jsonpath = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -954,7 +991,7 @@ mod tests {
             context: "$response.body".to_string(),
             condition: "$.name".to_string(),
         };
-        assert!(evaluate_criterion(&jsonpath, &eval, None));
+        assert!(evaluate_criterion(&jsonpath, &eval, None, &cache));
 
         let jp_existence = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -964,7 +1001,7 @@ mod tests {
             context: "$response.body".to_string(),
             condition: "$.ok".to_string(),
         };
-        assert!(evaluate_criterion(&jp_existence, &eval, None));
+        assert!(evaluate_criterion(&jp_existence, &eval, None, &cache));
 
         let jp_nested = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -974,7 +1011,7 @@ mod tests {
             context: "$response.body".to_string(),
             condition: "$.pets[0].id".to_string(),
         };
-        assert!(evaluate_criterion(&jp_nested, &eval, None));
+        assert!(evaluate_criterion(&jp_nested, &eval, None, &cache));
 
         let jp_missing = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -984,7 +1021,7 @@ mod tests {
             context: "$response.body".to_string(),
             condition: "$.nonexistent".to_string(),
         };
-        assert!(!evaluate_criterion(&jp_missing, &eval, None));
+        assert!(!evaluate_criterion(&jp_missing, &eval, None, &cache));
 
         let jp_filter_at_ok = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -994,7 +1031,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(@.ok == true)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_filter_at_ok, &eval, None));
+        assert!(evaluate_criterion(&jp_filter_at_ok, &eval, None, &cache));
 
         let jp_filter_none = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1004,7 +1041,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(@.id == 999)]".to_string(),
         };
-        assert!(!evaluate_criterion(&jp_filter_none, &eval, None));
+        assert!(!evaluate_criterion(&jp_filter_none, &eval, None, &cache));
 
         let jp_count = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1014,7 +1051,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(count(@.pets) > 0)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_count, &eval, None));
+        assert!(evaluate_criterion(&jp_count, &eval, None, &cache));
 
         let jp_and = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1024,7 +1061,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(@.ok == true && @.id == 2)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_and, &eval, None));
+        assert!(evaluate_criterion(&jp_and, &eval, None, &cache));
 
         let jp_or = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1034,7 +1071,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(@.id == 99 || @.id == 1)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_or, &eval, None));
+        assert!(evaluate_criterion(&jp_or, &eval, None, &cache));
 
         let jp_comparison = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1044,7 +1081,7 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(@.id > 1)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_comparison, &eval, None));
+        assert!(evaluate_criterion(&jp_comparison, &eval, None, &cache));
 
         let jp_root_count = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -1054,11 +1091,12 @@ mod tests {
             context: "$response.body.items".to_string(),
             condition: "$[?(count($) > 0)]".to_string(),
         };
-        assert!(evaluate_criterion(&jp_root_count, &eval, None));
+        assert!(evaluate_criterion(&jp_root_count, &eval, None, &cache));
     }
 
     #[test]
     fn evaluate_criterion_xpath_uses_context_and_condition() {
+        let cache = RegexCache::new();
         let criterion = SuccessCriterion {
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                 type_: "xpath".to_string(),
@@ -1077,7 +1115,7 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(EvalContext::default());
 
-        assert!(evaluate_criterion(&criterion, &eval, Some(&response)));
+        assert!(evaluate_criterion(&criterion, &eval, Some(&response), &cache));
     }
 
     #[test]
