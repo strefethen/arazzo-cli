@@ -17,6 +17,9 @@ CLAUDE.md
 # Beads issue tracker
 .beads/
 
+# Ideas / brainstorming
+ideas/
+
 # Internal planning docs (kept locally, not tracked)
 ARCHITECTURE.md
 FINDINGS.md

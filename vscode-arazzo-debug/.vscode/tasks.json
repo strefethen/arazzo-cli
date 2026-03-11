@@ -2,10 +2,31 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "cargo: build adapter",
+      "type": "shell",
+      "command": "cargo build --release -p arazzo-debug-adapter",
+      "options": {
+        "cwd": "${workspaceFolder}/.."
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "copy adapter binary",
+      "type": "shell",
+      "command": "node scripts/copy-binary.js",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "cargo: build adapter",
+      "problemMatcher": []
+    },
+    {
       "type": "npm",
       "script": "build",
       "group": "build",
       "label": "npm: build",
+      "dependsOn": "copy adapter binary",
       "problemMatcher": "$tsc"
     }
   ]
