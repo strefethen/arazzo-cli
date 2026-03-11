@@ -1,0 +1,60 @@
+# httpbin-reusable-inputs.arazzo.yaml
+#
+# Demonstrates $ref in workflow inputs, with two workflows sharing
+# the same input schema from components.inputs.
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/httpbin-reusable-inputs.arazzo.yaml
+#   cargo run -p arazzo-cli -- run --dry-run examples/httpbin-reusable-inputs.arazzo.yaml echo-name -i name=Alice
+#   cargo run -p arazzo-cli -- run --strict-inputs --dry-run examples/httpbin-reusable-inputs.arazzo.yaml echo-name
+
+arazzo: "1.0.0"
+info:
+  title: HTTPBin Reusable Inputs
+  version: "1.0.0"
+  description: >
+    Demonstrates $ref in workflow inputs, with two workflows sharing
+    the same input schema from components.inputs.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+components:
+  inputs:
+    nameInput:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name to echo
+      required:
+        - name
+
+workflows:
+  - workflowId: echo-name
+    inputs:
+      $ref: "#/components/inputs/nameInput"
+    steps:
+      - stepId: echo
+        operationPath: /get
+        parameters:
+          - name: name
+            in: query
+            value: $inputs.name
+        successCriteria:
+          - condition: $statusCode == 200
+
+  - workflowId: echo-name-post
+    inputs:
+      $ref: "#/components/inputs/nameInput"
+    steps:
+      - stepId: post-echo
+        operationPath: /post
+        requestBody:
+          contentType: application/json
+          payload:
+            name: $inputs.name
+        successCriteria:
+          - condition: $statusCode == 200
