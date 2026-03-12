@@ -233,7 +233,7 @@ pub fn emit_validate_result(path: &str, spec: &ArazzoSpec, json: bool) -> Result
 
 pub fn emit_validate_error(path: &str, err: &ValidateError, json: bool) -> Result<(), String> {
     if json {
-        return output_json(&ValidateResult {
+        output_json(&ValidateResult {
             valid: false,
             file: path.to_string(),
             version: None,
@@ -241,7 +241,8 @@ pub fn emit_validate_error(path: &str, err: &ValidateError, json: bool) -> Resul
             workflows: None,
             sources: None,
             errors: build_validate_issues(err),
-        });
+        })?;
+        return Err(String::new());
     }
     Err(format!("validation failed: {err}"))
 }

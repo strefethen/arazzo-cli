@@ -533,12 +533,19 @@ pub(super) fn build_trace_response(response: &Response) -> TraceResponse {
         Some(preview)
     };
 
+    let body = if response.body.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&response.body).to_string())
+    };
+
     TraceResponse {
         status_code: response.status_code,
         content_type: response.content_type.clone(),
         headers: response.headers.clone(),
         body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
         body_preview,
+        body,
     }
 }
 

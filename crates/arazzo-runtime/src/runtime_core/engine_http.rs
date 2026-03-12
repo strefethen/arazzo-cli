@@ -271,6 +271,7 @@ impl Engine {
                     headers: BTreeMap::new(),
                     body_bytes: 2,
                     body_preview: Some("{}".to_string()),
+                    body: Some("{}".to_string()),
                 }),
                 criteria: Vec::new(),
                 warnings,

@@ -122,6 +122,7 @@ dependencies = [
  "arazzo-expr",
  "arazzo-spec",
  "criterion",
+ "percent-encoding",
  "proptest",
  "regex",
  "reqwest",

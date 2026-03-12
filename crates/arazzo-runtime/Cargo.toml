@@ -22,6 +22,7 @@ serde_yml = "0.0.12"
 uppsala = "0.3"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 tokio-util = "0.7"
+percent-encoding = "2"
 url = "2"
 schemars = { version = "1", optional = true }
 

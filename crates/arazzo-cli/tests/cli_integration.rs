@@ -483,7 +483,7 @@ workflows:
 
     let invalid_str = invalid.to_string_lossy().to_string();
     let output = run(["--json", "validate", &invalid_str].as_slice(), None);
-    assert!(output.status.success());
+    assert!(!output.status.success());
 
     let body = stdout_json(&output);
     assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
@@ -531,7 +531,7 @@ workflows:
 
     let invalid_str = invalid.to_string_lossy().to_string();
     let output = run(["--json", "validate", &invalid_str].as_slice(), None);
-    assert!(output.status.success());
+    assert!(!output.status.success());
 
     let body = stdout_json(&output);
     assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
@@ -1512,8 +1512,8 @@ fn validate_json_reports_error_for_unparseable_yaml() {
 
     let bad_str = bad.to_string_lossy().to_string();
     let output = run(["--json", "validate", &bad_str].as_slice(), None);
-    // validate exits 0 and reports valid: false in JSON mode
-    assert!(output.status.success());
+    // validate exits non-zero and reports valid: false in JSON mode
+    assert!(!output.status.success());
     let body = stdout_json(&output);
     assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
     let errors = body

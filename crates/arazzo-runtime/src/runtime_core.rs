@@ -58,6 +58,7 @@ pub enum RuntimeErrorKind {
     ReplayTraceExhausted,
     ReplayRequestMismatch,
     ReplayResponseMissing,
+    IterationLimitExceeded,
 }
 
 impl RuntimeErrorKind {
@@ -93,6 +94,7 @@ impl RuntimeErrorKind {
             Self::ReplayTraceExhausted => "RUNTIME_REPLAY_TRACE_EXHAUSTED",
             Self::ReplayRequestMismatch => "RUNTIME_REPLAY_REQUEST_MISMATCH",
             Self::ReplayResponseMissing => "RUNTIME_REPLAY_RESPONSE_MISSING",
+            Self::IterationLimitExceeded => "RUNTIME_ITERATION_LIMIT_EXCEEDED",
         }
     }
 }
@@ -713,8 +715,9 @@ impl HttpClient {
         };
 
         let body = trace_response
-            .body_preview
+            .body
             .clone()
+            .or_else(|| trace_response.body_preview.clone())
             .unwrap_or_default()
             .into_bytes();
         let body_json = match trace_response.content_type {
@@ -952,6 +955,8 @@ pub struct TraceResponse {
     pub body_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Trace result of evaluating one success criterion.

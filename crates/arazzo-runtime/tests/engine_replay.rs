@@ -58,6 +58,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
             headers: BTreeMap::new(),
             body_bytes: 14,
             body_preview: Some(r#"{"value":"ok"}"#.to_string()),
+            body: Some(r#"{"value":"ok"}"#.to_string()),
         }),
         criteria: Vec::new(),
         warnings: Vec::new(),
@@ -102,4 +103,61 @@ async fn replay_reports_request_drift() {
         Err(err) => err,
     };
     assert_eq!(err.kind, RuntimeErrorKind::ReplayRequestMismatch);
+}
+
+// ── Bug #7: replay uses full body, not truncated body_preview ────
+
+#[tokio::test]
+async fn replay_uses_full_body_not_truncated_preview() {
+    // Build a JSON body larger than TRACE_BODY_PREVIEW_MAX_BYTES (2048)
+    let large_value = "x".repeat(3000);
+    let full_body = format!(r#"{{"value":"{large_value}"}}"#);
+    let preview = format!("{}...", &full_body[..2048]);
+
+    let trace = vec![TraceStepRecord {
+        seq: 1,
+        workflow_id: "wf".to_string(),
+        step_id: "s1".to_string(),
+        attempt: 1,
+        kind: "http".to_string(),
+        operation_path: "/items".to_string(),
+        workflow_id_ref: String::new(),
+        duration_ms: 0,
+        request: Some(TraceRequest {
+            method: "GET".to_string(),
+            url: "https://replay.invalid/items".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+        }),
+        response: Some(TraceResponse {
+            status_code: 200,
+            content_type: ContentType::Json,
+            headers: BTreeMap::new(),
+            body_bytes: full_body.len() as u64,
+            body_preview: Some(preview),
+            body: Some(full_body.clone()),
+        }),
+        criteria: Vec::new(),
+        warnings: Vec::new(),
+        decision: TraceDecision::with_path(TraceDecisionPath::Next),
+        outputs: BTreeMap::new(),
+        error: None,
+    }];
+
+    let engine = match EngineBuilder::new(replay_spec())
+        .trace(true)
+        .replay_trace_steps(trace)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building replay engine: {err}"),
+    };
+
+    let outputs = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected replay success with full body, got: {err}"),
+    };
+
+    // Expression evaluation should resolve the full value, not truncated
+    assert_eq!(outputs.get("final"), Some(&json!(large_value)));
 }

@@ -305,10 +305,12 @@ impl Engine {
             let mut step_index: usize = 0;
             let mut retry_count = BTreeMap::<usize, usize>::new();
             let max_iterations = workflow.steps.len().saturating_mul(10);
+            let mut completed = false;
 
             for _ in 0..max_iterations {
                 exec_ctx.check_cancelled()?;
                 if step_index >= workflow.steps.len() {
+                    completed = true;
                     break;
                 }
 
@@ -431,7 +433,10 @@ impl Engine {
                 }
 
                 match action.flow {
-                    FlowDecision::Done => break,
+                    FlowDecision::Done => {
+                        completed = true;
+                        break;
+                    }
                     FlowDecision::Next(idx) => {
                         if idx == step_index {
                             let value = retry_count.entry(step_index).or_insert(0);
@@ -482,6 +487,15 @@ impl Engine {
                         return Err(err);
                     }
                 }
+            }
+
+            if !completed {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::IterationLimitExceeded,
+                    format!(
+                        "workflow \"{workflow_id}\" exceeded iteration limit ({max_iterations}) — possible infinite retry/goto loop"
+                    ),
+                ));
             }
 
             let workflow_outputs = self.build_outputs(&workflow, &vars);

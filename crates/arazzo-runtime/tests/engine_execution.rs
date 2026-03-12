@@ -1817,3 +1817,99 @@ async fn response_within_size_limit_succeeds() {
         Err(err) => panic!("expected success, got: {err}"),
     }
 }
+
+// ── Bug #4: iteration limit exceeded on circular goto ────────────
+
+#[tokio::test]
+async fn execute_circular_goto_returns_iteration_limit_exceeded() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    // Two steps that goto each other on success — infinite loop.
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "loop".to_string(),
+        steps: vec![
+            Step {
+                step_id: "a".to_string(),
+                target: Some(StepTarget::OperationPath("/ping".to_string())),
+                success_criteria: success_200(),
+                on_success: vec![OnAction {
+                    type_: ActionType::Goto,
+                    step_id: "b".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            },
+            Step {
+                step_id: "b".to_string(),
+                target: Some(StepTarget::OperationPath("/pong".to_string())),
+                success_criteria: success_200(),
+                on_success: vec![OnAction {
+                    type_: ActionType::Goto,
+                    step_id: "a".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            },
+        ],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("loop", BTreeMap::new())
+        .await
+        .outputs;
+    let err = match result {
+        Ok(_) => panic!("expected IterationLimitExceeded, got success"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::IterationLimitExceeded);
+    assert!(err.message.contains("exceeded iteration limit"));
+}
+
+// ── Bug #11: path parameter values are percent-encoded ───────────
+
+#[tokio::test]
+async fn execute_path_param_with_special_chars_is_percent_encoded() {
+    let received_url = Arc::new(Mutex::new(String::new()));
+    let url_capture = Arc::clone(&received_url);
+    let server = start_server(move |_method, url, _headers, _body| {
+        *url_capture.lock().unwrap_or_else(|e| panic!("lock: {e}")) = url.clone();
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "enc".to_string(),
+        steps: vec![Step {
+            step_id: "s1".to_string(),
+            target: Some(StepTarget::OperationPath("/items/{name}".to_string())),
+            parameters: vec![Parameter {
+                name: "name".to_string(),
+                in_: Some(ParamLocation::Path),
+                value: serde_yml::Value::String("hello world/foo#bar".to_string()),
+                ..Parameter::default()
+            }],
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("enc", BTreeMap::new())
+        .await
+        .outputs;
+    if let Err(err) = &result {
+        panic!("expected success, got: {err}");
+    }
+
+    let url = received_url.lock().unwrap_or_else(|e| panic!("lock: {e}")).clone();
+    // Spaces, slashes, and '#' must be percent-encoded in path segments
+    assert!(
+        url.contains("hello%20world%2Ffoo%23bar"),
+        "expected percent-encoded path param, got: {url}"
+    );
+}

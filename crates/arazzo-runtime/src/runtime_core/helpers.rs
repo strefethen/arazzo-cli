@@ -1,7 +1,29 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
 use super::*;
+
+/// Characters to percent-encode in path segment values per RFC 3986 §3.3.
+/// Allows unreserved chars (§2.3), sub-delimiters (§2.2), ':', and '@'
+/// (all part of the `pchar` production). Non-ASCII bytes are always encoded.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'/')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'[')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
 
 static STEP_REF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\$steps\.([a-zA-Z_][a-zA-Z0-9_-]*)\.")
@@ -641,7 +663,8 @@ pub(super) fn replace_path_params(path: &str, params: &BTreeMap<String, String>)
         out.push_str(&remaining[..open]);
         let key = &remaining[open + 1..close];
         if let Some(value) = params.get(key) {
-            out.push_str(value);
+            let encoded = utf8_percent_encode(value, PATH_SEGMENT_ENCODE_SET).to_string();
+            out.push_str(&encoded);
         } else {
             out.push_str(&remaining[open..=close]);
         }
