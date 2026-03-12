@@ -272,6 +272,7 @@ impl Engine {
                     body_bytes: 2,
                     body_preview: Some("{}".to_string()),
                     body: Some("{}".to_string()),
+                    body_lossy: false,
                 }),
                 criteria: Vec::new(),
                 warnings,
@@ -445,7 +446,18 @@ impl Engine {
             }
         }
 
-        let query_params: BTreeMap<String, String> = query_params_vec.iter().cloned().collect();
+        // Merge duplicate query params with comma (HTTP convention) for the
+        // expression context. The URL itself retains all individual params.
+        let mut query_params = BTreeMap::<String, String>::new();
+        for (k, v) in &query_params_vec {
+            query_params
+                .entry(k.clone())
+                .and_modify(|existing| {
+                    existing.push(',');
+                    existing.push_str(v);
+                })
+                .or_insert_with(|| v.clone());
+        }
 
         if !path_params.is_empty() && target.contains('{') {
             target = replace_path_params(&target, &path_params);

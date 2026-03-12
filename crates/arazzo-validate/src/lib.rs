@@ -178,6 +178,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         .map(|wf| wf.workflow_id.clone())
         .collect();
 
+    let mut seen_workflow_ids = HashSet::new();
+
     for (wf_idx, wf) in spec.workflows.iter().enumerate() {
         let path = if wf.workflow_id.is_empty() {
             format!("workflows[{wf_idx}]")
@@ -191,20 +193,12 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId is required"),
             });
-        } else {
-            // Check for duplicates by counting occurrences.
-            let dup_count = spec
-                .workflows
-                .iter()
-                .filter(|w| w.workflow_id == wf.workflow_id)
-                .count();
-            if dup_count > 1 {
-                errs.push(ValidationError {
-                    kind: ValidationErrorKind::DuplicateIdentifier,
-                    path: format!("{path}.workflowId"),
-                    message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
-                });
-            }
+        } else if !seen_workflow_ids.insert(wf.workflow_id.clone()) {
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::DuplicateIdentifier,
+                path: format!("{path}.workflowId"),
+                message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
+            });
         }
 
         validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);

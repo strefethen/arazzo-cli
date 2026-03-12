@@ -436,7 +436,24 @@ fn evaluate_jsonpath_count_predicate(context_value: &Value, predicate: &str) -> 
     if !after_count.starts_with('(') {
         return None;
     }
-    let close = after_count.find(')')?;
+    // Find the matching close paren using depth tracking to handle
+    // nested expressions like count(@.items[?(@.active)]).
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, ch) in after_count.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
     let path = after_count[1..close].trim();
     let remainder = after_count[close + 1..].trim();
     let (op, rhs) = parse_leading_comparison(remainder)?;
@@ -570,8 +587,14 @@ fn parse_literal_value(input: &str) -> Option<Value> {
         && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
             || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
     {
-        let value = &trimmed[1..trimmed.len() - 1];
-        return Some(Value::String(value.to_string()));
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let unescaped = inner
+            .replace("\\\"", "\"")
+            .replace("\\'", "'")
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t");
+        return Some(Value::String(unescaped));
     }
     None
 }
@@ -638,7 +661,7 @@ pub(crate) fn parse_method(operation_path: &str) -> (&str, &str) {
     let candidate = &operation_path[..idx];
     let valid = matches!(
         candidate,
-        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "TRACE"
     );
     if valid {
         return (candidate, &operation_path[idx + 1..]);
@@ -691,10 +714,10 @@ pub(super) fn resolve_payload(value: &serde_yml::Value, eval: &ExpressionEvaluat
         serde_yml::Value::Number(v) => {
             if let Some(i) = v.as_i64() {
                 json!(i)
-            } else if let Some(f) = v.as_f64() {
-                json!(f)
             } else if let Some(u) = v.as_u64() {
                 json!(u)
+            } else if let Some(f) = v.as_f64() {
+                json!(f)
             } else {
                 Value::Null
             }

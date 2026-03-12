@@ -69,7 +69,13 @@ impl Engine {
                 };
 
                 let execution = match execution_result {
-                    Ok(execution) => execution,
+                    Ok(mut execution) => {
+                        // Replay intra-step events through the parent context
+                        for event in std::mem::take(&mut execution.events) {
+                            let _ = exec_ctx.event_tx.send(event).await;
+                        }
+                        execution
+                    }
                     Err(err) => {
                         if self.inner.trace_enabled {
                             let record = Engine::build_step_trace_record(
@@ -218,7 +224,7 @@ impl Engine {
         // they run independently. Create a minimal context for the HTTP call.
         // Events from parallel steps are collected after join and emitted by the
         // caller (execute_parallel) which has access to the real exec_ctx.
-        let (tx, _) = mpsc::channel(1);
+        let (tx, mut rx) = mpsc::channel(64);
         let minimal_ctx = ExecutionContext {
             event_tx: tx,
             trace_seq: AtomicU64::new(0),
@@ -234,9 +240,17 @@ impl Engine {
             .await?;
         let duration = start.elapsed();
 
+        // Drain intra-step events so they can be replayed through the parent context.
+        let mut events = Vec::new();
+        rx.close();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+
         Ok(ParallelStepExecution {
             execution,
             duration,
+            events,
         })
     }
 }
@@ -245,4 +259,5 @@ impl Engine {
 struct ParallelStepExecution {
     execution: StepExecution,
     duration: Duration,
+    events: Vec<EngineEvent>,
 }

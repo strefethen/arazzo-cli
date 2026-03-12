@@ -173,7 +173,10 @@ impl Engine {
             })?;
 
         let steps_to_run: Vec<usize> = if no_deps {
-            let direct_refs = extract_step_refs(&workflow.steps[target_idx]);
+            let direct_refs: Vec<String> = extract_step_refs(&workflow.steps[target_idx])
+                .into_iter()
+                .filter(|r| r != step_id)
+                .collect();
             if !direct_refs.is_empty() {
                 let dep_names = direct_refs.join(", ");
                 return Err(RuntimeError::new(
@@ -234,8 +237,28 @@ impl Engine {
             let duration = start.elapsed();
             let step_outputs = vars.step_outputs(&step.step_id);
 
+            // Evaluate onSuccess/onFailure actions even in single-step mode,
+            // so that action-based error handling is honored.
+            let retry_count = BTreeMap::new();
+            let action = self
+                .handle_step_result(StepDecisionContext {
+                    workflow_id,
+                    workflow: &workflow,
+                    step_idx: idx,
+                    result: &execution.result,
+                    vars: &vars,
+                    depth: 0,
+                    retry_count: &retry_count,
+                    cancel: &exec_ctx.cancel,
+                    is_timeout: &exec_ctx.is_timeout,
+                })
+                .await;
+
+            let trace_err = match &action.flow {
+                FlowDecision::Error(err) => Some(err.message.clone()),
+                _ => execution.result.err.clone(),
+            };
             if self.inner.trace_enabled {
-                let trace_err = execution.result.err.clone();
                 let record = Engine::build_step_trace_record(
                     exec_ctx,
                     workflow_id,
@@ -243,13 +266,16 @@ impl Engine {
                     attempt,
                     duration,
                     &execution.trace,
-                    TraceDecision::with_path(TraceDecisionPath::Next),
+                    action.trace,
                     step_outputs,
                     trace_err,
                 );
                 Engine::push_trace_record(exec_ctx, record).await;
             }
 
+            if let FlowDecision::Error(err) = action.flow {
+                return Err(err);
+            }
             if !execution.result.success {
                 return Err(RuntimeError::new(
                     RuntimeErrorKind::SuccessCriteriaFailed,

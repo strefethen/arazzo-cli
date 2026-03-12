@@ -134,7 +134,17 @@ fn load_env_file(path: impl AsRef<Path>) {
             continue;
         };
         let key = key.trim();
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        std::env::set_var(key, value);
+        let trimmed = value.trim();
+        let value = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+        {
+            trimmed[1..trimmed.len() - 1]
+                .replace("\\\"", "\"")
+                .replace("\\'", "'")
+                .replace("\\\\", "\\")
+        } else {
+            trimmed.to_string()
+        };
+        std::env::set_var(key, &value);
     }
 }

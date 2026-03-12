@@ -533,10 +533,14 @@ pub(super) fn build_trace_response(response: &Response) -> TraceResponse {
         Some(preview)
     };
 
-    let body = if response.body.is_empty() {
-        None
+    let (body, body_lossy) = if response.body.is_empty() {
+        (None, false)
     } else {
-        Some(String::from_utf8_lossy(&response.body).to_string())
+        let lossy = std::str::from_utf8(&response.body).is_err();
+        (
+            Some(String::from_utf8_lossy(&response.body).to_string()),
+            lossy,
+        )
     };
 
     TraceResponse {
@@ -546,6 +550,7 @@ pub(super) fn build_trace_response(response: &Response) -> TraceResponse {
         body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
         body_preview,
         body,
+        body_lossy,
     }
 }
 

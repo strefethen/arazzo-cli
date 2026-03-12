@@ -547,10 +547,12 @@ fn resolve_replay_spec_path(
     }
 
     let trace_spec = PathBuf::from(trace_spec_path);
-    if trace_spec.is_absolute() || trace_spec.exists() {
+    if trace_spec.is_absolute() {
         return trace_spec.to_string_lossy().to_string();
     }
 
+    // Prefer trace-relative path over CWD to avoid picking up
+    // a same-named spec in the current directory.
     let trace_parent = trace_path
         .parent()
         .map(PathBuf::from)
@@ -558,6 +560,11 @@ fn resolve_replay_spec_path(
     let candidate = trace_parent.join(&trace_spec);
     if candidate.exists() {
         return candidate.to_string_lossy().to_string();
+    }
+
+    // Fall back to CWD-relative
+    if trace_spec.exists() {
+        return trace_spec.to_string_lossy().to_string();
     }
 
     trace_spec.to_string_lossy().to_string()
@@ -623,13 +630,16 @@ fn parse_input_value(raw: &str) -> Value {
         return Value::String(inner.to_string());
     }
 
-    let mut value = raw.to_string();
+    let value = raw.to_string();
+    // Env var values are always strings in the OS — return them as-is
+    // to avoid surprising coercion (e.g., MY_VAR=true → Bool(true)).
     if value.starts_with('$') {
         let var_name = value
-            .trim_start_matches('$')
-            .trim_matches(|c| c == '{' || c == '}');
+            .strip_prefix('$')
+            .unwrap_or(&value)
+            .trim_matches(|c: char| c == '{' || c == '}');
         if let Ok(found) = std::env::var(var_name) {
-            value = found;
+            return Value::String(found);
         }
     }
 
@@ -649,7 +659,9 @@ fn parse_input_value(raw: &str) -> Value {
         return serde_json::json!(v);
     }
     if let Ok(v) = value.parse::<f64>() {
-        return serde_json::json!(v);
+        if v.is_finite() {
+            return serde_json::json!(v);
+        }
     }
     Value::String(value)
 }

@@ -1847,12 +1847,12 @@ fn parse_yaml_inline_value(line: &str, prefix: &str) -> Option<String> {
 }
 
 fn trim_yaml_scalar(value: &str) -> String {
-    value
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim()
-        .to_string()
+    let t = value.trim();
+    if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')) {
+        t[1..t.len() - 1].trim().to_string()
+    } else {
+        t.to_string()
+    }
 }
 
 fn lookup_line_for_checkpoint(

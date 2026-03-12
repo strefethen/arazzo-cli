@@ -303,7 +303,9 @@ impl Parameter {
             }
             serde_yml::Value::Bool(b) => b.to_string(),
             serde_yml::Value::Null => String::new(),
-            other => serde_yml::to_string(other).unwrap_or_default(),
+            other => serde_yml::to_string(other)
+                .map(|s| s.strip_prefix("---\n").unwrap_or(&s).trim_end().to_string())
+                .unwrap_or_default(),
         }
     }
 

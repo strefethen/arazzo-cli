@@ -132,6 +132,15 @@ impl DebugController {
         Ok(guard.stop_events.clone())
     }
 
+    /// Drain and return all accumulated stop events, preventing unbounded growth.
+    pub fn take_stop_events(&self) -> Result<Vec<DebugStopEvent>, String> {
+        let mut guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(std::mem::take(&mut guard.stop_events))
+    }
+
     pub fn clear_stop_events(&self) -> Result<(), String> {
         let mut guard = self
             .state

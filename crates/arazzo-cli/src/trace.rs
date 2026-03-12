@@ -373,6 +373,7 @@ mod tests {
             body_bytes: json_body.len() as u64,
             body_preview: Some(json_body.clone()),
             body: Some(json_body),
+            body_lossy: false,
         };
 
         let mut trace = make_trace_file(response);
@@ -413,6 +414,7 @@ mod tests {
             body_bytes: json_body.len() as u64,
             body_preview: Some(json_body.clone()),
             body: Some(json_body),
+            body_lossy: false,
         };
 
         let mut trace = make_trace_file(response);

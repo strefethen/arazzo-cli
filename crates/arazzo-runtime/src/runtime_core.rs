@@ -269,14 +269,6 @@ impl ExecutionHandle {
             ))
         })
     }
-
-    /// Detach the handle: the task continues running even if this
-    /// handle is dropped. Returns a standalone CancellationToken.
-    pub fn detach(self) -> CancellationToken {
-        let cancel = self.cancel.clone();
-        std::mem::forget(self); // skip Drop to avoid cancellation
-        cancel
-    }
 }
 
 /// Collected execution output from a completed workflow.
@@ -957,6 +949,10 @@ pub struct TraceResponse {
     pub body_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// True when the body was converted via lossy UTF-8 (non-UTF-8 bytes replaced
+    /// with U+FFFD). Replay consumers should treat the body as approximate.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_lossy: bool,
 }
 
 /// Trace result of evaluating one success criterion.
