@@ -716,7 +716,11 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
     if let Some(resp) = &result.response {
         let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
         if body_preview.len() > 500 {
-            body_preview.truncate(500);
+            let mut end = 500;
+            while !body_preview.is_char_boundary(end) {
+                end -= 1;
+            }
+            body_preview.truncate(end);
             body_preview.push_str("...");
         }
         return RuntimeError::new(
@@ -888,6 +892,13 @@ fn scan_payload_refs(value: &serde_yml::Value, scan: &mut impl FnMut(&str)) {
         serde_yml::Value::String(s) => {
             if s.starts_with('$') {
                 scan(s);
+            } else if s.contains("{$") {
+                for (pos, _) in s.match_indices("{$") {
+                    if let Some(end) = s[pos + 1..].find('}') {
+                        let ref_expr = &s[pos + 1..pos + 1 + end];
+                        scan(ref_expr);
+                    }
+                }
             }
         }
         serde_yml::Value::Sequence(seq) => {
