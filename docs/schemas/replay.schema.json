@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReplayOutput",
+  "description": "JSON output contract for `replay`.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "success"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "requestsChecked": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "outputs",
+        "requestsChecked"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        }
+      },
+      "required": [
+        "kind",
+        "error"
+      ]
+    }
+  ]
+}

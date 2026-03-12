@@ -144,6 +144,22 @@ pub enum RunOutput {
     },
 }
 
+/// JSON output contract for `replay`.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ReplayOutput {
+    Success {
+        outputs: BTreeMap<String, Value>,
+        #[serde(rename = "requestsChecked")]
+        requests_checked: usize,
+    },
+    Error {
+        error: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateResult {
@@ -513,6 +529,43 @@ pub fn emit_run_outputs(
         println!("  {key}: {display}");
     }
     Ok(())
+}
+
+pub fn emit_replay_success(
+    outputs: &BTreeMap<String, Value>,
+    requests_checked: usize,
+    json: bool,
+) -> Result<(), String> {
+    if json {
+        return output_json(&ReplayOutput::Success {
+            outputs: outputs.clone(),
+            requests_checked,
+        });
+    }
+
+    println!("Replay completed");
+    println!("Requests checked: {requests_checked}");
+    if outputs.is_empty() {
+        println!("Workflow outputs: (none)");
+        return Ok(());
+    }
+
+    println!("Workflow outputs:");
+    for (key, value) in outputs {
+        println!("  {key}: {}", format_value(value));
+    }
+    Ok(())
+}
+
+pub fn emit_replay_error(json: bool, err: &str, code: Option<&str>) -> Result<(), String> {
+    if json {
+        output_json(&ReplayOutput::Error {
+            error: err.to_string(),
+            code: code.map(String::from),
+        })?;
+        return Err(String::new());
+    }
+    Err(err.to_string())
 }
 
 fn format_value(value: &Value) -> String {

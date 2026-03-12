@@ -1743,3 +1743,77 @@ fn runtime_error_chain_preserved() {
 fn internal_runtime_api_version_is_v1() {
     assert_eq!(arazzo_runtime::INTERNAL_RUNTIME_API_VERSION, "v1");
 }
+
+// ── Response size limit tests ─────────────────────────────────────
+
+#[tokio::test]
+async fn response_exceeding_size_limit_produces_error() {
+    // Serve a response body larger than the configured limit.
+    let large_body = "x".repeat(1024); // 1 KiB
+    let server = start_server(move |_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, &large_body)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "size-limit".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/big".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    // Set a very small limit (512 bytes) so the 1 KiB response exceeds it.
+    let engine = match EngineBuilder::new(spec).max_response_bytes(512).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let result = engine.execute_collect("size-limit", BTreeMap::new()).await;
+    let err = match result.outputs {
+        Err(err) => err,
+        Ok(_) => panic!("expected ResponseTooLarge error, got success"),
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::ResponseTooLarge);
+    assert_eq!(err.code(), "RUNTIME_RESPONSE_TOO_LARGE");
+}
+
+#[tokio::test]
+async fn response_within_size_limit_succeeds() {
+    let small_body = r#"{"ok":true}"#;
+    let server =
+        start_server(move |_method, _url, _headers, _body| MockHttpResponse::json(200, small_body));
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "size-ok".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/small".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = match EngineBuilder::new(spec)
+        .max_response_bytes(1_048_576)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let result = engine.execute_collect("size-ok", BTreeMap::new()).await;
+    match result.outputs {
+        Ok(_) => {} // success as expected
+        Err(err) => panic!("expected success, got: {err}"),
+    }
+}

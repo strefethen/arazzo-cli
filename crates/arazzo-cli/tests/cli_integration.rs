@@ -115,6 +115,11 @@ fn run_json_warnings(body: &Value) -> Vec<String> {
         .collect()
 }
 
+fn assert_replay_json_kind(body: &Value, expected: &str) {
+    let kind = body.get("kind").and_then(Value::as_str).unwrap_or_default();
+    assert_eq!(kind, expected, "unexpected replay JSON envelope: {body}");
+}
+
 fn expression_warning_spec() -> &'static str {
     r#"
 arazzo: 1.0.0
@@ -1112,6 +1117,98 @@ fn run_trace_write_failure_returns_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("writing trace"));
+}
+
+#[test]
+fn replay_json_reexecutes_trace_successfully() {
+    let temp = TempDir::new("arazzo-replay-success");
+    let source = fixture_spec();
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+    if let Err(err) = fs::copy(&source, &spec_path) {
+        panic!("copying fixture to {}: {err}", spec_path.display());
+    }
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let trace_output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=429",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(trace_output.status.success());
+
+    let replay_output = run(["--json", "replay", &trace_str].as_slice(), None);
+    assert!(replay_output.status.success());
+    let body = stdout_json(&replay_output);
+    assert_replay_json_kind(&body, "success");
+    assert_eq!(
+        body.get("requestsChecked"),
+        Some(&Value::Number(2.into())),
+        "expected replay to validate two HTTP requests"
+    );
+}
+
+#[test]
+fn replay_json_reports_request_drift_error() {
+    let temp = TempDir::new("arazzo-replay-drift");
+    let source = fixture_spec();
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+    if let Err(err) = fs::copy(&source, &spec_path) {
+        panic!("copying fixture to {}: {err}", spec_path.display());
+    }
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let trace_output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=429",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(trace_output.status.success());
+
+    let spec_raw = match fs::read_to_string(&spec_path) {
+        Ok(raw) => raw,
+        Err(err) => panic!("reading {}: {err}", spec_path.display()),
+    };
+    let drifted = spec_raw.replace("/status/{code}", "/status/200");
+    if let Err(err) = fs::write(&spec_path, drifted) {
+        panic!("writing drifted spec {}: {err}", spec_path.display());
+    }
+
+    let replay_output = run(["--json", "replay", &trace_str].as_slice(), None);
+    assert!(!replay_output.status.success());
+    let body = stdout_json(&replay_output);
+    assert_replay_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUNTIME_REPLAY_REQUEST_MISMATCH")
+    );
 }
 
 // ---------------------------------------------------------------------------

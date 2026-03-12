@@ -206,6 +206,8 @@ impl Engine {
             .client
             .request(
                 RequestConfig {
+                    workflow_id: workflow_id.to_string(),
+                    step_id: step.step_id.clone(),
                     method: prep.method.clone(),
                     url: prep.url_result.url.clone(),
                     headers: prep.headers.clone(),

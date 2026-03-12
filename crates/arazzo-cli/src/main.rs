@@ -2,7 +2,7 @@
 
 //! CLI for executing and debugging Arazzo 1.0.1 API workflow specifications.
 //!
-//! Commands: `run`, `validate`, `list`, `catalog`, `show`, `schema`.
+//! Commands: `run`, `replay`, `validate`, `list`, `catalog`, `show`, `schema`.
 //! All commands support `--json` for structured output.
 
 mod cli;
@@ -57,6 +57,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             strict_inputs,
             trace,
             trace_max_body_bytes,
+            max_response_size,
         } => {
             let context = RunContext::new(
                 global,
@@ -77,9 +78,27 @@ async fn run(cli: Cli) -> Result<(), String> {
                     strict_inputs,
                     trace,
                     trace_max_body_bytes,
+                    max_response_size,
                 },
             );
             handlers::run_workflow(context).await
+        }
+        Commands::Replay {
+            trace,
+            spec,
+            workflow_id,
+            execution_timeout,
+            openapi,
+        } => {
+            handlers::replay_trace(
+                &trace,
+                spec.as_deref(),
+                workflow_id.as_deref(),
+                &openapi,
+                execution_timeout,
+                global,
+            )
+            .await
         }
         Commands::Validate { spec } => handlers::validate_spec(&spec, global),
         Commands::List { spec } => handlers::list_workflows(&spec, global),

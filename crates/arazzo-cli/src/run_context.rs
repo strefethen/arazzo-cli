@@ -28,6 +28,7 @@ pub struct RunOptions {
     pub strict_inputs: bool,
     pub trace: Option<String>,
     pub trace_max_body_bytes: usize,
+    pub max_response_size: Option<usize>,
 }
 
 /// Centralized run context with global options.

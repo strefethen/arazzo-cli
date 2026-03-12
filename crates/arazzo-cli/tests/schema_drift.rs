@@ -88,3 +88,8 @@ fn schema_show_matches_checked_in_file() {
 fn schema_run_matches_checked_in_file() {
     assert_schema_matches_file("run", "run.schema.json");
 }
+
+#[test]
+fn schema_replay_matches_checked_in_file() {
+    assert_schema_matches_file("replay", "replay.schema.json");
+}

@@ -244,3 +244,31 @@ fn snapshot_run_trace_failure_contract() {
 
     let _ = fs::remove_dir_all(temp_dir);
 }
+
+#[test]
+fn snapshot_replay_json_contract() {
+    let temp_dir = temp_dir("arazzo-replay-snapshot");
+    let trace_path = temp_dir.join("trace.json");
+    let trace_path_str = trace_path.to_string_lossy().to_string();
+
+    let trace_output = run([
+        "--json",
+        "run",
+        "examples/httpbin-get.arazzo.yaml",
+        "status-check",
+        "--dry-run",
+        "--input",
+        "code=429",
+        "--trace",
+        &trace_path_str,
+    ]
+    .as_slice());
+    assert!(trace_output.status.success());
+
+    let replay_output = run(["--json", "replay", &trace_path_str].as_slice());
+    assert!(replay_output.status.success());
+    let body = stdout_json(&replay_output);
+    assert_snapshot("replay.json", &body);
+
+    let _ = fs::remove_dir_all(temp_dir);
+}

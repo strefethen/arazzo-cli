@@ -1,6 +1,6 @@
 //! Workflow execution runtime for the Rust implementation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -21,6 +21,8 @@ const MAX_RETRIES_PER_STEP: usize = 3;
 const MAX_CALL_DEPTH: usize = 10;
 const DEFAULT_CHANNEL_CAPACITY: usize = 1024;
 pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
+/// Default maximum response body size: 10 MiB.
+pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Runtime error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,10 @@ pub enum RuntimeErrorKind {
     StepMissingDependency,
     InputValidation,
     InternalError,
+    ResponseTooLarge,
+    ReplayTraceExhausted,
+    ReplayRequestMismatch,
+    ReplayResponseMissing,
 }
 
 impl RuntimeErrorKind {
@@ -83,6 +89,10 @@ impl RuntimeErrorKind {
             Self::StepMissingDependency => "STEP_MISSING_DEPENDENCY",
             Self::InputValidation => "RUNTIME_INPUT_VALIDATION",
             Self::InternalError => "RUNTIME_INTERNAL_ERROR",
+            Self::ResponseTooLarge => "RUNTIME_RESPONSE_TOO_LARGE",
+            Self::ReplayTraceExhausted => "RUNTIME_REPLAY_TRACE_EXHAUSTED",
+            Self::ReplayRequestMismatch => "RUNTIME_REPLAY_REQUEST_MISMATCH",
+            Self::ReplayResponseMissing => "RUNTIME_REPLAY_RESPONSE_MISSING",
         }
     }
 }
@@ -432,29 +442,94 @@ impl RateLimiterState {
 
 #[derive(Debug, Clone)]
 struct HttpClient {
-    inner: reqwest::Client,
+    mode: HttpClientMode,
     default_headers: BTreeMap<String, String>,
     rate_limiter: Arc<tokio::sync::Mutex<RateLimiterState>>,
+    max_response_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+enum HttpClientMode {
+    Live(reqwest::Client),
+    Replay(Arc<tokio::sync::Mutex<ReplayState>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ReplayKey {
+    workflow_id: String,
+    step_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayRecord {
+    seq: u64,
+    attempt: u32,
+    request: TraceRequest,
+    response: Option<TraceResponse>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReplayState {
+    records_by_step: BTreeMap<ReplayKey, VecDeque<ReplayRecord>>,
+}
+
+impl ReplayState {
+    fn from_trace_steps(steps: &[TraceStepRecord]) -> Self {
+        let mut records_by_step = BTreeMap::<ReplayKey, VecDeque<ReplayRecord>>::new();
+        for step in steps {
+            let Some(request) = &step.request else {
+                continue;
+            };
+            let key = ReplayKey {
+                workflow_id: step.workflow_id.clone(),
+                step_id: step.step_id.clone(),
+            };
+            records_by_step
+                .entry(key)
+                .or_default()
+                .push_back(ReplayRecord {
+                    seq: step.seq,
+                    attempt: step.attempt,
+                    request: request.clone(),
+                    response: step.response.clone(),
+                    error: step.error.clone(),
+                });
+        }
+        Self { records_by_step }
+    }
 }
 
 impl HttpClient {
-    fn new(config: &ClientConfig) -> Result<Self, RuntimeError> {
-        let inner = reqwest::Client::builder()
-            .timeout(config.timeout)
-            .build()
-            .map_err(|err| {
-                RuntimeError::with_source(
-                    RuntimeErrorKind::HttpClientBuild,
-                    format!("building HTTP client: {err}"),
-                    err,
-                )
-            })?;
+    fn new(
+        config: &ClientConfig,
+        max_response_bytes: usize,
+        replay_trace_steps: Option<Vec<TraceStepRecord>>,
+    ) -> Result<Self, RuntimeError> {
+        let mode = if let Some(steps) = replay_trace_steps {
+            HttpClientMode::Replay(Arc::new(tokio::sync::Mutex::new(
+                ReplayState::from_trace_steps(&steps),
+            )))
+        } else {
+            let inner = reqwest::Client::builder()
+                .timeout(config.timeout)
+                .build()
+                .map_err(|err| {
+                    RuntimeError::with_source(
+                        RuntimeErrorKind::HttpClientBuild,
+                        format!("building HTTP client: {err}"),
+                        err,
+                    )
+                })?;
+            HttpClientMode::Live(inner)
+        };
         Ok(Self {
-            inner,
+            mode,
             default_headers: config.default_headers.clone(),
             rate_limiter: Arc::new(tokio::sync::Mutex::new(RateLimiterState::new(
                 &config.rate_limit,
             ))),
+            max_response_bytes,
         })
     }
 
@@ -464,6 +539,20 @@ impl HttpClient {
         cancel: &CancellationToken,
         is_timeout: &AtomicBool,
     ) -> Result<Response, RuntimeError> {
+        if let HttpClientMode::Replay(state) = &self.mode {
+            return self.replay_request(state, cfg).await;
+        }
+
+        let inner = match &self.mode {
+            HttpClientMode::Live(inner) => inner,
+            HttpClientMode::Replay(_) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InternalError,
+                    "runtime entered unreachable replay HTTP mode",
+                ));
+            }
+        };
+
         self.wait_for_rate_limit(cancel, is_timeout).await?;
         let method = reqwest::Method::from_bytes(cfg.method.as_bytes()).map_err(|err| {
             RuntimeError::new(
@@ -471,7 +560,7 @@ impl HttpClient {
                 format!("invalid HTTP method {}: {err}", cfg.method),
             )
         })?;
-        let mut req = self.inner.request(method, cfg.url);
+        let mut req = inner.request(method, cfg.url);
 
         for (k, v) in &self.default_headers {
             req = req.header(k, v);
@@ -483,7 +572,7 @@ impl HttpClient {
             req = req.body(body);
         }
 
-        let resp = req.send().await.map_err(|err| {
+        let mut resp = req.send().await.map_err(|err| {
             RuntimeError::with_source(
                 RuntimeErrorKind::HttpRequest,
                 format!("executing request: {err}"),
@@ -497,17 +586,40 @@ impl HttpClient {
             let value = v.to_str().unwrap_or_default().to_string();
             headers.insert(k.to_string(), value);
         }
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|err| {
-                RuntimeError::with_source(
-                    RuntimeErrorKind::HttpResponseRead,
-                    format!("reading response body: {err}"),
-                    err,
-                )
-            })?
-            .to_vec();
+
+        // Fail fast if Content-Length already exceeds the limit.
+        if let Some(content_length) = resp.content_length() {
+            if content_length > self.max_response_bytes as u64 {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ResponseTooLarge,
+                    format!(
+                        "response body too large: Content-Length {content_length} exceeds limit of {} bytes",
+                        self.max_response_bytes
+                    ),
+                ));
+            }
+        }
+
+        // Stream body in chunks, enforcing the size limit.
+        let max = self.max_response_bytes;
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|err| {
+            RuntimeError::with_source(
+                RuntimeErrorKind::HttpResponseRead,
+                format!("reading response body: {err}"),
+                err,
+            )
+        })? {
+            if body.len() + chunk.len() > max {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ResponseTooLarge,
+                    format!(
+                        "response body too large: exceeded limit of {max} bytes while streaming"
+                    ),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
 
         let content_type_raw = headers
             .get("content-type")
@@ -544,6 +656,81 @@ impl HttpClient {
         })
     }
 
+    async fn replay_request(
+        &self,
+        state: &Arc<tokio::sync::Mutex<ReplayState>>,
+        cfg: RequestConfig,
+    ) -> Result<Response, RuntimeError> {
+        let key = ReplayKey {
+            workflow_id: cfg.workflow_id.clone(),
+            step_id: cfg.step_id.clone(),
+        };
+
+        let record = {
+            let mut guard = state.lock().await;
+            let queue = guard.records_by_step.get_mut(&key).ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::ReplayTraceExhausted,
+                    format!(
+                        "no recorded replay request for workflow \"{}\" step \"{}\"",
+                        key.workflow_id, key.step_id
+                    ),
+                )
+            })?;
+            queue.pop_front().ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::ReplayTraceExhausted,
+                    format!(
+                        "recorded replay requests exhausted for workflow \"{}\" step \"{}\"",
+                        key.workflow_id, key.step_id
+                    ),
+                )
+            })?
+        };
+
+        validate_replay_request(&record.request, &cfg, record.seq, record.attempt)?;
+
+        let trace_response = match (record.response, record.error) {
+            (Some(response), _) => response,
+            (None, Some(error)) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::HttpRequest,
+                    format!(
+                        "replay trace request failed at seq {} (attempt {}): {error}",
+                        record.seq, record.attempt
+                    ),
+                ));
+            }
+            (None, None) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ReplayResponseMissing,
+                    format!(
+                        "replay trace missing response for workflow \"{}\" step \"{}\" (seq {})",
+                        key.workflow_id, key.step_id, record.seq
+                    ),
+                ));
+            }
+        };
+
+        let body = trace_response
+            .body_preview
+            .clone()
+            .unwrap_or_default()
+            .into_bytes();
+        let body_json = match trace_response.content_type {
+            ContentType::Json => serde_json::from_slice::<Value>(&body).ok(),
+            _ => None,
+        };
+
+        Ok(Response {
+            status_code: trace_response.status_code,
+            headers: trace_response.headers,
+            body,
+            body_json,
+            content_type: trace_response.content_type,
+        })
+    }
+
     async fn wait_for_rate_limit(
         &self,
         cancel: &CancellationToken,
@@ -576,9 +763,73 @@ impl HttpClient {
     }
 }
 
+fn validate_replay_request(
+    expected: &TraceRequest,
+    actual: &RequestConfig,
+    seq: u64,
+    attempt: u32,
+) -> Result<(), RuntimeError> {
+    if !expected.method.eq_ignore_ascii_case(&actual.method) {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::ReplayRequestMismatch,
+            format!(
+                "replay request drift at seq {seq} attempt {attempt}: method expected \"{}\" got \"{}\"",
+                expected.method, actual.method
+            ),
+        ));
+    }
+
+    if expected.url != actual.url {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::ReplayRequestMismatch,
+            format!(
+                "replay request drift at seq {seq} attempt {attempt}: url expected \"{}\" got \"{}\"",
+                expected.url, actual.url
+            ),
+        ));
+    }
+
+    if expected.headers != actual.headers {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::ReplayRequestMismatch,
+            format!(
+                "replay request drift at seq {seq} attempt {attempt}: headers expected {:?} got {:?}",
+                expected.headers, actual.headers
+            ),
+        ));
+    }
+
+    if !replay_body_matches(expected.body.as_ref(), actual.body.as_deref()) {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::ReplayRequestMismatch,
+            format!("replay request drift at seq {seq} attempt {attempt}: request body mismatch"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn replay_body_matches(expected: Option<&Value>, actual: Option<&[u8]>) -> bool {
+    match (expected, actual) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(expected_value), Some(actual_bytes)) => {
+            if let Ok(parsed) = serde_json::from_slice::<Value>(actual_bytes) {
+                return parsed == *expected_value;
+            }
+            match expected_value {
+                Value::String(s) => std::str::from_utf8(actual_bytes).is_ok_and(|text| text == s),
+                _ => false,
+            }
+        }
+    }
+}
+
 /// Request settings used by the runtime client.
 #[derive(Debug, Clone)]
 pub struct RequestConfig {
+    pub workflow_id: String,
+    pub step_id: String,
     pub method: String,
     pub url: String,
     pub headers: BTreeMap<String, String>,
@@ -1020,8 +1271,10 @@ pub struct EngineBuilder {
     parallel: bool,
     dry_run: bool,
     trace: bool,
+    replay_trace_steps: Option<Vec<TraceStepRecord>>,
     strict_inputs: bool,
     channel_capacity: usize,
+    max_response_bytes: usize,
     trace_hook: Option<Arc<dyn TraceHook>>,
     observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
@@ -1038,8 +1291,10 @@ impl EngineBuilder {
             parallel: false,
             dry_run: false,
             trace: false,
+            replay_trace_steps: None,
             strict_inputs: false,
             channel_capacity: DEFAULT_CHANNEL_CAPACITY,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             trace_hook: None,
             observer: None,
             debug_controller: None,
@@ -1068,6 +1323,13 @@ impl EngineBuilder {
     /// Enables or disables detailed per-step trace recording during execution.
     pub fn trace(mut self, enabled: bool) -> Self {
         self.trace = enabled;
+        self
+    }
+
+    /// Enables replay mode by serving recorded step responses from trace records
+    /// instead of issuing live network requests.
+    pub fn replay_trace_steps(mut self, steps: Vec<TraceStepRecord>) -> Self {
+        self.replay_trace_steps = Some(steps);
         self
     }
 
@@ -1103,6 +1365,13 @@ impl EngineBuilder {
         self
     }
 
+    /// Sets the maximum allowed response body size in bytes. Responses exceeding
+    /// this limit will produce a `ResponseTooLarge` error. Default: 10 MiB.
+    pub fn max_response_bytes(mut self, limit: usize) -> Self {
+        self.max_response_bytes = limit;
+        self
+    }
+
     /// Adds an OpenAPI spec to be parsed and indexed during build.
     /// Call multiple times for multiple specs. Replaces `Engine::load_openapi_spec`.
     pub fn openapi_spec(mut self, data: Vec<u8>) -> Self {
@@ -1115,7 +1384,7 @@ impl EngineBuilder {
     /// Returns an error if the HTTP client cannot be constructed (e.g. invalid TLS settings).
     pub fn build(self) -> Result<Engine, RuntimeError> {
         let config = self.client_config.unwrap_or_default();
-        let client = HttpClient::new(&config)?;
+        let client = HttpClient::new(&config, self.max_response_bytes, self.replay_trace_steps)?;
 
         let base_url = self
             .spec

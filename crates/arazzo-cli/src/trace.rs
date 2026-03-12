@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::TraceStepRecord;
 use humantime::format_rfc3339;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const TRACE_SCHEMA_VERSION: &str = "trace.v1";
@@ -35,7 +35,7 @@ const TRACE_SENSITIVE_KEYS: [&str; 18] = [
     "sessionid",
 ];
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceFile {
     pub schema_version: String,
@@ -45,13 +45,13 @@ pub struct TraceFile {
     pub steps: Vec<TraceStepRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TraceTool {
     pub name: String,
     pub version: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceRun {
     pub spec_path: String,
@@ -90,6 +90,20 @@ pub fn parse_trace_max_body_bytes(raw: &str) -> Result<usize, String> {
         ));
     }
     Ok(value)
+}
+
+pub fn read_trace_file(path: &Path) -> Result<TraceFile, String> {
+    let data =
+        fs::read(path).map_err(|err| format!("reading trace file {}: {err}", path.display()))?;
+    let trace: TraceFile = serde_json::from_slice(&data)
+        .map_err(|err| format!("parsing trace JSON {}: {err}", path.display()))?;
+    if trace.schema_version != TRACE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported trace schema version \"{}\" (expected \"{}\")",
+            trace.schema_version, TRACE_SCHEMA_VERSION
+        ));
+    }
+    Ok(trace)
 }
 
 pub fn build_trace_file(

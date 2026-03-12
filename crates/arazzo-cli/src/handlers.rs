@@ -12,7 +12,8 @@ use crate::cli::ExpressionDiagnosticsMode;
 use crate::output::{self, CatalogEntry};
 use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::{
-    build_trace_file, prepare_trace_for_write, write_trace_file_atomic, TraceRunMetadata,
+    build_trace_file, prepare_trace_for_write, read_trace_file, write_trace_file_atomic,
+    TraceRunMetadata,
 };
 
 pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
@@ -73,6 +74,10 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         .dry_run(run.dry_run)
         .strict_inputs(run.strict_inputs)
         .trace(trace_enabled);
+
+    if let Some(max_bytes) = run.max_response_size {
+        builder = builder.max_response_bytes(max_bytes);
+    }
 
     for openapi_path in &run.openapi_flags {
         let bytes = match fs::read(openapi_path) {
@@ -217,6 +222,107 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         output::emit_run_steps(&trace_steps);
     }
     output::emit_run_outputs(&outputs, global.json, &expression_warnings)
+}
+
+pub async fn replay_trace(
+    trace_path: &str,
+    spec_override: Option<&str>,
+    workflow_id_override: Option<&str>,
+    openapi_flags: &[String],
+    execution_timeout: std::time::Duration,
+    global: GlobalOptions,
+) -> Result<(), String> {
+    let trace_path_ref = Path::new(trace_path);
+    let trace = match read_trace_file(trace_path_ref) {
+        Ok(trace) => trace,
+        Err(err) => {
+            return output::emit_replay_error(global.json, &err, Some("REPLAY_TRACE_LOAD"));
+        }
+    };
+
+    let workflow_id = workflow_id_override
+        .unwrap_or(&trace.run.workflow_id)
+        .to_string();
+    let spec_path =
+        resolve_replay_spec_path(trace_path_ref, spec_override, trace.run.spec_path.as_str());
+    let spec = match arazzo_validate::parse(&spec_path) {
+        Ok(spec) => spec,
+        Err(err) => {
+            return output::emit_replay_error(
+                global.json,
+                &err.to_string(),
+                Some(replay_parse_error_code(&err)),
+            );
+        }
+    };
+
+    let mut builder = EngineBuilder::new(spec)
+        .parallel(trace.run.parallel)
+        .trace(true)
+        .replay_trace_steps(trace.steps.clone());
+
+    for openapi_path in openapi_flags {
+        let bytes = match fs::read(openapi_path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let msg = format!("reading OpenAPI file \"{openapi_path}\": {err}");
+                return output::emit_replay_error(
+                    global.json,
+                    &msg,
+                    Some("REPLAY_OPENAPI_READ_FILE"),
+                );
+            }
+        };
+        builder = builder.openapi_spec(bytes);
+    }
+
+    let engine = match builder.build() {
+        Ok(engine) => engine,
+        Err(err) => {
+            return output::emit_replay_error(global.json, &err.to_string(), Some(err.kind.code()));
+        }
+    };
+
+    if global.verbose {
+        eprintln!("Replaying trace: {trace_path}");
+        eprintln!("Spec: {spec_path}");
+        eprintln!("Workflow: {workflow_id}");
+    }
+
+    let expected_request_count = trace.steps.iter().filter(|s| s.request.is_some()).count();
+    let exec_result = engine
+        .execute_with_timeout(&workflow_id, trace.inputs.clone(), execution_timeout)
+        .collect()
+        .await;
+
+    let replay_steps: Vec<TraceStepRecord> = exec_result
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::TraceStep(r) => Some(r.clone()),
+            _ => None,
+        })
+        .collect();
+    let actual_request_count = replay_steps.iter().filter(|s| s.request.is_some()).count();
+
+    let outputs = match exec_result.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => {
+            return output::emit_replay_error(global.json, &err.to_string(), Some(err.kind.code()));
+        }
+    };
+
+    if actual_request_count != expected_request_count {
+        return output::emit_replay_error(
+            global.json,
+            &format!(
+                "replay request drift: expected {expected_request_count} recorded request(s) but replay executed {actual_request_count}"
+            ),
+            Some("REPLAY_REQUEST_COUNT_MISMATCH"),
+        );
+    }
+
+    output::emit_replay_success(&outputs, actual_request_count, global.json)
 }
 
 pub fn generate_workflow(
@@ -414,6 +520,41 @@ fn run_parse_error_code(err: &ValidateError) -> &'static str {
     }
 }
 
+fn replay_parse_error_code(err: &ValidateError) -> &'static str {
+    match err {
+        ValidateError::ReadFile(_) => "REPLAY_SPEC_READ_FILE",
+        ValidateError::ParseYaml(_) => "REPLAY_SPEC_PARSE_YAML",
+        ValidateError::Validation(_) => "REPLAY_SPEC_VALIDATION",
+        ValidateError::ComponentResolution(_) => "REPLAY_SPEC_COMPONENT_RESOLUTION",
+    }
+}
+
+fn resolve_replay_spec_path(
+    trace_path: &Path,
+    spec_override: Option<&str>,
+    trace_spec_path: &str,
+) -> String {
+    if let Some(spec) = spec_override {
+        return spec.to_string();
+    }
+
+    let trace_spec = PathBuf::from(trace_spec_path);
+    if trace_spec.is_absolute() || trace_spec.exists() {
+        return trace_spec.to_string_lossy().to_string();
+    }
+
+    let trace_parent = trace_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let candidate = trace_parent.join(&trace_spec);
+    if candidate.exists() {
+        return candidate.to_string_lossy().to_string();
+    }
+
+    trace_spec.to_string_lossy().to_string()
+}
+
 fn collect_expression_warnings(steps: &[TraceStepRecord]) -> Vec<String> {
     let mut warnings = Vec::new();
     for step in steps {
@@ -446,8 +587,8 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
     use crate::output::{
-        CatalogEntry, GenerateResult, RunOutput, StepInfo, ValidateResult, WorkflowDetail,
-        WorkflowInfo,
+        CatalogEntry, GenerateResult, ReplayOutput, RunOutput, StepInfo, ValidateResult,
+        WorkflowDetail, WorkflowInfo,
     };
 
     match command {
@@ -457,12 +598,13 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         Some("show") => output::output_json(&schema_for!(WorkflowDetail)),
         Some("steps") => output::output_json(&schema_for!(Vec<StepInfo>)),
         Some("run") => output::output_json(&schema_for!(RunOutput)),
+        Some("replay") => output::output_json(&schema_for!(ReplayOutput)),
         Some("generate") => output::output_json(&schema_for!(GenerateResult)),
         Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, generate"
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, replay, generate"
         )),
         None => output::output_json(&[
-            "validate", "list", "catalog", "show", "steps", "run", "generate",
+            "validate", "list", "catalog", "show", "steps", "run", "replay", "generate",
         ]),
     }
 }

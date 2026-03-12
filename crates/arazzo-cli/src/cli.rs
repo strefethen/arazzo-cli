@@ -85,6 +85,34 @@ pub enum Commands {
             value_parser = parse_trace_max_body_bytes
         )]
         trace_max_body_bytes: usize,
+
+        /// Maximum response body size in bytes (default: 10485760 = 10 MiB)
+        #[arg(long = "max-response-size")]
+        max_response_size: Option<usize>,
+    },
+    /// Replay a recorded trace.v1 file with deterministic response injection
+    Replay {
+        /// Path to trace.v1 JSON file
+        trace: String,
+
+        /// Override spec path from trace.run.specPath
+        #[arg(long = "spec")]
+        spec: Option<String>,
+
+        /// Override workflow id from trace.run.workflowId
+        #[arg(long = "workflow-id")]
+        workflow_id: Option<String>,
+
+        #[arg(
+            long = "execution-timeout",
+            default_value = "5m",
+            value_parser = parse_duration_value
+        )]
+        execution_timeout: Duration,
+
+        /// OpenAPI file used to resolve operationId targets (repeatable)
+        #[arg(long = "openapi")]
+        openapi: Vec<String>,
     },
     Validate {
         spec: String,
@@ -121,7 +149,7 @@ pub enum Commands {
     },
     /// Print JSON Schema for a command's --json output
     Schema {
-        /// Command name (validate, list, catalog, show, run, generate). Omit to list available commands.
+        /// Command name (validate, list, catalog, show, steps, run, replay, generate). Omit to list available commands.
         command: Option<String>,
     },
 }
