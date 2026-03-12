@@ -70,21 +70,33 @@ pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
     };
     let text = XMLNS_RE.replace_all(text, "");
     let text = NS_PREFIX_RE.replace_all(&text, "<$1");
-    let package = match sxd_document::parser::parse(&text) {
-        Ok(p) => p,
+    let mut doc = match uppsala::parse(&text) {
+        Ok(d) => d,
         Err(_) => return Value::Null,
     };
-    let doc = package.as_document();
-    match sxd_xpath::evaluate_xpath(&doc, expr) {
-        Ok(val) => {
-            let s = val.string();
+    doc.prepare_xpath();
+    let eval = uppsala::XPathEvaluator::new();
+    let root = doc.root();
+    match eval.evaluate(&doc, root, expr) {
+        Ok(uppsala::XPathValue::String(s)) if !s.is_empty() => Value::String(s),
+        Ok(uppsala::XPathValue::NodeSet(nodes)) if !nodes.is_empty() => {
+            let s = doc.text_content_deep(nodes[0]);
             if s.is_empty() {
                 Value::Null
             } else {
                 Value::String(s)
             }
         }
-        Err(_) => Value::Null,
+        Ok(uppsala::XPathValue::Number(n)) => {
+            let s = n.to_string();
+            if s.is_empty() {
+                Value::Null
+            } else {
+                Value::String(s)
+            }
+        }
+        Ok(uppsala::XPathValue::Boolean(b)) => Value::String(b.to_string()),
+        _ => Value::Null,
     }
 }
 

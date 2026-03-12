@@ -237,6 +237,79 @@ fn bench_header_lookup(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark XPath extraction — parse XML + evaluate XPath expression.
+fn bench_xpath_extraction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("xpath_extraction");
+
+    let small_xml = br#"<?xml version="1.0"?>
+<root><item><title>Hello</title><value>42</value></item></root>"#;
+
+    let medium_xml = {
+        let mut s = String::from(r#"<?xml version="1.0"?><feed>"#);
+        for i in 0..50 {
+            s.push_str(&format!(
+                "<entry><title>Entry {i}</title><id>{i}</id><summary>Summary for entry {i}</summary></entry>"
+            ));
+        }
+        s.push_str("</feed>");
+        s.into_bytes()
+    };
+
+    let namespaced_xml = br#"<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ns1:GetResponse xmlns:ns1="http://example.com/api">
+      <ns1:Result>
+        <ns1:Name>Alice</ns1:Name>
+        <ns1:StatusCode>200</ns1:StatusCode>
+      </ns1:Result>
+    </ns1:GetResponse>
+  </soap:Body>
+</soap:Envelope>"#;
+
+    // Benchmark: small XML, simple path
+    group.bench_function("small_simple_path", |b| {
+        b.iter(|| {
+            let xml = std::str::from_utf8(black_box(small_xml)).unwrap();
+            let mut doc = uppsala::parse(xml).unwrap();
+            doc.prepare_xpath();
+            let eval = uppsala::XPathEvaluator::new();
+            let root = doc.root();
+            eval.evaluate(&doc, root, "//item/title").unwrap()
+        })
+    });
+
+    // Benchmark: medium XML (50 entries), positional predicate
+    group.bench_function("medium_positional", |b| {
+        b.iter(|| {
+            let xml = std::str::from_utf8(black_box(&medium_xml)).unwrap();
+            let mut doc = uppsala::parse(xml).unwrap();
+            doc.prepare_xpath();
+            let eval = uppsala::XPathEvaluator::new();
+            let root = doc.root();
+            eval.evaluate(&doc, root, "//entry[25]/title").unwrap()
+        })
+    });
+
+    // Benchmark: namespaced XML with regex stripping (full pipeline)
+    group.bench_function("namespaced_full_pipeline", |b| {
+        let xmlns_re = regex::Regex::new(r#"xmlns(?::\w+)?="[^"]*""#).unwrap();
+        let ns_prefix_re = regex::Regex::new(r"<(/?)[\w-]+:").unwrap();
+        b.iter(|| {
+            let xml = std::str::from_utf8(black_box(namespaced_xml.as_slice())).unwrap();
+            let stripped = xmlns_re.replace_all(xml, "");
+            let stripped = ns_prefix_re.replace_all(&stripped, "<$1");
+            let mut doc = uppsala::parse(&stripped).unwrap();
+            doc.prepare_xpath();
+            let eval = uppsala::XPathEvaluator::new();
+            let root = doc.root();
+            eval.evaluate(&doc, root, "//Name").unwrap()
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_regex_compilation,
@@ -244,5 +317,6 @@ criterion_group!(
     bench_condition_evaluation,
     bench_response_body_clone,
     bench_header_lookup,
+    bench_xpath_extraction,
 );
 criterion_main!(benches);
