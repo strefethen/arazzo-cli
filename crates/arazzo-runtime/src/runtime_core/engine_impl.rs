@@ -582,7 +582,15 @@ impl Engine {
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
             let value_str = param.value_as_str();
-            let value = if value_str.contains("{$") {
+            let value = if let Some(inner) = value_str
+                .strip_prefix('{')
+                .and_then(|s| s.strip_suffix('}'))
+                .filter(|s| s.starts_with('$') && !s.contains('{'))
+            {
+                // Single expression like {$inputs.count} — preserve type
+                eval.evaluate(inner)
+            } else if value_str.contains("{$") {
+                // Mixed text + expressions — must stringify
                 Value::String(eval.interpolate_string(&value_str))
             } else {
                 eval.evaluate(&value_str)

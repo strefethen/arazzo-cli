@@ -133,14 +133,27 @@ impl ExpressionEvaluator {
             }
 
             "inputs" => {
-                let name = remainder.unwrap_or("");
-                self.ctx.inputs.get(name).cloned().unwrap_or_else(|| {
-                    warnings.push(ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: format!("input \"{name}\" not found in context"),
-                    });
-                    Value::Null
-                })
+                let full = remainder.unwrap_or("");
+                let (key, sub_path) = match full.split_once('.') {
+                    Some((k, rest)) => (k, rest),
+                    None => (full, ""),
+                };
+                match self.ctx.inputs.get(key) {
+                    Some(root) => {
+                        if sub_path.is_empty() {
+                            root.clone()
+                        } else {
+                            resolve_dot_path(root, sub_path).unwrap_or(Value::Null)
+                        }
+                    }
+                    None => {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!("input \"{key}\" not found in context"),
+                        });
+                        Value::Null
+                    }
+                }
             }
 
             "steps" => {
@@ -1659,5 +1672,43 @@ mod tests {
         let eval = ExpressionEvaluator::new(EvalContext::default());
         assert_eq!(eval.evaluate("$steps.missing.outputs.x"), Value::Null);
         assert_eq!(eval.evaluate("$foo.bar"), Value::Null);
+    }
+
+    // ── Bug #14: $inputs nested traversal ─────────────────────────
+
+    #[test]
+    fn inputs_nested_dot_path_traversal() {
+        let ctx = EvalContext {
+            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": {"baz": 42}}))]),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+
+        // Nested traversal
+        assert_eq!(eval.evaluate("$inputs.foo.bar.baz"), json!(42));
+        // One level deep
+        assert_eq!(eval.evaluate("$inputs.foo.bar"), json!({"baz": 42}));
+        // Top-level (flat key) still works
+        assert_eq!(eval.evaluate("$inputs.foo"), json!({"bar": {"baz": 42}}));
+    }
+
+    #[test]
+    fn inputs_flat_key_still_works() {
+        let ctx = EvalContext {
+            inputs: BTreeMap::from([("simple".to_string(), json!("hello"))]),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+        assert_eq!(eval.evaluate("$inputs.simple"), json!("hello"));
+    }
+
+    #[test]
+    fn inputs_nested_missing_sub_path_returns_null() {
+        let ctx = EvalContext {
+            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": 1}))]),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+        assert_eq!(eval.evaluate("$inputs.foo.missing"), Value::Null);
     }
 }

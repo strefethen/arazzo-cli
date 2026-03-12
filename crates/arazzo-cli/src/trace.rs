@@ -204,16 +204,20 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
 
         if let Some(response) = &mut step.response {
             redact_headers(&mut response.headers);
-            if matches!(response.content_type, arazzo_runtime::ContentType::Json) {
-                if let Some(preview) = &mut response.body_preview {
-                    if let Ok(mut value) = serde_json::from_str::<Value>(preview) {
-                        redact_json_value(&mut value);
-                        if let Ok(serialized) = serde_json::to_string(&value) {
-                            *preview = serialized;
-                        }
+            // Try JSON redaction on both body and body_preview regardless of
+            // content type — catches JSON with incorrect content-type headers.
+            for text in [&mut response.body_preview, &mut response.body]
+                .into_iter()
+                .flatten()
+            {
+                if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                    redact_json_value(&mut value);
+                    if let Ok(serialized) = serde_json::to_string(&value) {
+                        *text = serialized;
                     }
                 }
             }
+            // Truncate body_preview to max_body_bytes
             if let Some(preview) = &mut response.body_preview {
                 let mut bytes = preview.as_bytes().to_vec();
                 if bytes.len() > max_body_bytes {
@@ -221,6 +225,16 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
                     let mut text = String::from_utf8_lossy(&bytes).to_string();
                     text.push_str("...");
                     *preview = text;
+                }
+            }
+            // Truncate body to max_body_bytes
+            if let Some(body) = &mut response.body {
+                let mut bytes = body.as_bytes().to_vec();
+                if bytes.len() > max_body_bytes {
+                    bytes.truncate(max_body_bytes);
+                    let mut text = String::from_utf8_lossy(&bytes).to_string();
+                    text.push_str("...");
+                    *body = text;
                 }
             }
         }
@@ -295,4 +309,126 @@ fn redact_json_value(value: &mut Value) {
 fn is_sensitive_key(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     TRACE_SENSITIVE_KEYS.iter().any(|key| lower == *key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arazzo_runtime::{
+        ContentType, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse,
+    };
+
+    fn make_trace_file(response: TraceResponse) -> TraceFile {
+        TraceFile {
+            schema_version: TRACE_SCHEMA_VERSION.to_string(),
+            tool: TraceTool {
+                name: "test".to_string(),
+                version: "0.0.0".to_string(),
+            },
+            run: TraceRun {
+                spec_path: "test.yaml".to_string(),
+                workflow_id: "wf".to_string(),
+                parallel: false,
+                dry_run: false,
+                timeout_ms: 0,
+                started_at: String::new(),
+                finished_at: String::new(),
+                duration_ms: 0,
+                status: "success".to_string(),
+                error: None,
+            },
+            inputs: BTreeMap::new(),
+            steps: vec![TraceStepRecord {
+                seq: 1,
+                workflow_id: "wf".to_string(),
+                step_id: "s1".to_string(),
+                attempt: 1,
+                kind: "http".to_string(),
+                operation_path: "/test".to_string(),
+                workflow_id_ref: String::new(),
+                duration_ms: 0,
+                request: Some(TraceRequest {
+                    method: "GET".to_string(),
+                    url: "https://example.com/test".to_string(),
+                    headers: BTreeMap::new(),
+                    body: None,
+                }),
+                response: Some(response),
+                criteria: Vec::new(),
+                warnings: Vec::new(),
+                decision: TraceDecision::with_path(TraceDecisionPath::Next),
+                outputs: BTreeMap::new(),
+                error: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn redact_trace_redacts_both_body_and_body_preview() {
+        let json_body = r#"{"token":"secret123","name":"Alice"}"#.to_string();
+        let response = TraceResponse {
+            status_code: 200,
+            content_type: ContentType::Json,
+            headers: BTreeMap::new(),
+            body_bytes: json_body.len() as u64,
+            body_preview: Some(json_body.clone()),
+            body: Some(json_body),
+        };
+
+        let mut trace = make_trace_file(response);
+        redact_trace_file(&mut trace, 2048);
+
+        let resp = trace.steps[0]
+            .response
+            .as_ref()
+            .unwrap_or_else(|| panic!("response missing"));
+        // Both body and body_preview should have "token" redacted
+        let preview_str = resp
+            .body_preview
+            .as_deref()
+            .unwrap_or_else(|| panic!("preview missing"));
+        let preview: Value =
+            serde_json::from_str(preview_str).unwrap_or_else(|e| panic!("parse preview: {e}"));
+        assert_eq!(preview["token"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(preview["name"], Value::String("Alice".to_string()));
+
+        let body_str = resp
+            .body
+            .as_deref()
+            .unwrap_or_else(|| panic!("body missing"));
+        let body: Value =
+            serde_json::from_str(body_str).unwrap_or_else(|e| panic!("parse body: {e}"));
+        assert_eq!(body["token"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(body["name"], Value::String("Alice".to_string()));
+    }
+
+    #[test]
+    fn redact_trace_redacts_json_body_regardless_of_content_type() {
+        // Body is valid JSON but content type says "other"
+        let json_body = r#"{"password":"hunter2","user":"bob"}"#.to_string();
+        let response = TraceResponse {
+            status_code: 200,
+            content_type: ContentType::Other("text/plain".to_string()),
+            headers: BTreeMap::new(),
+            body_bytes: json_body.len() as u64,
+            body_preview: Some(json_body.clone()),
+            body: Some(json_body),
+        };
+
+        let mut trace = make_trace_file(response);
+        redact_trace_file(&mut trace, 2048);
+
+        let resp = trace.steps[0]
+            .response
+            .as_ref()
+            .unwrap_or_else(|| panic!("response missing"));
+        let body_str = resp
+            .body
+            .as_deref()
+            .unwrap_or_else(|| panic!("body missing"));
+        let body: Value =
+            serde_json::from_str(body_str).unwrap_or_else(|e| panic!("parse body: {e}"));
+        assert_eq!(body["password"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(body["user"], Value::String("bob".to_string()));
+    }
 }

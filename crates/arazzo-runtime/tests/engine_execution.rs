@@ -1898,18 +1898,76 @@ async fn execute_path_param_with_special_chars_is_percent_encoded() {
     }]);
 
     let engine = new_test_engine(&server.base_url, spec);
-    let result = engine
-        .execute_collect("enc", BTreeMap::new())
-        .await
-        .outputs;
+    let result = engine.execute_collect("enc", BTreeMap::new()).await.outputs;
     if let Err(err) = &result {
         panic!("expected success, got: {err}");
     }
 
-    let url = received_url.lock().unwrap_or_else(|e| panic!("lock: {e}")).clone();
+    let url = received_url
+        .lock()
+        .unwrap_or_else(|e| panic!("lock: {e}"))
+        .clone();
     // Spaces, slashes, and '#' must be percent-encoded in path segments
     assert!(
         url.contains("hello%20world%2Ffoo%23bar"),
         "expected percent-encoded path param, got: {url}"
+    );
+}
+
+// ── Bug #10: sub-workflow param interpolation preserves types ─────
+
+#[tokio::test]
+async fn sub_workflow_interpolated_param_preserves_number_type() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    // Parent passes {$inputs.count} to child — the braces trigger interpolation.
+    // Child exposes the received input as a workflow output.
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "parent".to_string(),
+            steps: vec![Step {
+                step_id: "call-child".to_string(),
+                target: Some(StepTarget::WorkflowId("child".to_string())),
+                parameters: vec![Parameter {
+                    name: "count".to_string(),
+                    value: serde_yml::Value::String("{$inputs.count}".to_string()),
+                    ..Parameter::default()
+                }],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([(
+                "result".to_string(),
+                "$steps.call-child.outputs.received".to_string(),
+            )]),
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "child".to_string(),
+            steps: vec![Step {
+                step_id: "noop".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([("received".to_string(), "$inputs.count".to_string())]),
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let inputs = BTreeMap::from([("count".to_string(), json!(42))]);
+    let outputs = match engine.execute_collect("parent", inputs).await.outputs {
+        Ok(o) => o,
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    // The value should be a number, not a string
+    assert_eq!(
+        outputs.get("result"),
+        Some(&json!(42)),
+        "interpolated param should preserve numeric type, got: {:?}",
+        outputs.get("result")
     );
 }

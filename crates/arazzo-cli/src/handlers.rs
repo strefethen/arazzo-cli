@@ -63,8 +63,16 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         ..ClientConfig::default()
     };
     for header in run.header_flags {
-        if let Some((k, v)) = header.split_once('=') {
+        let parsed = header
+            .split_once(':')
+            .map(|(k, v)| (k.trim(), v.trim_start()))
+            .or_else(|| header.split_once('=').map(|(k, v)| (k.trim(), v)));
+        if let Some((k, v)) = parsed {
             cfg.default_headers.insert(k.to_string(), v.to_string());
+        } else {
+            eprintln!(
+                "warning: ignoring malformed header (expected 'Name: value' or 'Name=value'): {header}"
+            );
         }
     }
 

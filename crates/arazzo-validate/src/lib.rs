@@ -638,7 +638,27 @@ fn resolve_action_ref(
             let Some(resolved) = component_map.get(name) else {
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
-            *action = resolved.clone();
+            // Merge: start with resolved component, overlay non-default local fields
+            let mut merged = resolved.clone();
+            if action.type_ != ActionType::default() {
+                merged.type_ = action.type_;
+            }
+            if !action.workflow_id.is_empty() {
+                merged.workflow_id = action.workflow_id.clone();
+            }
+            if !action.step_id.is_empty() {
+                merged.step_id = action.step_id.clone();
+            }
+            if action.retry_after != 0 {
+                merged.retry_after = action.retry_after;
+            }
+            if action.retry_limit.is_some() {
+                merged.retry_limit = action.retry_limit;
+            }
+            if !action.criteria.is_empty() {
+                merged.criteria = action.criteria.clone();
+            }
+            *action = merged;
         }
     }
     Ok(())
@@ -1734,5 +1754,49 @@ workflows:
         );
         assert!(inputs.properties.contains_key("age"));
         assert_eq!(inputs.required, vec!["age".to_string()]);
+    }
+
+    // ── Bug #26: resolve_action_ref merges instead of replacing ───
+
+    #[test]
+    fn parse_bytes_component_action_preserves_local_overrides() {
+        // Component defines retry with retryLimit=5, retryAfter=2.
+        // Local action references the component but overrides retryAfter=10.
+        // After resolution: retryLimit=5 (from component) + retryAfter=10 (local override).
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  failureActions:
+    retryPolicy:
+      type: retry
+      retryAfter: 2
+      retryLimit: 5
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onFailure:
+          - name: "$components.failureActions.retryPolicy"
+            retryAfter: 10
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        let actions = &spec.workflows[0].steps[0].on_failure;
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].type_, ActionType::Retry, "type from component");
+        assert_eq!(actions[0].retry_limit, Some(5), "retryLimit from component");
+        assert_eq!(actions[0].retry_after, 10, "retryAfter overridden locally");
     }
 }
