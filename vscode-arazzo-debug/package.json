@@ -2,7 +2,7 @@
   "name": "arazzo-debug",
   "displayName": "Arazzo Debugger",
   "description": "Debug Arazzo workflow files with breakpoints and step controls.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "strefethen",
   "license": "MIT",
   "preview": true,
