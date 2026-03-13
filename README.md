@@ -12,7 +12,7 @@ arazzo-cli is a standalone executor for [Arazzo](https://spec.openapis.org/arazz
 
 Testing a sequence of API calls today means writing imperative scripts, maintaining collections, or building custom test harnesses. The Arazzo spec (part of the OpenAPI ecosystem) lets you describe these sequences declaratively — but without a runtime, the spec is just documentation.
 
-arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, and debug them interactively.
+arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, and [debug them interactively](#vs-code-debugger).
 
 ## Quick Start
 
