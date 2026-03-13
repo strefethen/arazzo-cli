@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-echo "Verifying private workspace publish settings..."
+echo "Verifying workspace publish settings..."
 
 manifests=("$ROOT_DIR/Cargo.toml" "$ROOT_DIR"/crates/*/Cargo.toml)
 
 if grep -nE '^publish[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${manifests[@]}"; then
   echo
   echo "ERROR: Found publish=true in one or more manifests."
-  echo "This repository is private-only and must not publish externally."
+  echo "Crates in this workspace are distributed as binaries, not via crates.io."
   exit 1
 fi
 
@@ -33,4 +33,4 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-echo "Private publish settings verified."
+echo "Workspace publish settings verified."

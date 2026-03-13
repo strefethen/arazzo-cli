@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify private publish settings
+      - name: Verify publish settings
         run: bash scripts/ci/verify-private-workspace.sh
 
       - name: Set up Rust
