@@ -745,7 +745,7 @@ This project accepts PRs to demonstrate a fix or approach, though the maintainer
 
 ## Acknowledgments
 
-arazzo-cli is built on excellent open-source crates:
+Built with these open-source crates:
 
 - [clap](https://crates.io/crates/clap) — CLI argument parsing
 - [reqwest](https://crates.io/crates/reqwest) — HTTP client
