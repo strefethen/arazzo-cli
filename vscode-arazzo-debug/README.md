@@ -2,7 +2,7 @@
 
 Step-through debugging for [Arazzo 1.0](https://spec.openapis.org/arazzo/v1.0.0) API workflow specifications — set breakpoints, inspect variables, and trace execution in VS Code.
 
-![Debug session](images/screenshots/debug-session.png)
+![Debug session](https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/screenshots/debug-session.png)
 
 ## Features
 
