@@ -95,8 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `arazzo-expr` — expression parser/evaluator with diagnostics and proptest fuzzing
 - `arazzo-runtime` — async execution engine with debug controller and rate limiter
 - `arazzo-cli` — CLI binary
-- `arazzo-debug-protocol` — internal JSON-line debug protocol types
-- `arazzo-debug-adapter` — DAP server
+- `arazzo-debug-adapter` — DAP server with JSON-line debug protocol
 
 #### Performance
 - Compiled regex caching via `LazyLock`
