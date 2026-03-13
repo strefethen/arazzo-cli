@@ -61,6 +61,7 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 - [CLI Commands](#cli-commands)
 - [Examples](#examples)
 - [Execution Traces](#execution-traces)
+- [Deterministic Replay](#deterministic-replay)
 - [VS Code Debugger](#vs-code-debugger)
 - [Expression Language](#expression-language)
 - [How It Works](#how-it-works)
@@ -209,6 +210,50 @@ Sensitive values are automatically redacted:
 ```
 
 Schema reference: `docs/trace-schema-v1.md` | `docs/schemas/trace-v1.schema.json`
+
+## Deterministic Replay
+
+The `replay` command re-executes a workflow using the recorded responses from a trace file instead of making live HTTP requests. This enables offline testing, regression detection, and CI validation without network access.
+
+```bash
+# Record a trace
+arazzo run spec.yaml my-workflow --trace ./trace.json
+
+# Replay it later — no network calls
+arazzo replay ./trace.json
+```
+
+### How It Works
+
+Replay operates at the HTTP transport layer. The engine resolves expressions, evaluates criteria, and routes control flow exactly as it would during a live run — but instead of sending HTTP requests, it serves the recorded responses from the trace file.
+
+Before injecting each recorded response, the engine compares the replayed request against the original:
+
+| Field | Checked? | What a mismatch means |
+|---|---|---|
+| HTTP method | Yes | Step target changed |
+| URL | Yes | Parameters or base URL changed |
+| Headers | Yes | Authentication or header logic changed |
+| Request body | Yes (JSON-aware) | Payload construction changed |
+
+If any field differs, the engine reports a `RUNTIME_REPLAY_REQUEST_MISMATCH` error with the specific drift. This catches regressions where spec or expression changes silently alter what gets sent to the API.
+
+### Use Cases
+
+- **CI regression tests** — record a golden trace, replay it on every push to verify that expression resolution and request construction haven't changed
+- **Offline development** — work on workflow logic without access to the target API
+- **Spec refactoring** — rename steps, restructure parameters, and verify the same requests are produced
+- **Review artifacts** — trace files are plain JSON, easy to diff and inspect in code review
+
+### Overrides
+
+Replay supports overriding the spec path and workflow ID stored in the trace:
+
+```bash
+arazzo replay ./trace.json --spec ./updated-spec.yaml --workflow-id new-workflow
+```
+
+This is useful when replaying a trace against a modified spec to detect drift.
 
 ## VS Code Debugger
 
@@ -402,7 +447,7 @@ When you pass `--parallel`, the engine analyzes step dependencies and executes i
 
 ### How the DAG Scheduler Works
 
-The scheduler uses a variant of **Kahn's algorithm** for topological sorting:
+The scheduler uses a variant of [**Kahn's algorithm**](https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm) for topological sorting:
 
 1. **Scan expressions** — for each step, find all `$steps.<id>.outputs.*` references to identify upstream dependencies
 2. **Build a directed acyclic graph (DAG)** — if step B references `$steps.A.outputs.token`, add an edge A → B
