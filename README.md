@@ -75,6 +75,7 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 - [Programmatic API](#programmatic-api)
 - [Repository Layout](#repository-layout)
 - [Building from Source](#building-from-source)
+- [Acknowledgments](#acknowledgments)
 - [Contributing](#contributing)
 
 ## CLI Commands
@@ -741,6 +742,22 @@ CI also runs `cargo audit`, MSRV verification (Rust 1.82), and cross-platform bu
 Issues, bug reports, and feature requests are welcome.
 
 This project accepts PRs to demonstrate a fix or approach, though the maintainer may independently implement changes after review. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Acknowledgments
+
+arazzo-cli is built on excellent open-source crates:
+
+- [clap](https://crates.io/crates/clap) — CLI argument parsing
+- [reqwest](https://crates.io/crates/reqwest) — HTTP client
+- [tokio](https://crates.io/crates/tokio) — async runtime
+- [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) — serialization
+- [serde_yml](https://crates.io/crates/serde_yml) — YAML parsing
+- [yaml-rust2](https://crates.io/crates/yaml-rust2) — YAML event parsing with source positions (debug adapter)
+- [openapiv3](https://crates.io/crates/openapiv3) — OpenAPI 3.x spec model
+- [uppsala](https://crates.io/crates/uppsala) — XPath evaluation
+- [schemars](https://crates.io/crates/schemars) — JSON Schema generation
+- [regex](https://crates.io/crates/regex) — regular expressions
+- [url](https://crates.io/crates/url) — URL parsing and manipulation
 
 ## License
 
