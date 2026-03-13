@@ -1,32 +1,21 @@
 # Contributing to arazzo-cli
 
-Thanks for the interest in this project.
+## Bug Reports
 
-This repository follows a single-maintainer model optimized for speed and low operational overhead.
+Bug reports are welcome. Please include:
 
-## What Is Welcome
+- The command you ran and full `--json` output
+- Expected vs. actual behavior
+- A minimal `.arazzo.yaml` that reproduces the issue
+- Environment details (OS, Rust version, CLI version)
 
-- Bug reports with clear reproduction steps
-- Spec compliance issues and edge-case examples
-- PRs that demonstrate a proposed fix or implementation idea
+## Pull Requests
 
-## What To Expect
+Feel free to open issues, and PRs too if you want to show a proposed fix in
+action. Just know that I won't merge them directly — I'll review what's there
+and independently decide whether and how to address it. PRs may be closed
+without detailed feedback.
 
-- External PRs are not merged directly.
-- PRs may be closed without merge or detailed review.
-- The maintainer may independently re-implement, adapt, or decline proposed changes.
-- Response times are best-effort; there is no review SLA.
-
-## Submission Terms
-
-By submitting an issue or PR, you confirm:
-
-- You have the right to share the submitted material.
-- The maintainer may use ideas or code snippets from your submission under this repository's license.
-
-## How To Submit A Useful Report
-
-- Include the command used and full `--json` output when possible.
-- Include expected behavior and actual behavior.
-- Include a minimal Arazzo spec or fixture that reproduces the issue.
-- Include environment details (OS, Rust version, crate/CLI version).
+This is a single-maintainer project. I don't have the bandwidth to review
+external code, and I'm accountable for everything it ships. I hope that's
+understandable.
