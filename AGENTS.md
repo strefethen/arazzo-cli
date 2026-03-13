@@ -2,12 +2,6 @@
 
 Instructions for AI coding agents working on this repository.
 
-## Project Status
-
-- Rust cutover completed on 2026-02-19.
-- `main` is Rust-only.
-- Do not reintroduce Go runtime/CLI code.
-
 ## What This Is
 
 A standalone CLI and Rust workspace for executing Arazzo 1.0 workflow specifications at runtime (no code generation).
