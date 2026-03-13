@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 use arazzo_runtime::TraceStepRecord;
 use humantime::format_rfc3339;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,25 +16,23 @@ pub const TRACE_REDACTED: &str = "[REDACTED]";
 pub const TRACE_BODY_PREVIEW_DEFAULT_BYTES: usize = 2048;
 pub const TRACE_MAX_BODY_BYTES_LIMIT: usize = 1024 * 1024;
 
-const TRACE_SENSITIVE_KEYS: [&str; 18] = [
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "api-key",
-    "apikey",
-    "token",
-    "access_token",
-    "refresh_token",
-    "id_token",
-    "secret",
-    "client_secret",
+/// Header/field names that are always sensitive (exact match, case-insensitive).
+const TRACE_SENSITIVE_EXACT: [&str; 4] =
+    ["proxy-authorization", "set-cookie", "x-api-key", "api-key"];
+
+/// Stems matched via `contains` — catches compound names like `bearerToken`,
+/// `dbPassword`, `clientSecret`, `apiKey`, etc.
+const TRACE_SENSITIVE_STEMS: [&str; 10] = [
     "password",
     "passwd",
-    "pwd",
+    "secret",
+    "token",
+    "authorization",
+    "apikey",
+    "cookie",
     "session",
-    "sessionid",
+    "credential",
+    "pwd",
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -206,6 +206,7 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
             redact_headers(&mut response.headers);
             // Try JSON redaction on both body and body_preview regardless of
             // content type — catches JSON with incorrect content-type headers.
+            // For non-JSON bodies, fall back to regex-based pattern redaction.
             for text in [&mut response.body_preview, &mut response.body]
                 .into_iter()
                 .flatten()
@@ -215,6 +216,8 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
                     if let Ok(serialized) = serde_json::to_string(&value) {
                         *text = serialized;
                     }
+                } else {
+                    *text = redact_text_patterns(text);
                 }
             }
             // Truncate body_preview to max_body_bytes
@@ -306,9 +309,39 @@ fn redact_json_value(value: &mut Value) {
     }
 }
 
-fn is_sensitive_key(name: &str) -> bool {
+/// Redact common secret patterns in non-JSON text (XML, HTML, plain text, etc.).
+/// Uses lazily-compiled regexes so the patterns are built once across all calls.
+fn redact_text_patterns(text: &str) -> String {
+    // Bearer / Basic / token auth headers embedded in text
+    static RE_BEARER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
+            .unwrap_or_else(|err| panic!("failed to compile bearer regex: {err}"))
+    });
+    // key=value or key: value where the key looks sensitive
+    static RE_KV: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(password|passwd|secret|token|authorization|apikey|api_key|credential|pwd)(\s*[:=]\s*)\S+",
+        )
+        .unwrap_or_else(|err| panic!("failed to compile kv regex: {err}"))
+    });
+
+    let out = RE_BEARER.replace_all(text, |caps: &regex::Captures<'_>| {
+        format!("{} {TRACE_REDACTED}", &caps[1])
+    });
+    let out = RE_KV.replace_all(&out, |caps: &regex::Captures<'_>| {
+        format!("{}{}{TRACE_REDACTED}", &caps[1], &caps[2])
+    });
+    out.into_owned()
+}
+
+pub fn is_sensitive_key(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    TRACE_SENSITIVE_KEYS.iter().any(|key| lower == *key)
+    if TRACE_SENSITIVE_EXACT.iter().any(|key| lower == *key) {
+        return true;
+    }
+    TRACE_SENSITIVE_STEMS
+        .iter()
+        .any(|stem| lower.contains(stem))
 }
 
 #[cfg(test)]
@@ -432,5 +465,63 @@ mod tests {
             serde_json::from_str(body_str).unwrap_or_else(|e| panic!("parse body: {e}"));
         assert_eq!(body["password"], Value::String(TRACE_REDACTED.to_string()));
         assert_eq!(body["user"], Value::String("bob".to_string()));
+    }
+
+    #[test]
+    fn redact_trace_redacts_non_json_body_patterns() {
+        // Plain text body with Bearer token and key=value secrets
+        let plain_body =
+            "Hello\ntoken: Bearer eyJhbGciOiJIUzI1NiJ9.test\npassword=hunter2\nuser=bob"
+                .to_string();
+        let response = TraceResponse {
+            status_code: 200,
+            content_type: ContentType::Other("text/plain".to_string()),
+            headers: BTreeMap::new(),
+            body_bytes: plain_body.len() as u64,
+            body_preview: Some(plain_body.clone()),
+            body: Some(plain_body),
+            body_lossy: false,
+        };
+
+        let mut trace = make_trace_file(response);
+        redact_trace_file(&mut trace, 4096);
+
+        let resp = trace.steps[0]
+            .response
+            .as_ref()
+            .unwrap_or_else(|| panic!("response missing"));
+        let body = resp
+            .body
+            .as_deref()
+            .unwrap_or_else(|| panic!("body missing"));
+        // JWT should be redacted (via bearer or kv pattern)
+        assert!(
+            !body.contains("eyJhbGci"),
+            "JWT should be redacted, got: {body}"
+        );
+        // password value should be redacted
+        assert!(
+            !body.contains("hunter2"),
+            "password value should be redacted, got: {body}"
+        );
+        // Non-sensitive value should survive
+        assert!(body.contains("user=bob"), "user=bob should survive: {body}");
+    }
+
+    #[test]
+    fn redact_text_patterns_unit() {
+        assert_eq!(
+            redact_text_patterns("Bearer abc123.xyz"),
+            "Bearer [REDACTED]"
+        );
+        assert_eq!(
+            redact_text_patterns("token=secret123 name=alice"),
+            "token=[REDACTED] name=alice"
+        );
+        assert_eq!(
+            redact_text_patterns("password: hunter2"),
+            "password: [REDACTED]"
+        );
+        assert_eq!(redact_text_patterns("no secrets here"), "no secrets here");
     }
 }

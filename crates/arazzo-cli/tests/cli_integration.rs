@@ -2032,3 +2032,259 @@ fn run_no_deps_without_step_fails() {
         "--no-deps without --step should be rejected by clap"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Security redaction tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_dry_run_json_redacts_sensitive_headers() {
+    let temp = TempDir::new("arazzo-dry-run-json-redact");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Dry-Run JSON Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        parameters:
+          - name: Authorization
+            in: header
+            value: "Bearer top-secret-jwt"
+          - name: X-API-Key
+            in: header
+            value: "sk-1234567890"
+          - name: Accept
+            in: header
+            value: "application/json"
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        ["--json", "run", &spec_str, "wf", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let reqs = run_json_requests(&body);
+    assert!(!reqs.is_empty());
+
+    let headers = reqs[0]
+        .get("headers")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("expected headers object in dry-run JSON"));
+
+    // Authorization and X-API-Key should be redacted
+    let auth = headers
+        .get("Authorization")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        auth, "[REDACTED]",
+        "Authorization header should be redacted in --json --dry-run output"
+    );
+
+    let api_key = headers
+        .get("X-API-Key")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        api_key, "[REDACTED]",
+        "X-API-Key header should be redacted in --json --dry-run output"
+    );
+
+    // Non-sensitive header should survive
+    let accept = headers
+        .get("Accept")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        accept, "application/json",
+        "Accept header should not be redacted"
+    );
+}
+
+#[test]
+fn run_trace_redacts_compound_key_names() {
+    let temp = TempDir::new("arazzo-trace-redact-compound");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Compound Key Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    inputs:
+      type: object
+      properties:
+        bearerToken:
+          type: string
+        dbPassword:
+          type: string
+        safeName:
+          type: string
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        requestBody:
+          contentType: application/json
+          payload:
+            bearerToken: $inputs.bearerToken
+            dbPassword: $inputs.dbPassword
+            safeName: $inputs.safeName
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--input",
+            "bearerToken=jwt-secret-abc",
+            "--input",
+            "dbPassword=hunter2",
+            "--input",
+            "safeName=alice",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let trace = read_json_file(&trace_path);
+
+    // Compound key names should be redacted via stem matching
+    assert_eq!(
+        trace.pointer("/inputs/bearerToken"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "bearerToken input should be redacted (contains 'token' stem)"
+    );
+    assert_eq!(
+        trace.pointer("/inputs/dbPassword"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "dbPassword input should be redacted (contains 'password' stem)"
+    );
+    // Non-sensitive input should survive
+    assert_eq!(
+        trace.pointer("/inputs/safeName"),
+        Some(&Value::String("alice".to_string())),
+        "safeName should not be redacted"
+    );
+
+    // Request body should also have compound keys redacted
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/bearerToken"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "bearerToken in request body should be redacted"
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/dbPassword"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "dbPassword in request body should be redacted"
+    );
+    assert_eq!(
+        trace.pointer("/steps/0/request/body/safeName"),
+        Some(&Value::String("alice".to_string())),
+        "safeName in request body should survive"
+    );
+}
+
+#[test]
+fn run_verbose_redacts_sensitive_inputs() {
+    let temp = TempDir::new("arazzo-verbose-redact");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Verbose Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    inputs:
+      type: object
+      properties:
+        apiSecret:
+          type: string
+        userName:
+          type: string
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--verbose",
+            "run",
+            &spec_str,
+            "wf",
+            "--dry-run",
+            "--input",
+            "apiSecret=super-secret-key",
+            "--input",
+            "userName=alice",
+        ]
+        .as_slice(),
+        None,
+    );
+    // Dry-run may succeed or fail — we only care about stderr content
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // Verbose output should NOT contain the secret value
+    assert!(
+        !stderr.contains("super-secret-key"),
+        "verbose stderr should not contain secret value, got: {stderr}"
+    );
+    // Verbose output SHOULD contain the redaction marker
+    assert!(
+        stderr.contains("[REDACTED]"),
+        "verbose stderr should show [REDACTED] for sensitive inputs, got: {stderr}"
+    );
+    // Non-sensitive value should appear
+    assert!(
+        stderr.contains("alice"),
+        "verbose stderr should show non-sensitive input value, got: {stderr}"
+    );
+}

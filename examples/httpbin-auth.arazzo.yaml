@@ -5,6 +5,10 @@ info:
   description: >
     Tests authentication patterns against httpbin.org including basic auth,
     bearer tokens, and auth failure handling with error recovery.
+
+    Also demonstrates trace redaction behavior: sensitive inputs (bearerToken,
+    apiSecret) and headers (Authorization) are automatically redacted in trace
+    files and verbose/dry-run output.
 sourceDescriptions:
   - name: httpbin
     url: https://httpbin.org
@@ -68,6 +72,12 @@ workflows:
 
   - workflowId: bearer-auth
     summary: Bearer token authentication succeeds
+    inputs:
+      type: object
+      properties:
+        bearerToken:
+          type: string
+          description: A bearer token — automatically redacted in traces via stem matching
     steps:
       - stepId: auth-with-token
         operationPath: /bearer

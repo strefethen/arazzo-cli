@@ -451,9 +451,17 @@ pub fn emit_run_error(
 
 pub fn emit_dry_run_requests(
     json: bool,
-    reqs: Vec<DryRunRequest>,
+    mut reqs: Vec<DryRunRequest>,
     warnings: &[String],
 ) -> Result<(), String> {
+    // Redact sensitive headers for both JSON and human-readable paths.
+    for r in &mut reqs {
+        for (k, v) in &mut r.headers {
+            if crate::trace::is_sensitive_key(k) {
+                *v = crate::trace::TRACE_REDACTED.to_string();
+            }
+        }
+    }
     if json {
         return output_json(&RunOutput::DryRun {
             requests: reqs,

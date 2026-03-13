@@ -84,6 +84,7 @@ dependencies = [
  "humantime",
  "indexmap",
  "openapiv3",
+ "regex",
  "schemars",
  "serde",
  "serde_json",

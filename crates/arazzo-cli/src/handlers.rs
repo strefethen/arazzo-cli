@@ -55,7 +55,20 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
 
     if global.verbose {
         eprintln!("Executing workflow: {}", run.workflow_id);
-        eprintln!("Inputs: {inputs:?}");
+        let redacted: BTreeMap<&str, _> = inputs
+            .iter()
+            .map(|(k, v)| {
+                if crate::trace::is_sensitive_key(k) {
+                    (
+                        k.as_str(),
+                        serde_json::Value::String(crate::trace::TRACE_REDACTED.into()),
+                    )
+                } else {
+                    (k.as_str(), v.clone())
+                }
+            })
+            .collect();
+        eprintln!("Inputs: {redacted:?}");
     }
 
     let mut cfg = ClientConfig {
