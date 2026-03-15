@@ -37,6 +37,7 @@ impl Engine {
                             retry_count: ctx.retry_count,
                             cancel: ctx.cancel,
                             is_timeout: ctx.is_timeout,
+                            response: ctx.result.response.as_deref(),
                         },
                         action.action,
                         Some(SelectedActionDebugContext {
@@ -89,6 +90,7 @@ impl Engine {
                         retry_count: ctx.retry_count,
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
+                        response: ctx.result.response.as_deref(),
                     },
                     action.action,
                     Some(SelectedActionDebugContext {
@@ -308,7 +310,10 @@ impl Engine {
                 }
 
                 // RetryScheduled observer event emitted by caller (execute_inner) after FlowDecision::Retry
-                if action.retry_after > 0 {
+                // Spec §4.6.6: Retry-After response header overrides configured retryAfter.
+                let effective_delay =
+                    compute_retry_after_delay(action, ctx.response.map(|r| &r.headers));
+                if !effective_delay.is_zero() {
                     if let Some(debug) = debug_ctx {
                         if let Err(err) = self
                             .debug_gate_retry_delay(debug, action, current, limit)
@@ -317,12 +322,8 @@ impl Engine {
                             return RoutedDecision::error(err);
                         }
                     }
-                    if let Err(err) = sleep_with_cancel(
-                        Duration::from_secs(action.retry_after),
-                        ctx.cancel,
-                        ctx.is_timeout,
-                    )
-                    .await
+                    if let Err(err) =
+                        sleep_with_cancel(effective_delay, ctx.cancel, ctx.is_timeout).await
                     {
                         return RoutedDecision {
                             flow: FlowDecision::Error(err),
@@ -429,6 +430,7 @@ struct ExecuteActionContext<'a> {
     retry_count: &'a BTreeMap<usize, usize>,
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
+    response: Option<&'a Response>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,5 +487,97 @@ impl ActionBranch {
             Self::Success => StepCheckpoint::OnSuccessRetryDelay { action_index },
             Self::Failure => StepCheckpoint::OnFailureRetryDelay { action_index },
         }
+    }
+}
+
+/// Compute the effective retry delay per Arazzo 1.0.1 §4.6.6.
+///
+/// When the response carries a `Retry-After` header with a valid integer-seconds
+/// value, that value takes precedence over the configured `retryAfter` on the action.
+/// Falls back to the configured value when the header is absent or malformed.
+fn compute_retry_after_delay(
+    action: &OnAction,
+    headers: Option<&BTreeMap<String, String>>,
+) -> Duration {
+    let configured = Duration::from_secs(action.retry_after);
+    let Some(hdrs) = headers else {
+        return configured;
+    };
+    // Case-insensitive lookup for the Retry-After header.
+    let raw = hdrs
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("retry-after"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    if raw.is_empty() {
+        return configured;
+    }
+    // Integer form: number of seconds to wait.
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Duration::from_secs(secs);
+    }
+    // HTTP-date form is uncommon for rate-limited APIs; fall back to configured.
+    configured
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_header_integer_overrides_config() {
+        let action = OnAction {
+            retry_after: 10,
+            ..OnAction::default()
+        };
+        let mut headers = BTreeMap::new();
+        headers.insert("Retry-After".to_string(), "2".to_string());
+        let delay = compute_retry_after_delay(&action, Some(&headers));
+        assert_eq!(delay, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn retry_after_header_respected_when_no_config() {
+        let action = OnAction {
+            retry_after: 0,
+            ..OnAction::default()
+        };
+        let mut headers = BTreeMap::new();
+        headers.insert("retry-after".to_string(), "3".to_string());
+        let delay = compute_retry_after_delay(&action, Some(&headers));
+        assert_eq!(delay, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn retry_after_config_used_when_no_header() {
+        let action = OnAction {
+            retry_after: 5,
+            ..OnAction::default()
+        };
+        let headers = BTreeMap::new();
+        let delay = compute_retry_after_delay(&action, Some(&headers));
+        assert_eq!(delay, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn retry_after_malformed_header_falls_back() {
+        let action = OnAction {
+            retry_after: 4,
+            ..OnAction::default()
+        };
+        let mut headers = BTreeMap::new();
+        headers.insert("Retry-After".to_string(), "not-a-number".to_string());
+        let delay = compute_retry_after_delay(&action, Some(&headers));
+        assert_eq!(delay, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn retry_after_no_headers_at_all() {
+        let action = OnAction {
+            retry_after: 7,
+            ..OnAction::default()
+        };
+        let delay = compute_retry_after_delay(&action, None);
+        assert_eq!(delay, Duration::from_secs(7));
     }
 }

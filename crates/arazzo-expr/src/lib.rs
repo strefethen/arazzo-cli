@@ -50,12 +50,20 @@ static INTERPOLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|err| panic!("failed to compile interpolate regex: {err}"))
 });
 
+/// State snapshot for a completed workflow, used by `$workflows.<id>.*` expressions.
+#[derive(Debug, Clone, Default)]
+pub struct WorkflowEvalState {
+    pub inputs: BTreeMap<String, Value>,
+    pub outputs: BTreeMap<String, Value>,
+}
+
 /// Evaluation context for expression resolution.
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
     pub inputs: BTreeMap<String, Value>,
     pub steps: BTreeMap<String, BTreeMap<String, Value>>,
     pub outputs: BTreeMap<String, Value>,
+    pub workflows: BTreeMap<String, WorkflowEvalState>,
     pub status_code: Option<i64>,
     pub method: Option<String>,
     pub url: Option<String>,
@@ -246,6 +254,44 @@ impl ExpressionEvaluator {
 
             "response" => self.resolve_response(remainder.unwrap_or("")),
 
+            "workflows" => {
+                let after = remainder.unwrap_or("");
+                let (wf_id, tail) = match after.split_once('.') {
+                    Some(pair) => pair,
+                    None => {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: "invalid $workflows expression: expected $workflows.<id>.inputs.<name> or $workflows.<id>.outputs.<name>".to_string(),
+                        });
+                        return (Value::Null, warnings);
+                    }
+                };
+                match self.ctx.workflows.get(wf_id) {
+                    Some(state) => {
+                        if let Some(rest) = tail.strip_prefix("inputs.") {
+                            state.inputs.get(rest).cloned().unwrap_or(Value::Null)
+                        } else if let Some(rest) = tail.strip_prefix("outputs.") {
+                            state.outputs.get(rest).cloned().unwrap_or(Value::Null)
+                        } else {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: format!(
+                                    "invalid $workflows.{wf_id} sub-path: expected \"inputs.<name>\" or \"outputs.<name>\""
+                                ),
+                            });
+                            Value::Null
+                        }
+                    }
+                    None => {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!("workflow \"{wf_id}\" not found in workflows context"),
+                        });
+                        Value::Null
+                    }
+                }
+            }
+
             _ => {
                 warnings.push(ExpressionWarning {
                     expression: expr.to_string(),
@@ -318,6 +364,27 @@ impl ExpressionEvaluator {
         }
 
         let mut warnings = Vec::new();
+
+        // NOT operator: strip leading `!` but only when the next char is not `=`
+        // (to avoid consuming `!=` as NOT + `=`).
+        if condition.starts_with('!') && !condition.starts_with("!=") {
+            let inner = condition[1..].trim();
+            let (result, w) = self.evaluate_condition_with_diagnostics(inner);
+            warnings.extend(w);
+            return (!result, warnings);
+        }
+
+        // Parenthesis grouping: if the entire expression is wrapped in balanced
+        // parens (depth reaches zero only at the last char), strip them and recurse.
+        if condition.starts_with('(')
+            && condition.ends_with(')')
+            && is_balanced_outer_parens(condition)
+        {
+            let inner = &condition[1..condition.len() - 1];
+            let (result, w) = self.evaluate_condition_with_diagnostics(inner);
+            warnings.extend(w);
+            return (result, warnings);
+        }
 
         if let Some(parts) = split_outside_quotes(condition, "||") {
             for part in parts {
@@ -466,10 +533,33 @@ fn resolve_operand_with_diagnostics(
     }
 }
 
+/// Returns `true` when the first `(` and the last `)` in `s` form a balanced
+/// pair that encloses the entire expression — i.e. the paren depth only reaches
+/// zero at the very last character.
+fn is_balanced_outer_parens(s: &str) -> bool {
+    debug_assert!(s.starts_with('(') && s.ends_with(')'));
+    let mut depth: usize = 0;
+    let last = s.len() - 1;
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && idx != last {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
 fn split_outside_quotes<'a>(input: &'a str, delim: &'a str) -> Option<Vec<&'a str>> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut in_quote: Option<char> = None;
+    let mut paren_depth: usize = 0;
     let mut found = false;
 
     for (idx, ch) in input.char_indices() {
@@ -486,8 +576,16 @@ fn split_outside_quotes<'a>(input: &'a str, delim: &'a str) -> Option<Vec<&'a st
             in_quote = Some(ch);
             continue;
         }
+        if ch == '(' {
+            paren_depth += 1;
+            continue;
+        }
+        if ch == ')' {
+            paren_depth = paren_depth.saturating_sub(1);
+            continue;
+        }
 
-        if input[idx..].starts_with(delim) {
+        if paren_depth == 0 && input[idx..].starts_with(delim) {
             parts.push(input[start..idx].trim());
             start = idx + delim.len();
             found = true;
@@ -1710,5 +1808,163 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(ctx);
         assert_eq!(eval.evaluate("$inputs.foo.missing"), Value::Null);
+    }
+
+    // ── Phase 1: NOT operator and parenthesis grouping ──────────────
+
+    #[test]
+    fn not_operator_negates_true() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        assert!(!eval.evaluate_condition("!true"));
+    }
+
+    #[test]
+    fn not_operator_negates_false() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        assert!(eval.evaluate_condition("!false"));
+    }
+
+    #[test]
+    fn not_operator_on_expression() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            status_code: Some(404),
+            ..EvalContext::default()
+        });
+        // !($statusCode == 200) should be true when status is 404
+        assert!(eval.evaluate_condition("!($statusCode == 200)"));
+        // !($statusCode == 404) should be false when status is 404
+        assert!(!eval.evaluate_condition("!($statusCode == 404)"));
+    }
+
+    #[test]
+    fn not_does_not_consume_ne_operator() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("a".to_string(), json!(1));
+        ctx.inputs.insert("b".to_string(), json!(2));
+        let eval = ExpressionEvaluator::new(ctx);
+        // != must still work correctly — the `!` must NOT be consumed as NOT
+        assert!(eval.evaluate_condition("$inputs.a != $inputs.b"));
+    }
+
+    #[test]
+    fn paren_grouping_simple() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            status_code: Some(200),
+            ..EvalContext::default()
+        });
+        assert!(eval.evaluate_condition("($statusCode == 200)"));
+    }
+
+    #[test]
+    fn paren_grouping_or() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            status_code: Some(201),
+            ..EvalContext::default()
+        });
+        assert!(eval.evaluate_condition("($statusCode == 200 || $statusCode == 201)"));
+    }
+
+    #[test]
+    fn paren_grouping_with_and() {
+        let mut ctx = EvalContext {
+            status_code: Some(201),
+            ..EvalContext::default()
+        };
+        ctx.inputs.insert("c".to_string(), json!(3));
+        let eval = ExpressionEvaluator::new(ctx);
+        // ($statusCode == 200 || $statusCode == 201) && $inputs.c == 3
+        assert!(
+            eval.evaluate_condition("($statusCode == 200 || $statusCode == 201) && $inputs.c == 3")
+        );
+        // Should be false when the && side fails
+        assert!(!eval
+            .evaluate_condition("($statusCode == 200 || $statusCode == 201) && $inputs.c == 999"));
+    }
+
+    #[test]
+    fn nested_parens() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("a".to_string(), json!(1));
+        ctx.inputs.insert("b".to_string(), json!(2));
+        let eval = ExpressionEvaluator::new(ctx);
+        assert!(eval.evaluate_condition("(($inputs.a == 1)) && $inputs.b == 2"));
+    }
+
+    #[test]
+    fn not_on_paren_grouped_expression() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            status_code: Some(200),
+            response_body: Some(json!({"error": null})),
+            ..EvalContext::default()
+        });
+        // !($response.body.error) should be true when error is null (falsy)
+        assert!(eval.evaluate_condition("!($response.body.error)"));
+        // !($statusCode == 500) should be true when status is 200
+        assert!(eval.evaluate_condition("!($statusCode == 500)"));
+    }
+
+    // ── Phase 3: $workflows expression root ─────────────────────────
+
+    #[test]
+    fn workflows_expression_inputs() {
+        let mut ctx = EvalContext::default();
+        ctx.workflows.insert(
+            "auth".to_string(),
+            super::WorkflowEvalState {
+                inputs: BTreeMap::from([("env".to_string(), json!("production"))]),
+                outputs: BTreeMap::new(),
+            },
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+        assert_eq!(
+            eval.evaluate("$workflows.auth.inputs.env"),
+            json!("production")
+        );
+    }
+
+    #[test]
+    fn workflows_expression_outputs() {
+        let mut ctx = EvalContext::default();
+        ctx.workflows.insert(
+            "auth".to_string(),
+            super::WorkflowEvalState {
+                inputs: BTreeMap::new(),
+                outputs: BTreeMap::from([("token".to_string(), json!("abc-123"))]),
+            },
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+        assert_eq!(
+            eval.evaluate("$workflows.auth.outputs.token"),
+            json!("abc-123")
+        );
+    }
+
+    #[test]
+    fn workflows_unknown_id_is_null() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.unknown.outputs.x");
+        assert_eq!(value, Value::Null);
+        assert!(!warnings.is_empty());
+        assert!(warnings[0].message.contains("\"unknown\" not found"));
+    }
+
+    #[test]
+    fn workflows_missing_sub_path_warns() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth");
+        assert_eq!(value, Value::Null);
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn workflows_invalid_sub_path_warns() {
+        let mut ctx = EvalContext::default();
+        ctx.workflows
+            .insert("auth".to_string(), super::WorkflowEvalState::default());
+        let eval = ExpressionEvaluator::new(ctx);
+        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth.something.else");
+        assert_eq!(value, Value::Null);
+        assert!(!warnings.is_empty());
+        assert!(warnings[0].message.contains("invalid"));
     }
 }

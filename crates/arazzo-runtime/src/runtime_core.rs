@@ -1173,6 +1173,7 @@ struct StepTraceData {
 pub(crate) struct VarStore {
     inputs: BTreeMap<String, Value>,
     steps: BTreeMap<String, BTreeMap<String, Value>>,
+    workflow_states: BTreeMap<String, arazzo_expr::WorkflowEvalState>,
 }
 
 impl VarStore {
@@ -1199,10 +1200,23 @@ impl VarStore {
         }
     }
 
+    pub(crate) fn register_workflow_state(
+        &mut self,
+        workflow_id: &str,
+        inputs: BTreeMap<String, Value>,
+        outputs: BTreeMap<String, Value>,
+    ) {
+        self.workflow_states.insert(
+            workflow_id.to_string(),
+            arazzo_expr::WorkflowEvalState { inputs, outputs },
+        );
+    }
+
     pub(crate) fn eval_context(&self, response: Option<&Response>) -> EvalContext {
         let mut ctx = EvalContext {
             inputs: self.inputs.clone(),
             steps: self.steps.clone(),
+            workflows: self.workflow_states.clone(),
             ..EvalContext::default()
         };
         if let Some(resp) = response {

@@ -629,12 +629,15 @@ impl Engine {
             _ => "",
         };
         let outputs = self
-            .execute_inner(exec_ctx, wf_id, sub_inputs, depth + 1)
+            .execute_inner(exec_ctx, wf_id, sub_inputs.clone(), depth + 1)
             .await
             .map_err(|err| {
                 let msg = format!("sub-workflow {wf_id}: {}", err.message);
                 RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
             })?;
+
+        // Register completed sub-workflow state for $workflows.<id>.* expressions.
+        vars.register_workflow_state(wf_id, sub_inputs, outputs.clone());
 
         for (name, value) in outputs {
             vars.set_step_output(&step.step_id, &name, value);

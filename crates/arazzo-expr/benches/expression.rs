@@ -63,6 +63,7 @@ fn rich_context() -> EvalContext {
         inputs,
         steps,
         outputs: BTreeMap::new(),
+        workflows: BTreeMap::new(),
         status_code: Some(200),
         method: Some("GET".to_string()),
         url: Some("https://api.example.com/users/42".to_string()),
