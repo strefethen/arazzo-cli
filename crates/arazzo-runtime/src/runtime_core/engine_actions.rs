@@ -38,6 +38,7 @@ impl Engine {
                             cancel: ctx.cancel,
                             is_timeout: ctx.is_timeout,
                             response: ctx.result.response.as_deref(),
+                            vars: ctx.vars,
                         },
                         action.action,
                         Some(SelectedActionDebugContext {
@@ -91,6 +92,7 @@ impl Engine {
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                         response: ctx.result.response.as_deref(),
+                        vars: ctx.vars,
                     },
                     action.action,
                     Some(SelectedActionDebugContext {
@@ -226,13 +228,16 @@ impl Engine {
                 }
             }
             ActionType::Goto => {
+                // Resolve expressions in goto targets (e.g. "step_{$inputs.target}").
+                let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
                 if !action.step_id.is_empty() {
-                    if let Some(idx) = self.find_step_index(ctx.workflow, &action.step_id) {
+                    let resolved_step_id = eval.interpolate_string(&action.step_id);
+                    if let Some(idx) = self.find_step_index(ctx.workflow, &resolved_step_id) {
                         return RoutedDecision {
                             flow: FlowDecision::Next(idx),
                             trace: TraceDecision {
                                 action_type: action.type_.to_string(),
-                                target_step_id: action.step_id.clone(),
+                                target_step_id: resolved_step_id,
                                 ..TraceDecision::with_path(TraceDecisionPath::GotoStep)
                             },
                         };
@@ -240,21 +245,22 @@ impl Engine {
                     return RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::new(
                             RuntimeErrorKind::GotoTargetNotFound,
-                            format!("goto: step \"{}\" not found", action.step_id),
+                            format!("goto: step \"{resolved_step_id}\" not found"),
                         )),
                         trace: TraceDecision {
                             action_type: action.type_.to_string(),
-                            target_step_id: action.step_id.clone(),
+                            target_step_id: resolved_step_id,
                             ..TraceDecision::with_path(TraceDecisionPath::Error)
                         },
                     };
                 }
                 if !action.workflow_id.is_empty() {
+                    let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
                     return RoutedDecision {
-                        flow: FlowDecision::GotoWorkflow(action.workflow_id.clone()),
+                        flow: FlowDecision::GotoWorkflow(resolved_workflow_id.clone()),
                         trace: TraceDecision {
                             action_type: action.type_.to_string(),
-                            target_workflow_id: action.workflow_id.clone(),
+                            target_workflow_id: resolved_workflow_id,
                             ..TraceDecision::with_path(TraceDecisionPath::GotoWorkflow)
                         },
                     };
@@ -431,6 +437,7 @@ struct ExecuteActionContext<'a> {
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
     response: Option<&'a Response>,
+    vars: &'a VarStore,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

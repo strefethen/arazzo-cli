@@ -1525,8 +1525,8 @@ use engine_trace::{build_trace_response, DebugGateContext};
 use input_validation::{validate_inputs, InputIssueSeverity};
 
 use helpers::{
-    can_execute_parallel, parse_source_prefix, replace_path_params, resolve_payload,
-    sleep_with_cancel, step_result_error, value_to_string,
+    can_execute_parallel, encode_cookie_value, parse_source_prefix, replace_path_params,
+    resolve_payload, sleep_with_cancel, step_result_error, value_to_string,
 };
 
 pub(crate) use helpers::{

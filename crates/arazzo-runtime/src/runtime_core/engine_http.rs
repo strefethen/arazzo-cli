@@ -33,7 +33,7 @@ impl Engine {
             })
     }
 
-    fn prepare_http_request(
+    pub(crate) fn prepare_http_request(
         &self,
         step: &Step,
         vars: &VarStore,
@@ -110,7 +110,8 @@ impl Engine {
             } else if param.in_ == Some(ParamLocation::Cookie) {
                 let value_str = param.value_as_str();
                 let resolved = value_to_string(&eval.resolve_value(&value_str));
-                cookie_parts.push(format!("{}={}", param.name, resolved));
+                let encoded = encode_cookie_value(&resolved);
+                cookie_parts.push(format!("{}={}", param.name, encoded));
             }
         }
         if !cookie_parts.is_empty() {
@@ -439,7 +440,26 @@ impl Engine {
                 }
                 Some(ParamLocation::Query) => {
                     if !value.is_null() {
-                        query_params_vec.push((param.name.clone(), value_to_string(&value)));
+                        match &value {
+                            Value::Array(arr) => {
+                                // Exploded form: emit one key-value pair per element.
+                                for elem in arr {
+                                    query_params_vec
+                                        .push((param.name.clone(), value_to_string(elem)));
+                                }
+                            }
+                            Value::Object(_) => {
+                                // Serialize objects as JSON strings.
+                                query_params_vec.push((
+                                    param.name.clone(),
+                                    serde_json::to_string(&value).unwrap_or_default(),
+                                ));
+                            }
+                            _ => {
+                                query_params_vec
+                                    .push((param.name.clone(), value_to_string(&value)));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -485,7 +505,7 @@ impl Engine {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PreparedRequest {
+pub(crate) struct PreparedRequest {
     pub method: String,
     pub url_result: UrlBuildResult,
     pub headers: BTreeMap<String, String>,

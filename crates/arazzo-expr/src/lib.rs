@@ -365,15 +365,6 @@ impl ExpressionEvaluator {
 
         let mut warnings = Vec::new();
 
-        // NOT operator: strip leading `!` but only when the next char is not `=`
-        // (to avoid consuming `!=` as NOT + `=`).
-        if condition.starts_with('!') && !condition.starts_with("!=") {
-            let inner = condition[1..].trim();
-            let (result, w) = self.evaluate_condition_with_diagnostics(inner);
-            warnings.extend(w);
-            return (!result, warnings);
-        }
-
         // Parenthesis grouping: if the entire expression is wrapped in balanced
         // parens (depth reaches zero only at the last char), strip them and recurse.
         if condition.starts_with('(')
@@ -386,6 +377,7 @@ impl ExpressionEvaluator {
             return (result, warnings);
         }
 
+        // Split on `||` first (lowest precedence).
         if let Some(parts) = split_outside_quotes(condition, "||") {
             for part in parts {
                 let (result, w) = self.evaluate_condition_with_diagnostics(part);
@@ -397,6 +389,7 @@ impl ExpressionEvaluator {
             return (false, warnings);
         }
 
+        // Split on `&&` next.
         if let Some(parts) = split_outside_quotes(condition, "&&") {
             for part in parts {
                 let (result, w) = self.evaluate_condition_with_diagnostics(part);
@@ -406,6 +399,16 @@ impl ExpressionEvaluator {
                 }
             }
             return (true, warnings);
+        }
+
+        // NOT operator: strip leading `!` but only when the next char is not `=`
+        // (to avoid consuming `!=` as NOT + `=`). Applied after `||`/`&&` splits
+        // so that NOT binds tighter than logical connectives.
+        if condition.starts_with('!') && !condition.starts_with("!=") {
+            let inner = condition[1..].trim();
+            let (result, w) = self.evaluate_condition_with_diagnostics(inner);
+            warnings.extend(w);
+            return (!result, warnings);
         }
 
         self.evaluate_comparison_with_diagnostics(condition)
@@ -560,36 +563,54 @@ fn split_outside_quotes<'a>(input: &'a str, delim: &'a str) -> Option<Vec<&'a st
     let mut start = 0usize;
     let mut in_quote: Option<char> = None;
     let mut paren_depth: usize = 0;
+    let mut bracket_depth: usize = 0;
     let mut found = false;
+    let mut prev_backslash = false;
 
     for (idx, ch) in input.char_indices() {
         if idx < start {
+            prev_backslash = false;
             continue;
         }
         if let Some(q) = in_quote {
-            if ch == q {
+            if ch == q && !prev_backslash {
                 in_quote = None;
             }
+            prev_backslash = ch == '\\' && !prev_backslash;
             continue;
         }
-        if ch == '"' || ch == '\'' {
+        if (ch == '"' || ch == '\'') && !prev_backslash {
             in_quote = Some(ch);
+            prev_backslash = false;
             continue;
         }
         if ch == '(' {
             paren_depth += 1;
+            prev_backslash = false;
             continue;
         }
         if ch == ')' {
             paren_depth = paren_depth.saturating_sub(1);
+            prev_backslash = false;
+            continue;
+        }
+        if ch == '[' {
+            bracket_depth += 1;
+            prev_backslash = false;
+            continue;
+        }
+        if ch == ']' {
+            bracket_depth = bracket_depth.saturating_sub(1);
+            prev_backslash = false;
             continue;
         }
 
-        if paren_depth == 0 && input[idx..].starts_with(delim) {
+        if paren_depth == 0 && bracket_depth == 0 && input[idx..].starts_with(delim) {
             parts.push(input[start..idx].trim());
             start = idx + delim.len();
             found = true;
         }
+        prev_backslash = ch == '\\';
     }
 
     if !found {
@@ -607,17 +628,21 @@ fn find_operator(input: &str) -> (String, usize) {
     }
 
     let mut in_quote: Option<char> = None;
+    let mut prev_backslash = false;
     for (idx, ch) in input.char_indices() {
         if let Some(q) = in_quote {
-            if ch == q {
+            if ch == q && !prev_backslash {
                 in_quote = None;
             }
+            prev_backslash = ch == '\\' && !prev_backslash;
             continue;
         }
-        if ch == '"' || ch == '\'' {
+        if (ch == '"' || ch == '\'') && !prev_backslash {
             in_quote = Some(ch);
+            prev_backslash = false;
             continue;
         }
+        prev_backslash = ch == '\\' && !prev_backslash;
 
         if input[idx..].starts_with("!=") {
             return ("!=".to_string(), idx);
@@ -642,17 +667,21 @@ fn find_operator(input: &str) -> (String, usize) {
 
 fn index_outside_quotes(input: &str, needle: &str) -> Option<usize> {
     let mut in_quote: Option<char> = None;
+    let mut prev_backslash = false;
     for (idx, ch) in input.char_indices() {
         if let Some(q) = in_quote {
-            if ch == q {
+            if ch == q && !prev_backslash {
                 in_quote = None;
             }
+            prev_backslash = ch == '\\' && !prev_backslash;
             continue;
         }
-        if ch == '"' || ch == '\'' {
+        if (ch == '"' || ch == '\'') && !prev_backslash {
             in_quote = Some(ch);
+            prev_backslash = false;
             continue;
         }
+        prev_backslash = ch == '\\' && !prev_backslash;
         if input[idx..].starts_with(needle) {
             return Some(idx);
         }
@@ -730,7 +759,12 @@ fn parse_value(token: &str) -> Value {
                 if (bytes[0] == b'"' && bytes[token.len() - 1] == b'"')
                     || (bytes[0] == b'\'' && bytes[token.len() - 1] == b'\'')
                 {
-                    return Value::String(token[1..token.len() - 1].to_string());
+                    let inner = &token[1..token.len() - 1];
+                    let unescaped = inner
+                        .replace("\\\"", "\"")
+                        .replace("\\'", "'")
+                        .replace("\\\\", "\\");
+                    return Value::String(unescaped);
                 }
             }
             Value::String(token.to_string())
@@ -808,6 +842,13 @@ fn resolve_body_access(body: &Option<Value>, suffix: &str) -> Value {
     if let Some(path) = suffix.strip_prefix('.') {
         if let Some(b) = body {
             return resolve_dot_path(b, path).unwrap_or(Value::Null);
+        }
+        return Value::Null;
+    }
+    // Handle bracket notation directly after body: $response.body['key']
+    if suffix.starts_with('[') {
+        if let Some(b) = body {
+            return resolve_dot_path(b, suffix).unwrap_or(Value::Null);
         }
         return Value::Null;
     }
@@ -1158,7 +1199,15 @@ fn push_bracket_tokens<'a>(
         } else if let Ok(idx) = index_expr.parse::<usize>() {
             out.push(PathToken::Index(idx));
         } else if !index_expr.is_empty() {
-            out.push(PathToken::Field(index_expr));
+            // Strip surrounding quotes for bracket key access: ['key'] or ["key"]
+            let key = if (index_expr.starts_with('\'') && index_expr.ends_with('\''))
+                || (index_expr.starts_with('"') && index_expr.ends_with('"'))
+            {
+                &index_expr[1..index_expr.len() - 1]
+            } else {
+                index_expr
+            };
+            out.push(PathToken::Field(key));
         }
 
         cursor = close + 1;
@@ -1523,6 +1572,45 @@ mod tests {
         assert_eq!(
             eval.interpolate_string("Bearer {$inputs.name}"),
             "Bearer Alice"
+        );
+    }
+
+    #[test]
+    fn logical_not_precedence_bug() {
+        let ctx = EvalContext::default();
+        let eval = ExpressionEvaluator::new(ctx);
+        let condition = "!true || true";
+        assert!(
+            eval.evaluate_condition(condition),
+            "NOT precedence should be higher than OR"
+        );
+    }
+
+    #[test]
+    fn split_outside_quotes_handles_brackets_and_escapes() {
+        let ctx = EvalContext {
+            response_body: Some(json!({"name||title": "Something"})),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+        let condition = "$response.body['name||title'] == 'Something'";
+        assert!(
+            eval.evaluate_condition(condition),
+            "Should not split || inside brackets"
+        );
+    }
+
+    #[test]
+    fn split_outside_quotes_fails_on_escaped_quotes() {
+        let ctx = EvalContext {
+            inputs: std::collections::BTreeMap::from([("name".to_string(), json!("Alice\"Bob"))]),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+        let condition = "$inputs.name == \"Alice\\\"Bob\"";
+        assert!(
+            eval.evaluate_condition(condition),
+            "Should handle escaped quotes in strings"
         );
     }
 

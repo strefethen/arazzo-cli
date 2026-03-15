@@ -53,6 +53,49 @@ async fn execute_sequential_steps() {
 }
 
 #[tokio::test]
+async fn execute_on_success_goto_interpolation_bug() {
+    let server = start_server(|_method, url, _headers, _body| match url.as_str() {
+        "/s1" => MockHttpResponse::json(200, r#"{"ok":true}"#),
+        "/final" => MockHttpResponse::json(200, r#"{"done":true}"#),
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "test_workflow".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "s1".to_string(),
+                    target: Some(StepTarget::OperationPath("/s1".to_string())),
+                    success_criteria: success_200(),
+                    on_success: vec![OnAction {
+                        type_: ActionType::Goto,
+                        step_id: "target_{$inputs.target}".to_string(), // Dynamic target
+                        ..OnAction::default()
+                    }],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "target_final".to_string(),
+                    target: Some(StepTarget::OperationPath("/final".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let mut inputs = BTreeMap::new();
+    inputs.insert("target".to_string(), json!("final"));
+
+    let result = engine.execute_collect("test_workflow", inputs).await;
+    assert!(result.outputs.is_ok(), "goto interpolation failed");
+}
+
+#[tokio::test]
 async fn execute_failure_no_handler() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(500, r#"{"error":"server error"}"#)

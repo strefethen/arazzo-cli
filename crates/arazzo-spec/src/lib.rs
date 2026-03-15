@@ -303,9 +303,14 @@ impl Parameter {
             }
             serde_yaml_ng::Value::Bool(b) => b.to_string(),
             serde_yaml_ng::Value::Null => String::new(),
-            other => serde_yaml_ng::to_string(other)
-                .map(|s| s.strip_prefix("---\n").unwrap_or(&s).trim_end().to_string())
-                .unwrap_or_default(),
+            other => {
+                // Convert YAML mappings/sequences to JSON strings so that
+                // downstream expression evaluation (which operates on JSON)
+                // receives a valid representation.
+                let json_val: serde_json::Value =
+                    serde_json::to_value(other).unwrap_or(serde_json::Value::Null);
+                serde_json::to_string(&json_val).unwrap_or_default()
+            }
         }
     }
 

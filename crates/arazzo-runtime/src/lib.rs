@@ -367,6 +367,88 @@ mod tests {
     }
 
     #[test]
+    fn build_url_serializes_array_query_params_exploded() {
+        let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
+        let mut vars = VarStore::default();
+        vars.set_input("ids", json!(["a", "b"]));
+
+        let step = Step {
+            target: Some(StepTarget::OperationPath("/api".to_string())),
+            parameters: vec![arazzo_spec::Parameter {
+                name: "ids".to_string(),
+                in_: Some(ParamLocation::Query),
+                value: serde_yaml_ng::Value::String("$inputs.ids".to_string()),
+                ..arazzo_spec::Parameter::default()
+            }],
+            ..Step::default()
+        };
+
+        let url_result = engine
+            .build_url_from_path("/api", &step, &vars)
+            .unwrap_or_else(|err| panic!("build_url_from_path failed: {err}"));
+        // Standard exploded format is ?ids=a&ids=b.
+        assert!(
+            url_result.url.contains("ids=a&ids=b") || url_result.url.contains("ids=b&ids=a"),
+            "Actual: {}",
+            url_result.url
+        );
+    }
+
+    #[test]
+    fn build_request_encodes_cookie_params() {
+        let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
+        let vars = VarStore::default();
+        let step = Step {
+            target: Some(StepTarget::OperationPath("/api".to_string())),
+            parameters: vec![arazzo_spec::Parameter {
+                name: "session".to_string(),
+                in_: Some(ParamLocation::Cookie),
+                value: serde_yaml_ng::Value::String("hello;world".to_string()),
+                ..arazzo_spec::Parameter::default()
+            }],
+            ..Step::default()
+        };
+
+        let prep = engine
+            .prepare_http_request(&step, &vars)
+            .unwrap_or_else(|err| panic!("prepare_http_request failed: {err}"));
+        let cookie = prep
+            .headers
+            .get("Cookie")
+            .unwrap_or_else(|| panic!("Cookie header not found"));
+        // Should be percent-encoded to avoid splitting at ';'.
+        assert!(cookie.contains("%3B"), "Actual: {cookie}");
+    }
+
+    #[test]
+    fn build_request_preserves_complex_parameters() {
+        let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
+        let mut vars = VarStore::default();
+        vars.set_input("metadata", json!({"source": "cli"}));
+
+        let step = Step {
+            target: Some(StepTarget::OperationPath("/api".to_string())),
+            parameters: vec![arazzo_spec::Parameter {
+                name: "X-Metadata".to_string(),
+                in_: Some(ParamLocation::Header),
+                value: serde_yaml_ng::Value::String("$inputs.metadata".to_string()),
+                ..arazzo_spec::Parameter::default()
+            }],
+            ..Step::default()
+        };
+
+        let prep = engine
+            .prepare_http_request(&step, &vars)
+            .unwrap_or_else(|err| panic!("prepare_http_request failed: {err}"));
+        let header = prep
+            .headers
+            .get("X-Metadata")
+            .unwrap_or_else(|| panic!("X-Metadata header not found"));
+        // Should be serialized JSON.
+        assert!(header.contains("\"source\""), "Actual: '{header}'");
+    }
+
+    #[test]
     fn build_url_encodes_query_params() {
         let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
         let mut vars = VarStore::default();
