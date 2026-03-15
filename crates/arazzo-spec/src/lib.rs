@@ -144,7 +144,7 @@ pub struct PropertyDef {
     #[serde(default)]
     pub format: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_yml::Value>,
+    pub default: Option<serde_yaml_ng::Value>,
 }
 
 /// Step target discriminator — exactly one of operationId, operationPath, or workflowId.
@@ -280,7 +280,7 @@ pub struct Parameter {
     #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
     pub in_: Option<ParamLocation>,
     #[serde(default)]
-    pub value: serde_yml::Value,
+    pub value: serde_yaml_ng::Value,
     #[serde(default)]
     pub reference: String,
 }
@@ -289,8 +289,8 @@ impl Parameter {
     /// Returns the value as a string suitable for expression evaluation.
     pub fn value_as_str(&self) -> String {
         match &self.value {
-            serde_yml::Value::String(s) => s.clone(),
-            serde_yml::Value::Number(n) => {
+            serde_yaml_ng::Value::String(s) => s.clone(),
+            serde_yaml_ng::Value::Number(n) => {
                 if let Some(u) = n.as_u64() {
                     u.to_string()
                 } else if let Some(i) = n.as_i64() {
@@ -301,9 +301,9 @@ impl Parameter {
                     String::new()
                 }
             }
-            serde_yml::Value::Bool(b) => b.to_string(),
-            serde_yml::Value::Null => String::new(),
-            other => serde_yml::to_string(other)
+            serde_yaml_ng::Value::Bool(b) => b.to_string(),
+            serde_yaml_ng::Value::Null => String::new(),
+            other => serde_yaml_ng::to_string(other)
                 .map(|s| s.strip_prefix("---\n").unwrap_or(&s).trim_end().to_string())
                 .unwrap_or_default(),
         }
@@ -312,8 +312,8 @@ impl Parameter {
     /// Returns true if the value is empty (null or empty string).
     pub fn is_value_empty(&self) -> bool {
         match &self.value {
-            serde_yml::Value::Null => true,
-            serde_yml::Value::String(s) => s.is_empty(),
+            serde_yaml_ng::Value::Null => true,
+            serde_yaml_ng::Value::String(s) => s.is_empty(),
             _ => false,
         }
     }
@@ -326,7 +326,7 @@ pub struct RequestBody {
     #[serde(default)]
     pub content_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_yml::Value>,
+    pub payload: Option<serde_yaml_ng::Value>,
     #[serde(default)]
     pub reference: String,
 }
@@ -428,6 +428,6 @@ pub struct OnAction {
 }
 
 /// Parses raw YAML bytes into an unvalidated specification model.
-pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yml::Error> {
-    serde_yml::from_slice::<ArazzoSpec>(data)
+pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng::Error> {
+    serde_yaml_ng::from_slice::<ArazzoSpec>(data)
 }

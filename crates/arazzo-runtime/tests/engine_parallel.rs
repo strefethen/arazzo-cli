@@ -152,7 +152,7 @@ async fn execute_parallel_with_dependencies() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -385,7 +385,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -398,7 +398,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
@@ -412,13 +412,13 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yml::Value::String("$steps.b.outputs.y".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.b.outputs.y".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "z".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yml::Value::String("$steps.c.outputs.z".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.c.outputs.z".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],

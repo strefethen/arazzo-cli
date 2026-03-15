@@ -934,7 +934,7 @@ async fn execute_sub_workflow_with_inputs() {
                 target: Some(StepTarget::WorkflowId("child".to_string())),
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
-                    value: serde_yml::Value::String("$inputs.uid".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.uid".to_string()),
                     ..Parameter::default()
                 }],
                 ..Step::default()
@@ -949,7 +949,7 @@ async fn execute_sub_workflow_with_inputs() {
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yml::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1230,7 +1230,7 @@ async fn execute_operation_id_and_path_params() {
                 parameters: vec![Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yml::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1359,19 +1359,19 @@ async fn dry_run_resolves_expressions_and_skips_http_calls() {
                 Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yml::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
                     ..Parameter::default()
                 },
                 Parameter {
                     name: "Authorization".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yml::Value::String("$inputs.token".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.token".to_string()),
                     ..Parameter::default()
                 },
                 Parameter {
                     name: "format".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yml::Value::String("json".to_string()),
+                    value: serde_yaml_ng::Value::String("json".to_string()),
                     ..Parameter::default()
                 },
             ],
@@ -1424,7 +1424,7 @@ async fn dry_run_multi_step_and_custom_headers() {
                 parameters: vec![Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1436,7 +1436,7 @@ async fn dry_run_multi_step_and_custom_headers() {
                 parameters: vec![Parameter {
                     name: "X-Custom".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yml::Value::String("custom-value".to_string()),
+                    value: serde_yaml_ng::Value::String("custom-value".to_string()),
                     ..Parameter::default()
                 }],
                 request_body: Some(RequestBody {
@@ -1551,7 +1551,7 @@ async fn execute_step_with_transitive_deps() {
                     parameters: vec![Parameter {
                         name: "ref_id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
                         ..Parameter::default()
                     }],
                     outputs: BTreeMap::from([(
@@ -1888,7 +1888,7 @@ async fn execute_path_param_with_special_chars_is_percent_encoded() {
             parameters: vec![Parameter {
                 name: "name".to_string(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yml::Value::String("hello world/foo#bar".to_string()),
+                value: serde_yaml_ng::Value::String("hello world/foo#bar".to_string()),
                 ..Parameter::default()
             }],
             success_criteria: success_200(),
@@ -1932,7 +1932,7 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
                 target: Some(StepTarget::WorkflowId("child".to_string())),
                 parameters: vec![Parameter {
                     name: "count".to_string(),
-                    value: serde_yml::Value::String("{$inputs.count}".to_string()),
+                    value: serde_yaml_ng::Value::String("{$inputs.count}".to_string()),
                     ..Parameter::default()
                 }],
                 ..Step::default()

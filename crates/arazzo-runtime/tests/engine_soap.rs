@@ -31,19 +31,19 @@ fn soap_step(
             Parameter {
                 name: "Content-Type".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yml::Value::String("text/xml".to_string()),
+                value: serde_yaml_ng::Value::String("text/xml".to_string()),
                 ..Parameter::default()
             },
             Parameter {
                 name: "SOAPAction".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yml::Value::String(soap_action.to_string()),
+                value: serde_yaml_ng::Value::String(soap_action.to_string()),
                 ..Parameter::default()
             },
         ],
         request_body: Some(RequestBody {
             content_type: "text/xml".to_string(),
-            payload: Some(serde_yml::Value::String(payload.to_string())),
+            payload: Some(serde_yaml_ng::Value::String(payload.to_string())),
             ..RequestBody::default()
         }),
         success_criteria: vec![

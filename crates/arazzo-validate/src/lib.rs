@@ -16,7 +16,7 @@ use arazzo_spec::{
 #[derive(Debug)]
 pub enum Error {
     ReadFile(std::io::Error),
-    ParseYaml(serde_yml::Error),
+    ParseYaml(serde_yaml_ng::Error),
     Validation(ValidationReport),
     /// Component resolution error (pre-validation).
     ComponentResolution(String),

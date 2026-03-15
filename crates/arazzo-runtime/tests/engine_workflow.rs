@@ -74,7 +74,7 @@ async fn execute_env_expression() {
             parameters: vec![arazzo_spec::Parameter {
                 name: "Authorization".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yml::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
+                value: serde_yaml_ng::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
                 ..arazzo_spec::Parameter::default()
             }],
             success_criteria: success_200(),
@@ -403,7 +403,7 @@ async fn workflow_level_parameters_merge_into_steps() {
             parameters: vec![Parameter {
                 name: "X-Workflow-Header".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yml::Value::String("workflow-value".to_string()),
+                value: serde_yaml_ng::Value::String("workflow-value".to_string()),
                 ..Parameter::default()
             }],
             steps: vec![Step {
@@ -439,7 +439,7 @@ async fn step_params_override_workflow_params() {
             parameters: vec![Parameter {
                 name: "X-Auth".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yml::Value::String("default-token".to_string()),
+                value: serde_yaml_ng::Value::String("default-token".to_string()),
                 ..Parameter::default()
             }],
             steps: vec![Step {
@@ -448,7 +448,7 @@ async fn step_params_override_workflow_params() {
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yml::Value::String("step-token".to_string()),
+                    value: serde_yaml_ng::Value::String("step-token".to_string()),
                     ..Parameter::default()
                 }],
                 ..Step::default()
@@ -482,7 +482,7 @@ async fn workflow_params_not_merged_into_subworkflow_steps() {
                 parameters: vec![Parameter {
                     name: "X-Parent".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yml::Value::String("parent-val".to_string()),
+                    value: serde_yaml_ng::Value::String("parent-val".to_string()),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -490,7 +490,7 @@ async fn workflow_params_not_merged_into_subworkflow_steps() {
                     target: Some(StepTarget::WorkflowId("child".to_string())),
                     parameters: vec![Parameter {
                         name: "input_val".to_string(),
-                        value: serde_yml::Value::String("hello".to_string()),
+                        value: serde_yaml_ng::Value::String("hello".to_string()),
                         ..Parameter::default()
                     }],
                     ..Step::default()
@@ -614,7 +614,7 @@ async fn request_header_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yml::Value::String("Bearer token123".to_string()),
+                    value: serde_yaml_ng::Value::String("Bearer token123".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -652,7 +652,7 @@ async fn request_query_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "page".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yml::Value::String("5".to_string()),
+                    value: serde_yaml_ng::Value::String("5".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -689,7 +689,7 @@ async fn request_path_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yml::Value::String("42".to_string()),
+                    value: serde_yaml_ng::Value::String("42".to_string()),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),

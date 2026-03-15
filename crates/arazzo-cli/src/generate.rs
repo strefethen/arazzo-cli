@@ -845,7 +845,7 @@ fn build_workflow(
         wf_parameters.push(Parameter {
             name: auth_req.param_name.clone(),
             in_: Some(auth_req.param_in),
-            value: serde_yml::Value::String(auth_req.param_value_expr.clone()),
+            value: serde_yaml_ng::Value::String(auth_req.param_value_expr.clone()),
             reference: String::new(),
         });
     }
@@ -903,7 +903,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yml::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
             });
         }
@@ -931,7 +931,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yml::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
             });
         }
@@ -959,7 +959,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yml::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
             });
         }
@@ -1058,30 +1058,32 @@ fn build_step(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Convert serde_json::Value to serde_yml::Value.
-fn json_to_yml(v: Value) -> serde_yml::Value {
+/// Convert serde_json::Value to serde_yaml_ng::Value.
+fn json_to_yml(v: Value) -> serde_yaml_ng::Value {
     match v {
-        Value::Null => serde_yml::Value::Null,
-        Value::Bool(b) => serde_yml::Value::Bool(b),
+        Value::Null => serde_yaml_ng::Value::Null,
+        Value::Bool(b) => serde_yaml_ng::Value::Bool(b),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                serde_yml::Value::Number(serde_yml::Number::from(i))
+                serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(i))
             } else if let Some(u) = n.as_u64() {
-                serde_yml::Value::Number(serde_yml::Number::from(u))
+                serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(u))
             } else if let Some(f) = n.as_f64() {
-                serde_yml::Value::Number(serde_yml::Number::from(f))
+                serde_yaml_ng::Value::Number(serde_yaml_ng::Number::from(f))
             } else {
-                serde_yml::Value::Null
+                serde_yaml_ng::Value::Null
             }
         }
-        Value::String(s) => serde_yml::Value::String(s),
-        Value::Array(arr) => serde_yml::Value::Sequence(arr.into_iter().map(json_to_yml).collect()),
+        Value::String(s) => serde_yaml_ng::Value::String(s),
+        Value::Array(arr) => {
+            serde_yaml_ng::Value::Sequence(arr.into_iter().map(json_to_yml).collect())
+        }
         Value::Object(map) => {
-            let mut m = serde_yml::Mapping::new();
+            let mut m = serde_yaml_ng::Mapping::new();
             for (k, v) in map {
-                m.insert(serde_yml::Value::String(k), json_to_yml(v));
+                m.insert(serde_yaml_ng::Value::String(k), json_to_yml(v));
             }
-            serde_yml::Value::Mapping(m)
+            serde_yaml_ng::Value::Mapping(m)
         }
     }
 }
@@ -1094,7 +1096,7 @@ mod tests {
     use super::*;
 
     fn parse_openapi(yaml: &str) -> OpenAPI {
-        serde_yml::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"))
+        serde_yaml_ng::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"))
     }
 
     #[test]
@@ -1356,7 +1358,7 @@ paths: {}
     fn test_full_generation_petstore() {
         let yaml = include_str!("../../../testdata/petstore.openapi.yaml");
         let openapi: OpenAPI =
-            serde_yml::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"));
+            serde_yaml_ng::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"));
         let result = generate_crud(&openapi, "petstore.openapi.yaml")
             .unwrap_or_else(|e| panic!("generate error: {e}"));
 
@@ -1377,8 +1379,8 @@ paths: {}
         }
 
         // Verify the generated spec serializes to valid YAML.
-        let yaml_out =
-            serde_yml::to_string(&result.spec).unwrap_or_else(|e| panic!("serialize error: {e}"));
+        let yaml_out = serde_yaml_ng::to_string(&result.spec)
+            .unwrap_or_else(|e| panic!("serialize error: {e}"));
         assert!(yaml_out.contains("arazzo:"));
         assert!(yaml_out.contains("crud-pets"));
 

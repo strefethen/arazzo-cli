@@ -177,7 +177,7 @@ mod tests {
             "color".to_string(),
             PropertyDef {
                 type_: Some(JsonSchemaType::String),
-                default: Some(serde_yml::Value::String("blue".to_string())),
+                default: Some(serde_yaml_ng::Value::String("blue".to_string())),
                 ..PropertyDef::default()
             },
         );
@@ -198,7 +198,7 @@ mod tests {
             "name".to_string(),
             PropertyDef {
                 type_: Some(JsonSchemaType::String),
-                default: Some(serde_yml::Value::String("default-name".to_string())),
+                default: Some(serde_yaml_ng::Value::String("default-name".to_string())),
                 ..PropertyDef::default()
             },
         );

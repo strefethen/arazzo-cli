@@ -378,13 +378,13 @@ mod tests {
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yml::Value::String("$inputs.q".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.q".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
                 arazzo_spec::Parameter {
                     name: "tag".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yml::Value::String("a=b".to_string()),
+                    value: serde_yaml_ng::Value::String("a=b".to_string()),
                     ..arazzo_spec::Parameter::default()
                 },
             ],

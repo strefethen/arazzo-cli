@@ -51,7 +51,7 @@ fn parse_spec(bytes: &[u8], context: &str) -> ArazzoSpec {
 }
 
 fn serialize_spec(spec: &ArazzoSpec, context: &str) -> String {
-    match serde_yml::to_string(spec) {
+    match serde_yaml_ng::to_string(spec) {
         Ok(serialized) => serialized,
         Err(err) => panic!("failed serializing {context}: {err}"),
     }

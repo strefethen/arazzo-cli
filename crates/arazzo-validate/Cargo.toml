@@ -13,4 +13,4 @@ workspace = true
 
 [dependencies]
 arazzo-spec = { path = "../arazzo-spec" }
-serde_yml = "0.0.12"
+serde_yaml_ng = "0.10"

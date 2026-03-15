@@ -242,8 +242,8 @@ pub fn success_200() -> Vec<SuccessCriterion> {
     }]
 }
 
-pub fn to_yaml(value: Value) -> serde_yml::Value {
-    match serde_yml::to_value(value) {
+pub fn to_yaml(value: Value) -> serde_yaml_ng::Value {
+    match serde_yaml_ng::to_value(value) {
         Ok(v) => v,
         Err(err) => panic!("converting json to yaml: {err}"),
     }

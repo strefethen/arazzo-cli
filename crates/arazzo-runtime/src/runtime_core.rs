@@ -1441,7 +1441,7 @@ fn parse_openapi_into_index(
     data: &[u8],
     op_index: &mut BTreeMap<String, OperationEntry>,
 ) -> Result<(), RuntimeError> {
-    let root: serde_yml::Value = serde_yml::from_slice(data).map_err(|err| {
+    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(data).map_err(|err| {
         RuntimeError::new(
             RuntimeErrorKind::SourceDescriptionParse,
             format!("parsing OpenAPI spec: {err}"),
@@ -1478,8 +1478,8 @@ fn parse_openapi_into_index(
                 continue;
             };
             let op_id = operation_map
-                .get(serde_yml::Value::String("operationId".to_string()))
-                .and_then(serde_yml::Value::as_str)
+                .get(serde_yaml_ng::Value::String("operationId".to_string()))
+                .and_then(serde_yaml_ng::Value::as_str)
                 .unwrap_or_default()
                 .to_string();
             if op_id.is_empty() {

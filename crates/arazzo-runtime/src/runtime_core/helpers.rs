@@ -707,11 +707,11 @@ pub(super) fn value_to_string(value: &Value) -> String {
     }
 }
 
-pub(super) fn resolve_payload(value: &serde_yml::Value, eval: &ExpressionEvaluator) -> Value {
+pub(super) fn resolve_payload(value: &serde_yaml_ng::Value, eval: &ExpressionEvaluator) -> Value {
     match value {
-        serde_yml::Value::Null => Value::Null,
-        serde_yml::Value::Bool(v) => Value::Bool(*v),
-        serde_yml::Value::Number(v) => {
+        serde_yaml_ng::Value::Null => Value::Null,
+        serde_yaml_ng::Value::Bool(v) => Value::Bool(*v),
+        serde_yaml_ng::Value::Number(v) => {
             if let Some(i) = v.as_i64() {
                 json!(i)
             } else if let Some(u) = v.as_u64() {
@@ -722,15 +722,15 @@ pub(super) fn resolve_payload(value: &serde_yml::Value, eval: &ExpressionEvaluat
                 Value::Null
             }
         }
-        serde_yml::Value::String(v) => eval.resolve_value(v),
-        serde_yml::Value::Sequence(seq) => {
+        serde_yaml_ng::Value::String(v) => eval.resolve_value(v),
+        serde_yaml_ng::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
             for item in seq {
                 out.push(resolve_payload(item, eval));
             }
             Value::Array(out)
         }
-        serde_yml::Value::Mapping(map) => {
+        serde_yaml_ng::Value::Mapping(map) => {
             let mut out = serde_json::Map::new();
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
@@ -933,9 +933,9 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
     refs.into_iter().collect()
 }
 
-fn scan_payload_refs(value: &serde_yml::Value, scan: &mut impl FnMut(&str)) {
+fn scan_payload_refs(value: &serde_yaml_ng::Value, scan: &mut impl FnMut(&str)) {
     match value {
-        serde_yml::Value::String(s) => {
+        serde_yaml_ng::Value::String(s) => {
             if s.starts_with('$') {
                 scan(s);
             } else if s.contains("{$") {
@@ -947,12 +947,12 @@ fn scan_payload_refs(value: &serde_yml::Value, scan: &mut impl FnMut(&str)) {
                 }
             }
         }
-        serde_yml::Value::Sequence(seq) => {
+        serde_yaml_ng::Value::Sequence(seq) => {
             for item in seq {
                 scan_payload_refs(item, scan);
             }
         }
-        serde_yml::Value::Mapping(map) => {
+        serde_yaml_ng::Value::Mapping(map) => {
             for (_, v) in map {
                 scan_payload_refs(v, scan);
             }
@@ -1202,7 +1202,7 @@ mod tests {
             parameters: vec![arazzo_spec::Parameter {
                 name: "q".to_string(),
                 in_: Some(ParamLocation::Query),
-                value: serde_yml::Value::String("$steps.s1.outputs.query".to_string()),
+                value: serde_yaml_ng::Value::String("$steps.s1.outputs.query".to_string()),
                 ..arazzo_spec::Parameter::default()
             }],
             outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
@@ -1286,7 +1286,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1308,7 +1308,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.s2.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.s2.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1318,7 +1318,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "from".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1356,13 +1356,13 @@ mod tests {
                         arazzo_spec::Parameter {
                             name: "x".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yml::Value::String("$steps.b.outputs.id".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.b.outputs.id".to_string()),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -1500,7 +1500,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1510,7 +1510,7 @@ mod tests {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "y".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yml::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
                         ..arazzo_spec::Parameter::default()
                     }],
                     ..Step::default()
@@ -1669,7 +1669,7 @@ mod tests {
                         parameters.push(arazzo_spec::Parameter {
                             name: format!("p{dep}"),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yml::Value::String(format!(
+                            value: serde_yaml_ng::Value::String(format!(
                                 "$steps.s{dep}.outputs.value"
                             )),
                             ..arazzo_spec::Parameter::default()

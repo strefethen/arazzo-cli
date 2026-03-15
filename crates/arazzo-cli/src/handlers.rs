@@ -356,7 +356,7 @@ pub fn generate_workflow(
         .map_err(|err| format!("reading OpenAPI spec \"{spec_path}\": {err}"))?;
 
     let openapi: openapiv3::OpenAPI =
-        serde_yml::from_slice(&bytes).map_err(|err| format!("parsing OpenAPI spec: {err}"))?;
+        serde_yaml_ng::from_slice(&bytes).map_err(|err| format!("parsing OpenAPI spec: {err}"))?;
 
     if scenario != "crud" {
         return Err(format!("unknown scenario \"{scenario}\"; available: crud"));
@@ -364,7 +364,7 @@ pub fn generate_workflow(
 
     let result = crate::generate::generate_crud(&openapi, spec_path)?;
 
-    let yaml = serde_yml::to_string(&result.spec)
+    let yaml = serde_yaml_ng::to_string(&result.spec)
         .map_err(|err| format!("serializing Arazzo spec: {err}"))?;
 
     for warning in &result.warnings {
