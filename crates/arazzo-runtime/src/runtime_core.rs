@@ -1151,6 +1151,10 @@ struct StepResult {
     success: bool,
     response: Option<Arc<Response>>,
     err: Option<String>,
+    /// Original error kind from a runtime error (e.g. HttpRequest, ExecutionTimeout).
+    /// Preserved so that onFailure `end` actions can report the true cause
+    /// instead of a generic `SuccessCriteriaFailed`.
+    err_kind: Option<RuntimeErrorKind>,
 }
 
 #[derive(Debug, Clone)]

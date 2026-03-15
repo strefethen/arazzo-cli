@@ -789,10 +789,10 @@ pub(super) fn to_json_path(expr: &str) -> String {
 
 pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeError {
     if let Some(err) = &result.err {
-        return RuntimeError::new(
-            RuntimeErrorKind::SuccessCriteriaFailed,
-            format!("step {step_id}: {err}"),
-        );
+        let kind = result
+            .err_kind
+            .unwrap_or(RuntimeErrorKind::SuccessCriteriaFailed);
+        return RuntimeError::new(kind, format!("step {step_id}: {err}"));
     }
     if let Some(resp) = &result.response {
         let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();

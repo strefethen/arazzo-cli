@@ -216,22 +216,19 @@ impl Engine {
             {
                 Ok(exec) => exec,
                 Err(err) => {
-                    let duration = start.elapsed();
-                    if self.inner.trace_enabled {
-                        let record = Engine::build_step_trace_record(
-                            exec_ctx,
-                            workflow_id,
-                            &step,
-                            attempt,
-                            duration,
-                            &StepTraceData::default(),
-                            TraceDecision::with_path(TraceDecisionPath::Error),
-                            BTreeMap::new(),
-                            Some(err.message.clone()),
-                        );
-                        Engine::push_trace_record(exec_ctx, record).await;
+                    // Route runtime errors through onFailure handlers instead of
+                    // failing immediately (same as execute_inner — Bug #10).
+                    StepExecution {
+                        result: StepResult {
+                            success: false,
+                            response: None,
+                            err: Some(err.message.clone()),
+                            err_kind: Some(err.kind),
+                        },
+                        outputs: BTreeMap::new(),
+                        dry_run_request: None,
+                        trace: StepTraceData::default(),
                     }
-                    return Err(err);
                 }
             };
             let duration = start.elapsed();
@@ -364,32 +361,20 @@ impl Engine {
                 {
                     Ok(execution) => execution,
                     Err(err) => {
-                        let duration = start.elapsed();
-                        if self.inner.trace_enabled {
-                            let record = Engine::build_step_trace_record(
-                                exec_ctx,
-                                workflow_id,
-                                &step,
-                                attempt,
-                                duration,
-                                &StepTraceData::default(),
-                                TraceDecision::with_path(TraceDecisionPath::Error),
-                                BTreeMap::new(),
-                                Some(err.message.clone()),
-                            );
-                            Engine::push_trace_record(exec_ctx, record).await;
-                        }
-                        self.emit_observer_event(
-                            exec_ctx,
-                            ObserverEvent::WorkflowCompleted {
-                                workflow_id: workflow_id.to_string(),
-                                outputs: BTreeMap::new(),
-                                duration: workflow_start.elapsed(),
-                                error: Some(err.message.clone()),
+                        // Route runtime errors (HTTP timeout, connection refused, etc.)
+                        // through onFailure action handlers instead of failing immediately.
+                        // The Arazzo spec says onFailure should handle ALL forms of step failure.
+                        StepExecution {
+                            result: StepResult {
+                                success: false,
+                                response: None,
+                                err: Some(err.message.clone()),
+                                err_kind: Some(err.kind),
                             },
-                        )
-                        .await;
-                        return Err(err);
+                            outputs: BTreeMap::new(),
+                            dry_run_request: None,
+                            trace: StepTraceData::default(),
+                        }
                     }
                 };
                 let duration = start.elapsed();
@@ -650,6 +635,7 @@ impl Engine {
                     success: false,
                     response: None,
                     err: None,
+                    err_kind: None,
                 });
             }
         }
@@ -658,6 +644,7 @@ impl Engine {
             success: true,
             response: None,
             err: None,
+            err_kind: None,
         })
     }
 

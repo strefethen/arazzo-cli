@@ -39,6 +39,7 @@ impl Engine {
                             is_timeout: ctx.is_timeout,
                             response: ctx.result.response.as_deref(),
                             vars: ctx.vars,
+                            original_err_kind: ctx.result.err_kind,
                         },
                         action.action,
                         Some(SelectedActionDebugContext {
@@ -93,6 +94,7 @@ impl Engine {
                         is_timeout: ctx.is_timeout,
                         response: ctx.result.response.as_deref(),
                         vars: ctx.vars,
+                        original_err_kind: ctx.result.err_kind,
                     },
                     action.action,
                     Some(SelectedActionDebugContext {
@@ -204,9 +206,14 @@ impl Engine {
         match action.type_ {
             ActionType::End => {
                 if ctx.is_failure_path {
+                    // Preserve the original error kind (e.g. HttpRequest, ExecutionTimeout)
+                    // instead of replacing it with a generic SuccessCriteriaFailed.
+                    let err_kind = ctx
+                        .original_err_kind
+                        .unwrap_or(RuntimeErrorKind::SuccessCriteriaFailed);
                     RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::new(
-                            RuntimeErrorKind::SuccessCriteriaFailed,
+                            err_kind,
                             format!(
                                 "step {}: workflow ended by onFailure action",
                                 ctx.workflow.steps[ctx.current_idx].step_id
@@ -438,6 +445,10 @@ struct ExecuteActionContext<'a> {
     is_timeout: &'a AtomicBool,
     response: Option<&'a Response>,
     vars: &'a VarStore,
+    /// Original error kind from a runtime error (e.g. HttpRequest, ExecutionTimeout).
+    /// Used by the `End` action on the failure path to preserve the root cause
+    /// instead of replacing it with a generic `SuccessCriteriaFailed`.
+    original_err_kind: Option<RuntimeErrorKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
