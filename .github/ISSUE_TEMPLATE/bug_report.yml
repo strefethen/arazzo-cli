@@ -1,0 +1,42 @@
+name: Bug Report
+description: Report a bug in arazzo-cli
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command you ran.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Full output, ideally with `--json` flag.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: spec
+    attributes:
+      label: Minimal Arazzo spec
+      description: A minimal `.arazzo.yaml` that reproduces the issue.
+      render: yaml
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, Rust version, arazzo-cli version (`arazzo --version`)"
+    validations:
+      required: true
