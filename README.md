@@ -14,6 +14,10 @@ Testing a sequence of API calls today means writing imperative scripts, maintain
 
 arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, and [debug them interactively](#vs-code-debugger).
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/NFjjca0b1lKZ9hNA.svg)](https://asciinema.org/a/NFjjca0b1lKZ9hNA)
+
 ## Quick Start
 
 ```bash
