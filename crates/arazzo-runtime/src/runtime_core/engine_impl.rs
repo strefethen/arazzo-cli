@@ -146,142 +146,189 @@ impl Engine {
         ExecutionHandle::new(event_rx, result_rx, cancel, is_timeout)
     }
 
-    async fn execute_step_inner(
-        &self,
-        exec_ctx: &ExecutionContext,
-        workflow_id: &str,
-        step_id: &str,
+    #[allow(clippy::type_complexity)]
+    fn execute_step_inner<'a>(
+        &'a self,
+        exec_ctx: &'a ExecutionContext,
+        workflow_id: &'a str,
+        step_id: &'a str,
         inputs: BTreeMap<String, Value>,
         no_deps: bool,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
-        let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
-            RuntimeError::new(
-                RuntimeErrorKind::WorkflowNotFound,
-                format!("workflow \"{workflow_id}\" not found"),
-            )
-        })?;
-
-        let target_idx = workflow
-            .steps
-            .iter()
-            .position(|s| s.step_id == step_id)
-            .ok_or_else(|| {
+    ) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Value>, RuntimeError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
                 RuntimeError::new(
-                    RuntimeErrorKind::StepNotFound,
-                    format!("step \"{step_id}\" not found in workflow \"{workflow_id}\""),
+                    RuntimeErrorKind::WorkflowNotFound,
+                    format!("workflow \"{workflow_id}\" not found"),
                 )
             })?;
 
-        let steps_to_run: Vec<usize> = if no_deps {
-            let direct_refs: Vec<String> = extract_step_refs(&workflow.steps[target_idx])
-                .into_iter()
-                .filter(|r| r != step_id)
-                .collect();
-            if !direct_refs.is_empty() {
-                let dep_names = direct_refs.join(", ");
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::StepMissingDependency,
-                    format!(
-                        "step \"{step_id}\" references outputs from step(s) [{dep_names}] which were not executed (use without --no-deps to auto-resolve)"
-                    ),
-                ));
-            }
-            vec![target_idx]
-        } else {
-            let mut deps = compute_transitive_deps(&workflow, step_id)?;
-            deps.insert(target_idx);
-            deps.into_iter().collect()
-        };
+            let target_idx = workflow
+                .steps
+                .iter()
+                .position(|s| s.step_id == step_id)
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::StepNotFound,
+                        format!("step \"{step_id}\" not found in workflow \"{workflow_id}\""),
+                    )
+                })?;
 
-        let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
-
-        for &idx in &steps_to_run {
-            exec_ctx.check_cancelled()?;
-            let step = {
-                let mut s = workflow.steps[idx].clone();
-                merge_workflow_params(&workflow.parameters, &mut s);
-                s
-            };
-
-            let start = std::time::Instant::now();
-            let attempt = if self.inner.trace_enabled {
-                Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
+            let steps_to_run: Vec<usize> = if no_deps {
+                let direct_refs: Vec<String> = extract_step_refs(&workflow.steps[target_idx])
+                    .into_iter()
+                    .filter(|r| r != step_id)
+                    .collect();
+                if !direct_refs.is_empty() {
+                    let dep_names = direct_refs.join(", ");
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::StepMissingDependency,
+                        format!(
+                            "step \"{step_id}\" references outputs from step(s) [{dep_names}] which were not executed (use without --no-deps to auto-resolve)"
+                        ),
+                    ));
+                }
+                vec![target_idx]
             } else {
-                0
+                let mut deps = compute_transitive_deps(&workflow, step_id)?;
+                deps.insert(target_idx);
+                deps.into_iter().collect()
             };
 
-            let execution = match self
-                .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, 0)
-                .await
-            {
-                Ok(exec) => exec,
-                Err(err) => {
-                    // Route runtime errors through onFailure handlers instead of
-                    // failing immediately (same as execute_inner — Bug #10).
-                    StepExecution {
-                        result: StepResult {
-                            success: false,
-                            response: None,
-                            err: Some(err.message.clone()),
-                            err_kind: Some(err.kind),
-                        },
-                        outputs: BTreeMap::new(),
-                        dry_run_request: None,
-                        trace: StepTraceData::default(),
+            let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
+
+            // Shared retry_count across all iterations so limits accumulate correctly.
+            let mut retry_count = BTreeMap::<usize, usize>::new();
+            let max_iterations = steps_to_run.len().saturating_mul(10);
+            let mut run_cursor: usize = 0;
+
+            for _ in 0..max_iterations {
+                exec_ctx.check_cancelled()?;
+                if run_cursor >= steps_to_run.len() {
+                    break;
+                }
+                let idx = steps_to_run[run_cursor];
+                let step = {
+                    let mut s = workflow.steps[idx].clone();
+                    merge_workflow_params(&workflow.parameters, &mut s);
+                    s
+                };
+
+                let start = std::time::Instant::now();
+                let attempt = if self.inner.trace_enabled {
+                    Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
+                } else {
+                    0
+                };
+
+                let execution = match self
+                    .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, 0)
+                    .await
+                {
+                    Ok(exec) => exec,
+                    Err(err) => {
+                        // Route runtime errors through onFailure handlers instead of
+                        // failing immediately (same as execute_inner — Bug #10).
+                        StepExecution {
+                            result: StepResult {
+                                success: false,
+                                response: None,
+                                err: Some(err.message.clone()),
+                                err_kind: Some(err.kind),
+                            },
+                            outputs: BTreeMap::new(),
+                            dry_run_request: None,
+                            trace: StepTraceData::default(),
+                        }
+                    }
+                };
+                let duration = start.elapsed();
+                let step_outputs = vars.step_outputs(&step.step_id);
+
+                let action = self
+                    .handle_step_result(StepDecisionContext {
+                        workflow_id,
+                        workflow: &workflow,
+                        step_idx: idx,
+                        result: &execution.result,
+                        vars: &vars,
+                        depth: 0,
+                        retry_count: &retry_count,
+                        cancel: &exec_ctx.cancel,
+                        is_timeout: &exec_ctx.is_timeout,
+                    })
+                    .await;
+
+                let trace_err = match &action.flow {
+                    FlowDecision::Error(err) => Some(err.message.clone()),
+                    _ => execution.result.err.clone(),
+                };
+                if self.inner.trace_enabled {
+                    let record = Engine::build_step_trace_record(
+                        exec_ctx,
+                        workflow_id,
+                        &step,
+                        attempt,
+                        duration,
+                        &execution.trace,
+                        action.trace.clone(),
+                        step_outputs,
+                        trace_err,
+                    );
+                    Engine::push_trace_record(exec_ctx, record).await;
+                }
+
+                match action.flow {
+                    FlowDecision::Done => {
+                        break;
+                    }
+                    FlowDecision::Next(next_idx) => {
+                        // Find the position of next_idx in our filtered steps_to_run set.
+                        if let Some(pos) = steps_to_run.iter().position(|&i| i == next_idx) {
+                            retry_count.remove(&idx);
+                            run_cursor = pos;
+                        } else if next_idx > idx {
+                            // Goto target is past us but not in our filtered set — advance.
+                            retry_count.remove(&idx);
+                            run_cursor += 1;
+                        } else {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::GotoTargetNotFound,
+                                format!(
+                                    "goto target step index {next_idx} not in execute_step scope"
+                                ),
+                            ));
+                        }
+                    }
+                    FlowDecision::Retry(retry_idx) => {
+                        let value = retry_count.entry(retry_idx).or_insert(0);
+                        *value += 1;
+                        // Retry targets the current step; find it in our filtered set.
+                        if let Some(pos) = steps_to_run.iter().position(|&i| i == retry_idx) {
+                            run_cursor = pos;
+                        } else {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::GotoTargetNotFound,
+                                format!(
+                                    "retry target step index {retry_idx} not in execute_step scope"
+                                ),
+                            ));
+                        }
+                    }
+                    FlowDecision::GotoWorkflow(next_wf) => {
+                        return self
+                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), 1)
+                            .await;
+                    }
+                    FlowDecision::Error(err) => {
+                        return Err(err);
                     }
                 }
-            };
-            let duration = start.elapsed();
-            let step_outputs = vars.step_outputs(&step.step_id);
-
-            // Evaluate onSuccess/onFailure actions even in single-step mode,
-            // so that action-based error handling is honored.
-            let retry_count = BTreeMap::new();
-            let action = self
-                .handle_step_result(StepDecisionContext {
-                    workflow_id,
-                    workflow: &workflow,
-                    step_idx: idx,
-                    result: &execution.result,
-                    vars: &vars,
-                    depth: 0,
-                    retry_count: &retry_count,
-                    cancel: &exec_ctx.cancel,
-                    is_timeout: &exec_ctx.is_timeout,
-                })
-                .await;
-
-            let trace_err = match &action.flow {
-                FlowDecision::Error(err) => Some(err.message.clone()),
-                _ => execution.result.err.clone(),
-            };
-            if self.inner.trace_enabled {
-                let record = Engine::build_step_trace_record(
-                    exec_ctx,
-                    workflow_id,
-                    &step,
-                    attempt,
-                    duration,
-                    &execution.trace,
-                    action.trace,
-                    step_outputs,
-                    trace_err,
-                );
-                Engine::push_trace_record(exec_ctx, record).await;
             }
 
-            if let FlowDecision::Error(err) = action.flow {
-                return Err(err);
-            }
-            if !execution.result.success {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::SuccessCriteriaFailed,
-                    format!("step \"{}\" failed success criteria", step.step_id),
-                ));
-            }
-        }
-
-        Ok(vars.step_outputs(step_id))
+            Ok(vars.step_outputs(step_id))
+        })
     }
 
     /// Core recursive execution loop. Uses `Box::pin` for async recursion

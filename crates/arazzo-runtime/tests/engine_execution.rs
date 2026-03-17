@@ -1756,6 +1756,141 @@ async fn execute_step_unknown_workflow_errors() {
     assert_eq!(err.kind, RuntimeErrorKind::WorkflowNotFound);
 }
 
+// ── execute_step flow decision tests (Bug #14) ──────────────────
+
+#[tokio::test]
+async fn execute_step_retries_on_failure() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_m, _u, _h, _b| {
+        let current = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
+        if current < 3 {
+            return MockHttpResponse::empty(500);
+        }
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: ActionType::Retry,
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let exec_result = engine
+        .execute_step("wf", "s1", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
+    if let Err(err) = result {
+        panic!("expected success after retries in execute_step, got: {err}");
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn execute_step_retry_limit_exceeded() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_m, _u, _h, _b| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: ActionType::Retry,
+                    retry_limit: Some(1),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let exec_result = engine
+        .execute_step("wf", "s1", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
+    let err = match result {
+        Ok(_) => panic!("expected retry limit exceeded error"),
+        Err(e) => e,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    // 1 initial call + 1 retry = 2 total calls
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn execute_step_on_success_end_stops_early() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_m, _u, _h, _b| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "s1".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    success_criteria: success_200(),
+                    on_success: vec![OnAction {
+                        type_: ActionType::End,
+                        ..OnAction::default()
+                    }],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "s2".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = new_test_engine(&server.base_url, spec);
+    // Target s2 — deps resolve s1 first. s1's onSuccess:End should stop execution.
+    let exec_result = engine
+        .execute_step("wf", "s2", BTreeMap::new(), false)
+        .collect()
+        .await;
+    let result = exec_result.outputs;
+    // onSuccess:End should cause a clean exit — s2 never runs
+    assert!(result.is_ok(), "expected success (Done), got: {result:?}");
+    // Only s1 should have been called, s2 should be skipped
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
 // ── RuntimeError tests ────────────────────────────────────────────
 
 #[test]
