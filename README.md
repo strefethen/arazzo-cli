@@ -59,6 +59,7 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec default, configurable burst) |
 | **`.env` loading** | Automatic `.env` file loading — reference secrets as `$env.VAR_NAME` |
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
+| **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`) |
 
 ## Contents
 
@@ -75,6 +76,7 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 - [Input Validation](#input-validation)
 - [Sub-Workflows](#sub-workflows)
 - [Generating Workflows](#generating-workflows)
+- [MCP Server](#mcp-server)
 - [Safety and Correctness](#safety-and-correctness)
 - [Programmatic API](#programmatic-api)
 - [Repository Layout](#repository-layout)
@@ -94,6 +96,7 @@ arazzo catalog <dir>                   Discover specs across a directory tree
 arazzo show <workflow-id> --dir <dir>  Display workflow details (inputs, outputs, steps)
 arazzo generate --spec <openapi>       Generate Arazzo workflows from an OpenAPI spec
 arazzo schema [command]                Print JSON Schema for a command's --json output
+arazzo serve [specs...] [--dir <dir>]  Start an MCP server for AI agent integration
 ```
 
 Global flags:
@@ -132,6 +135,11 @@ Global flags:
 - `--spec <path>` — path to an OpenAPI 3.x spec (YAML or JSON; required)
 - `--scenario <name>` — generation scenario (default `crud`)
 - `-o`/`--output <path>` — write generated YAML to file instead of stdout
+
+`serve` flags:
+
+- `[specs...]` — Arazzo spec files to load (positional, repeatable)
+- `--dir <path>` — directory containing `.arazzo.yaml` files to discover and load
 
 ## Examples
 
@@ -633,6 +641,59 @@ The `crud` scenario (currently the only supported scenario) analyzes your OpenAP
 
 This gives you a runnable starting point that you can customize — add assertions, error handling, conditional logic, or compose into larger workflows.
 
+## MCP Server
+
+arazzo-cli includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes Arazzo workflows as tools for AI agents. Any MCP-compatible client — Claude Desktop, Cursor, or custom agents — can discover and execute your workflows.
+
+### Starting the server
+
+```bash
+# Standalone binary
+arazzo-mcp examples/httpbin-get.arazzo.yaml
+
+# Or via the CLI subcommand
+arazzo serve examples/httpbin-get.arazzo.yaml
+
+# Load all specs from a directory
+arazzo serve --dir examples/
+```
+
+The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP).
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `list_workflows` | Discover all workflows across loaded specs (IDs, summaries, inputs, outputs) |
+| `describe_workflow` | Full input schema, output names, step summaries, and source descriptions for a workflow |
+| `run_workflow` | Execute a workflow with inputs and return structured outputs. Supports `dry_run` and `parallel` flags. |
+| `validate_spec` | Validate an Arazzo spec YAML file and return any errors |
+
+### Claude Desktop configuration
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "arazzo": {
+      "command": "arazzo-mcp",
+      "args": ["path/to/your/workflows.arazzo.yaml"]
+    }
+  }
+}
+```
+
+### Example session
+
+An AI agent discovers and executes a workflow:
+
+1. Agent calls `list_workflows` → sees `get-origin` workflow
+2. Agent calls `describe_workflow(workflow_id: "get-origin")` → learns it takes no inputs, outputs `origin` and `url`
+3. Agent calls `run_workflow(workflow_id: "get-origin")` → gets `{"kind":"success","outputs":{"origin":"1.2.3.4","url":"https://httpbin.org/get"}}`
+
+The agent never constructs raw HTTP requests — all multi-step orchestration, expression evaluation, retry logic, and error handling is managed by the Arazzo spec.
+
 ## Safety and Correctness
 
 arazzo-cli is designed to be reliable and predictable:
@@ -713,6 +774,7 @@ crates/
   arazzo-expr              Expression parser/evaluator
   arazzo-runtime           Execution engine + debug controller
   arazzo-cli               CLI binary
+  arazzo-mcp               MCP server (Model Context Protocol) for AI agents
   arazzo-debug-adapter     DAP server (Debug Adapter Protocol)
 vscode-arazzo-debug/       VS Code debugger extension (TypeScript)
 examples/                  17 runnable workflow specs
