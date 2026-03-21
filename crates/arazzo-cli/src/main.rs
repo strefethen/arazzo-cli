@@ -2,8 +2,8 @@
 
 //! CLI for executing and debugging Arazzo 1.0.1 API workflow specifications.
 //!
-//! Commands: `run`, `replay`, `validate`, `list`, `catalog`, `show`, `schema`.
-//! All commands support `--json` for structured output.
+//! Commands: `run`, `replay`, `validate`, `list`, `steps`, `catalog`, `show`,
+//! `generate`, `schema`, `serve`.
 
 mod cli;
 mod generate;
@@ -111,6 +111,37 @@ async fn run(cli: Cli) -> Result<(), String> {
             output,
         } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global),
         Commands::Schema { command } => handlers::schema(command.as_deref()),
+        Commands::Serve {
+            specs,
+            dir,
+            allowed_dir,
+        } => {
+            let mut paths = specs;
+            if let Some(d) = dir {
+                let discovered = arazzo_mcp::state::discover_specs(&d)
+                    .map_err(|err| format!("discovering specs: {err}"))?;
+                paths.extend(discovered);
+            }
+            if paths.is_empty() {
+                return Err(
+                    "no spec files provided. Pass file paths or use --dir <directory>".to_string(),
+                );
+            }
+            let allowed = if allowed_dir.is_empty() {
+                None
+            } else {
+                Some(allowed_dir)
+            };
+            // Escape the existing tokio runtime before calling run_mcp_stdio,
+            // which creates its own runtime internally.
+            tokio::task::spawn_blocking(move || {
+                let reader = io::BufReader::new(io::stdin());
+                let mut writer = io::BufWriter::new(io::stdout().lock());
+                arazzo_mcp::run_mcp_stdio(reader, &mut writer, &paths, allowed)
+            })
+            .await
+            .map_err(|err| format!("serve task panicked: {err}"))?
+        }
     }
 }
 

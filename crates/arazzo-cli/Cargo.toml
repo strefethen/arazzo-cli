@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 arazzo-spec = { path = "../arazzo-spec" }
 arazzo-runtime = { path = "../arazzo-runtime", features = ["schema"] }
+arazzo-mcp = { path = "../arazzo-mcp" }
 arazzo-validate = { path = "../arazzo-validate" }
 clap = { version = "4", features = ["derive"] }
 humantime = "2"

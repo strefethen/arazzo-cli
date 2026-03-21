@@ -152,6 +152,19 @@ pub enum Commands {
         /// Command name (validate, list, catalog, show, steps, run, replay, generate). Omit to list available commands.
         command: Option<String>,
     },
+    /// Start an MCP server for AI agent integration
+    Serve {
+        /// Arazzo spec files to load
+        specs: Vec<String>,
+
+        /// Directory containing .arazzo.yaml files to load
+        #[arg(long = "dir")]
+        dir: Option<String>,
+
+        /// Restrict validate_spec file access to these directories (repeatable)
+        #[arg(long = "allowed-dir")]
+        allowed_dir: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
