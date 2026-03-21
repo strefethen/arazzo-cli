@@ -6,6 +6,7 @@ members = [
   "crates/arazzo-runtime",
   "crates/arazzo-cli",
   "crates/arazzo-debug-adapter",
+  "crates/arazzo-mcp",
 ]
 resolver = "2"
 

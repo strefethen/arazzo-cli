@@ -1,0 +1,27 @@
+[package]
+name = "arazzo-mcp"
+description = "MCP server exposing Arazzo workflows as AI-agent tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "arazzo-mcp"
+path = "src/main.rs"
+
+[dependencies]
+arazzo-spec = { path = "../arazzo-spec" }
+arazzo-runtime = { path = "../arazzo-runtime" }
+arazzo-validate = { path = "../arazzo-validate" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+tiny_http = "0.12"

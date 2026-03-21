@@ -71,6 +71,7 @@ dependencies = [
 name = "arazzo-cli"
 version = "0.1.0"
 dependencies = [
+ "arazzo-mcp",
  "arazzo-runtime",
  "arazzo-spec",
  "arazzo-validate",
@@ -109,6 +110,20 @@ dependencies = [
  "proptest",
  "regex",
  "serde_json",
+]
+
+[[package]]
+name = "arazzo-mcp"
+version = "0.1.0"
+dependencies = [
+ "arazzo-runtime",
+ "arazzo-spec",
+ "arazzo-validate",
+ "clap",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
 ]
 
 [[package]]
