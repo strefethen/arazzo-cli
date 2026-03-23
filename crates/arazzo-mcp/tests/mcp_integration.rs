@@ -90,36 +90,13 @@ fn build_messages(msgs: &[Value]) -> Vec<u8> {
     msgs.iter().flat_map(frame_msg).collect()
 }
 
-/// Parse Content-Length framed responses from output bytes.
+/// Parse newline-delimited JSON responses from output bytes.
 fn parse_responses(data: &[u8]) -> Vec<Value> {
     let text = String::from_utf8_lossy(data);
-    let mut results = Vec::new();
-    let mut pos = 0;
-    while pos < text.len() {
-        let remaining = &text[pos..];
-        if !remaining.starts_with("Content-Length:") {
-            break;
-        }
-        let header_end = match remaining.find("\r\n\r\n") {
-            Some(i) => i,
-            None => break,
-        };
-        let length_str = &remaining["Content-Length:".len()..header_end].trim();
-        let length: usize = match length_str.parse() {
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        let payload_start = header_end + 4;
-        let payload_end = payload_start + length;
-        if payload_end > remaining.len() {
-            break;
-        }
-        if let Ok(val) = serde_json::from_str::<Value>(&remaining[payload_start..payload_end]) {
-            results.push(val);
-        }
-        pos += payload_end;
-    }
-    results
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
 }
 
 /// Extract the text content from an MCP tool result.
