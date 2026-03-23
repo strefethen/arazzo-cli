@@ -338,3 +338,80 @@ fn build_validate_errors(err: &arazzo_validate::Error) -> Vec<Value> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Handler: generate_workflow
+// ---------------------------------------------------------------------------
+
+pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, String> {
+    let file_path = args
+        .get("file_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing required argument: file_path".to_string())?;
+
+    if let Err(err) = state.check_path_allowed(file_path) {
+        return tool_err(&err);
+    }
+
+    let openapi = match arazzo_generate::parse_openapi_file(file_path) {
+        Ok(spec) => spec,
+        Err(err) => return tool_err(&err),
+    };
+
+    let result = match arazzo_generate::crud::generate_crud(&openapi, file_path) {
+        Ok(r) => r,
+        Err(err) => return tool_err(&err),
+    };
+
+    let yaml = serde_yaml_ng::to_string(&result.spec)
+        .map_err(|err| format!("serializing Arazzo spec: {err}"))?;
+
+    tool_ok(&json!({
+        "yaml": yaml,
+        "warnings": result.warnings,
+        "resources": result.resources,
+        "auth_type": result.auth_type,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Handler: describe_openapi
+// ---------------------------------------------------------------------------
+
+pub fn describe_openapi(state: &ServerState, args: &Value) -> Result<Value, String> {
+    let file_path = args
+        .get("file_path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing required argument: file_path".to_string())?;
+
+    if let Err(err) = state.check_path_allowed(file_path) {
+        return tool_err(&err);
+    }
+
+    let openapi = match arazzo_generate::parse_openapi_file(file_path) {
+        Ok(spec) => spec,
+        Err(err) => return tool_err(&err),
+    };
+
+    let description = arazzo_generate::openapi_describe::describe(&openapi);
+    tool_ok(&description)
+}
+
+// ---------------------------------------------------------------------------
+// Handler: generate_example
+// ---------------------------------------------------------------------------
+
+pub fn generate_example(args: &Value) -> Result<Value, String> {
+    let schema = args
+        .get("schema")
+        .ok_or_else(|| "missing required argument: schema".to_string())?;
+
+    let field_name = args
+        .get("field_name")
+        .and_then(Value::as_str)
+        .unwrap_or("value");
+
+    let example =
+        arazzo_generate::standalone_example::generate_from_json_schema(schema, field_name);
+    tool_ok(&example)
+}

@@ -34,16 +34,53 @@ pub struct JsonRpcRequest {
 enum ReaderMsg {
     Request(JsonRpcRequest),
     Eof,
-    ReadError(String),
+    ReadError(()),
 }
 
 // ---------------------------------------------------------------------------
 // Content-Length framing
 // ---------------------------------------------------------------------------
 
+/// Read a JSON-RPC message.
+///
+/// Supports two framing modes:
+/// - **Newline-delimited JSON** (MCP 2025-11-25 stdio): one JSON object per line.
+/// - **Content-Length framed** (MCP 2024-11-05 / DAP): `Content-Length: N\r\n\r\n{...}`.
+///
+/// Auto-detects based on whether the first non-empty line starts with `{`.
 fn read_message<R: BufRead + Read>(reader: &mut R) -> Result<Option<String>, String> {
     let mut line = String::new();
+
+    // Skip blank lines, then peek at the first non-empty line.
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("reading line: {err}"))?;
+        if bytes == 0 {
+            return Ok(None); // EOF
+        }
+        if !line.trim().is_empty() {
+            break;
+        }
+    }
+
+    let trimmed = line.trim();
+
+    // Newline-delimited JSON: line starts with `{`.
+    if trimmed.starts_with('{') {
+        return Ok(Some(trimmed.to_string()));
+    }
+
+    // Content-Length framed: parse headers until empty line.
     let mut content_length: Option<usize> = None;
+    if let Some(raw) = trimmed.strip_prefix("Content-Length:") {
+        content_length = Some(
+            raw.trim()
+                .parse::<usize>()
+                .map_err(|err| format!("parsing Content-Length: {err}"))?,
+        );
+    }
 
     loop {
         line.clear();
@@ -53,17 +90,16 @@ fn read_message<R: BufRead + Read>(reader: &mut R) -> Result<Option<String>, Str
         if bytes == 0 {
             return Ok(None);
         }
-
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
         }
         if let Some(raw) = trimmed.strip_prefix("Content-Length:") {
-            let parsed = raw
-                .trim()
-                .parse::<usize>()
-                .map_err(|err| format!("parsing Content-Length: {err}"))?;
-            content_length = Some(parsed);
+            content_length = Some(
+                raw.trim()
+                    .parse::<usize>()
+                    .map_err(|err| format!("parsing Content-Length: {err}"))?,
+            );
         }
     }
 
@@ -79,15 +115,15 @@ fn read_message<R: BufRead + Read>(reader: &mut R) -> Result<Option<String>, Str
         .map_err(|err| format!("decoding payload utf8: {err}"))
 }
 
+/// Write a JSON-RPC message as newline-delimited JSON (MCP 2025-11-25 stdio).
 fn write_message<W: Write>(writer: &mut W, value: &Value) -> Result<(), String> {
     let payload = serde_json::to_vec(value).map_err(|err| format!("serializing JSON: {err}"))?;
-    let header = format!("Content-Length: {}\r\n\r\n", payload.len());
-    writer
-        .write_all(header.as_bytes())
-        .map_err(|err| format!("writing header: {err}"))?;
     writer
         .write_all(&payload)
         .map_err(|err| format!("writing payload: {err}"))?;
+    writer
+        .write_all(b"\n")
+        .map_err(|err| format!("writing newline: {err}"))?;
     writer
         .flush()
         .map_err(|err| format!("flushing output: {err}"))
@@ -161,8 +197,8 @@ where
                     let _ = tx.send(ReaderMsg::Eof);
                     break;
                 }
-                Err(err) => {
-                    let _ = tx.send(ReaderMsg::ReadError(err));
+                Err(_) => {
+                    let _ = tx.send(ReaderMsg::ReadError(()));
                     break;
                 }
             }
@@ -179,10 +215,7 @@ where
     while let Ok(msg) = rx.recv() {
         match msg {
             ReaderMsg::Eof => break,
-            ReaderMsg::ReadError(err) => {
-                eprintln!("mcp read error: {err}");
-                break;
-            }
+            ReaderMsg::ReadError(_) => break,
             ReaderMsg::Request(req) => {
                 let response = dispatch(&req, state, &runtime, &mut initialized);
                 if let Some(resp) = response {
@@ -218,7 +251,7 @@ fn dispatch(
     match method {
         "initialize" => {
             let result = json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {
                     "tools": { "listChanged": false },
                 },
@@ -251,6 +284,9 @@ fn dispatch(
                 "describe_workflow" => handlers::describe_workflow(state, &arguments),
                 "run_workflow" => handlers::run_workflow(state, &arguments, runtime),
                 "validate_spec" => handlers::validate_spec(state, &arguments),
+                "generate_workflow" => handlers::generate_workflow(state, &arguments),
+                "describe_openapi" => handlers::describe_openapi(state, &arguments),
+                "generate_example" => handlers::generate_example(&arguments),
                 _ => {
                     let msg = format!("unknown tool: {tool_name}");
                     Ok(tool_result(&msg, true))
@@ -308,13 +344,26 @@ mod tests {
     }
 
     #[test]
-    fn write_produces_valid_framing() {
+    fn write_produces_newline_delimited_json() {
         let msg = json!({"jsonrpc":"2.0","id":1,"result":{}});
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).ok();
         let output = String::from_utf8(buf).unwrap_or_default();
-        assert!(output.starts_with("Content-Length: "));
-        assert!(output.contains("\r\n\r\n"));
+        assert!(output.ends_with('\n'));
+        assert!(output.trim().starts_with('{'));
+        let parsed: Value = serde_json::from_str(output.trim()).unwrap_or(Value::Null);
+        assert_eq!(parsed["id"], 1);
+    }
+
+    #[test]
+    fn read_newline_delimited_json() {
+        let msg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n";
+        let mut cursor = Cursor::new(msg.as_bytes().to_vec());
+        let result = read_message(&mut cursor).ok().flatten();
+        assert!(result.is_some());
+        let parsed: Value =
+            serde_json::from_str(&result.unwrap_or_default()).unwrap_or(Value::Null);
+        assert_eq!(parsed["method"], "ping");
     }
 
     #[test]
@@ -324,7 +373,7 @@ mod tests {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": { "name": "test", "version": "0.1" }
             }

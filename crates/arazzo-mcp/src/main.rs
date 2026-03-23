@@ -36,11 +36,6 @@ fn main() {
         }
     };
 
-    if spec_paths.is_empty() {
-        eprintln!("error: no spec files provided. Pass file paths or use --dir <directory>");
-        std::process::exit(1);
-    }
-
     let reader = BufReader::new(io::stdin());
     let mut writer = BufWriter::new(io::stdout().lock());
 

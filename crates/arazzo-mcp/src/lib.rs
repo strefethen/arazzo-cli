@@ -32,11 +32,14 @@ where
 {
     let server_state = state::ServerState::load(spec_paths, allowed_dirs)?;
 
-    eprintln!(
-        "arazzo-mcp: loaded {} spec(s) with {} workflow(s)",
-        server_state.specs.len(),
-        server_state.all_workflows().len(),
-    );
+    // Diagnostics go to stderr only when specs are loaded (not in bare MCP mode).
+    if !spec_paths.is_empty() {
+        eprintln!(
+            "arazzo-mcp: loaded {} spec(s) with {} workflow(s)",
+            server_state.specs.len(),
+            server_state.all_workflows().len(),
+        );
+    }
 
     protocol::serve(reader, writer, &server_state)
 }

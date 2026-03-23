@@ -78,5 +78,51 @@ pub fn definitions(_state: &ServerState) -> Vec<Value> {
                 "required": ["file_path"]
             }
         }),
+        json!({
+            "name": "generate_workflow",
+            "description": "Generate Arazzo CRUD workflows from an OpenAPI spec file. Returns the generated Arazzo YAML with chained steps, authentication, and realistic request bodies.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the OpenAPI spec file (YAML or JSON)"
+                    }
+                },
+                "required": ["file_path"]
+            }
+        }),
+        json!({
+            "name": "describe_openapi",
+            "description": "Inspect an OpenAPI spec file. Returns endpoints (path, method, operationId, summary), schemas (name, properties, required), and authentication schemes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the OpenAPI spec file (YAML or JSON)"
+                    }
+                },
+                "required": ["file_path"]
+            }
+        }),
+        json!({
+            "name": "generate_example",
+            "description": "Generate a realistic example value from a JSON Schema object. Uses smart heuristics based on field name, format, enum values, and min/max constraints.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schema": {
+                        "type": "object",
+                        "description": "JSON Schema object with type, format, enum, min/max, properties, etc."
+                    },
+                    "field_name": {
+                        "type": "string",
+                        "description": "Field name for name-based heuristics (e.g., 'email', 'phone'). Defaults to 'value'."
+                    }
+                },
+                "required": ["schema"]
+            }
+        }),
     ]
 }

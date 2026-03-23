@@ -128,12 +128,14 @@ dependencies = [
 name = "arazzo-mcp"
 version = "0.2.0"
 dependencies = [
+ "arazzo-generate",
  "arazzo-runtime",
  "arazzo-spec",
  "arazzo-validate",
  "clap",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tiny_http",
  "tokio",
 ]

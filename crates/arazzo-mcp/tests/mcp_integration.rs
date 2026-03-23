@@ -236,7 +236,7 @@ fn test_full_flow() {
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
-    assert_eq!(tools, 4);
+    assert_eq!(tools, 7);
 
     // 3: list_workflows
     let workflows = extract_tool_text(&responses[2]);
