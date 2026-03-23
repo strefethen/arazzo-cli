@@ -71,6 +71,7 @@ dependencies = [
 name = "arazzo-cli"
 version = "0.2.0"
 dependencies = [
+ "arazzo-generate",
  "arazzo-mcp",
  "arazzo-runtime",
  "arazzo-spec",
@@ -110,6 +111,17 @@ dependencies = [
  "proptest",
  "regex",
  "serde_json",
+]
+
+[[package]]
+name = "arazzo-generate"
+version = "0.2.0"
+dependencies = [
+ "arazzo-spec",
+ "indexmap",
+ "openapiv3",
+ "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]

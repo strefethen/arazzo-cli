@@ -4,6 +4,7 @@ members = [
   "crates/arazzo-validate",
   "crates/arazzo-expr",
   "crates/arazzo-runtime",
+  "crates/arazzo-generate",
   "crates/arazzo-cli",
   "crates/arazzo-debug-adapter",
   "crates/arazzo-mcp",

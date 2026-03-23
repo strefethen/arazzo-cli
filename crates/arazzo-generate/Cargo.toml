@@ -1,0 +1,18 @@
+[package]
+name = "arazzo-generate"
+description = "OpenAPI-to-Arazzo generation, introspection, and example value synthesis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+arazzo-spec = { path = "../arazzo-spec" }
+openapiv3 = "2"
+indexmap = "2"
+serde_json = "1"
+serde_yaml_ng = "0.10"
