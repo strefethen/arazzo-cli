@@ -16,7 +16,7 @@ arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, a
 
 ## Demo
 
-[![asciicast](https://asciinema.org/a/NFjjca0b1lKZ9hNA.svg)](https://asciinema.org/a/NFjjca0b1lKZ9hNA)
+[![asciicast](https://asciinema.org/a/NFjjca0b1lKZ9hNA.png)](https://asciinema.org/a/NFjjca0b1lKZ9hNA)
 
 ## Quick Start
 
@@ -59,7 +59,7 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec default, configurable burst) |
 | **`.env` loading** | Automatic `.env` file loading — reference secrets as `$env.VAR_NAME` |
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
-| **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`) |
+| **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
 ## Contents
 
@@ -658,16 +658,36 @@ arazzo serve examples/httpbin-get.arazzo.yaml
 arazzo serve --dir examples/
 ```
 
-The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP).
+The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP). Newline-delimited JSON framing is also supported for simpler integrations.
+
+### Security
+
+By default, file-accepting tools (`validate_spec`, `generate_workflow`, `describe_openapi`) can read any path the process has access to. Use `--allowed-dir` to restrict file access:
+
+```bash
+arazzo serve --allowed-dir /home/user/specs examples/*.arazzo.yaml
+```
+
+The flag is repeatable — pass it multiple times to allow several directories.
 
 ### Available tools
+
+**Workflow execution**
 
 | Tool | Description |
 |------|-------------|
 | `list_workflows` | Discover all workflows across loaded specs (IDs, summaries, inputs, outputs) |
 | `describe_workflow` | Full input schema, output names, step summaries, and source descriptions for a workflow |
-| `run_workflow` | Execute a workflow with inputs and return structured outputs. Supports `dry_run` and `parallel` flags. |
+| `run_workflow` | Execute a workflow with inputs and return structured outputs. Supports `dry_run`, `parallel`, and timeout options. |
 | `validate_spec` | Validate an Arazzo spec YAML file and return any errors |
+
+**Authoring assistance**
+
+| Tool | Description |
+|------|-------------|
+| `describe_openapi` | Inspect an OpenAPI spec — returns endpoints, schemas, and auth schemes |
+| `generate_workflow` | Generate Arazzo CRUD workflows from an OpenAPI spec with chained steps, auth, and realistic request bodies |
+| `generate_example` | Generate a realistic example value from a JSON Schema using name/format/enum heuristics |
 
 ### Claude Desktop configuration
 
@@ -684,7 +704,7 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-### Example session
+### Example: executing a workflow
 
 An AI agent discovers and executes a workflow:
 
@@ -693,6 +713,14 @@ An AI agent discovers and executes a workflow:
 3. Agent calls `run_workflow(workflow_id: "get-origin")` → gets `{"kind":"success","outputs":{"origin":"1.2.3.4","url":"https://httpbin.org/get"}}`
 
 The agent never constructs raw HTTP requests — all multi-step orchestration, expression evaluation, retry logic, and error handling is managed by the Arazzo spec.
+
+### Example: generating a workflow from an OpenAPI spec
+
+An AI agent creates a new Arazzo workflow from scratch:
+
+1. Agent calls `describe_openapi(file_path: "petstore.openapi.yaml")` → sees 5 endpoints, `Pet`/`PetInput` schemas, `ApiKeyAuth`
+2. Agent calls `generate_workflow(file_path: "petstore.openapi.yaml")` → gets a complete Arazzo YAML with chained CRUD steps and realistic payloads
+3. Agent calls `generate_example(schema: {"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string","format":"email"}}})` → gets `{"name":"Jane Doe","email":"user@example.com"}`
 
 ## Safety and Correctness
 
