@@ -61,7 +61,7 @@ fn rich_context() -> EvalContext {
 
     EvalContext {
         inputs,
-        steps,
+        steps: steps.into(),
         outputs: BTreeMap::new(),
         workflows: BTreeMap::new(),
         status_code: Some(200),

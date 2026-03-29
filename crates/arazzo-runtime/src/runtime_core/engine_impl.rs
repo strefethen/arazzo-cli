@@ -748,24 +748,30 @@ impl Engine {
         vars: &VarStore,
     ) -> BTreeMap<String, Value> {
         let mut ctx = self.make_eval_context(vars, None);
-        let mut computed_outputs = BTreeMap::new();
         for (name, expr) in &workflow.outputs {
             let eval = ExpressionEvaluator::new(ctx.clone());
             let value = eval.resolve_value(expr);
-            computed_outputs.insert(name.clone(), value);
-            ctx.outputs = computed_outputs.clone();
+            ctx.outputs.insert(name.clone(), value);
         }
-        computed_outputs
+        ctx.outputs
     }
 }
 
 pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut Step) {
     if !matches!(&step.target, Some(StepTarget::WorkflowId(_))) && !workflow_params.is_empty() {
-        let mut merged = workflow_params.to_vec();
-        for sp in &step.parameters {
-            merged.retain(|wp| !(wp.name == sp.name && wp.in_ == sp.in_));
-            merged.push(sp.clone());
-        }
+        // Build a set of (name, in_) keys from step params for O(1) lookup.
+        let step_keys: std::collections::HashSet<(&str, Option<&ParamLocation>)> = step
+            .parameters
+            .iter()
+            .map(|p| (p.name.as_str(), p.in_.as_ref()))
+            .collect();
+        // Prepend workflow params that aren't overridden by step params.
+        let mut merged: Vec<Parameter> = workflow_params
+            .iter()
+            .filter(|wp| !step_keys.contains(&(wp.name.as_str(), wp.in_.as_ref())))
+            .cloned()
+            .collect();
+        merged.append(&mut step.parameters);
         step.parameters = merged;
     }
 }

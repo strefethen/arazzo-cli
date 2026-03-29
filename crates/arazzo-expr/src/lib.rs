@@ -2,9 +2,11 @@
 
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::Arc;
 
 use std::sync::LazyLock;
 
@@ -61,7 +63,8 @@ pub struct WorkflowEvalState {
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
     pub inputs: BTreeMap<String, Value>,
-    pub steps: BTreeMap<String, BTreeMap<String, Value>>,
+    /// Step outputs, wrapped in `Arc` for cheap cloning during repeated evaluation.
+    pub steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     pub outputs: BTreeMap<String, Value>,
     pub workflows: BTreeMap<String, WorkflowEvalState>,
     pub status_code: Option<i64>,
@@ -344,7 +347,7 @@ impl ExpressionEvaluator {
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.
     pub fn evaluate_string(&self, expr: &str) -> String {
-        to_string_value(&self.evaluate(expr))
+        to_string_value(&self.evaluate(expr)).into_owned()
     }
 
     /// Evaluate a condition expression with `||` and `&&` precedence.
@@ -427,11 +430,11 @@ impl ExpressionEvaluator {
             out.push_str(&input[cursor..full.start()]);
 
             let expr = if let Some(inner) = captures.get(1) {
-                inner.as_str().to_string()
+                inner.as_str()
             } else {
-                full.as_str().to_string()
+                full.as_str()
             };
-            out.push_str(&self.evaluate_string(&expr));
+            out.push_str(&self.evaluate_string(expr));
             cursor = full.end();
         }
 
@@ -455,7 +458,7 @@ impl ExpressionEvaluator {
         warnings.extend(left_w);
         let right = condition[idx + op.len()..].trim();
 
-        let result = match op.as_str() {
+        let result = match op {
             "==" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
@@ -489,7 +492,7 @@ impl ExpressionEvaluator {
             " contains " => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                to_string_value(&left).contains(&to_string_value(&rv))
+                to_string_value(&left).contains(&*to_string_value(&rv))
             }
             " matches " => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
@@ -620,10 +623,10 @@ fn split_outside_quotes<'a>(input: &'a str, delim: &'a str) -> Option<Vec<&'a st
     Some(parts)
 }
 
-fn find_operator(input: &str) -> (String, usize) {
+fn find_operator(input: &str) -> (&'static str, usize) {
     for word_op in [" contains ", " matches ", " in "] {
         if let Some(idx) = index_outside_quotes(input, word_op) {
-            return (word_op.to_string(), idx);
+            return (word_op, idx);
         }
     }
 
@@ -645,24 +648,27 @@ fn find_operator(input: &str) -> (String, usize) {
         prev_backslash = ch == '\\' && !prev_backslash;
 
         if input[idx..].starts_with("!=") {
-            return ("!=".to_string(), idx);
+            return ("!=", idx);
         }
         if input[idx..].starts_with(">=") {
-            return (">=".to_string(), idx);
+            return (">=", idx);
         }
         if input[idx..].starts_with("<=") {
-            return ("<=".to_string(), idx);
+            return ("<=", idx);
         }
         if input[idx..].starts_with("==") {
-            return ("==".to_string(), idx);
+            return ("==", idx);
         }
 
-        if ch == '>' || ch == '<' {
-            return (ch.to_string(), idx);
+        if ch == '>' {
+            return (">", idx);
+        }
+        if ch == '<' {
+            return ("<", idx);
         }
     }
 
-    (String::new(), usize::MAX)
+    ("", usize::MAX)
 }
 
 fn index_outside_quotes(input: &str, needle: &str) -> Option<usize> {
@@ -810,12 +816,12 @@ fn to_f64(value: &Value) -> Option<f64> {
     }
 }
 
-fn to_string_value(value: &Value) -> String {
+fn to_string_value(value: &Value) -> Cow<'_, str> {
     match value {
-        Value::String(v) => v.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(v) => v.to_string(),
-        _ => String::new(),
+        Value::String(v) => Cow::Borrowed(v.as_str()),
+        Value::Number(n) => Cow::Owned(n.to_string()),
+        Value::Bool(v) => Cow::Borrowed(if *v { "true" } else { "false" }),
+        _ => Cow::Borrowed(""),
     }
 }
 
@@ -1071,12 +1077,13 @@ fn split_path_segments(path: &str) -> Vec<&str> {
     }
 
     if start < path.len() {
-        out.push(&path[start..]);
+        let tail = &path[start..];
+        if !tail.is_empty() {
+            out.push(tail);
+        }
     }
 
-    out.into_iter()
-        .filter(|segment| !segment.is_empty())
-        .collect()
+    out
 }
 
 fn push_segment_tokens<'a>(
@@ -1222,6 +1229,7 @@ fn push_bracket_tokens<'a>(
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
+    use std::sync::Arc;
 
     use super::{compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator};
     use proptest::prelude::*;
@@ -1259,7 +1267,7 @@ mod tests {
     fn evaluate_inputs_and_step_outputs() {
         let mut ctx = EvalContext::default();
         ctx.inputs.insert("name".to_string(), json!("Alice"));
-        ctx.steps.insert(
+        Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("token".to_string(), json!("abc"))]),
         );
@@ -1410,7 +1418,7 @@ mod tests {
             status_code: Some(201),
             ..EvalContext::default()
         };
-        ctx.steps.insert(
+        Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([
                 ("msg".to_string(), json!("hello world")),
@@ -1482,7 +1490,7 @@ mod tests {
         ctx.inputs.insert("flag".to_string(), json!(true));
         ctx.inputs.insert("zero".to_string(), json!(0));
         ctx.inputs.insert("empty".to_string(), json!(""));
-        ctx.steps.insert(
+        Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("msg".to_string(), json!("status >= ok"))]),
         );
@@ -1553,7 +1561,7 @@ mod tests {
         ctx.inputs.insert("name".to_string(), json!("Alice"));
         ctx.inputs.insert("age".to_string(), json!(30));
         ctx.inputs.insert("a".to_string(), json!("X"));
-        ctx.steps.insert(
+        Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("b".to_string(), json!("Y"))]),
         );
@@ -1812,7 +1820,7 @@ mod tests {
     #[test]
     fn diagnostics_missing_output_key_warns() {
         let mut ctx = EvalContext::default();
-        ctx.steps.insert(
+        Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("a".to_string(), json!(1))]),
         );

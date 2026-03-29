@@ -1176,7 +1176,7 @@ struct StepTraceData {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct VarStore {
     inputs: BTreeMap<String, Value>,
-    steps: BTreeMap<String, BTreeMap<String, Value>>,
+    steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     workflow_states: BTreeMap<String, arazzo_expr::WorkflowEvalState>,
 }
 
@@ -1186,7 +1186,7 @@ impl VarStore {
     }
 
     pub(crate) fn set_step_output(&mut self, step_id: &str, name: &str, value: Value) {
-        self.steps
+        Arc::make_mut(&mut self.steps)
             .entry(step_id.to_string())
             .or_default()
             .insert(name.to_string(), value);
@@ -1200,7 +1200,7 @@ impl VarStore {
         DebugScopes {
             locals: BTreeMap::new(),
             inputs: self.inputs.clone(),
-            steps: self.steps.clone(),
+            steps: (*self.steps).clone(),
         }
     }
 
@@ -1219,7 +1219,7 @@ impl VarStore {
     pub(crate) fn eval_context(&self, response: Option<&Response>) -> EvalContext {
         let mut ctx = EvalContext {
             inputs: self.inputs.clone(),
-            steps: self.steps.clone(),
+            steps: Arc::clone(&self.steps),
             workflows: self.workflow_states.clone(),
             ..EvalContext::default()
         };

@@ -296,7 +296,9 @@ impl Engine {
 
         let mut eval_ctx = self.make_eval_context(gate.vars, gate.response);
         if !gate.current_outputs.is_empty() {
-            let scoped_outputs = eval_ctx.steps.entry(gate.step_id.to_string()).or_default();
+            let scoped_outputs = std::sync::Arc::make_mut(&mut eval_ctx.steps)
+                .entry(gate.step_id.to_string())
+                .or_default();
             for (name, value) in gate.current_outputs {
                 scoped_outputs.insert(name.clone(), value.clone());
             }

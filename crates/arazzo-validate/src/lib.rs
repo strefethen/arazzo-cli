@@ -145,7 +145,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         });
     }
 
-    let mut source_names = HashSet::<String>::new();
+    let mut source_names = HashSet::<&str>::new();
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
         let path = format!("sourceDescriptions[{idx}]");
         if src.name.is_empty() {
@@ -154,7 +154,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 path: format!("{path}.name"),
                 message: format!("{path}.name is required"),
             });
-        } else if !source_names.insert(src.name.clone()) {
+        } else if !source_names.insert(&src.name) {
             errs.push(ValidationError {
                 kind: ValidationErrorKind::DuplicateIdentifier,
                 path: format!("{path}.name"),
@@ -171,14 +171,14 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
     }
 
     // Collect all workflow IDs upfront for cross-workflow goto validation.
-    let workflow_ids: HashSet<String> = spec
+    let workflow_ids: HashSet<&str> = spec
         .workflows
         .iter()
         .filter(|wf| !wf.workflow_id.is_empty())
-        .map(|wf| wf.workflow_id.clone())
+        .map(|wf| wf.workflow_id.as_str())
         .collect();
 
-    let mut seen_workflow_ids = HashSet::new();
+    let mut seen_workflow_ids = HashSet::<&str>::new();
 
     for (wf_idx, wf) in spec.workflows.iter().enumerate() {
         let path = if wf.workflow_id.is_empty() {
@@ -193,7 +193,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId is required"),
             });
-        } else if !seen_workflow_ids.insert(wf.workflow_id.clone()) {
+        } else if !seen_workflow_ids.insert(wf.workflow_id.as_str()) {
             errs.push(ValidationError {
                 kind: ValidationErrorKind::DuplicateIdentifier,
                 path: format!("{path}.workflowId"),
@@ -204,11 +204,11 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);
 
         // Collect step IDs for this workflow before validating actions.
-        let step_ids: HashSet<String> = wf
+        let step_ids: HashSet<&str> = wf
             .steps
             .iter()
             .filter(|s| !s.step_id.is_empty())
-            .map(|s| s.step_id.clone())
+            .map(|s| s.step_id.as_str())
             .collect();
 
         validate_actions(
@@ -226,7 +226,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             &mut errs,
         );
 
-        let mut seen_step_ids = HashSet::<String>::new();
+        let mut seen_step_ids = HashSet::<&str>::new();
         for (step_idx, step) in wf.steps.iter().enumerate() {
             let step_path = if step.step_id.is_empty() {
                 format!("{path} > steps[{step_idx}]")
@@ -240,7 +240,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                     path: format!("{step_path}.stepId"),
                     message: format!("{step_path}.stepId is required"),
                 });
-            } else if !seen_step_ids.insert(step.step_id.clone()) {
+            } else if !seen_step_ids.insert(step.step_id.as_str()) {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::DuplicateIdentifier,
                     path: format!("{step_path}.stepId"),
@@ -362,8 +362,8 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<V
 fn validate_actions(
     path_prefix: &str,
     actions: &[OnAction],
-    step_ids: &HashSet<String>,
-    workflow_ids: &HashSet<String>,
+    step_ids: &HashSet<&str>,
+    workflow_ids: &HashSet<&str>,
     errs: &mut Vec<ValidationError>,
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
@@ -378,7 +378,10 @@ fn validate_actions(
                     message: format!("{action_path} goto action must specify stepId or workflowId"),
                 });
             }
-            if has_step && !action.step_id.starts_with('$') && !step_ids.contains(&action.step_id) {
+            if has_step
+                && !action.step_id.starts_with('$')
+                && !step_ids.contains(action.step_id.as_str())
+            {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::InvalidReference,
                     path: format!("{action_path}.stepId"),
@@ -390,7 +393,7 @@ fn validate_actions(
             }
             if has_workflow
                 && !action.workflow_id.starts_with('$')
-                && !workflow_ids.contains(&action.workflow_id)
+                && !workflow_ids.contains(action.workflow_id.as_str())
             {
                 errs.push(ValidationError {
                     kind: ValidationErrorKind::InvalidReference,
@@ -495,14 +498,19 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
 
 /// Resolves `$ref` in workflow inputs against `components.inputs`.
 fn resolve_input_refs(spec: &mut ArazzoSpec) -> Result<(), String> {
+    let has_inputs = spec
+        .components
+        .as_ref()
+        .is_some_and(|c| !c.inputs.is_empty());
+    if !has_inputs {
+        return Ok(());
+    }
+    // Borrow-checked: we need a clone of inputs because we mutate spec.workflows below.
     let input_map = spec
         .components
         .as_ref()
         .map(|c| c.inputs.clone())
         .unwrap_or_default();
-    if input_map.is_empty() {
-        return Ok(());
-    }
 
     for workflow in &mut spec.workflows {
         let Some(schema) = &mut workflow.inputs else {
