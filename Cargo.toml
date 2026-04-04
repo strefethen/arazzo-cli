@@ -27,6 +27,9 @@ publish = false
 [workspace.dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

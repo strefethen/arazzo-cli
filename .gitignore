@@ -13,6 +13,7 @@
 # Claude Code
 .claude/
 CLAUDE.md
+.mcp.json
 
 # Beads issue tracker
 .beads/
