@@ -1232,7 +1232,14 @@ impl VarStore {
         if let Some(resp) = response {
             ctx.status_code = Some(resp.status_code);
             ctx.response_headers = resp.headers.clone();
-            ctx.response_body = resp.body_json.clone();
+            // Prefer parsed JSON; fall back to the raw body as a string so that
+            // $response.body returns the text content for XML / plain-text
+            // responses instead of silently resolving to Null.
+            ctx.response_body = resp.body_json.clone().or_else(|| {
+                String::from_utf8(resp.body.clone())
+                    .ok()
+                    .map(Value::String)
+            });
         }
         ctx
     }
