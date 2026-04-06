@@ -724,8 +724,17 @@ fn split_list_elements(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0usize;
     let mut in_quote: Option<char> = None;
+    let mut prev_backslash = false;
 
     for (idx, ch) in input.char_indices() {
+        if prev_backslash {
+            prev_backslash = false;
+            continue;
+        }
+        if ch == '\\' {
+            prev_backslash = true;
+            continue;
+        }
         if let Some(q) = in_quote {
             if ch == q {
                 in_quote = None;
