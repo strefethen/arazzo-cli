@@ -578,7 +578,13 @@ impl HttpClient {
         let mut headers = BTreeMap::new();
         for (k, v) in resp.headers() {
             let value = v.to_str().unwrap_or_default().to_string();
-            headers.insert(k.to_string(), value);
+            headers
+                .entry(k.to_string())
+                .and_modify(|existing: &mut String| {
+                    existing.push_str(", ");
+                    existing.push_str(&value);
+                })
+                .or_insert(value);
         }
 
         // Fail fast if Content-Length already exceeds the limit.
