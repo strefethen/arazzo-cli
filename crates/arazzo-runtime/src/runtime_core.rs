@@ -578,11 +578,20 @@ impl HttpClient {
         let mut headers = BTreeMap::new();
         for (k, v) in resp.headers() {
             let value = v.to_str().unwrap_or_default().to_string();
+            let key = k.to_string();
             headers
-                .entry(k.to_string())
+                .entry(key.clone())
                 .and_modify(|existing: &mut String| {
-                    existing.push_str(", ");
-                    existing.push_str(&value);
+                    // RFC 7230 §3.2.2 allows comma-joining multi-valued headers,
+                    // except Set-Cookie (RFC 6265) whose values may contain commas.
+                    // For Set-Cookie, keep only the last value (no lossless
+                    // representation in BTreeMap<String, String>).
+                    if key == "set-cookie" {
+                        *existing = value.clone();
+                    } else {
+                        existing.push_str(", ");
+                        existing.push_str(&value);
+                    }
                 })
                 .or_insert(value);
         }
@@ -631,7 +640,7 @@ impl HttpClient {
         let is_json = content_type_raw.contains("json");
         // Intentional: response body may not be valid JSON (e.g. HTML, plain text).
         // We attempt parsing and store None if it fails — expressions that reference
-        // $response.body will fall back to the raw bytes.
+        // $response.body will fall back to the raw body decoded as a UTF-8 string.
         let body_json = if is_xml {
             None
         } else {
