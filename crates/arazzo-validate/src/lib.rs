@@ -378,6 +378,15 @@ fn validate_actions(
                     message: format!("{action_path} goto action must specify stepId or workflowId"),
                 });
             }
+            if has_step && has_workflow {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidReference,
+                    path: action_path.clone(),
+                    message: format!(
+                        "{action_path} goto action specifies both stepId and workflowId; use one or the other"
+                    ),
+                });
+            }
             if has_step
                 && !action.step_id.starts_with('$')
                 && !step_ids.contains(action.step_id.as_str())
@@ -401,6 +410,28 @@ fn validate_actions(
                     message: format!(
                         "{action_path}.workflowId references unknown workflow \"{}\"",
                         action.workflow_id
+                    ),
+                });
+            }
+        }
+        if action.type_ != ActionType::Retry {
+            if action.retry_limit.is_some() {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidRetryField,
+                    path: format!("{action_path}.retryLimit"),
+                    message: format!(
+                        "{action_path}.retryLimit has no effect on {} action",
+                        action.type_
+                    ),
+                });
+            }
+            if action.retry_after > 0 {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidRetryField,
+                    path: format!("{action_path}.retryAfter"),
+                    message: format!(
+                        "{action_path}.retryAfter has no effect on {} action",
+                        action.type_
                     ),
                 });
             }
