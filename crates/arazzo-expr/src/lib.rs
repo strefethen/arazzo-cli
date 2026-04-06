@@ -787,10 +787,23 @@ fn compare_values(a: &Value, b: &Value) -> bool {
     }
 
     if let (Some(lhs), Some(rhs)) = (to_f64(a), to_f64(b)) {
-        return lhs == rhs;
+        return f64_approx_eq(lhs, rhs);
     }
 
     to_string_value(a) == to_string_value(b)
+}
+
+/// Approximate f64 equality using a scaled epsilon. Handles the common case
+/// where two JSON numbers representing the same value may differ slightly
+/// due to serialization round-trips.
+fn f64_approx_eq(a: f64, b: f64) -> bool {
+    if a == b {
+        return true; // exact match, ±0, infinities
+    }
+    let diff = (a - b).abs();
+    // Scale epsilon by the magnitude of the larger operand (floor at 1.0
+    // so that values near zero use an absolute epsilon).
+    diff <= f64::EPSILON * a.abs().max(b.abs()).max(1.0)
 }
 
 fn compare_ordered(a: &Value, b: &Value) -> Ordering {
