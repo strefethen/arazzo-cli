@@ -21,9 +21,18 @@ use clap::Parser;
 use crate::cli::{Cli, Commands};
 use crate::run_context::{GlobalOptions, RunContext, RunOptions};
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Load .env before starting the tokio runtime so that std::env::set_var
+    // is called from a single-threaded context (safe per Rust docs).
     load_env_file(".env");
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|err| panic!("failed to build tokio runtime: {err}"))
+        .block_on(async_main());
+}
+
+async fn async_main() {
     let cli = Cli::parse();
     if let Err(err) = run(cli).await {
         if !err.is_empty() {
