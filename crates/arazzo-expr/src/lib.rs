@@ -817,13 +817,13 @@ fn f64_approx_eq(a: f64, b: f64) -> bool {
 
 fn compare_ordered(a: &Value, b: &Value) -> Ordering {
     if let (Some(lhs), Some(rhs)) = (to_f64(a), to_f64(b)) {
+        if f64_approx_eq(lhs, rhs) {
+            return Ordering::Equal;
+        }
         if lhs < rhs {
             return Ordering::Less;
         }
-        if lhs > rhs {
-            return Ordering::Greater;
-        }
-        return Ordering::Equal;
+        return Ordering::Greater;
     }
 
     let lhs = to_string_value(a);
