@@ -258,28 +258,37 @@ fn redact_headers(headers: &mut BTreeMap<String, String>) {
 }
 
 fn redact_url_query(url: &mut String) {
-    let mut parsed = match url::Url::parse(url) {
-        Ok(value) => value,
-        Err(_) => return,
+    // Parse query params without reconstructing the URL to avoid
+    // normalization artifacts (percent-encoding changes, reordering)
+    // that could cause replay drift.
+    let Some(query_start) = url.find('?') else {
+        return;
     };
-
-    let mut pairs = Vec::<(String, String)>::new();
-    for (key, value) in parsed.query_pairs() {
-        if is_sensitive_key(&key) {
-            pairs.push((key.to_string(), TRACE_REDACTED.to_string()));
-        } else {
-            pairs.push((key.to_string(), value.to_string()));
-        }
-    }
-    if pairs.is_empty() {
+    let query = &url[query_start + 1..];
+    if query.is_empty() {
         return;
     }
 
-    parsed
-        .query_pairs_mut()
-        .clear()
-        .extend_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    *url = parsed.to_string();
+    let mut redacted_query = String::with_capacity(query.len());
+    for (i, pair) in query.split('&').enumerate() {
+        if i > 0 {
+            redacted_query.push('&');
+        }
+        if let Some((key, _value)) = pair.split_once('=') {
+            if is_sensitive_key(key) {
+                redacted_query.push_str(key);
+                redacted_query.push('=');
+                redacted_query.push_str(TRACE_REDACTED);
+            } else {
+                redacted_query.push_str(pair);
+            }
+        } else {
+            redacted_query.push_str(pair);
+        }
+    }
+
+    url.truncate(query_start + 1);
+    url.push_str(&redacted_query);
 }
 
 fn redact_json_object(map: &mut BTreeMap<String, Value>) {
