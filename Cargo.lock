@@ -75,7 +75,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "arazzo-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-generate",
  "arazzo-mcp",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-debug-adapter"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-runtime",
  "arazzo-validate",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-expr"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "proptest",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-generate"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-spec",
  "indexmap",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-mcp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-generate",
  "arazzo-runtime",
@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-runtime"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-expr",
  "arazzo-spec",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-spec"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-validate"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "arazzo-spec",
  "serde_yaml_ng",
