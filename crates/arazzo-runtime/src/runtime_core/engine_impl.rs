@@ -288,11 +288,9 @@ impl Engine {
                     FlowDecision::Next(next_idx) => {
                         // Find the position of next_idx in our filtered steps_to_run set.
                         if let Some(pos) = steps_to_run.iter().position(|&i| i == next_idx) {
-                            retry_count.remove(&idx);
                             run_cursor = pos;
                         } else if next_idx > idx {
                             // Goto target is past us but not in our filtered set — advance.
-                            retry_count.remove(&idx);
                             run_cursor += 1;
                         } else {
                             return Err(RuntimeError::new(
@@ -501,8 +499,6 @@ impl Engine {
                         if idx == step_index {
                             let value = retry_count.entry(step_index).or_insert(0);
                             *value += 1;
-                        } else {
-                            retry_count.remove(&step_index);
                         }
                         step_index = idx;
                     }
