@@ -220,24 +220,27 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
                     *text = redact_text_patterns(text);
                 }
             }
-            // Truncate body_preview to max_body_bytes
+            // Truncate body_preview to max_body_bytes (at a char boundary to
+            // avoid splitting multi-byte UTF-8 sequences).
             if let Some(preview) = &mut response.body_preview {
-                let mut bytes = preview.as_bytes().to_vec();
-                if bytes.len() > max_body_bytes {
-                    bytes.truncate(max_body_bytes);
-                    let mut text = String::from_utf8_lossy(&bytes).to_string();
-                    text.push_str("...");
-                    *preview = text;
+                if preview.len() > max_body_bytes {
+                    let mut end = max_body_bytes;
+                    while !preview.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    preview.truncate(end);
+                    preview.push_str("...");
                 }
             }
             // Truncate body to max_body_bytes
             if let Some(body) = &mut response.body {
-                let mut bytes = body.as_bytes().to_vec();
-                if bytes.len() > max_body_bytes {
-                    bytes.truncate(max_body_bytes);
-                    let mut text = String::from_utf8_lossy(&bytes).to_string();
-                    text.push_str("...");
-                    *body = text;
+                if body.len() > max_body_bytes {
+                    let mut end = max_body_bytes;
+                    while !body.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    body.truncate(end);
+                    body.push_str("...");
                 }
             }
         }
