@@ -202,6 +202,7 @@ impl Engine {
             let mut retry_count = BTreeMap::<usize, usize>::new();
             let max_iterations = compute_max_iterations(
                 steps_to_run.iter().map(|&i| &workflow.steps[i]),
+                &workflow.failure_actions,
             );
             let mut run_cursor: usize = 0;
 
@@ -318,7 +319,7 @@ impl Engine {
                     }
                     FlowDecision::GotoWorkflow(next_wf) => {
                         return self
-                            .execute_inner(exec_ctx, &next_wf, BTreeMap::new(), 1)
+                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), 1)
                             .await;
                     }
                     FlowDecision::Error(err) => {
@@ -374,7 +375,10 @@ impl Engine {
             let workflow_start = Instant::now();
             let mut step_index: usize = 0;
             let mut retry_count = BTreeMap::<usize, usize>::new();
-            let max_iterations = compute_max_iterations(workflow.steps.iter());
+            let max_iterations = compute_max_iterations(
+                workflow.steps.iter(),
+                &workflow.failure_actions,
+            );
             let mut completed = false;
 
             for _ in 0..max_iterations {
@@ -522,7 +526,7 @@ impl Engine {
                     }
                     FlowDecision::GotoWorkflow(next_wf) => {
                         return self
-                            .execute_inner(exec_ctx, &next_wf, BTreeMap::new(), depth + 1)
+                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), depth + 1)
                             .await;
                     }
                     FlowDecision::Error(err) => {
@@ -772,26 +776,42 @@ pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut St
 
 /// Computes a safe iteration limit for workflow execution that accounts for
 /// per-step retry budgets. Each step needs `1 + max_retry_limit` iterations
-/// in the worst case. A goto multiplier (×2) provides headroom for goto cycles.
-/// The result is floored at `step_count × 10` for backwards compatibility with
-/// goto-heavy workflows that have no explicit retry limits.
-fn compute_max_iterations<'a>(steps: impl Iterator<Item = &'a Step>) -> usize {
+/// in the worst case. When a step has no actions, the engine falls back to
+/// workflow-level actions, so those are also considered. A goto multiplier (×2)
+/// provides headroom for goto cycles. The result is floored at `step_count × 10`
+/// for backwards compatibility with goto-heavy workflows.
+fn compute_max_iterations<'a>(
+    steps: impl Iterator<Item = &'a Step>,
+    workflow_actions: &[OnAction],
+) -> usize {
+    let workflow_retry = max_retry_from_actions(workflow_actions);
     let mut step_count: usize = 0;
     let mut total_budget: usize = 0;
     for step in steps {
         step_count += 1;
-        let max_retry = step
-            .on_failure
-            .iter()
-            .chain(step.on_success.iter())
-            .filter(|a| a.type_ == ActionType::Retry)
-            .filter_map(|a| a.retry_limit)
-            .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
-            .max()
-            .unwrap_or(0);
+        let step_retry = max_retry_from_actions(
+            &step.on_failure.iter().chain(step.on_success.iter()).cloned().collect::<Vec<_>>(),
+        );
+        // If the step has no actions of its own, the engine falls back to
+        // workflow-level actions, so use the workflow retry limit.
+        let max_retry = if step.on_failure.is_empty() && step.on_success.is_empty() {
+            workflow_retry
+        } else {
+            step_retry
+        };
         total_budget = total_budget.saturating_add(1 + max_retry);
     }
     // Goto multiplier ×2, floored at the legacy heuristic (step_count × 10).
     let retry_aware = total_budget.saturating_mul(2);
     retry_aware.max(step_count.saturating_mul(10))
+}
+
+fn max_retry_from_actions(actions: &[OnAction]) -> usize {
+    actions
+        .iter()
+        .filter(|a| a.type_ == ActionType::Retry)
+        .filter_map(|a| a.retry_limit)
+        .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
+        .max()
+        .unwrap_or(0)
 }
