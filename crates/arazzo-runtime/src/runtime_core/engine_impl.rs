@@ -200,7 +200,9 @@ impl Engine {
 
             // Shared retry_count across all iterations so limits accumulate correctly.
             let mut retry_count = BTreeMap::<usize, usize>::new();
-            let max_iterations = steps_to_run.len().saturating_mul(10);
+            let max_iterations = compute_max_iterations(
+                steps_to_run.iter().map(|&i| &workflow.steps[i]),
+            );
             let mut run_cursor: usize = 0;
 
             for _ in 0..max_iterations {
@@ -374,7 +376,7 @@ impl Engine {
             let workflow_start = Instant::now();
             let mut step_index: usize = 0;
             let mut retry_count = BTreeMap::<usize, usize>::new();
-            let max_iterations = workflow.steps.len().saturating_mul(10);
+            let max_iterations = compute_max_iterations(workflow.steps.iter());
             let mut completed = false;
 
             for _ in 0..max_iterations {
@@ -774,4 +776,30 @@ pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut St
         merged.append(&mut step.parameters);
         step.parameters = merged;
     }
+}
+
+/// Computes a safe iteration limit for workflow execution that accounts for
+/// per-step retry budgets. Each step needs `1 + max_retry_limit` iterations
+/// in the worst case. A goto multiplier (×2) provides headroom for goto cycles.
+/// The result is floored at `step_count × 10` for backwards compatibility with
+/// goto-heavy workflows that have no explicit retry limits.
+fn compute_max_iterations<'a>(steps: impl Iterator<Item = &'a Step>) -> usize {
+    let mut step_count: usize = 0;
+    let mut total_budget: usize = 0;
+    for step in steps {
+        step_count += 1;
+        let max_retry = step
+            .on_failure
+            .iter()
+            .chain(step.on_success.iter())
+            .filter(|a| a.type_ == ActionType::Retry)
+            .filter_map(|a| a.retry_limit)
+            .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
+            .max()
+            .unwrap_or(0);
+        total_budget = total_budget.saturating_add(1 + max_retry);
+    }
+    // Goto multiplier ×2, floored at the legacy heuristic (step_count × 10).
+    let retry_aware = total_budget.saturating_mul(2);
+    retry_aware.max(step_count.saturating_mul(10))
 }
