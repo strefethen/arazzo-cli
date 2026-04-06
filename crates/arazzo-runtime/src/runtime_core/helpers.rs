@@ -725,9 +725,10 @@ pub(super) fn value_to_string(value: &Value) -> String {
 
 /// Percent-encode cookie-unsafe characters in a cookie value.
 ///
-/// RFC 6265 forbids semicolons, commas, spaces, and equals signs inside
-/// unquoted cookie values. Percent-encoding these characters prevents the
-/// server from mis-parsing a single cookie value as multiple cookies.
+/// RFC 6265 §4.1.1 forbids semicolons, commas, spaces, equals signs,
+/// double quotes, and backslashes inside unquoted cookie values.
+/// Percent-encoding these characters prevents the server from
+/// mis-parsing a single cookie value as multiple cookies.
 pub(super) fn encode_cookie_value(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -736,6 +737,8 @@ pub(super) fn encode_cookie_value(raw: &str) -> String {
             ',' => out.push_str("%2C"),
             ' ' => out.push_str("%20"),
             '=' => out.push_str("%3D"),
+            '"' => out.push_str("%22"),
+            '\\' => out.push_str("%5C"),
             _ => out.push(ch),
         }
     }
