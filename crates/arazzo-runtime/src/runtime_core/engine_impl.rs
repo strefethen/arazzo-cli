@@ -496,10 +496,6 @@ impl Engine {
                         break;
                     }
                     FlowDecision::Next(idx) => {
-                        if idx == step_index {
-                            let value = retry_count.entry(step_index).or_insert(0);
-                            *value += 1;
-                        }
                         step_index = idx;
                     }
                     FlowDecision::Retry(idx) => {
