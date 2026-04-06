@@ -416,24 +416,16 @@ fn validate_actions(
         }
         if action.type_ != ActionType::Retry {
             if action.retry_limit.is_some() {
-                errs.push(ValidationError {
-                    kind: ValidationErrorKind::InvalidRetryField,
-                    path: format!("{action_path}.retryLimit"),
-                    message: format!(
-                        "{action_path}.retryLimit has no effect on {} action",
-                        action.type_
-                    ),
-                });
+                eprintln!(
+                    "warning: {action_path}.retryLimit has no effect on {} action",
+                    action.type_
+                );
             }
             if action.retry_after > 0 {
-                errs.push(ValidationError {
-                    kind: ValidationErrorKind::InvalidRetryField,
-                    path: format!("{action_path}.retryAfter"),
-                    message: format!(
-                        "{action_path}.retryAfter has no effect on {} action",
-                        action.type_
-                    ),
-                });
+                eprintln!(
+                    "warning: {action_path}.retryAfter has no effect on {} action",
+                    action.type_
+                );
             }
         }
         for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
