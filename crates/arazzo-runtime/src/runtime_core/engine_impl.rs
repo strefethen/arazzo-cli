@@ -318,7 +318,7 @@ impl Engine {
                     }
                     FlowDecision::GotoWorkflow(next_wf) => {
                         return self
-                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), 1)
+                            .execute_inner(exec_ctx, &next_wf, BTreeMap::new(), 1)
                             .await;
                     }
                     FlowDecision::Error(err) => {
@@ -526,7 +526,7 @@ impl Engine {
                     }
                     FlowDecision::GotoWorkflow(next_wf) => {
                         return self
-                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), depth + 1)
+                            .execute_inner(exec_ctx, &next_wf, BTreeMap::new(), depth + 1)
                             .await;
                     }
                     FlowDecision::Error(err) => {
