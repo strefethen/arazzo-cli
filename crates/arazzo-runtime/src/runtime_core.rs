@@ -1244,11 +1244,10 @@ impl VarStore {
             // Prefer parsed JSON; fall back to the raw body as a string so that
             // $response.body returns the text content for XML / plain-text
             // responses instead of silently resolving to Null.
-            ctx.response_body = resp.body_json.clone().or_else(|| {
-                String::from_utf8(resp.body.clone())
-                    .ok()
-                    .map(Value::String)
-            });
+            ctx.response_body = resp
+                .body_json
+                .clone()
+                .or_else(|| String::from_utf8(resp.body.clone()).ok().map(Value::String));
         }
         ctx
     }

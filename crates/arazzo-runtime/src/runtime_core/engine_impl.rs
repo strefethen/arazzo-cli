@@ -375,10 +375,8 @@ impl Engine {
             let workflow_start = Instant::now();
             let mut step_index: usize = 0;
             let mut retry_count = BTreeMap::<usize, usize>::new();
-            let max_iterations = compute_max_iterations(
-                workflow.steps.iter(),
-                &workflow.failure_actions,
-            );
+            let max_iterations =
+                compute_max_iterations(workflow.steps.iter(), &workflow.failure_actions);
             let mut completed = false;
 
             for _ in 0..max_iterations {
@@ -790,7 +788,12 @@ fn compute_max_iterations<'a>(
     for step in steps {
         step_count += 1;
         let step_retry = max_retry_from_actions(
-            &step.on_failure.iter().chain(step.on_success.iter()).cloned().collect::<Vec<_>>(),
+            &step
+                .on_failure
+                .iter()
+                .chain(step.on_success.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         // If the step has no actions of its own, the engine falls back to
         // workflow-level actions, so use the workflow retry limit.
