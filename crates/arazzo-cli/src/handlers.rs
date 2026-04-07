@@ -706,7 +706,8 @@ pub async fn run_tests(
             code: None,
         };
         if global.json || format == TestFormat::Json {
-            output::output_json(&result)
+            output::output_json(&result)?;
+            Err(String::new())
         } else {
             Err(err)
         }
@@ -802,13 +803,13 @@ pub async fn run_tests(
         }
         TestFormat::Tap => {
             print!("{}", format_tap(&result));
+            print_human_summary(&result);
         }
         TestFormat::Junit => {
             print!("{}", format_junit(&result));
+            print_human_summary(&result);
         }
     }
-
-    print_human_summary(&result);
 
     if has_failures {
         Err(String::new())
