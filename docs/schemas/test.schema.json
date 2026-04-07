@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TestOutput",
+  "description": "Combined schema type for the `test` command output.",
+  "oneOf": [
+    {
+      "description": "All specs parsed and workflows executed (some may have failed).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "results"
+        },
+        "suites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestSuiteResult"
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/TestSummary"
+        }
+      },
+      "required": [
+        "kind",
+        "summary",
+        "suites"
+      ]
+    },
+    {
+      "description": "Could not run tests at all (no specs found, invalid filter regex, etc.)",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
+        }
+      },
+      "required": [
+        "kind",
+        "error"
+      ]
+    }
+  ],
+  "$defs": {
+    "TestCaseResult": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "errorCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/TestStatus"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestStepResult"
+          }
+        },
+        "workflowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflowId",
+        "status",
+        "durationMs",
+        "steps"
+      ]
+    },
+    "TestStatus": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "error"
+      ]
+    },
+    "TestStepResult": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/TestStatus"
+        },
+        "statusCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "stepId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stepId",
+        "status",
+        "durationMs"
+      ]
+    },
+    "TestSuiteResult": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestCaseResult"
+          }
+        }
+      },
+      "required": [
+        "file",
+        "name",
+        "tests",
+        "durationMs"
+      ]
+    },
+    "TestSummary": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "suiteErrors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "totalSuites": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "totalTests": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "totalSuites",
+        "totalTests",
+        "passed",
+        "failed",
+        "errors",
+        "suiteErrors",
+        "durationMs"
+      ]
+    }
+  }
+}

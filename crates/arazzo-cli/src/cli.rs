@@ -152,6 +152,78 @@ pub enum Commands {
         /// Command name (validate, list, catalog, show, steps, run, replay, generate). Omit to list available commands.
         command: Option<String>,
     },
+    /// Run Arazzo specs as tests and report results
+    Test {
+        /// Spec files or directories to test (directories scanned recursively
+        /// for .arazzo.yaml / .arazzo.yml)
+        #[arg(required = true)]
+        paths: Vec<String>,
+
+        /// Output format (overridden to json when --json is set)
+        #[arg(long, value_enum, default_value_t = TestFormat::Tap)]
+        format: TestFormat,
+
+        /// Key=value inputs for all workflows
+        #[arg(short = 'i', long = "input")]
+        input: Vec<String>,
+
+        /// JSON-typed inputs (key=<json-value>)
+        #[arg(long = "input-json")]
+        input_json: Vec<String>,
+
+        /// Per-request HTTP timeout
+        #[arg(
+            short = 't',
+            long = "http-timeout",
+            default_value = "30s",
+            value_parser = parse_duration_value
+        )]
+        http_timeout: Duration,
+
+        /// Per-workflow execution timeout
+        #[arg(
+            long = "execution-timeout",
+            default_value = "5m",
+            value_parser = parse_duration_value
+        )]
+        execution_timeout: Duration,
+
+        /// Custom HTTP headers
+        #[arg(short = 'H', long = "header")]
+        header: Vec<String>,
+
+        /// Additional OpenAPI spec files for operationId resolution
+        #[arg(long = "openapi")]
+        openapi: Vec<String>,
+
+        /// Expression evaluation diagnostics
+        #[arg(
+            long = "expr-diagnostics",
+            value_enum,
+            default_value_t = ExpressionDiagnosticsMode::Off
+        )]
+        expr_diagnostics: ExpressionDiagnosticsMode,
+
+        /// Parallel step execution within each workflow
+        #[arg(long)]
+        parallel: bool,
+
+        /// Make input validation errors fatal
+        #[arg(long = "strict-inputs")]
+        strict_inputs: bool,
+
+        /// Maximum response body size in bytes
+        #[arg(long = "max-response-size")]
+        max_response_size: Option<usize>,
+
+        /// Stop on first failure
+        #[arg(long)]
+        fail_fast: bool,
+
+        /// Regex filter on workflow IDs
+        #[arg(long)]
+        filter: Option<String>,
+    },
     /// Start an MCP server for AI agent integration
     Serve {
         /// Arazzo spec files to load
@@ -165,6 +237,14 @@ pub enum Commands {
         #[arg(long = "allowed-dir")]
         allowed_dir: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum TestFormat {
+    Json,
+    Junit,
+    Tap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

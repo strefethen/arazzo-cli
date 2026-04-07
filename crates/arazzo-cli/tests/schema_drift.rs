@@ -93,3 +93,8 @@ fn schema_run_matches_checked_in_file() {
 fn schema_replay_matches_checked_in_file() {
     assert_schema_matches_file("replay", "replay.schema.json");
 }
+
+#[test]
+fn schema_test_matches_checked_in_file() {
+    assert_schema_matches_file("test", "test.schema.json");
+}

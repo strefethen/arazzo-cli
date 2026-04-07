@@ -7,6 +7,83 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
+// ── Test command output types ────────────────────────────────────
+
+/// Combined schema type for the `test` command output.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[allow(dead_code)]
+pub enum TestOutput {
+    /// All specs parsed and workflows executed (some may have failed).
+    Results {
+        summary: TestSummary,
+        suites: Vec<TestSuiteResult>,
+    },
+    /// Could not run tests at all (no specs found, invalid filter regex, etc.)
+    Error {
+        error: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestSummary {
+    pub total_suites: usize,
+    pub total_tests: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub errors: usize,
+    pub suite_errors: usize,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestSuiteResult {
+    pub file: String,
+    pub name: String,
+    pub tests: Vec<TestCaseResult>,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCaseResult {
+    pub workflow_id: String,
+    pub status: TestStatus,
+    pub duration_ms: u64,
+    pub steps: Vec<TestStepResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub enum TestStatus {
+    Pass,
+    Fail,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestStepResult {
+    pub step_id: String,
+    pub status: TestStatus,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StepInfo {

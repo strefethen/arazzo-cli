@@ -8,7 +8,7 @@ use arazzo_spec::ArazzoSpec;
 use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
 
-use crate::cli::ExpressionDiagnosticsMode;
+use crate::cli::{ExpressionDiagnosticsMode, TestFormat};
 use crate::output::{self, CatalogEntry};
 use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::{
@@ -615,8 +615,8 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
     use crate::output::{
-        CatalogEntry, GenerateResult, ReplayOutput, RunOutput, StepInfo, ValidateResult,
-        WorkflowDetail, WorkflowInfo,
+        CatalogEntry, GenerateResult, ReplayOutput, RunOutput, StepInfo, TestOutput,
+        ValidateResult, WorkflowDetail, WorkflowInfo,
     };
 
     match command {
@@ -628,11 +628,12 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         Some("run") => output::output_json(&schema_for!(RunOutput)),
         Some("replay") => output::output_json(&schema_for!(ReplayOutput)),
         Some("generate") => output::output_json(&schema_for!(GenerateResult)),
+        Some("test") => output::output_json(&schema_for!(TestOutput)),
         Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, replay, generate"
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, replay, generate, test"
         )),
         None => output::output_json(&[
-            "validate", "list", "catalog", "show", "steps", "run", "replay", "generate",
+            "validate", "list", "catalog", "show", "steps", "run", "replay", "generate", "test",
         ]),
     }
 }
@@ -677,6 +678,143 @@ fn parse_input_value(raw: &str) -> Value {
         }
     }
     Value::String(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_tests(
+    paths: Vec<String>,
+    format: TestFormat,
+    input: Vec<String>,
+    input_json: Vec<String>,
+    http_timeout: std::time::Duration,
+    execution_timeout: std::time::Duration,
+    header: Vec<String>,
+    openapi: Vec<String>,
+    expr_diagnostics: ExpressionDiagnosticsMode,
+    parallel: bool,
+    strict_inputs: bool,
+    max_response_size: Option<usize>,
+    fail_fast: bool,
+    filter: Option<String>,
+    global: GlobalOptions,
+) -> Result<(), String> {
+    use crate::test_runner::{discover_test_specs, run_test_suite, TestRunOptions};
+
+    let emit_error = |err: String| -> Result<(), String> {
+        let result = output::TestOutput::Error {
+            error: err.clone(),
+            code: None,
+        };
+        if global.json || format == TestFormat::Json {
+            output::output_json(&result)
+        } else {
+            Err(err)
+        }
+    };
+
+    let specs = match discover_test_specs(&paths) {
+        Ok(s) => s,
+        Err(err) => return emit_error(err),
+    };
+
+    // Parse inputs (same logic as `run`).
+    let mut inputs = BTreeMap::<String, Value>::new();
+    for item in input {
+        let (key, raw_value) = parse_input_kv(&item)?;
+        inputs.insert(key, parse_input_value(raw_value));
+    }
+    for item in input_json {
+        let (key, raw_value) = parse_input_kv(&item)?;
+        let value = serde_json::from_str::<Value>(raw_value).map_err(|err| {
+            format!("invalid JSON input format for \"{key}\": {err} (expected key=<json>)")
+        })?;
+        inputs.insert(key, value);
+    }
+
+    // Parse headers.
+    let mut headers = BTreeMap::new();
+    for h in header {
+        let parsed = h
+            .split_once(':')
+            .map(|(k, v)| (k.trim(), v.trim_start()))
+            .or_else(|| h.split_once('=').map(|(k, v)| (k.trim(), v)));
+        if let Some((k, v)) = parsed {
+            headers.insert(k.to_string(), v.to_string());
+        } else {
+            eprintln!(
+                "warning: ignoring malformed header (expected 'Name: value' or 'Name=value'): {h}"
+            );
+        }
+    }
+
+    // Load OpenAPI files once.
+    let mut openapi_bytes = Vec::new();
+    for openapi_path in &openapi {
+        let bytes = fs::read(openapi_path)
+            .map_err(|err| format!("reading OpenAPI file \"{openapi_path}\": {err}"))?;
+        openapi_bytes.push(bytes);
+    }
+
+    // Compile filter regex.
+    let filter_re = match filter {
+        Some(pattern) => match regex::Regex::new(&pattern) {
+            Ok(re) => Some(re),
+            Err(err) => return emit_error(format!("invalid --filter regex: {err}")),
+        },
+        None => None,
+    };
+
+    let opts = TestRunOptions {
+        inputs,
+        http_timeout,
+        execution_timeout,
+        headers,
+        openapi_bytes,
+        expr_diagnostics,
+        parallel,
+        strict_inputs,
+        max_response_size,
+        fail_fast,
+        filter: filter_re,
+    };
+
+    let result = run_test_suite(&specs, &opts).await;
+
+    // Determine exit code: non-zero if any failures/errors.
+    let has_failures = match &result {
+        output::TestOutput::Results { summary, .. } => {
+            summary.failed > 0 || summary.errors > 0 || summary.suite_errors > 0
+        }
+        output::TestOutput::Error { .. } => true,
+    };
+
+    use crate::test_runner::{format_junit, format_tap, print_human_summary};
+
+    let effective_format = if global.json {
+        TestFormat::Json
+    } else {
+        format
+    };
+
+    match effective_format {
+        TestFormat::Json => {
+            output::output_json(&result)?;
+        }
+        TestFormat::Tap => {
+            print!("{}", format_tap(&result));
+        }
+        TestFormat::Junit => {
+            print!("{}", format_junit(&result));
+        }
+    }
+
+    print_human_summary(&result);
+
+    if has_failures {
+        Err(String::new())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

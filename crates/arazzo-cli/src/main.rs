@@ -10,6 +10,7 @@ mod generate;
 mod handlers;
 mod output;
 mod run_context;
+mod test_runner;
 mod trace;
 
 use std::fs;
@@ -120,6 +121,41 @@ async fn run(cli: Cli) -> Result<(), String> {
             output,
         } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global),
         Commands::Schema { command } => handlers::schema(command.as_deref()),
+        Commands::Test {
+            paths,
+            format,
+            input,
+            input_json,
+            http_timeout,
+            execution_timeout,
+            header,
+            openapi,
+            expr_diagnostics,
+            parallel,
+            strict_inputs,
+            max_response_size,
+            fail_fast,
+            filter,
+        } => {
+            handlers::run_tests(
+                paths,
+                format,
+                input,
+                input_json,
+                http_timeout,
+                execution_timeout,
+                header,
+                openapi,
+                expr_diagnostics,
+                parallel,
+                strict_inputs,
+                max_response_size,
+                fail_fast,
+                filter,
+                global,
+            )
+            .await
+        }
         Commands::Serve {
             specs,
             dir,
