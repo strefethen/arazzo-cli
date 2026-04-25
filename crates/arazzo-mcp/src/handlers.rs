@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use arazzo_runtime::{ClientConfig, EngineBuilder};
+use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
 use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
@@ -250,7 +250,12 @@ pub fn run_workflow(
     match result.outputs {
         Ok(ref outputs) => {
             if dry_run {
-                let dry_run_reqs: Vec<&_> = result.dry_run_requests();
+                let dry_run_reqs: Vec<_> = result
+                    .dry_run_requests()
+                    .into_iter()
+                    .cloned()
+                    .map(redacted_dry_run_request)
+                    .collect();
                 let reqs_json: Vec<Value> = dry_run_reqs
                     .iter()
                     .map(|r| {

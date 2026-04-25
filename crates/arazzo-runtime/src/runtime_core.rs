@@ -1543,6 +1543,7 @@ mod engine_parallel;
 mod engine_trace;
 mod helpers;
 mod input_validation;
+mod redaction;
 
 use engine_actions::{ActionBranch, FlowDecision, SelectedActionDebugContext, StepDecisionContext};
 use engine_impl::merge_workflow_params;
@@ -1558,4 +1559,9 @@ pub(crate) use helpers::{
     build_levels, compute_transitive_deps, evaluate_criterion, evaluate_criterion_detailed,
     evaluate_output_expression, evaluate_output_expression_detailed, extract_step_refs,
     extract_xpath, parse_method, CriterionEvaluation,
+};
+
+pub use redaction::{
+    is_sensitive_key, redact_dry_run_request, redact_headers, redact_json_object,
+    redact_json_value, redact_text_patterns, redact_url_query, redacted_dry_run_request, REDACTED,
 };

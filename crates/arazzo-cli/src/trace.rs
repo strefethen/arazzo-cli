@@ -1,39 +1,20 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::SystemTime;
 
-use arazzo_runtime::TraceStepRecord;
+use arazzo_runtime::{
+    redact_headers, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
+    TraceStepRecord,
+};
 use humantime::format_rfc3339;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const TRACE_SCHEMA_VERSION: &str = "trace.v1";
 pub const INTERNAL_TRACE_PIPELINE_VERSION: &str = "v1";
-pub const TRACE_REDACTED: &str = "[REDACTED]";
 pub const TRACE_BODY_PREVIEW_DEFAULT_BYTES: usize = 2048;
 pub const TRACE_MAX_BODY_BYTES_LIMIT: usize = 1024 * 1024;
-
-/// Header/field names that are always sensitive (exact match, case-insensitive).
-const TRACE_SENSITIVE_EXACT: [&str; 4] =
-    ["proxy-authorization", "set-cookie", "x-api-key", "api-key"];
-
-/// Stems matched via `contains` — catches compound names like `bearerToken`,
-/// `dbPassword`, `clientSecret`, `apiKey`, etc.
-const TRACE_SENSITIVE_STEMS: [&str; 10] = [
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "authorization",
-    "apikey",
-    "cookie",
-    "session",
-    "credential",
-    "pwd",
-];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,118 +230,11 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
     }
 }
 
-fn redact_headers(headers: &mut BTreeMap<String, String>) {
-    for (name, value) in headers {
-        if is_sensitive_key(name) {
-            *value = TRACE_REDACTED.to_string();
-        }
-    }
-}
-
-fn redact_url_query(url: &mut String) {
-    // Parse query params without reconstructing the URL to avoid
-    // normalization artifacts (percent-encoding changes, reordering)
-    // that could cause replay drift.
-    let Some(query_start) = url.find('?') else {
-        return;
-    };
-    let query = &url[query_start + 1..];
-    if query.is_empty() {
-        return;
-    }
-
-    let mut redacted_query = String::with_capacity(query.len());
-    for (i, pair) in query.split('&').enumerate() {
-        if i > 0 {
-            redacted_query.push('&');
-        }
-        if let Some((key, _value)) = pair.split_once('=') {
-            if is_sensitive_key(key) {
-                redacted_query.push_str(key);
-                redacted_query.push('=');
-                redacted_query.push_str(TRACE_REDACTED);
-            } else {
-                redacted_query.push_str(pair);
-            }
-        } else {
-            redacted_query.push_str(pair);
-        }
-    }
-
-    url.truncate(query_start + 1);
-    url.push_str(&redacted_query);
-}
-
-fn redact_json_object(map: &mut BTreeMap<String, Value>) {
-    for (key, value) in map {
-        if is_sensitive_key(key) {
-            *value = Value::String(TRACE_REDACTED.to_string());
-        } else {
-            redact_json_value(value);
-        }
-    }
-}
-
-fn redact_json_value(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (key, nested) in map {
-                if is_sensitive_key(key) {
-                    *nested = Value::String(TRACE_REDACTED.to_string());
-                } else {
-                    redact_json_value(nested);
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact_json_value(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Redact common secret patterns in non-JSON text (XML, HTML, plain text, etc.).
-/// Uses lazily-compiled regexes so the patterns are built once across all calls.
-fn redact_text_patterns(text: &str) -> String {
-    // Bearer / Basic / token auth headers embedded in text
-    static RE_BEARER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+")
-            .unwrap_or_else(|err| panic!("failed to compile bearer regex: {err}"))
-    });
-    // key=value or key: value where the key looks sensitive
-    static RE_KV: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(password|passwd|secret|token|authorization|apikey|api_key|credential|pwd)(\s*[:=]\s*)\S+",
-        )
-        .unwrap_or_else(|err| panic!("failed to compile kv regex: {err}"))
-    });
-
-    let out = RE_BEARER.replace_all(text, |caps: &regex::Captures<'_>| {
-        format!("{} {TRACE_REDACTED}", &caps[1])
-    });
-    let out = RE_KV.replace_all(&out, |caps: &regex::Captures<'_>| {
-        format!("{}{}{TRACE_REDACTED}", &caps[1], &caps[2])
-    });
-    out.into_owned()
-}
-
-pub fn is_sensitive_key(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    if TRACE_SENSITIVE_EXACT.iter().any(|key| lower == *key) {
-        return true;
-    }
-    TRACE_SENSITIVE_STEMS
-        .iter()
-        .any(|stem| lower.contains(stem))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arazzo_runtime::{
-        ContentType, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse,
+        ContentType, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, REDACTED,
     };
 
     fn make_trace_file(response: TraceResponse) -> TraceFile {
@@ -435,7 +309,7 @@ mod tests {
             .unwrap_or_else(|| panic!("preview missing"));
         let preview: Value =
             serde_json::from_str(preview_str).unwrap_or_else(|e| panic!("parse preview: {e}"));
-        assert_eq!(preview["token"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(preview["token"], Value::String(REDACTED.to_string()));
         assert_eq!(preview["name"], Value::String("Alice".to_string()));
 
         let body_str = resp
@@ -444,7 +318,7 @@ mod tests {
             .unwrap_or_else(|| panic!("body missing"));
         let body: Value =
             serde_json::from_str(body_str).unwrap_or_else(|e| panic!("parse body: {e}"));
-        assert_eq!(body["token"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(body["token"], Value::String(REDACTED.to_string()));
         assert_eq!(body["name"], Value::String("Alice".to_string()));
     }
 
@@ -475,7 +349,7 @@ mod tests {
             .unwrap_or_else(|| panic!("body missing"));
         let body: Value =
             serde_json::from_str(body_str).unwrap_or_else(|e| panic!("parse body: {e}"));
-        assert_eq!(body["password"], Value::String(TRACE_REDACTED.to_string()));
+        assert_eq!(body["password"], Value::String(REDACTED.to_string()));
         assert_eq!(body["user"], Value::String("bob".to_string()));
     }
 

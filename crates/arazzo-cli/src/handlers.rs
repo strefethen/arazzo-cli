@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use arazzo_runtime::{ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord};
+use arazzo_runtime::{
+    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord, REDACTED,
+};
 use arazzo_spec::ArazzoSpec;
 use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
@@ -58,11 +60,8 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         let redacted: BTreeMap<&str, _> = inputs
             .iter()
             .map(|(k, v)| {
-                if crate::trace::is_sensitive_key(k) {
-                    (
-                        k.as_str(),
-                        serde_json::Value::String(crate::trace::TRACE_REDACTED.into()),
-                    )
+                if is_sensitive_key(k) {
+                    (k.as_str(), serde_json::Value::String(REDACTED.into()))
                 } else {
                     (k.as_str(), v.clone())
                 }

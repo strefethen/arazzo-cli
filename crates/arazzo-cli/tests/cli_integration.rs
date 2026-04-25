@@ -2038,7 +2038,7 @@ fn run_no_deps_without_step_fails() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn run_dry_run_json_redacts_sensitive_headers() {
+fn run_dry_run_json_redacts_sensitive_request_parts() {
     let temp = TempDir::new("arazzo-dry-run-json-redact");
     let mut spec_path = temp.path().to_path_buf();
     spec_path.push("spec.yaml");
@@ -2067,6 +2067,19 @@ workflows:
           - name: Accept
             in: header
             value: "application/json"
+          - name: token
+            in: query
+            value: "query-secret-123"
+          - name: page
+            in: query
+            value: "1"
+        requestBody:
+          contentType: application/json
+          payload:
+            clientSecret: body-secret-123
+            safeName: alice
+            nested:
+              dbPassword: hunter2
         successCriteria:
           - condition: $statusCode == 200
 "#;
@@ -2078,6 +2091,16 @@ workflows:
         None,
     );
     assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        !stdout.contains("top-secret-jwt")
+            && !stdout.contains("sk-1234567890")
+            && !stdout.contains("query-secret-123")
+            && !stdout.contains("body-secret-123")
+            && !stdout.contains("hunter2"),
+        "dry-run JSON stdout should not contain raw secrets, got: {stdout}"
+    );
 
     let body = stdout_json(&output);
     let reqs = run_json_requests(&body);
@@ -2115,6 +2138,104 @@ workflows:
     assert_eq!(
         accept, "application/json",
         "Accept header should not be redacted"
+    );
+
+    let url = reqs[0]
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        url.contains("token=[REDACTED]") || url.contains("token=%5BREDACTED%5D"),
+        "sensitive query value should be redacted: {url}"
+    );
+    assert!(
+        url.contains("page=1"),
+        "safe query value should survive: {url}"
+    );
+
+    let req_body = reqs[0]
+        .get("body")
+        .unwrap_or_else(|| panic!("expected body in dry-run JSON"));
+    assert_eq!(
+        req_body.pointer("/clientSecret"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "clientSecret body field should be redacted"
+    );
+    assert_eq!(
+        req_body.pointer("/nested/dbPassword"),
+        Some(&Value::String("[REDACTED]".to_string())),
+        "dbPassword body field should be redacted"
+    );
+    assert_eq!(
+        req_body.pointer("/safeName"),
+        Some(&Value::String("alice".to_string())),
+        "safeName body field should survive"
+    );
+}
+
+#[test]
+fn run_dry_run_human_redacts_sensitive_request_parts() {
+    let temp = TempDir::new("arazzo-dry-run-human-redact");
+    let mut spec_path = temp.path().to_path_buf();
+    spec_path.push("spec.yaml");
+
+    let spec = r#"
+arazzo: 1.0.0
+info:
+  title: Dry-Run Human Redaction
+  version: 1.0.0
+sourceDescriptions:
+  - name: sample
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step-one
+        operationPath: /items
+        parameters:
+          - name: Authorization
+            in: header
+            value: "Bearer top-secret-jwt"
+          - name: Accept
+            in: header
+            value: "application/json"
+          - name: token
+            in: query
+            value: "query-secret-123"
+          - name: page
+            in: query
+            value: "1"
+        requestBody:
+          contentType: application/json
+          payload:
+            clientSecret: body-secret-123
+            safeName: alice
+        successCriteria:
+          - condition: $statusCode == 200
+"#;
+    write_file(&spec_path, spec);
+
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let output = run(["run", &spec_str, "wf", "--dry-run"].as_slice(), None);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        !stdout.contains("top-secret-jwt")
+            && !stdout.contains("query-secret-123")
+            && !stdout.contains("body-secret-123"),
+        "dry-run human stdout should not contain raw secrets, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("[REDACTED]"),
+        "dry-run human stdout should show redaction marker, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("application/json")
+            && stdout.contains("page=1")
+            && stdout.contains("alice"),
+        "dry-run human stdout should preserve non-sensitive values, got: {stdout}"
     );
 }
 

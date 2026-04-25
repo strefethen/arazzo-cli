@@ -12,7 +12,8 @@ use std::time::Duration;
 use arazzo_mcp::protocol;
 use arazzo_mcp::state::ServerState;
 use arazzo_spec::{
-    ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
+    ArazzoSpec, Info, ParamLocation, Parameter, RequestBody, SourceDescription, SourceType, Step,
+    StepTarget, SuccessCriterion, Workflow,
 };
 use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
@@ -160,6 +161,74 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
                 );
                 m
             },
+            ..Workflow::default()
+        }],
+        ..ArazzoSpec::default()
+    }
+}
+
+fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
+    ArazzoSpec {
+        arazzo: "1.0.0".to_string(),
+        info: Info {
+            title: "Sensitive Test Spec".to_string(),
+            version: "1.0.0".to_string(),
+            ..Info::default()
+        },
+        source_descriptions: vec![SourceDescription {
+            name: "test".to_string(),
+            url: base_url.to_string(),
+            type_: SourceType::OpenApi,
+        }],
+        workflows: vec![Workflow {
+            workflow_id: "send-secret".to_string(),
+            steps: vec![Step {
+                step_id: "submit".to_string(),
+                target: Some(StepTarget::OperationPath("/submit".to_string())),
+                parameters: vec![
+                    Parameter {
+                        name: "Authorization".to_string(),
+                        in_: Some(ParamLocation::Header),
+                        value: serde_yaml_ng::Value::String("Bearer top-secret-jwt".to_string()),
+                        ..Parameter::default()
+                    },
+                    Parameter {
+                        name: "Accept".to_string(),
+                        in_: Some(ParamLocation::Header),
+                        value: serde_yaml_ng::Value::String("application/json".to_string()),
+                        ..Parameter::default()
+                    },
+                    Parameter {
+                        name: "token".to_string(),
+                        in_: Some(ParamLocation::Query),
+                        value: serde_yaml_ng::Value::String("query-secret-123".to_string()),
+                        ..Parameter::default()
+                    },
+                    Parameter {
+                        name: "page".to_string(),
+                        in_: Some(ParamLocation::Query),
+                        value: serde_yaml_ng::Value::String("1".to_string()),
+                        ..Parameter::default()
+                    },
+                ],
+                request_body: Some(RequestBody {
+                    content_type: "application/json".to_string(),
+                    payload: Some(
+                        serde_yaml_ng::to_value(json!({
+                            "clientSecret": "body-secret-123",
+                            "safeName": "alice",
+                            "nested": { "dbPassword": "hunter2" }
+                        }))
+                        .unwrap_or_else(|err| panic!("building YAML payload: {err}")),
+                    ),
+                    ..RequestBody::default()
+                }),
+                success_criteria: vec![SuccessCriterion {
+                    condition: "$statusCode == 200".to_string(),
+                    ..SuccessCriterion::default()
+                }],
+                ..Step::default()
+            }],
             ..Workflow::default()
         }],
         ..ArazzoSpec::default()
@@ -375,4 +444,96 @@ fn test_dry_run() {
     assert_eq!(dry_run["kind"], "dryRun");
     let requests = dry_run["requests"].as_array();
     assert!(requests.is_some_and(|r| !r.is_empty()));
+}
+
+#[test]
+fn test_dry_run_redacts_sensitive_request_parts() {
+    let server = start_server(|_method, _url| {
+        panic!("dry-run should not make HTTP requests");
+    });
+
+    let spec = make_sensitive_spec(&server.base_url);
+    let state = ServerState::from_spec("sensitive.arazzo.yaml", spec);
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"send-secret","dry_run":true}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(responses.len() >= 2);
+    assert!(!is_tool_error(&responses[1]));
+
+    let result_text = responses[1]
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("expected tool text response: {:?}", responses[1]));
+    assert!(
+        !result_text.contains("top-secret-jwt")
+            && !result_text.contains("query-secret-123")
+            && !result_text.contains("body-secret-123")
+            && !result_text.contains("hunter2"),
+        "MCP dry-run response should not contain raw secrets, got: {result_text}"
+    );
+
+    let result = extract_tool_text(&responses[1]);
+    assert!(result.is_some());
+    let dry_run = result.unwrap_or(Value::Null);
+    assert_eq!(dry_run["kind"], "dryRun");
+    let requests = dry_run["requests"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected dryRun requests array: {dry_run}"));
+    assert!(!requests.is_empty());
+
+    let request = &requests[0];
+    let headers = request
+        .get("headers")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("expected headers object: {request}"));
+    assert_eq!(
+        headers.get("Authorization").and_then(Value::as_str),
+        Some("[REDACTED]")
+    );
+    assert_eq!(
+        headers.get("Accept").and_then(Value::as_str),
+        Some("application/json")
+    );
+
+    let url = request
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        url.contains("token=[REDACTED]") || url.contains("token=%5BREDACTED%5D"),
+        "sensitive query value should be redacted: {url}"
+    );
+    assert!(
+        url.contains("page=1"),
+        "safe query value should survive: {url}"
+    );
+
+    let body = request
+        .get("body")
+        .unwrap_or_else(|| panic!("expected body object: {request}"));
+    assert_eq!(
+        body.pointer("/clientSecret"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        body.pointer("/nested/dbPassword"),
+        Some(&Value::String("[REDACTED]".to_string()))
+    );
+    assert_eq!(
+        body.pointer("/safeName"),
+        Some(&Value::String("alice".to_string()))
+    );
 }

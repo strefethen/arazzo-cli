@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{DryRunRequest, TraceStepRecord};
+use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord};
 use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Error as ValidateError, ValidationErrorKind};
 use schemars::JsonSchema;
@@ -531,13 +531,9 @@ pub fn emit_dry_run_requests(
     mut reqs: Vec<DryRunRequest>,
     warnings: &[String],
 ) -> Result<(), String> {
-    // Redact sensitive headers for both JSON and human-readable paths.
+    // Redact serialized dry-run requests for both JSON and human-readable paths.
     for r in &mut reqs {
-        for (k, v) in &mut r.headers {
-            if crate::trace::is_sensitive_key(k) {
-                *v = crate::trace::TRACE_REDACTED.to_string();
-            }
-        }
+        redact_dry_run_request(r);
     }
     if json {
         return output_json(&RunOutput::DryRun {
