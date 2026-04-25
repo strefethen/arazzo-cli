@@ -474,8 +474,7 @@ fn evaluate_jsonpath_count_predicate(context_value: &Value, predicate: &str) -> 
     let remainder = after_count[close + 1..].trim();
     let (op, rhs) = parse_leading_comparison(remainder)?;
     let rhs_num = rhs.parse::<f64>().ok()?;
-    let value = extract_jsonpath_relative(context_value, path);
-    let lhs = count_jsonpath_nodes(&value) as f64;
+    let lhs = count_jsonpath_relative_nodes(context_value, path)? as f64;
     Some(compare_with_op(&lhs, &rhs_num, op))
 }
 
@@ -505,6 +504,14 @@ fn extract_jsonpath_relative(context_value: &Value, path: &str) -> Value {
         ..EvalContext::default()
     });
     eval.evaluate(&format!("$response.body.{normalized}"))
+}
+
+fn count_jsonpath_relative_nodes(context_value: &Value, path: &str) -> Option<usize> {
+    let normalized = normalize_jsonpath_path(path);
+    if normalized.is_empty() {
+        return Some(1);
+    }
+    arazzo_expr::count_resolved_path_nodes(context_value, &normalized).ok()
 }
 
 fn normalize_jsonpath_path(path: &str) -> String {
@@ -638,15 +645,6 @@ fn compare_with_op<T: PartialOrd + PartialEq>(lhs: &T, rhs: &T, op: &str) -> boo
         ">=" => lhs >= rhs,
         "<=" => lhs <= rhs,
         _ => false,
-    }
-}
-
-fn count_jsonpath_nodes(value: &Value) -> usize {
-    match value {
-        Value::Null => 0,
-        Value::Array(items) => items.len(),
-        Value::Object(items) => items.len(),
-        _ => 1,
     }
 }
 
@@ -1287,7 +1285,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "JSONPath count with parens inside string literals requires full tokenizer rewrite"]
     fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
         let cache = RegexCache::new();
         let eval = ExpressionEvaluator::new(EvalContext {
@@ -1303,11 +1300,64 @@ mod tests {
             context: "$response.body".to_string(),
             condition: "$[?(count(@.items[?(@.type == 'foo)bar')]) > 0)]".to_string(),
         };
-        // CURRENT BUG: count() regex stops at the first ')' it sees.
         assert!(
             evaluate_criterion(&jp_count, &eval, None, &cache),
             "Count should handle parentheses in strings"
         );
+    }
+
+    #[test]
+    fn evaluate_jsonpath_count_predicate_counts_nodelist_cardinality() {
+        let cache = RegexCache::new();
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!({
+                "items": [
+                    {"type": "match", "name": "kept", "extra": true},
+                    {"type": "other", "name": "skipped"}
+                ]
+            })),
+            ..EvalContext::default()
+        });
+
+        let matching_object = SuccessCriterion {
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+            })),
+            context: "$response.body".to_string(),
+            condition: "$[?(count(@.items[?(@.type == 'match')]) == 1)]".to_string(),
+        };
+        assert!(evaluate_criterion(&matching_object, &eval, None, &cache));
+
+        let missing = SuccessCriterion {
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+            })),
+            context: "$response.body".to_string(),
+            condition: "$[?(count(@.items[?(@.type == 'missing')]) == 0)]".to_string(),
+        };
+        assert!(evaluate_criterion(&missing, &eval, None, &cache));
+
+        let indexed = SuccessCriterion {
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+            })),
+            context: "$response.body".to_string(),
+            condition: "$[?(count(@.items[0]) == 1)]".to_string(),
+        };
+        assert!(evaluate_criterion(&indexed, &eval, None, &cache));
+
+        let unsupported = SuccessCriterion {
+            type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                type_: "jsonpath".to_string(),
+                version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+            })),
+            context: "$response.body".to_string(),
+            condition: "$[?(count(@.items[0:1]) == 1)]".to_string(),
+        };
+        assert!(!evaluate_criterion(&unsupported, &eval, None, &cache));
     }
 
     #[test]

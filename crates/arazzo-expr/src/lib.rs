@@ -911,6 +911,32 @@ fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
     }
 }
 
+/// Count the JSON nodes selected by an Arazzo dot-notation path before the
+/// public evaluator collapses the result into a JSON value.
+pub fn count_resolved_path_nodes(root: &Value, path: &str) -> Result<usize, PathError> {
+    if path.is_empty() {
+        return Ok(1);
+    }
+    let tokens = tokenize_path(path)?;
+    if tokens.is_empty() {
+        return Ok(0);
+    }
+
+    let mut current = vec![root];
+    for (idx, token) in tokens.iter().copied().enumerate() {
+        let is_last = idx + 1 == tokens.len();
+        if matches!(token, PathToken::Hash) && is_last {
+            return Ok(usize::from(!current.is_empty()));
+        }
+        current = apply_path_token(&current, token);
+        if current.is_empty() {
+            return Ok(0);
+        }
+    }
+
+    Ok(current.len())
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PathToken<'a> {
     Field(&'a str),
@@ -1214,19 +1240,35 @@ fn push_bracket_tokens<'a>(
             out.push(PathToken::Field(&segment[cursor..open]));
         }
 
-        let Some(close_rel) = segment[open + 1..].find(']') else {
+        let Some(close) = find_matching_bracket(segment, open) else {
             return Err(PathError::InvalidSyntax {
                 path: full_path.to_string(),
                 detail: format!("unclosed bracket in: {segment}"),
             });
         };
-        let close = open + 1 + close_rel;
         let index_expr = segment[open + 1..close].trim();
 
         if index_expr == "*" {
             out.push(PathToken::Wildcard);
         } else if let Ok(idx) = index_expr.parse::<usize>() {
             out.push(PathToken::Index(idx));
+        } else if let Some(inner) = parse_bracket_filter_expr(index_expr) {
+            if let Some(expr) = parse_filter_expr(inner) {
+                out.push(PathToken::Filter {
+                    expr,
+                    all_matches: true,
+                });
+            } else {
+                return Err(PathError::InvalidSyntax {
+                    path: full_path.to_string(),
+                    detail: format!("invalid filter expression: {index_expr}"),
+                });
+            }
+        } else if index_expr.starts_with("?(") {
+            return Err(PathError::InvalidSyntax {
+                path: full_path.to_string(),
+                detail: format!("unbalanced filter expression: {index_expr}"),
+            });
         } else if !index_expr.is_empty() {
             // Strip surrounding quotes for bracket key access: ['key'] or ["key"]
             let key = if (index_expr.starts_with('\'') && index_expr.ends_with('\''))
@@ -1246,6 +1288,56 @@ fn push_bracket_tokens<'a>(
         out.push(PathToken::Field(&segment[cursor..]));
     }
     Ok(())
+}
+
+fn parse_bracket_filter_expr(segment: &str) -> Option<&str> {
+    let trimmed = segment.trim();
+    if trimmed.starts_with("?(") && trimmed.ends_with(')') {
+        Some(trimmed[2..trimmed.len() - 1].trim())
+    } else {
+        None
+    }
+}
+
+fn find_matching_bracket(input: &str, open: usize) -> Option<usize> {
+    let mut bracket_depth = 0usize;
+    let mut paren_depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input[open..].char_indices() {
+        let idx = open + idx;
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => in_quote = Some(ch),
+            '(' => paren_depth = paren_depth.saturating_add(1),
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth = bracket_depth.saturating_add(1),
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                if bracket_depth == 0 && paren_depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1361,6 +1453,10 @@ mod tests {
         assert_eq!(
             eval.evaluate("$response.body.users[*].id"),
             json!([1, 2, 3])
+        );
+        assert_eq!(
+            eval.evaluate(r#"$response.body.users[?(@.group=="a")].id"#),
+            json!([1, 3])
         );
         assert_eq!(eval.evaluate("$response.body.missing"), Value::Null);
     }
@@ -1749,6 +1845,51 @@ mod tests {
             matches!(result, Err(super::PathError::InvalidSyntax { .. })),
             "expected InvalidSyntax, got {result:?}"
         );
+    }
+
+    #[test]
+    fn resolve_dot_path_bracket_filter_handles_literal_delimiters() {
+        let root = json!({
+            "items": [
+                {"id": 1, "type": "foo)bar", "group": "a"},
+                {"id": 2, "type": "foo]bar", "group": "b"},
+                {"id": 3, "type": "other", "group": "a"}
+            ]
+        });
+
+        assert_eq!(
+            super::resolve_dot_path(&root, "items[?(@.type == 'foo)bar')].id"),
+            Ok(json!(1))
+        );
+        assert_eq!(
+            super::resolve_dot_path(&root, "items[?(@.type == 'foo]bar')].id"),
+            Ok(json!(2))
+        );
+        assert_eq!(
+            super::resolve_dot_path(&root, "items[?(@.group == 'a')].id"),
+            Ok(json!([1, 3]))
+        );
+    }
+
+    #[test]
+    fn count_resolved_path_nodes_preserves_nodelist_cardinality() {
+        let root = json!({
+            "items": [
+                {"id": 1, "type": "match", "extra": true},
+                {"id": 2, "type": "other"}
+            ]
+        });
+
+        assert_eq!(super::count_resolved_path_nodes(&root, ""), Ok(1));
+        assert_eq!(
+            super::count_resolved_path_nodes(&root, "items[?(@.type == 'match')]"),
+            Ok(1)
+        );
+        assert_eq!(
+            super::count_resolved_path_nodes(&root, "items[?(@.type == 'missing')]"),
+            Ok(0)
+        );
+        assert_eq!(super::count_resolved_path_nodes(&root, "items[0]"), Ok(1));
     }
 
     #[test]
