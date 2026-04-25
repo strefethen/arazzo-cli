@@ -486,7 +486,7 @@ impl Engine {
             target = replace_path_params(&target, &path_params);
         }
         if !query_params_vec.is_empty() {
-            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            let mut serializer = url_crate::form_urlencoded::Serializer::new(String::new());
             for (k, v) in query_params_vec {
                 serializer.append_pair(&k, &v);
             }
