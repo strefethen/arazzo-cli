@@ -789,17 +789,20 @@ async fn source_descriptions_url_expression() {
             summary: String::new(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![
             SourceDescription {
                 name: "primary".to_string(),
                 url: "http://localhost".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             },
             SourceDescription {
                 name: "secondary".to_string(),
                 url: "https://api.example.com".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             },
         ],
         workflows: vec![Workflow {
@@ -826,6 +829,7 @@ async fn source_descriptions_url_expression() {
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
     let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,
@@ -852,17 +856,20 @@ async fn multiple_source_descriptions_routing() {
             summary: String::new(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![
             SourceDescription {
                 name: "api1".to_string(),
                 url: "https://api1.example.com".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             },
             SourceDescription {
                 name: "api2".to_string(),
                 url: "https://api2.example.com".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             },
         ],
         workflows: vec![Workflow {
@@ -895,6 +902,7 @@ async fn multiple_source_descriptions_routing() {
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
     let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(e) => e,

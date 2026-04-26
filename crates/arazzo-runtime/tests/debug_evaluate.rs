@@ -83,6 +83,7 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
             name: "test".to_string(),
             url,
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -102,6 +103,7 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
 
     match EngineBuilder::new(spec)

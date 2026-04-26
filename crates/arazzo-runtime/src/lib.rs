@@ -162,14 +162,17 @@ mod tests {
                 summary: String::new(),
                 version: "1.0.0".to_string(),
                 description: String::new(),
+                ..Info::default()
             },
             source_descriptions: vec![SourceDescription {
                 name: "test".to_string(),
                 url: "http://localhost".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             }],
             workflows,
             components: None,
+            ..ArazzoSpec::default()
         }
     }
 
@@ -264,7 +267,9 @@ mod tests {
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                     type_: "jsonpath".to_string(),
                     version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+                    ..CriterionExpressionType::default()
                 })),
+                ..SuccessCriterion::default()
             }],
             ..OnAction::default()
         }];
@@ -306,14 +311,17 @@ mod tests {
                 summary: String::new(),
                 version: "1.0.0".to_string(),
                 description: String::new(),
+                ..Info::default()
             },
             source_descriptions: vec![SourceDescription {
                 name: "test".to_string(),
                 url: base_url.to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             }],
             workflows,
             components: None,
+            ..ArazzoSpec::default()
         }
     }
 

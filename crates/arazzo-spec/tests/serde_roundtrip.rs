@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use arazzo_spec::{parse_unvalidated_bytes, ActionType, ArazzoSpec, SourceType, StepTarget};
+use arazzo_spec::{
+    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, SourceType, StepTarget,
+};
 
 fn examples_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
@@ -73,11 +75,14 @@ fn parse_serialize_parse_roundtrip_for_all_examples() {
 }
 
 #[test]
-fn parse_ignores_unknown_fields_and_drops_them_on_serialize() {
+fn parse_preserves_vendor_extensions_on_root() {
     let raw = r#"
 arazzo: "1.0.0"
+x-arazzo-cli:
+  auth:
+    type: oauth2
 info:
-  title: Unknown Field Test
+  title: Root Extension Test
   version: "1.0.0"
 sourceDescriptions:
   - name: testApi
@@ -88,22 +93,304 @@ workflows:
     steps:
       - stepId: call
         operationPath: /get
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "spec with root extensions");
+    assert!(spec.extensions.contains_key("x-arazzo-cli"));
+
+    let serialized = serialize_spec(&spec, "spec with root extensions");
+    assert!(serialized.contains("x-arazzo-cli"));
+
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "serialized spec with root extensions",
+    );
+    assert_eq!(spec.extensions, reparsed.extensions);
+}
+
+#[test]
+fn parse_preserves_vendor_extensions_nested() {
+    let raw = r##"
+arazzo: "1.0.0"
+info:
+  title: Nested Extension Test
+  version: "1.0.0"
+  x-info:
+    owner: docs
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+    x-source:
+      authProfile: test
+components:
+  x-components:
+    note: preserved
+  inputs:
+    SharedInput:
+      type: object
+      x-schema:
+        source: component
+      properties:
+        id:
+          type: string
+          x-property:
+            pii: false
+      required:
+        - id
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      value: "abc"
+      x-parameter:
+        trace: true
+  successActions:
+    Done:
+      type: end
+      x-action:
+        audit: true
+workflows:
+  - workflowId: wf
+    x-workflow:
+      owner: qa
+    inputs:
+      $ref: "#/components/inputs/SharedInput"
+    parameters:
+      - reference: "$components.parameters.RequestId"
+    steps:
+      - stepId: call
+        operationPath: /get
+        x-step:
+          retries: custom
+        parameters:
+          - name: filter
+            in: query
+            value: active
+            x-step-param:
+              from: inline
+        requestBody:
+          contentType: application/json
+          payload:
+            id: "123"
+          x-body:
+            profile: create
+        successCriteria:
+          - context: "$response.body"
+            condition: "$.ok"
+            type:
+              type: jsonpath
+              version: draft-goessner-dispatch-jsonpath-00
+              x-criterion-type:
+                dialect: goessner
+            x-criterion:
+              expected: true
+        onSuccess:
+          - type: end
+            x-action:
+              audit: true
+"##;
+
+    let spec = parse_spec(raw.as_bytes(), "spec with nested extensions");
+    let Some(components) = spec.components.as_ref() else {
+        panic!("nested extension fixture should include components");
+    };
+    let workflow = &spec.workflows[0];
+    let step = &workflow.steps[0];
+    let criterion = &step.success_criteria[0];
+    let criterion_type = match criterion.type_.as_ref() {
+        Some(CriterionType::ExpressionType(value)) => value,
+        other => panic!("expected criterion expression type, got {other:?}"),
+    };
+
+    assert!(spec.info.extensions.contains_key("x-info"));
+    assert!(spec.source_descriptions[0]
+        .extensions
+        .contains_key("x-source"));
+    assert!(components.extensions.contains_key("x-components"));
+    let Some(component_input) = components.inputs.get("SharedInput") else {
+        panic!("fixture should include component input");
+    };
+    let Some(component_input_property) = component_input.properties.get("id") else {
+        panic!("fixture should include component input property");
+    };
+    let Some(component_parameter) = components.parameters.get("RequestId") else {
+        panic!("fixture should include component parameter");
+    };
+    let Some(request_body) = step.request_body.as_ref() else {
+        panic!("fixture should include requestBody");
+    };
+    let Some(component_success_action) = components.success_actions.get("Done") else {
+        panic!("fixture should include component success action");
+    };
+    assert!(component_input.extensions.contains_key("x-schema"));
+    assert!(component_input_property
+        .extensions
+        .contains_key("x-property"));
+    assert!(component_parameter.extensions.contains_key("x-parameter"));
+    assert!(workflow.extensions.contains_key("x-workflow"));
+    assert!(step.extensions.contains_key("x-step"));
+    assert!(step.parameters[0].extensions.contains_key("x-step-param"));
+    assert!(request_body.extensions.contains_key("x-body"));
+    assert!(criterion.extensions.contains_key("x-criterion"));
+    assert!(criterion_type.extensions.contains_key("x-criterion-type"));
+    assert!(step.on_success[0].extensions.contains_key("x-action"));
+    assert!(component_success_action.extensions.contains_key("x-action"));
+
+    let serialized = serialize_spec(&spec, "spec with nested extensions");
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "serialized spec with nested extensions",
+    );
+    assert_eq!(spec, reparsed);
+}
+
+#[test]
+fn parse_preserves_all_extension_value_shapes() {
+    let raw = r#"
+arazzo: "1.0.0"
+x-null: null
+x-string: text
+x-number: 42
+x-bool: true
+x-array:
+  - one
+  - two
+x-object:
+  nested: true
+info:
+  title: Value Shape Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "spec with all extension value shapes");
+    assert_eq!(
+        spec.extensions.get("x-null"),
+        Some(&serde_yaml_ng::Value::Null)
+    );
+    assert!(matches!(
+        spec.extensions.get("x-string"),
+        Some(serde_yaml_ng::Value::String(value)) if value == "text"
+    ));
+    assert!(matches!(
+        spec.extensions.get("x-number"),
+        Some(serde_yaml_ng::Value::Number(_))
+    ));
+    assert!(matches!(
+        spec.extensions.get("x-bool"),
+        Some(serde_yaml_ng::Value::Bool(true))
+    ));
+    assert!(matches!(
+        spec.extensions.get("x-array"),
+        Some(serde_yaml_ng::Value::Sequence(_))
+    ));
+    assert!(matches!(
+        spec.extensions.get("x-object"),
+        Some(serde_yaml_ng::Value::Mapping(_))
+    ));
+
+    let serialized = serialize_spec(&spec, "spec with all extension value shapes");
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "serialized spec with all extension value shapes",
+    );
+    assert_eq!(spec, reparsed);
+}
+
+#[test]
+fn parse_drops_non_vendor_unknown_fields() {
+    let raw = r#"
+arazzo: "1.0.0"
+info:
+  title: Unknown Field Test
+  version: "1.0.0"
+  unknownInfoField: false
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        unknownStepField:
+          nested: true
 unknownRootField:
   nested: true
 "#;
 
-    let spec = parse_spec(raw.as_bytes(), "spec with unknown root fields");
-    let serialized = serialize_spec(&spec, "spec with unknown root fields");
+    let spec = parse_spec(raw.as_bytes(), "spec with unknown non-extension fields");
+    let serialized = serialize_spec(&spec, "spec with unknown non-extension fields");
 
     assert!(
         !serialized.contains("unknownRootField"),
-        "unknown fields should not survive serialization"
+        "non-extension root fields should not survive serialization"
+    );
+    assert!(
+        !serialized.contains("unknownInfoField"),
+        "non-extension info fields should not survive serialization"
+    );
+    assert!(
+        !serialized.contains("unknownStepField"),
+        "non-extension step fields should not survive serialization"
     );
     assert_eq!(spec.workflows.len(), 1);
     assert_eq!(
         spec.workflows[0].steps[0].target,
         Some(StepTarget::OperationPath("/get".to_string()))
     );
+}
+
+#[test]
+fn step_custom_serde_preserves_vendor_extensions_and_target() {
+    let raw = r#"
+arazzo: "1.0.0"
+info:
+  title: Step Extension Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        x-arazzo-cli:
+          stepMode: dry
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "step extension test spec");
+    let step = &spec.workflows[0].steps[0];
+    assert_eq!(
+        step.target,
+        Some(StepTarget::OperationPath("/get".to_string()))
+    );
+    assert!(step.extensions.contains_key("x-arazzo-cli"));
+
+    let serialized = serialize_spec(&spec, "step extension test spec");
+    assert!(serialized.contains("operationPath: /get"));
+    assert!(serialized.contains("x-arazzo-cli"));
+
+    let reparsed = parse_spec(serialized.as_bytes(), "serialized step extension test spec");
+    assert_eq!(
+        reparsed.workflows[0].steps[0].target,
+        Some(StepTarget::OperationPath("/get".to_string()))
+    );
+    assert!(reparsed.workflows[0].steps[0]
+        .extensions
+        .contains_key("x-arazzo-cli"));
 }
 
 #[test]

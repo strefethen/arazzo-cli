@@ -3,6 +3,48 @@ use arazzo_spec::{CriterionExpressionType, CriterionType};
 use proptest::prelude::*;
 use serde_json::json;
 
+fn expression_criterion_type(type_: &str, version: &str) -> CriterionType {
+    CriterionType::ExpressionType(CriterionExpressionType {
+        type_: type_.to_string(),
+        version: version.to_string(),
+        ..CriterionExpressionType::default()
+    })
+}
+
+fn named_criterion(name: &str, context: &str, condition: &str) -> SuccessCriterion {
+    SuccessCriterion {
+        type_: Some(CriterionType::Name(name.to_string())),
+        context: context.to_string(),
+        condition: condition.to_string(),
+        ..SuccessCriterion::default()
+    }
+}
+
+fn typed_criterion(type_: CriterionType, context: &str, condition: &str) -> SuccessCriterion {
+    SuccessCriterion {
+        type_: Some(type_),
+        context: context.to_string(),
+        condition: condition.to_string(),
+        ..SuccessCriterion::default()
+    }
+}
+
+fn jsonpath_criterion(context: &str, condition: &str) -> SuccessCriterion {
+    typed_criterion(
+        expression_criterion_type("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+        context,
+        condition,
+    )
+}
+
+fn xpath_criterion(context: &str, condition: &str) -> SuccessCriterion {
+    typed_criterion(
+        expression_criterion_type("xpath", "xpath-10"),
+        context,
+        condition,
+    )
+}
+
 #[test]
 fn parse_method_supports_known_verbs() {
     assert_eq!(parse_method("GET /items"), ("GET", "/items"));
@@ -39,135 +81,47 @@ fn evaluate_criterion_modes() {
     };
     assert!(evaluate_criterion(&plain, &eval, None, &cache));
 
-    let regex = SuccessCriterion {
-        type_: Some(CriterionType::Name("regex".to_string())),
-        context: "$response.body.name".to_string(),
-        condition: "^[a-z]+$".to_string(),
-    };
+    let regex = named_criterion("regex", "$response.body.name", "^[a-z]+$");
     assert!(evaluate_criterion(&regex, &eval, None, &cache));
 
-    let jsonpath = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$.name".to_string(),
-    };
+    let jsonpath = jsonpath_criterion("$response.body", "$.name");
     assert!(evaluate_criterion(&jsonpath, &eval, None, &cache));
 
-    let jp_existence = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$.ok".to_string(),
-    };
+    let jp_existence = jsonpath_criterion("$response.body", "$.ok");
     assert!(evaluate_criterion(&jp_existence, &eval, None, &cache));
 
-    let jp_nested = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$.pets[0].id".to_string(),
-    };
+    let jp_nested = jsonpath_criterion("$response.body", "$.pets[0].id");
     assert!(evaluate_criterion(&jp_nested, &eval, None, &cache));
 
-    let jp_missing = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$.nonexistent".to_string(),
-    };
+    let jp_missing = jsonpath_criterion("$response.body", "$.nonexistent");
     assert!(!evaluate_criterion(&jp_missing, &eval, None, &cache));
 
-    let jp_filter_at_ok = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(@.ok == true)]".to_string(),
-    };
+    let jp_filter_at_ok = jsonpath_criterion("$response.body.items", "$[?(@.ok == true)]");
     assert!(evaluate_criterion(&jp_filter_at_ok, &eval, None, &cache));
 
-    let jp_filter_none = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(@.id == 999)]".to_string(),
-    };
+    let jp_filter_none = jsonpath_criterion("$response.body.items", "$[?(@.id == 999)]");
     assert!(!evaluate_criterion(&jp_filter_none, &eval, None, &cache));
 
-    let jp_count = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(count(@.pets) > 0)]".to_string(),
-    };
+    let jp_count = jsonpath_criterion("$response.body.items", "$[?(count(@.pets) > 0)]");
     assert!(evaluate_criterion(&jp_count, &eval, None, &cache));
 
-    let jp_and = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(@.ok == true && @.id == 2)]".to_string(),
-    };
+    let jp_and = jsonpath_criterion("$response.body.items", "$[?(@.ok == true && @.id == 2)]");
     assert!(evaluate_criterion(&jp_and, &eval, None, &cache));
 
-    let jp_or = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(@.id == 99 || @.id == 1)]".to_string(),
-    };
+    let jp_or = jsonpath_criterion("$response.body.items", "$[?(@.id == 99 || @.id == 1)]");
     assert!(evaluate_criterion(&jp_or, &eval, None, &cache));
 
-    let jp_comparison = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(@.id > 1)]".to_string(),
-    };
+    let jp_comparison = jsonpath_criterion("$response.body.items", "$[?(@.id > 1)]");
     assert!(evaluate_criterion(&jp_comparison, &eval, None, &cache));
 
-    let jp_root_count = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body.items".to_string(),
-        condition: "$[?(count($) > 0)]".to_string(),
-    };
+    let jp_root_count = jsonpath_criterion("$response.body.items", "$[?(count($) > 0)]");
     assert!(evaluate_criterion(&jp_root_count, &eval, None, &cache));
 }
 
 #[test]
 fn evaluate_criterion_xpath_uses_context_and_condition() {
     let cache = RegexCache::new();
-    let criterion = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "xpath".to_string(),
-            version: "xpath-10".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "//item[1]/title".to_string(),
-    };
+    let criterion = xpath_criterion("$response.body", "//item[1]/title");
     let response = Response {
             status_code: 200,
             headers: BTreeMap::new(),
@@ -250,14 +204,10 @@ fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
         ..EvalContext::default()
     });
 
-    let jp_count = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$[?(count(@.items[?(@.type == 'foo)bar')]) > 0)]".to_string(),
-    };
+    let jp_count = jsonpath_criterion(
+        "$response.body",
+        "$[?(count(@.items[?(@.type == 'foo)bar')]) > 0)]",
+    );
     assert!(
         evaluate_criterion(&jp_count, &eval, None, &cache),
         "Count should handle parentheses in strings"
@@ -277,44 +227,22 @@ fn evaluate_jsonpath_count_predicate_counts_nodelist_cardinality() {
         ..EvalContext::default()
     });
 
-    let matching_object = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$[?(count(@.items[?(@.type == 'match')]) == 1)]".to_string(),
-    };
+    let matching_object = jsonpath_criterion(
+        "$response.body",
+        "$[?(count(@.items[?(@.type == 'match')]) == 1)]",
+    );
     assert!(evaluate_criterion(&matching_object, &eval, None, &cache));
 
-    let missing = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$[?(count(@.items[?(@.type == 'missing')]) == 0)]".to_string(),
-    };
+    let missing = jsonpath_criterion(
+        "$response.body",
+        "$[?(count(@.items[?(@.type == 'missing')]) == 0)]",
+    );
     assert!(evaluate_criterion(&missing, &eval, None, &cache));
 
-    let indexed = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$[?(count(@.items[0]) == 1)]".to_string(),
-    };
+    let indexed = jsonpath_criterion("$response.body", "$[?(count(@.items[0]) == 1)]");
     assert!(evaluate_criterion(&indexed, &eval, None, &cache));
 
-    let unsupported = SuccessCriterion {
-        type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
-            type_: "jsonpath".to_string(),
-            version: "draft-goessner-dispatch-jsonpath-00".to_string(),
-        })),
-        context: "$response.body".to_string(),
-        condition: "$[?(count(@.items[0:1]) == 1)]".to_string(),
-    };
+    let unsupported = jsonpath_criterion("$response.body", "$[?(count(@.items[0:1]) == 1)]");
     assert!(!evaluate_criterion(&unsupported, &eval, None, &cache));
 }
 

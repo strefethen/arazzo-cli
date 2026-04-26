@@ -193,14 +193,17 @@ pub fn make_spec(workflows: Vec<Workflow>) -> ArazzoSpec {
             summary: String::new(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: "http://localhost".to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows,
         components: None,
+        ..ArazzoSpec::default()
     }
 }
 
@@ -212,14 +215,17 @@ pub fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSp
             summary: String::new(),
             version: "1.0.0".to_string(),
             description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
             url: base_url.to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows,
         components: None,
+        ..ArazzoSpec::default()
     }
 }
 

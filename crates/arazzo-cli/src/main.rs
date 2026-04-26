@@ -13,6 +13,7 @@ mod run_context;
 mod test_runner;
 mod trace;
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::Path;
@@ -34,12 +35,54 @@ fn main() {
 }
 
 async fn async_main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_args(std::env::args_os()));
     if let Err(err) = run(cli).await {
         if !err.is_empty() {
             eprintln!("{err}");
         }
         std::process::exit(1);
+    }
+}
+
+fn normalize_args(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut args: Vec<OsString> = args.into_iter().collect();
+    normalize_generate_positional_spec(&mut args);
+    args
+}
+
+fn normalize_generate_positional_spec(args: &mut Vec<OsString>) {
+    let Some(generate_index) = args.iter().position(|arg| arg == "generate") else {
+        return;
+    };
+    let tail = &args[generate_index + 1..];
+    if tail
+        .iter()
+        .any(|arg| arg == "--spec" || arg.to_string_lossy().starts_with("--spec="))
+    {
+        return;
+    }
+
+    let mut skip_next = false;
+    for (offset, current) in tail.iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+
+        let arg = current.to_string_lossy();
+        if matches!(arg.as_ref(), "--scenario" | "--output" | "-o") {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with("--scenario=") || arg.starts_with("--output=") {
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+
+        args.insert(generate_index + 1 + offset, OsString::from("--spec"));
+        return;
     }
 }
 
@@ -222,5 +265,63 @@ fn load_env_file(path: impl AsRef<Path>) {
             trimmed.to_string()
         };
         std::env::set_var(key, &value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(args: &[OsString]) -> Vec<String> {
+        args.iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn normalize_generate_positional_spec_inserts_spec_flag() {
+        let args = normalize_args([
+            OsString::from("arazzo"),
+            OsString::from("generate"),
+            OsString::from("petstore.json"),
+            OsString::from("--scenario"),
+            OsString::from("crud"),
+        ]);
+
+        assert_eq!(
+            strings(&args),
+            vec![
+                "arazzo",
+                "generate",
+                "--spec",
+                "petstore.json",
+                "--scenario",
+                "crud"
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_generate_positional_spec_preserves_explicit_spec_flag() {
+        let args = normalize_args([
+            OsString::from("arazzo"),
+            OsString::from("generate"),
+            OsString::from("--spec"),
+            OsString::from("petstore.json"),
+            OsString::from("--scenario"),
+            OsString::from("crud"),
+        ]);
+
+        assert_eq!(
+            strings(&args),
+            vec![
+                "arazzo",
+                "generate",
+                "--spec",
+                "petstore.json",
+                "--scenario",
+                "crud"
+            ]
+        );
     }
 }

@@ -249,6 +249,7 @@ fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_ru
             name: "test".to_string(),
             url: base_url,
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -265,6 +266,7 @@ fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_ru
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
 
     match EngineBuilder::new(spec)
@@ -291,6 +293,7 @@ fn build_failure_engine(
             name: "test".to_string(),
             url: base_url,
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -324,6 +327,7 @@ fn build_failure_engine(
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
 
     match EngineBuilder::new(spec)
@@ -352,6 +356,7 @@ fn build_retry_engine(
             name: "test".to_string(),
             url: base_url,
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
@@ -377,6 +382,7 @@ fn build_retry_engine(
             ..Workflow::default()
         }],
         components: None,
+        ..ArazzoSpec::default()
     };
 
     match EngineBuilder::new(spec)

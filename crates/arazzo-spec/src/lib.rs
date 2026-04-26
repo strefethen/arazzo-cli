@@ -6,6 +6,42 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Raw `x-*` Specification Extension fields preserved on Arazzo objects.
+pub type VendorExtensions = BTreeMap<String, serde_yaml_ng::Value>;
+
+fn is_vendor_extension_key(key: &str) -> bool {
+    key.starts_with("x-")
+}
+
+fn vendor_extensions_is_empty(extensions: &VendorExtensions) -> bool {
+    extensions.keys().all(|key| !is_vendor_extension_key(key))
+}
+
+fn serialize_vendor_extensions<S>(
+    extensions: &VendorExtensions,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    extensions
+        .iter()
+        .filter(|(key, _)| is_vendor_extension_key(key))
+        .collect::<BTreeMap<_, _>>()
+        .serialize(serializer)
+}
+
+fn deserialize_vendor_extensions<'de, D>(deserializer: D) -> Result<VendorExtensions, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, serde_yaml_ng::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter(|(key, _)| is_vendor_extension_key(key))
+        .collect())
+}
+
 /// Root Arazzo specification document.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +56,14 @@ pub struct ArazzoSpec {
     pub workflows: Vec<Workflow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Components>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Reusable component collections referenced via `$components.*`.
@@ -34,6 +78,14 @@ pub struct Components {
     pub success_actions: BTreeMap<String, OnAction>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub failure_actions: BTreeMap<String, OnAction>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Metadata about the specification.
@@ -48,18 +100,27 @@ pub struct Info {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Source description type discriminator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
+    #[default]
     OpenApi,
     Arazzo,
 }
 
 /// API source descriptor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceDescription {
     #[serde(default)]
@@ -68,6 +129,14 @@ pub struct SourceDescription {
     pub url: String,
     #[serde(rename = "type")]
     pub type_: SourceType,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// A single workflow in the document.
@@ -92,6 +161,14 @@ pub struct Workflow {
     pub failure_actions: Vec<OnAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<Parameter>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// JSON Schema type discriminator.
@@ -131,6 +208,14 @@ pub struct SchemaObject {
     pub properties: BTreeMap<String, PropertyDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Schema property definition.
@@ -145,6 +230,14 @@ pub struct PropertyDef {
     pub format: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_yaml_ng::Value>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Step target discriminator — exactly one of operationId, operationPath, or workflowId.
@@ -167,6 +260,7 @@ pub struct Step {
     pub on_success: Vec<OnAction>,
     pub on_failure: Vec<OnAction>,
     pub outputs: BTreeMap<String, String>,
+    pub extensions: VendorExtensions,
 }
 
 /// Serde helper that mirrors the flat YAML/JSON shape of a Step.
@@ -195,6 +289,14 @@ struct StepSerde {
     on_failure: Vec<OnAction>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     outputs: BTreeMap<String, String>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    extensions: VendorExtensions,
 }
 
 impl Serialize for Step {
@@ -217,6 +319,7 @@ impl Serialize for Step {
             on_success: self.on_success.clone(),
             on_failure: self.on_failure.clone(),
             outputs: self.outputs.clone(),
+            extensions: self.extensions.clone(),
         }
         .serialize(serializer)
     }
@@ -257,6 +360,7 @@ impl<'de> Deserialize<'de> for Step {
             on_success: raw.on_success,
             on_failure: raw.on_failure,
             outputs: raw.outputs,
+            extensions: raw.extensions,
         })
     }
 }
@@ -283,6 +387,14 @@ pub struct Parameter {
     pub value: serde_yaml_ng::Value,
     #[serde(default)]
     pub reference: String,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 impl Parameter {
@@ -334,6 +446,14 @@ pub struct RequestBody {
     pub payload: Option<serde_yaml_ng::Value>,
     #[serde(default)]
     pub reference: String,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Step success criterion.
@@ -346,6 +466,14 @@ pub struct SuccessCriterion {
     pub context: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub type_: Option<CriterionType>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Criterion expression type selector.
@@ -364,6 +492,14 @@ pub struct CriterionExpressionType {
     pub type_: String,
     #[serde(default)]
     pub version: String,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 impl SuccessCriterion {
@@ -430,6 +566,14 @@ pub struct OnAction {
     pub retry_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<SuccessCriterion>,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Parses raw YAML bytes into an unvalidated specification model.

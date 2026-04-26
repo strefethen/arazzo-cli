@@ -54,14 +54,17 @@ pub fn generate_crud(openapi: &OpenAPI, spec_filename: &str) -> Result<GenerateO
             version: "1.0.0".to_string(),
             summary: format!("Auto-generated CRUD workflows for {}", openapi.info.title),
             description: String::new(),
+            ..Info::default()
         },
         source_descriptions: vec![SourceDescription {
             name: source_name,
             url: server_url,
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows,
         components: None,
+        ..ArazzoSpec::default()
     };
 
     Ok(GenerateOutput {
@@ -570,6 +573,7 @@ fn build_workflow(
             in_: Some(auth_req.param_in),
             value: serde_yaml_ng::Value::String(auth_req.param_value_expr.clone()),
             reference: String::new(),
+            ..Parameter::default()
         });
     }
 
@@ -623,6 +627,7 @@ fn build_workflow(
                 in_: Some(ParamLocation::Path),
                 value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
+                ..Parameter::default()
             });
         }
         steps.push(step);
@@ -650,6 +655,7 @@ fn build_workflow(
                 in_: Some(ParamLocation::Path),
                 value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
+                ..Parameter::default()
             });
         }
         steps.push(step);
@@ -677,6 +683,7 @@ fn build_workflow(
                 in_: Some(ParamLocation::Path),
                 value: serde_yaml_ng::Value::String(id_expr),
                 reference: String::new(),
+                ..Parameter::default()
             });
         }
         steps.push(step);
@@ -700,6 +707,7 @@ fn build_workflow(
         success_actions: Vec::new(),
         failure_actions: Vec::new(),
         parameters: wf_parameters,
+        ..Workflow::default()
     }
 }
 
@@ -734,6 +742,7 @@ fn build_step(
             content_type: "application/json".to_string(),
             payload: Some(json_to_yml(example)),
             reference: String::new(),
+            ..RequestBody::default()
         })
     });
 
@@ -741,6 +750,7 @@ fn build_step(
         condition: format!("$statusCode == {status_code}"),
         context: String::new(),
         type_: None,
+        ..SuccessCriterion::default()
     }];
 
     let on_failure = vec![OnAction {
@@ -764,6 +774,7 @@ fn build_step(
         on_success: Vec::new(),
         on_failure,
         outputs,
+        ..Step::default()
     }
 }
 
@@ -1018,6 +1029,10 @@ paths: {}
         assert!(
             yaml_out.contains("{petstore}."),
             "operationPath must use {{sourceName}} prefix"
+        );
+        assert!(
+            !yaml_out.contains("extensions:"),
+            "generated specs should not emit empty extension maps"
         );
     }
 }

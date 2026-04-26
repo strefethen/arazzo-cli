@@ -111,6 +111,7 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
             name: "test".to_string(),
             url: "http://localhost".to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![
             Workflow {
@@ -151,6 +152,7 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
             },
         ],
         components: None,
+        ..ArazzoSpec::default()
     };
 
     let controller = Arc::new(DebugController::new());

@@ -135,6 +135,7 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
             name: "test".to_string(),
             url: base_url.to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "get-data".to_string(),
@@ -179,6 +180,7 @@ fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
             name: "test".to_string(),
             url: base_url.to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         }],
         workflows: vec![Workflow {
             workflow_id: "send-secret".to_string(),

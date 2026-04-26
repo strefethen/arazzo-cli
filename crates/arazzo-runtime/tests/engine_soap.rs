@@ -56,6 +56,7 @@ fn soap_step(
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                     type_: "xpath".to_string(),
                     version: String::new(),
+                    ..CriterionExpressionType::default()
                 })),
                 ..SuccessCriterion::default()
             },

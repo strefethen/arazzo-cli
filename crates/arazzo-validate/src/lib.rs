@@ -640,6 +640,7 @@ fn resolve_param_refs(
             if param.is_value_empty() {
                 param.value = component_param.value.clone();
             }
+            param.extensions = component_param.extensions.clone();
             param.reference.clear();
         }
         resolved.push(param);
@@ -734,11 +735,13 @@ workflows:
                 summary: String::new(),
                 version: "1.0.0".to_string(),
                 description: String::new(),
+                ..Info::default()
             },
             source_descriptions: vec![SourceDescription {
                 name: "api".to_string(),
                 url: "https://example.com".to_string(),
                 type_: SourceType::OpenApi,
+                ..SourceDescription::default()
             }],
             workflows: vec![Workflow {
                 workflow_id: "wf1".to_string(),
@@ -874,6 +877,48 @@ workflows:
     }
 
     #[test]
+    fn parse_bytes_allows_vendor_extensions_without_validation_errors() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+x-arazzo-cli:
+  root: true
+info:
+  title: Test
+  version: "1.0.0"
+  x-info:
+    owner: qa
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+    x-source:
+      auth: default
+workflows:
+  - workflowId: wf1
+    x-workflow:
+      env: test
+    steps:
+      - stepId: s1
+        operationPath: /test
+        x-step:
+          mode: smoke
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        assert!(spec.extensions.contains_key("x-arazzo-cli"));
+        assert!(spec.info.extensions.contains_key("x-info"));
+        assert!(spec.source_descriptions[0]
+            .extensions
+            .contains_key("x-source"));
+        assert!(spec.workflows[0].extensions.contains_key("x-workflow"));
+        assert!(spec.workflows[0].steps[0].extensions.contains_key("x-step"));
+    }
+
+    #[test]
     fn parse_bytes_component_parameter_override() {
         let spec_yaml = r#"
 arazzo: "1.0.0"
@@ -906,6 +951,42 @@ workflows:
         };
         let params = &spec.workflows[0].steps[0].parameters;
         assert_eq!(params[0].value, "Bearer custom-token");
+    }
+
+    #[test]
+    fn component_parameter_ref_preserves_component_extensions_when_resolved() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  parameters:
+    authHeader:
+      name: Authorization
+      in: header
+      value: "Bearer abc123"
+      x-parameter:
+        origin: component
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        parameters:
+          - reference: "$components.parameters.authHeader"
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let params = &spec.workflows[0].steps[0].parameters;
+        assert!(params[0].extensions.contains_key("x-parameter"));
     }
 
     #[test]
@@ -978,6 +1059,42 @@ workflows:
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].type_, ActionType::End);
         assert_eq!(actions[0].name, "terminate");
+    }
+
+    #[test]
+    fn component_action_ref_preserves_component_extensions_when_resolved() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  successActions:
+    endWorkflow:
+      type: end
+      name: terminate
+      x-action:
+        origin: component
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: "$components.successActions.endWorkflow"
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        let actions = &spec.workflows[0].steps[0].on_success;
+        assert!(actions[0].extensions.contains_key("x-action"));
     }
 
     #[test]
@@ -1111,6 +1228,7 @@ workflows:
             name: "api".to_string(),
             url: "https://other.example.com".to_string(),
             type_: SourceType::OpenApi,
+            ..SourceDescription::default()
         });
         let errs = expect_validation_errors(validate(&spec));
         assert_eq!(errs[0].kind, ValidationErrorKind::DuplicateIdentifier);
@@ -1306,7 +1424,9 @@ workflows:
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                 type_: "jsonpath".to_string(),
                 version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+                ..CriterionExpressionType::default()
             })),
+            ..SuccessCriterion::default()
         }];
 
         let result = validate(&spec);
@@ -1324,7 +1444,9 @@ workflows:
             type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                 type_: "jsonpath".to_string(),
                 version: "invalid-version".to_string(),
+                ..CriterionExpressionType::default()
             })),
+            ..SuccessCriterion::default()
         }];
 
         let errs = expect_validation_errors(validate(&spec));
@@ -1344,6 +1466,7 @@ workflows:
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                     type_: "xpath".to_string(),
                     version: "xpath-10".to_string(),
+                    ..CriterionExpressionType::default()
                 })),
                 ..SuccessCriterion::default()
             }],
@@ -1574,6 +1697,7 @@ workflows:
             name: "external".to_string(),
             url: "https://example.com/other.arazzo.yaml".to_string(),
             type_: SourceType::Arazzo,
+            ..SourceDescription::default()
         });
         spec.workflows[0].steps[0].on_success = vec![OnAction {
             type_: ActionType::Goto,
@@ -1658,6 +1782,79 @@ workflows:
         );
         assert!(inputs.properties.contains_key("name"));
         assert_eq!(inputs.required, vec!["name".to_string()]);
+    }
+
+    #[test]
+    fn component_input_ref_preserves_component_extensions() {
+        let spec_yaml = r##"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    shared:
+      type: object
+      x-input:
+        origin: component
+      properties:
+        name:
+          type: string
+workflows:
+  - workflowId: wf1
+    inputs:
+      $ref: "#/components/inputs/shared"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"##;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let inputs = spec.workflows[0]
+            .inputs
+            .as_ref()
+            .unwrap_or_else(|| panic!("inputs should be present"));
+        assert!(inputs.extensions.contains_key("x-input"));
+    }
+
+    #[test]
+    fn non_vendor_unknown_fields_do_not_validate_or_survive_serialization() {
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+unknownRoot: dropped
+info:
+  title: Test
+  version: "1.0.0"
+  unknownInfo: dropped
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        unknownStep: dropped
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        let serialized =
+            serde_yaml_ng::to_string(&spec).unwrap_or_else(|err| panic!("serialize: {err}"));
+
+        assert!(!serialized.contains("unknownRoot"));
+        assert!(!serialized.contains("unknownInfo"));
+        assert!(!serialized.contains("unknownStep"));
     }
 
     #[test]
