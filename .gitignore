@@ -56,3 +56,4 @@ docs/vscode-marketplace-release-plan.md
 /vscode-arazzo-debug/bin/
 /vscode-arazzo-debug/*.vsix
 /vscode-arazzo-debug/.vscode-test/
+.tickets/
