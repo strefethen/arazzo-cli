@@ -441,30 +441,24 @@ impl Engine {
                 Some(ParamLocation::Path) => {
                     path_params.insert(param.name.clone(), value_to_string(&value));
                 }
-                Some(ParamLocation::Query) => {
-                    if !value.is_null() {
-                        match &value {
-                            Value::Array(arr) => {
-                                // Exploded form: emit one key-value pair per element.
-                                for elem in arr {
-                                    query_params_vec
-                                        .push((param.name.clone(), value_to_string(elem)));
-                                }
-                            }
-                            Value::Object(_) => {
-                                // Serialize objects as JSON strings.
-                                query_params_vec.push((
-                                    param.name.clone(),
-                                    serde_json::to_string(&value).unwrap_or_default(),
-                                ));
-                            }
-                            _ => {
-                                query_params_vec
-                                    .push((param.name.clone(), value_to_string(&value)));
-                            }
+                Some(ParamLocation::Query) if !value.is_null() => match &value {
+                    Value::Array(arr) => {
+                        // Exploded form: emit one key-value pair per element.
+                        for elem in arr {
+                            query_params_vec.push((param.name.clone(), value_to_string(elem)));
                         }
                     }
-                }
+                    Value::Object(_) => {
+                        // Serialize objects as JSON strings.
+                        query_params_vec.push((
+                            param.name.clone(),
+                            serde_json::to_string(&value).unwrap_or_default(),
+                        ));
+                    }
+                    _ => {
+                        query_params_vec.push((param.name.clone(), value_to_string(&value)));
+                    }
+                },
                 _ => {}
             }
         }
