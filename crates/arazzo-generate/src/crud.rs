@@ -314,14 +314,12 @@ fn group_resources(openapi: &OpenAPI, warnings: &mut Vec<String>) -> Vec<Resourc
                             operation: op.operation,
                         })
                     }
-                    "PUT" | "PATCH" => {
-                        if group.update.is_none() || op.method == "PUT" {
-                            group.update = Some(CrudOps {
-                                method: op.method,
-                                path: full_item_path,
-                                operation: op.operation,
-                            });
-                        }
+                    "PUT" | "PATCH" if group.update.is_none() || op.method == "PUT" => {
+                        group.update = Some(CrudOps {
+                            method: op.method,
+                            path: full_item_path,
+                            operation: op.operation,
+                        });
                     }
                     "DELETE" => {
                         group.delete = Some(CrudOps {
