@@ -9,6 +9,12 @@ provider-grade OpenAPI ingestion tool. It incorporates the Codex and Claude
 revision reviews while preserving the original direction: add a shared OpenAPI
 contract layer instead of growing `crud.rs` directly.
 
+This is the single canonical plan. Earlier comparison revisions
+(`openapi-provider-grade-ingestion-codex.md` and
+`openapi-provider-grade-ingestion-claude.md`) were audit inputs only; any
+durable decisions from them must be folded into this file before implementation
+tickets are written.
+
 `arazzo-cli` is already useful as an Arazzo runtime and CRUD workflow
 scaffolder for OpenAPI 3.x specs. It is not yet provider-grade OpenAPI
 ingestion.
@@ -142,6 +148,11 @@ the workspace:
   OpenAPI 3.1 fields that `openapiv3` does not model.
 - `url` and `percent-encoding` for URL and path/query encoding helpers.
 - `reqwest` only where the existing async HTTP stack is already appropriate.
+
+The `openapiv3` crate version must remain pinned through workspace dependency
+management. Any upgrade that can change the typed model or serde behavior must
+rerun catalog golden snapshots and 3.1 diagnostic fixtures, because parser-model
+changes can silently alter catalog output even when compilation succeeds.
 
 External dependency additions are exception cases. A ticket proposing one must
 include:
@@ -369,6 +380,7 @@ Remote fetching must enforce:
 - maximum fetched document size
 - total fetch document count
 - total fetched byte budget
+- total resolution-pass timeout
 - redirect limit
 - re-check every redirect target against policy
 - check resolved IP addresses for the original host and every redirect target
@@ -381,7 +393,7 @@ Remote fetching must enforce:
 - cycle detection across local and remote refs
 - stable diagnostics for disabled remote refs, unsupported schemes, policy
   denial, DNS/connection failure, timeout, size overflow, redirect overflow,
-  parse failure, and cycles
+  pass-timeout, parse failure, and cycles
 
 The implementation must decide the async boundary before coding:
 
@@ -592,6 +604,7 @@ pub struct RemoteRefAllowList {
     pub max_total_bytes: usize,
     pub max_documents: usize,
     pub max_redirects: usize,
+    pub pass_timeout_ms: u64,
 }
 ```
 
@@ -894,16 +907,20 @@ Tasks:
 5. Document which real provider behaviors each fixture models.
    Fixtures may use provider-shaped names, but implementation must not branch on
    provider identity or fixture names.
-6. Lock the recipe schema draft enough that Phase 11 does not invent it from
+6. Add a fixture freshness note for each provider-shaped fixture. The note should
+   record the source date and source revision or URL when available. Stale
+   fixture notes warn during implementation review but do not fail tests unless a
+   specific ticket chooses to enforce freshness.
+7. Lock the recipe schema draft enough that Phase 11 does not invent it from
    scratch.
-7. Decide whether initial Arazzo binding is:
+8. Decide whether initial Arazzo binding is:
    - vendor extension only: `x-arazzo-cli.openapiBinding`
    - `arazzo-spec` schema model expansion
    - both, with extensions first
-8. Decide source-id derivation and path privacy for CLI/MCP JSON output.
-9. Decide the initial Swagger/OpenAPI 2.x strategy. This plan recommends
+9. Decide source-id derivation and path privacy for CLI/MCP JSON output.
+10. Decide the initial Swagger/OpenAPI 2.x strategy. This plan recommends
    fail-closed with conversion guidance.
-10. Add the dependency posture above to the acceptance checklist for every
+11. Add the dependency posture above to the acceptance checklist for every
    implementation ticket in this plan.
 
 Acceptance criteria:
@@ -917,6 +934,8 @@ Acceptance criteria:
 - Fixtures are hermetic and small enough to maintain in-repo.
 - At least one real-fragment fixture is committed with an attribution note, or a
   documented no-copy substitute is committed with the reason copying was rejected.
+- Provider-shaped fixtures carry freshness notes without requiring product code
+  to special-case provider identities.
 - The JSON shape for `generate --json` is defined before diagnostics are added.
 
 Testing obligations:
@@ -954,13 +973,18 @@ Tasks:
 2. Parse root OpenAPI documents from `OpenApiSourceInput`.
 3. Preserve `source_id`, `display_name`, and root file location.
 4. Detect OpenAPI version before deserializing into `openapiv3` where possible.
-5. Detect `openapi: "3.1.x"` early and emit diagnostics for 3.1-only constructs:
+5. Detect `openapi: "3.1.x"` early and emit diagnostics for 3.1-only constructs.
+   The implementation should walk the raw schema tree for JSON Schema 2020-12
+   keywords the typed model cannot represent, not only the examples below:
    - JSON Schema array `type: ["string", "null"]`
    - `const`
    - `unevaluatedProperties`
    - `prefixItems`
    - top-level `webhooks`
    - `$schema`
+   - `$dynamicRef` and `$dynamicAnchor`
+   - `dependentRequired` and `dependentSchemas`
+   - `contentEncoding` and `contentMediaType`
 6. Preserve affected schemas as `SchemaContract::RawJsonSchema` when the typed
    model cannot represent the construct.
 7. Implement internal `$ref` resolution for:
@@ -1002,7 +1026,9 @@ Testing obligations:
 
 - `cargo test -p arazzo-openapi`
 - Unit tests for internal refs, local external refs, path escape, and cycles.
-- Version-diagnostics tests for every 3.1 construct enumerated above.
+- Version-diagnostics tests for every 3.1 construct enumerated above, plus at
+  least one assertion that an unmodeled raw-schema keyword outside the named
+  examples still emits a stable diagnostic.
 - Benchmark or release-mode measurement for the Phase 1 performance budget.
   Enforce it in CI only after the measured baseline is approved.
 - Workspace fmt, clippy, and tests.
@@ -1031,12 +1057,14 @@ Tasks:
 4. Route MCP file inputs through `check_path_allowed` before cataloging.
 5. Port MCP `describe_openapi` to the catalog envelope with `legacy` fields.
 6. Cache parsed `OpenApiCatalog` values in `ServerState`.
-7. Key the cache by absolute path, precise mtime, file size, dependency
-   fingerprint for resolved local external refs, resolver policy, and
-   catalog-affecting options.
-8. Invalidate when mtime, file size, any dependency fingerprint, relevant policy,
-   or relevant options change. If precise mtime is unavailable, use a content
-   digest or re-parse.
+7. Key the cache by absolute path, root content hash, precise mtime, file size,
+   dependency fingerprint for resolved local external refs, resolver policy, and
+   catalog-affecting options. The root content hash protects network filesystems,
+   atomic renames, and coarse mtime resolution; the dependency fingerprint
+   protects local external refs.
+8. Invalidate when root content hash, mtime, file size, any dependency
+   fingerprint, relevant policy, or relevant options change. If hashing is
+   disabled in a future performance mode, re-parse on timestamp uncertainty.
 9. Add JSON schemas and schema drift checks for the new output.
 10. Keep human output concise but include diagnostic counts.
 
@@ -1054,10 +1082,11 @@ Testing obligations:
 - CLI integration tests for `--json inspect openapi`.
 - MCP integration tests for `describe_openapi`.
 - MCP cache test: two consecutive calls with identical args parse once.
-- MCP cache invalidation test: modifying spec mtime triggers a re-parse.
+- MCP cache invalidation test: modifying spec contents triggers a re-parse even
+  if mtime does not change.
 - MCP cache invalidation test: modifying a local external ref triggers a
   re-parse of the root catalog.
-- Schema drift tests for `inspect-openapi`.
+- Schema drift tests for `inspect openapi`.
 - Workspace fmt, clippy, and tests.
 
 ### Phase 3 - Fix `generate --json` And Port CRUD To Catalog
@@ -1335,6 +1364,10 @@ Tasks:
 5. In contract mode:
    - resolve operation by unique `operationId`
    - fail on ambiguous `operationId`
+   - when an Arazzo step routes through a `sourceDescription`, resolve the source
+     first, then perform the `operationId` lookup within that source only
+   - fail with the same ambiguous-operation diagnostic if the source-scoped lookup
+     still has multiple matching operations
    - apply effective server selection
    - apply parameter serialization
    - validate required parameters before HTTP
@@ -1352,6 +1385,8 @@ Acceptance criteria:
 - Existing `operationId` tests still pass in default mode.
 - Contract mode fails before HTTP on missing required parameters.
 - Contract mode fails before HTTP on ambiguous operation IDs.
+- `sourceDescription` routing can disambiguate across sources but cannot silently
+  choose among duplicate operation IDs within one source.
 - Contract mode fails before HTTP when unsupported/raw schema semantics affect
   required request correctness.
 - Dry-run output shows the exact prepared provider request.
@@ -1394,6 +1429,7 @@ Tasks:
    - timeout
    - maximum fetched document size
    - total document and byte budget
+   - total resolution-pass timeout
    - redirect limit
    - re-check every redirect target against policy
    - check resolved IP addresses for the original host and every redirect target
@@ -1406,7 +1442,7 @@ Tasks:
    - cycle detection across local and remote refs
 6. Emit stable diagnostics for disabled remote refs, unsupported scheme, policy
    denial, DNS/connection failure, timeout, size overflow, redirect overflow,
-   parse failure, and cycles.
+   pass-timeout, parse failure, and cycles.
 
 Acceptance criteria:
 
@@ -1415,12 +1451,15 @@ Acceptance criteria:
 - MCP cannot fetch arbitrary remote or internal network targets by default.
 - Remote diagnostics include the source ref that triggered the fetch.
 - Redirect targets are re-evaluated against policy.
+- A single resolution pass cannot exceed the configured total deadline, even when
+  every individual fetch stays under its own timeout.
 
 Testing obligations:
 
 - Unit tests for policy decisions.
 - Hermetic local-server tests for success, redirect, timeout, size, content type,
   and denial.
+- Hermetic local-server test for total pass-timeout across multiple slow refs.
 - Tests proving no request is made when remote refs are disabled.
 - Workspace fmt, clippy, and tests.
 
@@ -1593,27 +1632,29 @@ must prove no request is made when remote refs are disabled.
 7. Implement local external refs with root-relative sandboxing.
 8. Implement operation identity and duplicate `operationId` diagnostics.
 9. Implement OpenAPI version detection and Phase 1 3.1 diagnostics.
-10. Add Phase 1 performance budget benchmark.
-11. Add `--json inspect openapi` and schema drift coverage.
-12. Port MCP `describe_openapi` to catalog output with legacy compatibility.
-13. Add MCP catalog caching and invalidation.
-14. Fix `generate --json` envelope and schema coverage.
-15. Port CRUD generation to `OpenApiCatalog`.
-16. Add generated workflow contract validation.
-17. Add binding strategy support through `x-arazzo-cli.openapiBinding` or
+10. Add `openapiv3` upgrade-policy notes and snapshot coverage for typed-model
+    drift.
+11. Add Phase 1 performance budget benchmark.
+12. Add `--json inspect openapi` and schema drift coverage.
+13. Port MCP `describe_openapi` to catalog output with legacy compatibility.
+14. Add MCP catalog caching and invalidation.
+15. Fix `generate --json` envelope and schema coverage.
+16. Port CRUD generation to `OpenApiCatalog`.
+17. Add generated workflow contract validation.
+18. Add binding strategy support through `x-arazzo-cli.openapiBinding` or
     approved spec model changes.
-18. Implement parameter serialization helpers.
-19. Implement request body media-type normalization.
-20. Implement server and security resolution.
-21. Add opt-in runtime `--openapi-mode contract`.
-22. Add remote-ref security policy and async-boundary decision note.
-23. Implement remote refs only after the policy is approved.
-24. Expand OpenAPI 3.1 diagnostics profile and document initial 2.x guidance.
-25. Add operation/tag/catalog generation.
-26. Implement generic user-supplied recipe execution from the locked schema.
-27. Add provider-shaped example recipe fixtures and require contract validation
+19. Implement parameter serialization helpers.
+20. Implement request body media-type normalization.
+21. Implement server and security resolution.
+22. Add opt-in runtime `--openapi-mode contract`.
+23. Add remote-ref security policy and async-boundary decision note.
+24. Implement remote refs only after the policy is approved.
+25. Expand OpenAPI 3.1 diagnostics profile and document initial 2.x guidance.
+26. Add operation/tag/catalog generation.
+27. Implement generic user-supplied recipe execution from the locked schema.
+28. Add provider-shaped example recipe fixtures and require contract validation
     for each output.
-28. Only if blocked by a concrete fixture: write a dependency-evaluation note for
+29. Only if blocked by a concrete fixture: write a dependency-evaluation note for
     the smallest external crate that solves the proven gap.
 
 ## Explicit Human Decisions Needed
@@ -1635,6 +1676,9 @@ must prove no request is made when remote refs are disabled.
 10. Should strict validation be on by default in CI-like environments?
 11. Should stable JSON expose absolute file paths, or should source IDs be
     redacted/hash-derived with paths limited to human text output?
+12. What is the policy for adopting major `openapiv3` upgrades after catalog
+    snapshots exist: pin indefinitely, upgrade on demand, or evaluate on a
+    release cadence?
 
 ## Open Questions
 
@@ -1642,6 +1686,8 @@ must prove no request is made when remote refs are disabled.
 - Exact `schemaVersion` strings once the JSON contracts are ready to stabilize.
 - Whether 3.1 inspection should expose raw schemas directly or summarize them
   behind a smaller schema contract.
+- Whether the initial JSON Schema 2020-12 keyword walk should be allowlist-based
+  for modeled keywords or denylist-based for known-unmodeled keywords.
 - How long MCP `legacy` fields stay in `describe_openapi`.
 - Where user-supplied recipe files are loaded from, and whether checked-in
   example recipes live only under `testdata/openapi/recipes/`.
