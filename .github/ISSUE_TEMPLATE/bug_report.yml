@@ -37,6 +37,6 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: "OS, Rust version, arazzo-cli version (`arazzo --version`)"
+      description: "OS, Rust version, and arazzo-cli install source or release tag."
     validations:
       required: true

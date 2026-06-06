@@ -256,8 +256,8 @@ README.md
 
 **Tasks:**
 
-1. Add `arazzo --json inspect openapi --spec <path>` returning the catalog
-   envelope. Add `arazzo schema inspect-openapi` for drift coverage.
+1. Add `arazzo-cli --json inspect openapi --spec <path>` returning the catalog
+   envelope. Add `arazzo-cli schema inspect-openapi` for drift coverage.
 2. Replace the existing MCP `describe_openapi` shape with the catalog
    envelope. CHANGELOG documents the cutover.
 3. Cache parsed `OpenApiCatalog` in `ServerState` keyed by absolute path +

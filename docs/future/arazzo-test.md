@@ -1,4 +1,4 @@
-# `arazzo test` Implementation-Ready Plan (5-7 Days)
+# `arazzo-cli test` Implementation-Ready Plan (5-7 Days)
 
 ## 1. Scope Lock (v1)
 
@@ -18,7 +18,7 @@
 
 ### Command
 ```bash
-arazzo test <spec>
+arazzo-cli test <spec>
 ```
 
 ### Flags
@@ -270,7 +270,7 @@ Runtime-level codes are propagated from `RuntimeErrorKind::code()`.
 
 ## 15. Definition of Done
 
-- `arazzo test` implemented with all v1 flags listed above.
+- `arazzo-cli test` implemented with all v1 flags listed above.
 - JSON schema available via `schema test` and checked into `docs/schemas/test.schema.json`.
 - JUnit and TAP reports implemented and tested.
 - Deterministic ordering guaranteed in JSON and report outputs.

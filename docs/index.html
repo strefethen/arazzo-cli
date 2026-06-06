@@ -485,15 +485,15 @@
                 <div>
                     <p class="text-white/50 text-sm font-medium mb-3">Validate and run a workflow</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo validate</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span><br>
-                        <span class="prompt">$</span> <span class="cmd">arazzo run</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span> bearer-auth <span class="flag">--verbose</span>
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli validate</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span><br>
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli run</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span> bearer-auth <span class="flag">--verbose</span>
                     </div>
                 </div>
                 <div>
                     <p class="text-white/50 text-sm font-medium mb-3">Record a trace and replay it offline</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo run</span> <span class="cv">spec.yaml</span> my-workflow <span class="flag">--trace</span> <span class="cv">./trace.json</span><br>
-                        <span class="prompt">$</span> <span class="cmd">arazzo replay</span> <span class="cv">./trace.json</span>
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli run</span> <span class="cv">spec.yaml</span> my-workflow <span class="flag">--trace</span> <span class="cv">./trace.json</span><br>
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli replay</span> <span class="cv">./trace.json</span>
                     </div>
                 </div>
             </div>

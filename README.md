@@ -31,8 +31,8 @@ Or install it:
 
 ```bash
 cargo install --path ./crates/arazzo-cli --locked
-arazzo validate examples/httpbin-get.arazzo.yaml
-arazzo run examples/httpbin-get.arazzo.yaml get-origin
+arazzo-cli validate examples/httpbin-get.arazzo.yaml
+arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 ```
 
 ## Features
@@ -87,16 +87,16 @@ arazzo run examples/httpbin-get.arazzo.yaml get-origin
 ## CLI Commands
 
 ```
-arazzo run <spec> <workflow-id>        Execute a workflow
-arazzo replay <trace.json>             Replay a trace.v1 artifact with injected responses
-arazzo validate <spec>                 Parse and validate a spec
-arazzo list <spec>                     List workflows in a spec
-arazzo steps <spec> <workflow-id>      List steps within a workflow
-arazzo catalog <dir>                   Discover specs across a directory tree
-arazzo show <workflow-id> --dir <dir>  Display workflow details (inputs, outputs, steps)
-arazzo generate --spec <openapi>       Generate Arazzo workflows from an OpenAPI spec
-arazzo schema [command]                Print JSON Schema for a command's --json output
-arazzo serve [specs...] [--dir <dir>]  Start an MCP server for AI agent integration
+arazzo-cli run <spec> <workflow-id>        Execute a workflow
+arazzo-cli replay <trace.json>             Replay a trace.v1 artifact with injected responses
+arazzo-cli validate <spec>                 Parse and validate a spec
+arazzo-cli list <spec>                     List workflows in a spec
+arazzo-cli steps <spec> <workflow-id>      List steps within a workflow
+arazzo-cli catalog <dir>                   Discover specs across a directory tree
+arazzo-cli show <workflow-id> --dir <dir>  Display workflow details (inputs, outputs, steps)
+arazzo-cli generate --spec <openapi>       Generate Arazzo workflows from an OpenAPI spec
+arazzo-cli schema [command]                Print JSON Schema for a command's --json output
+arazzo-cli serve [specs...] [--dir <dir>]  Start an MCP server for AI agent integration
 ```
 
 Global flags:
@@ -169,28 +169,28 @@ Try them:
 
 ```bash
 # Validate
-arazzo validate examples/httpbin-auth.arazzo.yaml
+arazzo-cli validate examples/httpbin-auth.arazzo.yaml
 
 # Run with inputs
-arazzo run examples/httpbin-get.arazzo.yaml status-check --input code=200
+arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=200
 
 # Dry-run (no network calls)
-arazzo run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
+arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --dry-run --input code=429
 
 # Verbose output with step details
-arazzo run examples/httpbin-parallel.arazzo.yaml independent-steps --parallel --verbose
+arazzo-cli run examples/httpbin-parallel.arazzo.yaml independent-steps --parallel --verbose
 
 # Run a single step (auto-resolves its dependencies)
-arazzo run examples/httpbin-data-flow.arazzo.yaml chain-outputs --step use-uuid
+arazzo-cli run examples/httpbin-data-flow.arazzo.yaml chain-outputs --step use-uuid
 
 # Generate CRUD workflows from an OpenAPI spec
-arazzo generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
+arazzo-cli generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
 
 # Write a trace file
-arazzo run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./trace.json
+arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./trace.json
 
 # Replay a trace offline
-arazzo replay ./trace.json
+arazzo-cli replay ./trace.json
 ```
 
 ## Execution Traces
@@ -230,10 +230,10 @@ The `replay` command re-executes a workflow using the recorded responses from a 
 
 ```bash
 # Record a trace
-arazzo run spec.yaml my-workflow --trace ./trace.json
+arazzo-cli run spec.yaml my-workflow --trace ./trace.json
 
 # Replay it later — no network calls
-arazzo replay ./trace.json
+arazzo-cli replay ./trace.json
 ```
 
 ### How It Works
@@ -263,7 +263,7 @@ If any field differs, the engine reports a `RUNTIME_REPLAY_REQUEST_MISMATCH` err
 Replay supports overriding the spec path and workflow ID stored in the trace:
 
 ```bash
-arazzo replay ./trace.json --spec ./updated-spec.yaml --workflow-id new-workflow
+arazzo-cli replay ./trace.json --spec ./updated-spec.yaml --workflow-id new-workflow
 ```
 
 This is useful when replaying a trace against a modified spec to detect drift.
@@ -594,10 +594,10 @@ By default, validation issues are reported as warnings and execution continues. 
 
 ```bash
 # Warns about missing 'name' input but continues
-arazzo run spec.yaml my-workflow
+arazzo-cli run spec.yaml my-workflow
 
 # Fails immediately if 'name' is missing
-arazzo run spec.yaml my-workflow --strict-inputs
+arazzo-cli run spec.yaml my-workflow --strict-inputs
 ```
 
 ## Sub-Workflows
@@ -628,7 +628,7 @@ The child workflow executes with its own input context, and its outputs are avai
 The `generate` command scaffolds Arazzo workflows from existing OpenAPI 3.x specs:
 
 ```bash
-arazzo generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
+arazzo-cli generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
 ```
 
 The `crud` scenario (currently the only supported scenario) analyzes your OpenAPI spec and produces:
@@ -652,10 +652,10 @@ arazzo-cli includes a built-in [Model Context Protocol](https://modelcontextprot
 arazzo-mcp examples/httpbin-get.arazzo.yaml
 
 # Or via the CLI subcommand
-arazzo serve examples/httpbin-get.arazzo.yaml
+arazzo-cli serve examples/httpbin-get.arazzo.yaml
 
 # Load all specs from a directory
-arazzo serve --dir examples/
+arazzo-cli serve --dir examples/
 ```
 
 The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP). Newline-delimited JSON framing is also supported for simpler integrations.
@@ -665,7 +665,7 @@ The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the
 By default, file-accepting tools (`validate_spec`, `generate_workflow`, `describe_openapi`) can read any path the process has access to. Use `--allowed-dir` to restrict file access:
 
 ```bash
-arazzo serve --allowed-dir /home/user/specs examples/*.arazzo.yaml
+arazzo-cli serve --allowed-dir /home/user/specs examples/*.arazzo.yaml
 ```
 
 The flag is repeatable — pass it multiple times to allow several directories.

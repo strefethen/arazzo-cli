@@ -20,7 +20,7 @@ What's missing for **replay**:
 - Trace loader/parser (~100 LOC)
 - Response injector trait / mock HTTP client adapter (~200 LOC)
 - Request validator (compare live vs. recorded) (~100 LOC)
-- `arazzo replay <trace.json>` CLI command (~100 LOC)
+- `arazzo-cli replay <trace.json>` CLI command (~100 LOC)
 
 **Verdict**: Trace + redaction is ship-ready today. Replay is ~650 LOC of additive work with no architectural changes needed. **Highest ROI feature to complete next.**
 
@@ -65,7 +65,7 @@ What's missing:
 
 ---
 
-## 4. First-Class Workflow Test Runner (`arazzo test`)
+## 4. First-Class Workflow Test Runner (`arazzo-cli test`)
 
 **Readiness: 60% (infrastructure exists; needs composition into a command)**
 
@@ -78,12 +78,12 @@ What exists:
 - **Engine reusability**: `Arc<EngineInner>` means the same engine can run multiple workflows without rebuilding.
 
 What's missing:
-- **`arazzo test` CLI command**: No test discovery, no fixture loading, no result reporting.
+- **`arazzo-cli test` CLI command**: No test discovery, no fixture loading, no result reporting.
 - **Fixture file format**: No convention for declaring mock responses alongside specs.
 - **Test discovery**: No scanning for `*.test.yaml` or similar patterns.
 - **Result reporting**: No TAP/JUnit output, no per-test pass/fail summary.
 
-**Verdict**: Mostly a composition task — the pieces exist. **A basic `arazzo test` with fixture files + expected outputs could ship in ~400 LOC.**
+**Verdict**: Mostly a composition task — the pieces exist. **A basic `arazzo-cli test` with fixture files + expected outputs could ship in ~400 LOC.**
 
 ---
 

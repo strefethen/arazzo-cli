@@ -36,18 +36,18 @@ Assumptions:
 
 ### New Command Group
 ```bash
-arazzo auth login <profile> --client-id <id> --auth-url <url> --token-url <url> --scope <scope>...
-arazzo auth login <profile> --client-id <id> --client-secret <secret> --token-url <url> --grant client_credentials --scope <scope>...
-arazzo auth login <profile> --issuer <url> --client-id <id>   # OIDC discovery mode
-arazzo auth status <profile>
-arazzo auth logout <profile>
+arazzo-cli auth login <profile> --client-id <id> --auth-url <url> --token-url <url> --scope <scope>...
+arazzo-cli auth login <profile> --client-id <id> --client-secret <secret> --token-url <url> --grant client_credentials --scope <scope>...
+arazzo-cli auth login <profile> --issuer <url> --client-id <id>   # OIDC discovery mode
+arazzo-cli auth status <profile>
+arazzo-cli auth logout <profile>
 ```
 
 ### Run Integration
 ```bash
-arazzo run <spec> <workflow-id> --auth-profile <profile>
-arazzo run <spec> <workflow-id> --api-key-header X-Api-Key=<value>
-arazzo run <spec> <workflow-id> --api-key-query api_key=<value>
+arazzo-cli run <spec> <workflow-id> --auth-profile <profile>
+arazzo-cli run <spec> <workflow-id> --api-key-header X-Api-Key=<value>
+arazzo-cli run <spec> <workflow-id> --api-key-query api_key=<value>
 ```
 
 ### Optional Flags
@@ -485,9 +485,9 @@ Keychain-based tests require a running keychain daemon, which is unavailable in 
 
 ## 14. Definition Of Done
 
-- `arazzo auth login/status/logout` implemented and documented (authorization code + client credentials).
-- `arazzo run --auth-profile` works with automatic refresh (with buffer).
-- `arazzo run --api-key-header` / `--api-key-query` works for static API key injection.
+- `arazzo-cli auth login/status/logout` implemented and documented (authorization code + client credentials).
+- `arazzo-cli run --auth-profile` works with automatic refresh (with buffer).
+- `arazzo-cli run --api-key-header` / `--api-key-query` works for static API key injection.
 - OIDC discovery via `--issuer` resolves endpoints automatically.
 - Tokens stored securely via configurable credential backend (keychain default).
 - `.arazzo-auth.yaml` project-level config supported.
