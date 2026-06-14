@@ -259,10 +259,12 @@ using `Option<CriterionType>` plus `has_declared_type()`
    omitted `type` should remain omitted on re-serialize (the
    `skip_serializing_if = "Option::is_none"` handles this; add/adjust a case).
 
-> **Fallback if the blast radius is unacceptable for the release window:** keep
-> `type_: ActionType` and instead capture explicitness with a `#[serde(skip)]`
-> companion populated by a custom `Deserialize`. This is messier and diverges from
-> the `SuccessCriterion` precedent, so only use it under time pressure.
+This is the correct fix and matches the `SuccessCriterion` precedent already in
+the codebase. The ~15-site blast radius is mechanical (swap reads for the
+`action_type()` accessor, wrap literals in `Some(...)`); work through every call
+site rather than narrowing the change. If the `Option<ActionType>` approach turns
+out to be wrong for a reason discovered mid-implementation, pivot the design and
+update this plan — do not fall back to a sentinel/`#[serde(skip)]` workaround.
 
 ### Tests
 
