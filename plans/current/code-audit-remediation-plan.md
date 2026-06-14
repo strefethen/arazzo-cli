@@ -77,7 +77,7 @@ bind a real localhost port, and the spec handed to the subprocess must point its
 this — there is no in-process server helper and `crates/arazzo-cli/Cargo.toml`
 has **no `[dev-dependencies]` section** yet.
 
-### Change (recommended: hermetic local server)
+### Change
 
 1. Add a dev-dependency to `crates/arazzo-cli/Cargo.toml`:
    ```toml
@@ -92,8 +92,9 @@ has **no `[dev-dependencies]` section** yet.
    `tiny_http::Server`, returns its `http://127.0.0.1:<port>` base URL, and serves
    canned JSON for `/get` and the chained-post endpoints. Shut it down on drop.
 
-3. Rewrite the three tests to **generate a temp spec** (use the existing `tempfile`
-   pattern already present in the file, e.g. around `cli_integration.rs:1815`)
+3. Rewrite the three tests to **generate a temp spec** (use the existing `TempDir`
+   helper defined at `cli_integration.rs:10`, e.g. the copy-into-tempdir pattern
+   around `cli_integration.rs:1815`)
    whose `sourceDescriptions[0].url` is the local server URL, then run the CLI
    against that temp spec. Assert on the canned response outputs (`origin`, `url`,
    `enriched_action`).
@@ -101,14 +102,6 @@ has **no `[dev-dependencies]` section** yet.
    For the dependency-resolution test, the temp spec must reproduce the
    `post-initial` → `post-enriched` dependency from
    `examples/httpbin-chained-posts.arazzo.yaml` but target the local server.
-
-### Alternative (faster, lower fidelity)
-
-If a full local-server harness is out of scope for the immediate release, mark
-the three tests `#[ignore]` with a comment explaining they require network, and
-add a dedicated opt-in CI job (`cargo test -- --ignored`) that is allowed to
-fail/retry. This unblocks the green build but leaves a coverage gap, so prefer
-the hermetic approach.
 
 ### Acceptance
 
@@ -126,7 +119,7 @@ the hermetic approach.
 
 ### Why
 
-- Workspace version is `0.2.2` (`Cargo.toml:18` via `workspace.package.version`).
+- Workspace version is `0.2.2` (`Cargo.toml:15` via `workspace.package.version`).
 - `CHANGELOG.md` contains a single `## [0.1.0] - 2026-03-13` section and **no
   0.2.x entries**, despite two point releases of accumulated fixes
   (Set-Cookie handling, goto-workflow input forwarding, retry self-loop count,
@@ -150,11 +143,12 @@ the hermetic approach.
    - `7550006 fix(expr): use f64_approx_eq in compare_ordered`
    - `8e8cdd6 fix(validate): unused retry field warnings to stderr`
    - `3fe61ec fix(cli): load .env before starting tokio runtime`
-   - `c6cd734 fix(jsonpath): count predicate tokenization`
-   - `5846c73 / e1252fe Preserve Arazzo vendor extensions`
+   - `c6cd734 Fix JSONPath count predicate tokenization`
+   - `5846c73 Preserve Arazzo vendor extensions` (note `e1252fe` is the
+     companion compliance-plan doc update, not a user-visible change)
    - `3cb8a48 Refactor runtime core into focused modules`
 2. Move the `--step` / `--no-deps` bullets: they are currently listed under
-   `0.1.0` (`CHANGELOG.md:18-19`) but the feature stabilized in the 0.2.x line.
+   `0.1.0` (`CHANGELOG.md:24-25`) but the feature stabilized in the 0.2.x line.
    Verify against history and place them in the correct section.
 3. Decide and document the tagging story in `CONTRIBUTING.md` or a short
    `RELEASING.md`: bump `workspace.package.version`, update `CHANGELOG.md`, then
@@ -173,7 +167,7 @@ the hermetic approach.
 
 **Severity:** Medium — silent incorrect behavior. Confirmed bug; existing test
 `parse_bytes_component_action_preserves_local_overrides`
-(`crates/arazzo-validate/src/lib.rs:1982`) does **not** cover the failing case.
+(`crates/arazzo-validate/src/lib.rs:1984`) does **not** cover the failing case.
 
 ### Why
 
@@ -189,7 +183,7 @@ pub enum ActionType {
     Retry,
 }
 
-// crates/arazzo-spec/src/lib.rs:556-558
+// crates/arazzo-spec/src/lib.rs:557-558
 #[serde(rename = "type", default)]
 pub type_: ActionType,
 ```
@@ -215,7 +209,7 @@ This is the same class of problem `SuccessCriterion` already solved correctly by
 using `Option<CriterionType>` plus `has_declared_type()`
 (`crates/arazzo-spec/src/lib.rs:468, 526`). Adopt that house style.
 
-### Change (recommended: `Option<ActionType>`, matches existing convention)
+### Change (`Option<ActionType>`, matches existing convention)
 
 1. In `crates/arazzo-spec/src/lib.rs`, change the field to optional and add an
    accessor:
@@ -269,7 +263,7 @@ update this plan — do not fall back to a sentinel/`#[serde(skip)]` workaround.
 ### Tests
 
 Add to `crates/arazzo-validate/src/lib.rs` tests (next to bug #26 test at line
-1982): a component defines `type: retry`; the local reference overrides
+1984): a component defines `type: retry`; the local reference overrides
 `type: end`; assert the resolved action is `End`. This test must fail before the
 fix and pass after.
 
@@ -294,7 +288,7 @@ lands on an index **not** in the set, the fallback advances the cursor by one
 slot instead of seeking to the next step at-or-after the target:
 
 ```rust
-// crates/arazzo-runtime/src/runtime_core/engine_impl.rs:288-302
+// crates/arazzo-runtime/src/runtime_core/engine_impl.rs:289-303
 FlowDecision::Next(next_idx) => {
     // Find the position of next_idx in our filtered steps_to_run set.
     if let Some(pos) = steps_to_run.iter().position(|&i| i == next_idx) {
@@ -334,11 +328,21 @@ FlowDecision::Next(next_idx) => {
 }
 ```
 
-Note the terminal case changes from an error to `break` (graceful end), which
-matches the semantics of "goto a step beyond the filtered tail." Confirm this
-against `RuntimeErrorKind::GotoTargetNotFound` expectations — the genuine
-"target index < current and absent" error path is preserved by the `>= next_idx`
-search returning `None` only when nothing qualifies.
+This seek is correct because `steps_to_run` is sorted ascending —
+`compute_transitive_deps` returns a `BTreeSet<usize>` and the target index is
+inserted into it before collecting (`engine_impl.rs:194-196`), so
+`position(|&i| i >= next_idx)` lands on the *first* in-scope step at-or-after the
+target.
+
+Note the terminal case changes from a `GotoTargetNotFound` error to `break`
+(graceful end), matching the semantics of "goto a step beyond the filtered tail."
+Be deliberate about one behavior change this introduces: a goto whose target is
+**absent from the filtered set and below the current cursor** previously returned
+`GotoTargetNotFound`; it now resumes at the first in-scope step ≥ target instead
+of erroring. Confirm that is acceptable for filtered execution. The
+`GotoTargetNotFound` kind is still used by the retry branch
+(`engine_impl.rs:313`) and `engine_actions.rs:254`, so the error variant itself
+is not orphaned.
 
 ### Tests
 
@@ -484,7 +488,7 @@ stub that should be removed, not implemented.
 spec with `yaml_rust2` (`crates/arazzo-debug-adapter/src/dap.rs:15-16`), builds a
 line index, and resolves breakpoints server-side in `resolve_source_breakpoints`
 (`dap.rs:1034`), returning `verified: true/false` per breakpoint
-(`dap.rs:1055,1075`). VS Code sends raw source lines via `setBreakpoints`
+(`dap.rs:1056,1075`). VS Code sends raw source lines via `setBreakpoints`
 (`dap.rs:317`) and the server maps them to step checkpoints.
 
 Therefore the client-side TypeScript stubs duplicate (incompletely) work the
@@ -551,8 +555,10 @@ node:test runner already in use so CI stays fast. Wire the new tests into the
   `docs/debugger-troubleshooting.md` (~40 lines) to cover launch config, scopes,
   conditional breakpoints, sub-workflow call stacks, and the
   `runtimeExecutable`/`runtimeArgs` dev override.
-- Add the missing screenshot referenced from `README.md` (the audit found a
-  dangling `docs/images/vscode-debugger.png` reference) or remove the reference.
+- The README screenshot reference (`docs/images/vscode-debugger.png`, embedded at
+  `README.md:275`) resolves to a real 1414×1103 PNG, so no action is needed here
+  beyond refreshing it if the UI changes — the earlier "missing screenshot"
+  finding was incorrect.
 - Once 7a–7c land and the extension is dogfooded against the example specs, drop
   `"preview": true` and bump `vscode-arazzo-debug/package.json` to `1.0.0`. Add a
   `CHANGELOG.md` entry in the extension folder.
