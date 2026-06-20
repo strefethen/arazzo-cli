@@ -2,7 +2,7 @@ mod common;
 
 use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
 use arazzo_spec::{
-    ActionType, OnAction, ParamLocation, Parameter, RequestBody, Step, StepTarget,
+    ActionType, OnAction, ParamLocation, Parameter, Replacement, RequestBody, Step, StepTarget,
     SuccessCriterion, Workflow,
 };
 use common::*;
@@ -1335,6 +1335,271 @@ async fn execute_operation_id_not_loaded() {
 }
 
 // ── Dry-run tests ─────────────────────────────────────────────────
+
+fn request_body_with_replacements(
+    payload: serde_json::Value,
+    replacements: Vec<Replacement>,
+) -> RequestBody {
+    RequestBody {
+        content_type: "application/json".to_string(),
+        payload: Some(to_yaml(payload)),
+        replacements,
+        ..RequestBody::default()
+    }
+}
+
+fn replacement(target: &str, value: serde_yaml_ng::Value) -> Replacement {
+    Replacement {
+        target: target.to_string(),
+        value,
+    }
+}
+
+fn captured_string(captured: &Arc<Mutex<String>>) -> String {
+    match captured.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => panic!("captured request body lock poisoned"),
+    }
+}
+
+fn parse_json_body(body: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => value,
+        Err(err) => panic!("parsing captured body as JSON: {err}; body={body}"),
+    }
+}
+
+#[tokio::test]
+async fn replacements_overlay_json_payload_before_send() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_ref = Arc::clone(&captured);
+    let server = start_server(move |_method, url, _headers, body| {
+        if url == "/items" {
+            match captured_ref.lock() {
+                Ok(mut guard) => *guard = body,
+                Err(_) => panic!("capturing request body"),
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        } else {
+            MockHttpResponse::empty(404)
+        }
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "replace".to_string(),
+            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            request_body: Some(request_body_with_replacements(
+                json!({"a": 1, "b": [10, 20]}),
+                vec![
+                    replacement("/a", to_yaml(json!(99))),
+                    replacement("/b/1", to_yaml(json!(21))),
+                ],
+            )),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    assert_eq!(
+        parse_json_body(&captured_string(&captured)),
+        json!({"a": 99, "b": [10, 21]})
+    );
+}
+
+#[tokio::test]
+async fn replacements_with_expression_value_resolves_against_inputs() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_ref = Arc::clone(&captured);
+    let server = start_server(move |_method, url, _headers, body| {
+        if url == "/items" {
+            match captured_ref.lock() {
+                Ok(mut guard) => *guard = body,
+                Err(_) => panic!("capturing request body"),
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        } else {
+            MockHttpResponse::empty(404)
+        }
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "replace".to_string(),
+            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            request_body: Some(request_body_with_replacements(
+                json!({"userId": null}),
+                vec![replacement(
+                    "/userId",
+                    serde_yaml_ng::Value::String("$inputs.userId".to_string()),
+                )],
+            )),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let mut inputs = BTreeMap::new();
+    inputs.insert("userId".to_string(), json!("U-7"));
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("wf", inputs).await.outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    assert_eq!(
+        parse_json_body(&captured_string(&captured)),
+        json!({"userId": "U-7"})
+    );
+}
+
+#[tokio::test]
+async fn replacements_with_dependent_step_outputs_resolves_in_order() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_ref = Arc::clone(&captured);
+    let server = start_server(move |_method, url, _headers, body| match url.as_str() {
+        "/create" => MockHttpResponse::json(200, r#"{"id":"S-1"}"#),
+        "/update" => {
+            match captured_ref.lock() {
+                Ok(mut guard) => *guard = body,
+                Err(_) => panic!("capturing request body"),
+            }
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![
+            Step {
+                step_id: "create".to_string(),
+                target: Some(StepTarget::OperationPath("POST /create".to_string())),
+                success_criteria: success_200(),
+                outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
+                ..Step::default()
+            },
+            Step {
+                step_id: "update".to_string(),
+                target: Some(StepTarget::OperationPath("POST /update".to_string())),
+                request_body: Some(request_body_with_replacements(
+                    json!({"id": null}),
+                    vec![replacement(
+                        "/id",
+                        serde_yaml_ng::Value::String("$steps.create.outputs.id".to_string()),
+                    )],
+                )),
+                success_criteria: success_200(),
+                ..Step::default()
+            },
+        ],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    assert_eq!(
+        parse_json_body(&captured_string(&captured)),
+        json!({"id": "S-1"})
+    );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn replacements_dry_run_emits_merged_body() {
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "replace".to_string(),
+            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            request_body: Some(request_body_with_replacements(
+                json!({"a": 1, "b": {"keep": true}}),
+                vec![
+                    replacement("/a", to_yaml(json!(99))),
+                    replacement("/missing/path", to_yaml(json!("x"))),
+                ],
+            )),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = match EngineBuilder::new(spec).dry_run(true).trace(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
+        panic!("expected success, got: {err}");
+    }
+
+    let reqs = exec_result.dry_run_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].body, Some(json!({"a": 99, "b": {"keep": true}})));
+
+    let traces = exec_result.trace_steps();
+    assert_eq!(traces.len(), 1);
+    assert!(traces[0]
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("requestBody.replacements[1]:")));
+}
+
+#[tokio::test]
+async fn replacements_warnings_propagate_to_step_trace() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "replace".to_string(),
+            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            request_body: Some(request_body_with_replacements(
+                json!({"a": 1}),
+                vec![replacement("/missing/path", to_yaml(json!("x")))],
+            )),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let mut spec = spec;
+    if let Some(source) = spec.source_descriptions.get_mut(0) {
+        source.url = server.base_url.clone();
+    }
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
+        panic!("expected success, got: {err}");
+    }
+
+    let traces = exec_result.trace_steps();
+    assert_eq!(traces.len(), 1);
+    assert!(traces[0]
+        .warnings
+        .iter()
+        .any(|warning| warning.starts_with("requestBody.replacements[0]:")));
+}
 
 #[tokio::test]
 #[allow(deprecated)]

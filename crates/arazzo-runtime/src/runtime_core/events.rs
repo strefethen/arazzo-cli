@@ -153,6 +153,8 @@ pub struct DryRunRequest {
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Trace path chosen after a step attempt.

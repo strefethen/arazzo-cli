@@ -60,12 +60,24 @@ impl Engine {
             explicit_method.to_string()
         };
 
+        let mut prep_warnings = Vec::<String>::new();
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
                 let mut ctx = self.make_eval_context(vars, None);
                 ctx.method = Some(method.clone());
                 let eval = ExpressionEvaluator::new(ctx);
-                Some(resolve_payload(payload, &eval))
+                let mut body = resolve_payload(payload, &eval);
+                if !req_body.replacements.is_empty() {
+                    let (mutated, warnings) = apply_replacements(
+                        body,
+                        req_body.content_type.as_str(),
+                        &req_body.replacements,
+                        &eval,
+                    );
+                    body = mutated;
+                    prep_warnings.extend(warnings);
+                }
+                Some(body)
             } else {
                 None
             }
@@ -132,6 +144,7 @@ impl Engine {
             body,
             body_json,
             trace_request,
+            warnings: prep_warnings,
         })
     }
 
@@ -230,13 +243,6 @@ impl Engine {
         vars: &VarStore,
         prep: PreparedRequest,
     ) -> Result<StepExecution, RuntimeError> {
-        let req = DryRunRequest {
-            step_id: step.step_id.clone(),
-            method: prep.method.clone(),
-            url: prep.url_result.url.clone(),
-            headers: prep.headers.clone(),
-            body: prep.body_json.clone(),
-        };
         let fake = Response {
             status_code: 200,
             headers: BTreeMap::new(),
@@ -247,7 +253,7 @@ impl Engine {
         let dry_ctx = self.make_post_request_eval_context(vars, Some(&fake), &prep);
         let dry_eval = ExpressionEvaluator::new(dry_ctx);
         let mut outputs = BTreeMap::new();
-        let mut warnings = Vec::<String>::new();
+        let mut warnings = prep.warnings.clone();
         for (name, expr) in &step.outputs {
             let (value, expr_warnings) =
                 evaluate_output_expression_detailed(expr, &dry_eval, Some(&fake));
@@ -256,6 +262,14 @@ impl Engine {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
         }
+        let req = DryRunRequest {
+            step_id: step.step_id.clone(),
+            method: prep.method.clone(),
+            url: prep.url_result.url.clone(),
+            headers: prep.headers.clone(),
+            body: prep.body_json.clone(),
+            warnings: warnings.clone(),
+        };
         Ok(StepExecution {
             result: StepResult {
                 success: true,
@@ -297,7 +311,7 @@ impl Engine {
         let eval = ExpressionEvaluator::new(post_ctx);
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
-        let mut step_warnings = Vec::<String>::new();
+        let mut step_warnings = prep.warnings.clone();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
             let evaluation = evaluate_criterion_detailed(
                 criterion,
@@ -509,4 +523,5 @@ pub(crate) struct PreparedRequest {
     pub body: Option<Vec<u8>>,
     pub body_json: Option<Value>,
     pub trace_request: TraceRequest,
+    pub warnings: Vec<String>,
 }

@@ -125,13 +125,18 @@ workflows:
             <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
                            xmlns:tns="http://example.com/customer-service">
               <soap:Body>
-                <tns:UpdateCustomer>
-                  <tns:CustomerId>{$steps.create-customer.outputs.new_id}</tns:CustomerId>
+                <tns:UpdateCustomer mode="template">
+                  <tns:CustomerId>TEMPLATE</tns:CustomerId>
                   <tns:Name>Arazzo Updated User</tns:Name>
                   <tns:Status>Active</tns:Status>
                 </tns:UpdateCustomer>
               </soap:Body>
             </soap:Envelope>
+          replacements:
+            - target: "//*[local-name()='CustomerId']"
+              value: "$steps.create-customer.outputs.new_id"
+            - target: "//*[local-name()='UpdateCustomer']/@mode"
+              value: patch
         successCriteria:
           - condition: $statusCode == 200
           - condition: //UpdateCustomerResponse/Customer/Name

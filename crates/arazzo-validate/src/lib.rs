@@ -276,6 +276,13 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 &step.parameters,
                 &mut errs,
             );
+            if let Some(request_body) = &step.request_body {
+                validate_replacements(
+                    &format!("{step_path}.requestBody.replacements"),
+                    &request_body.replacements,
+                    &mut errs,
+                );
+            }
 
             for (criterion_idx, criterion) in step.success_criteria.iter().enumerate() {
                 validate_criterion(
@@ -354,6 +361,23 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<V
                 kind: ValidationErrorKind::MissingParameterValue,
                 path: param_path,
                 message: format!("{path_prefix}[{param_idx}] must have value or reference"),
+            });
+        }
+    }
+}
+
+fn validate_replacements(
+    path_prefix: &str,
+    replacements: &[arazzo_spec::Replacement],
+    errs: &mut Vec<ValidationError>,
+) {
+    for (replacement_idx, replacement) in replacements.iter().enumerate() {
+        if replacement.target.trim().is_empty() {
+            let path = format!("{path_prefix}[{replacement_idx}].target");
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: path.clone(),
+                message: format!("{path} is required"),
             });
         }
     }
@@ -698,7 +722,8 @@ mod tests {
 
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation,
-        SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
+        Replacement, RequestBody, SourceDescription, SourceType, Step, StepTarget,
+        SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec, Error, ValidationErrorKind};
@@ -1293,6 +1318,58 @@ workflows:
         assert!(errs[0]
             .message
             .contains("must have operationId, operationPath, or workflowId"));
+    }
+
+    #[test]
+    fn validate_replacement_empty_target_errors() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].request_body = Some(RequestBody {
+            replacements: vec![Replacement {
+                target: "  ".to_string(),
+                value: serde_yaml_ng::Value::String("bar".to_string()),
+            }],
+            ..RequestBody::default()
+        });
+
+        let errs = expect_validation_errors(validate(&spec));
+        let err = errs
+            .iter()
+            .find(|item| item.path.contains("requestBody.replacements[0].target"))
+            .unwrap_or_else(|| panic!("expected replacement target error, got: {errs:?}"));
+
+        assert_eq!(err.kind, ValidationErrorKind::MissingRequiredField);
+    }
+
+    #[test]
+    fn validate_replacement_null_value_is_allowed() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].request_body = Some(RequestBody {
+            replacements: vec![Replacement {
+                target: "/foo".to_string(),
+                value: serde_yaml_ng::Value::Null,
+            }],
+            ..RequestBody::default()
+        });
+
+        if let Err(err) = validate(&spec) {
+            panic!("expected null replacement value to pass, got: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_replacement_present_passes() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].request_body = Some(RequestBody {
+            replacements: vec![Replacement {
+                target: "/foo".to_string(),
+                value: serde_yaml_ng::Value::String("bar".to_string()),
+            }],
+            ..RequestBody::default()
+        });
+
+        if let Err(err) = validate(&spec) {
+            panic!("expected replacement to pass, got: {err}");
+        }
     }
 
     #[test]

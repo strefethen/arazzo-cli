@@ -163,6 +163,7 @@ mod tests {
                 "safeName": "alice",
                 "nested": { "dbPassword": "hunter2" }
             })),
+            warnings: Vec::new(),
         };
 
         redact_dry_run_request(&mut req);

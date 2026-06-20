@@ -1,11 +1,12 @@
 mod common;
 
 use arazzo_spec::{
-    CriterionExpressionType, CriterionType, ParamLocation, Parameter, RequestBody, Step,
-    StepTarget, SuccessCriterion, Workflow,
+    CriterionExpressionType, CriterionType, ParamLocation, Parameter, Replacement, RequestBody,
+    Step, StepTarget, SuccessCriterion, Workflow,
 };
 use common::*;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 fn xml_response(body: &str) -> MockHttpResponse {
     let mut headers = BTreeMap::new();
@@ -14,6 +15,20 @@ fn xml_response(body: &str) -> MockHttpResponse {
         status: 200,
         headers,
         body: body.to_string(),
+    }
+}
+
+fn replacement(target: &str, value: &str) -> Replacement {
+    Replacement {
+        target: target.to_string(),
+        value: serde_yaml_ng::Value::String(value.to_string()),
+    }
+}
+
+fn captured_string(captured: &Arc<Mutex<String>>) -> String {
+    match captured.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => panic!("captured request body lock poisoned"),
     }
 }
 
@@ -70,6 +85,120 @@ fn soap_step(
 }
 
 // ── SOAP round-trip: XML body → mock server → XPath extraction ──
+
+#[tokio::test]
+async fn replacements_overlay_xml_payload_before_send() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_ref = Arc::clone(&captured);
+    let server = start_server(move |_method, _url, _headers, body| {
+        match captured_ref.lock() {
+            Ok(mut guard) => *guard = body,
+            Err(_) => panic!("capturing SOAP request body"),
+        }
+        xml_response(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><UpdateCustomerResponse><Ok>true</Ok></UpdateCustomerResponse></soap:Body>
+</soap:Envelope>"#,
+        )
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "soap-replace".to_string(),
+        steps: vec![Step {
+            step_id: "update".to_string(),
+            target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+            request_body: Some(RequestBody {
+                content_type: "text/xml".to_string(),
+                payload: Some(serde_yaml_ng::Value::String(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="urn:test">
+  <soap:Body>
+    <tns:UpdateCustomer><tns:CustomerId>old</tns:CustomerId></tns:UpdateCustomer>
+  </soap:Body>
+</soap:Envelope>"#
+                        .to_string(),
+                )),
+                replacements: vec![replacement("//*[local-name()='CustomerId']", "C-99")],
+                ..RequestBody::default()
+            }),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("soap-replace", BTreeMap::new())
+        .await
+        .outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    let body = captured_string(&captured);
+    assert!(body.contains(r#"xmlns:tns="urn:test""#), "{body}");
+    assert!(
+        body.contains("<tns:CustomerId>C-99</tns:CustomerId>"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn replacements_attribute_target_on_xml_payload() {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_ref = Arc::clone(&captured);
+    let server = start_server(move |_method, _url, _headers, body| {
+        match captured_ref.lock() {
+            Ok(mut guard) => *guard = body,
+            Err(_) => panic!("capturing SOAP request body"),
+        }
+        xml_response(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><UpdateCustomerResponse><Ok>true</Ok></UpdateCustomerResponse></soap:Body>
+</soap:Envelope>"#,
+        )
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "soap-attr-replace".to_string(),
+        steps: vec![Step {
+            step_id: "update".to_string(),
+            target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+            request_body: Some(RequestBody {
+                content_type: "text/xml".to_string(),
+                payload: Some(serde_yaml_ng::Value::String(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="urn:test">
+  <soap:Body>
+    <tns:UpdateCustomer><tns:Customer id="old"/></tns:UpdateCustomer>
+  </soap:Body>
+</soap:Envelope>"#
+                        .to_string(),
+                )),
+                replacements: vec![replacement("//*[local-name()='Customer']/@id", "X-1")],
+                ..RequestBody::default()
+            }),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("soap-attr-replace", BTreeMap::new())
+        .await
+        .outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    let body = captured_string(&captured);
+    assert!(body.contains(r#"<tns:Customer id="X-1"/>"#), "{body}");
+}
 
 #[tokio::test]
 async fn soap_xml_body_sent_as_raw_bytes() {

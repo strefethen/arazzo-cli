@@ -446,6 +446,8 @@ pub struct RequestBody {
     pub payload: Option<serde_yaml_ng::Value>,
     #[serde(default)]
     pub reference: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replacements: Vec<Replacement>,
     #[serde(
         flatten,
         default,
@@ -454,6 +456,22 @@ pub struct RequestBody {
         deserialize_with = "deserialize_vendor_extensions"
     )]
     pub extensions: VendorExtensions,
+}
+
+/// A single payload replacement targeting a JSON Pointer (RFC 6901) or XPath
+/// 1.0 location inside the request body. Per Arazzo 1.0.1 §4.6.14.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Replacement {
+    /// RFC 6901 JSON Pointer (for JSON bodies) or XPath 1.0 expression (for
+    /// XML/text bodies). Required.
+    #[serde(default)]
+    pub target: String,
+
+    /// Value to inject. May be a literal scalar, mapping, sequence, or an
+    /// Arazzo runtime expression string resolved at send time.
+    #[serde(default)]
+    pub value: serde_yaml_ng::Value,
 }
 
 /// Step success criterion.
@@ -579,4 +597,61 @@ pub struct OnAction {
 /// Parses raw YAML bytes into an unvalidated specification model.
 pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng::Error> {
     serde_yaml_ng::from_slice::<ArazzoSpec>(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Replacement, RequestBody};
+
+    fn serialize<T: serde::Serialize>(value: &T) -> String {
+        match serde_yaml_ng::to_string(value) {
+            Ok(serialized) => serialized,
+            Err(err) => panic!("serializing YAML: {err}"),
+        }
+    }
+
+    fn deserialize_request_body(input: &str) -> RequestBody {
+        match serde_yaml_ng::from_str::<RequestBody>(input) {
+            Ok(body) => body,
+            Err(err) => panic!("deserializing request body YAML: {err}"),
+        }
+    }
+
+    #[test]
+    fn requestbody_replacements_roundtrip() {
+        let body = RequestBody {
+            content_type: "application/json".to_string(),
+            replacements: vec![
+                Replacement {
+                    target: "/foo".to_string(),
+                    value: serde_yaml_ng::Value::String("bar".to_string()),
+                },
+                Replacement {
+                    target: "/count".to_string(),
+                    value: serde_yaml_ng::Value::Number(2.into()),
+                },
+            ],
+            ..RequestBody::default()
+        };
+
+        let serialized = serialize(&body);
+        let reparsed = deserialize_request_body(&serialized);
+
+        assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn requestbody_default_has_empty_replacements() {
+        assert!(RequestBody::default().replacements.is_empty());
+    }
+
+    #[test]
+    fn replacements_skip_serializing_when_empty() {
+        let serialized = serialize(&RequestBody {
+            replacements: Vec::new(),
+            ..RequestBody::default()
+        });
+
+        assert!(!serialized.contains("replacements:"));
+    }
 }

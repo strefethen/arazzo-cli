@@ -7,7 +7,7 @@ The prior roadmap (`docs/roadmap-close-spec-coverage.md`) identified the right c
 
 **Last updated:** 2026-04-26
 
-**Progress:** Phases 1–3 implemented and shipped (`8e7f639`); Phase 6 vendor extension roundtrip shipped (`5846c73`). 3 gaps remaining (down from 7).
+**Progress:** Phases 1–4 implemented; Phase 6 vendor extension roundtrip shipped (`5846c73`). 2 gaps remaining (down from 7).
 Also completed: `serde_yml` → `serde_yaml_ng` migration (`f4f2074`) to clear Dependabot advisories.
 
 ---
@@ -43,7 +43,7 @@ The table below maps every Arazzo 1.0.1 feature to its current status and the au
 | 23 | `step.requestBody.payload` — expression resolution | Full | `helpers.rs:725` |
 | 24 | `step.requestBody.payload` — `{$expr}` interpolation | Full | `helpers.rs:725` via `resolve_value` |
 | 25 | `step.requestBody.contentType` | Full | `engine_http.rs:98` |
-| 26 | **`step.requestBody.replacements`** | **Missing** | Not in spec model or runtime |
+| 26 | **`step.requestBody.replacements`** | Full | `arazzo-spec/src/lib.rs` + `runtime_core/payload.rs` + `engine_http.rs` (Phase 4, ac-36bi) |
 | 27 | `step.successCriteria` — `simple` type | Full | `helpers.rs:181` |
 | 28 | `step.successCriteria` — `regex` type | Full | `helpers.rs:151` |
 | 29 | `step.successCriteria` — `jsonpath` type | Full | `helpers.rs:162` |
@@ -112,19 +112,21 @@ The table below maps every Arazzo 1.0.1 feature to its current status and the au
 | 92 | Response body size guard | Full | `runtime_core.rs:584` |
 | 93 | `dependsOn` cycle detection | **Missing** | DAG not implemented for workflow ordering |
 
-**Summary: 85 full, 4 partial, 4 missing.** (was 79/4/10 before phases 1–3)
+**Summary: 86 full, 4 partial, 3 missing.** (was 79/4/10 before phases 1–3)
 
 ---
 
 ## Gap analysis
 
-### G1 — `requestBody.replacements` (Spec §4.7.5)
+### ~~G1 — `requestBody.replacements` (Spec §4.6.14)~~ ✅ Done (Phase 4, ac-36bi implementation)
 
 The spec defines a `replacements` array on `requestBody`. Each replacement carries:
 - `target` — RFC 6901 JSON Pointer (for JSON payloads) or XPath (for XML payloads)
 - `value` — expression evaluated at send time
 
-This allows partial overlay of a template body without re-specifying the whole payload. Not modeled in `arazzo-spec` and not handled by `resolve_payload` in `helpers.rs`.
+This allows partial overlay of a template body without re-specifying the whole payload. Implemented as a typed spec field, validator check, post-payload runtime mutation hook, and trace warning surface.
+
+Implementation note: replacements are applied in array order; later entries win on conflicting targets. Spec §4.6.14 is silent on ordering.
 
 ### ~~G2 — `Retry-After` response header override (Spec §4.6.6)~~ ✅ Done (Phase 2, `8e7f639`)
 
@@ -338,7 +340,7 @@ After `execute_inner` returns `outputs` for a child workflow, call `vars.registe
 
 ---
 
-### Phase 4 — `requestBody.replacements`
+### Phase 4 — `requestBody.replacements` ✅ Done
 
 **Justification:** This is required for PATCH-style partial updates where a canonical template body exists in components and individual steps overlay only changed fields. Without it, every step must inline its full body. This is the highest-complexity feature and the most niche — most workflows either inline the body or use expression-resolved payload fields.
 
@@ -347,7 +349,7 @@ After `execute_inner` returns `outputs` for a child workflow, call `vars.registe
 **Files:**
 - `crates/arazzo-spec/src/lib.rs`
 - `crates/arazzo-validate/src/lib.rs`
-- `crates/arazzo-runtime/src/runtime_core/helpers.rs`
+- `crates/arazzo-runtime/src/runtime_core/payload.rs`
 - `crates/arazzo-runtime/src/runtime_core/engine_http.rs`
 
 **Changes:**
@@ -370,75 +372,22 @@ pub struct Replacement {
 pub replacements: Vec<Replacement>,
 ```
 
-4b. Add validation: `target` must be non-empty, `value` must be non-null.
+4b. Add validation: `target` must be non-empty; `value: null` is allowed.
 
-4c. Add `apply_replacements` in `helpers.rs`:
+4c. Add `apply_replacements` in `runtime_core/payload.rs`:
 
 ```rust
 pub(super) fn apply_replacements(
     body: Value,
-    replacements: &[Replacement],
+    content_type: &str,
+    replacements: &[arazzo_spec::Replacement],
     eval: &ExpressionEvaluator,
-) -> Value {
-    let mut out = body;
-    for rep in replacements {
-        let new_value = eval.resolve_value(&value_to_string_yaml(&rep.value));
-        // Parse rep.target as RFC 6901 JSON Pointer
-        if rep.target.starts_with('/') {
-            apply_json_pointer_replacement(&mut out, &rep.target, new_value);
-        }
-        // XPath replacement (XML bodies) is out of scope for the first implementation.
-        // Log a warning if target looks like XPath and content-type is XML.
-    }
-    out
-}
-
-fn apply_json_pointer_replacement(root: &mut Value, pointer: &str, value: Value) {
-    // Walk the pointer segments, creating objects/arrays as needed.
-    // Pointer format: /key1/key2/3  (3 is an array index)
-    let tokens: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
-    let mut current = root;
-    for (i, token) in tokens.iter().enumerate() {
-        let token = token.replace("~1", "/").replace("~0", "~");
-        let is_last = i == tokens.len() - 1;
-        current = match current {
-            Value::Object(map) => {
-                if is_last {
-                    map.insert(token, value);
-                    return;
-                }
-                map.entry(token).or_insert(Value::Object(Default::default()))
-            }
-            Value::Array(arr) => {
-                if let Ok(idx) = token.parse::<usize>() {
-                    if is_last && idx < arr.len() {
-                        arr[idx] = value;
-                        return;
-                    }
-                    if idx < arr.len() { &mut arr[idx] } else { return; }
-                } else { return; }
-            }
-            _ => return,
-        };
-    }
-}
+) -> (Value, Vec<String>);
 ```
 
-4d. Call `apply_replacements` in `engine_http.rs:prepare_http_request` after `resolve_payload`:
+JSON Pointer replacements mutate resolved JSON bodies without auto-creating missing intermediate objects or array entries. XPath replacements mutate raw XML/text string bodies without the namespace-stripping used by read-only XPath extraction. Replacement warnings use the existing `StepTraceData.warnings` surface with `requestBody.replacements[{i}]:` prefixes.
 
-```rust
-let mut body_json = if let Some(req_body) = &step.request_body {
-    if let Some(payload) = &req_body.payload {
-        Some(resolve_payload(payload, &eval))
-    } else { None }
-} else { None };
-
-if let (Some(body), Some(req_body)) = (&mut body_json, &step.request_body) {
-    if !req_body.replacements.is_empty() {
-        *body = apply_replacements(body.clone(), &req_body.replacements, &eval);
-    }
-}
-```
+4d. Call `apply_replacements` in `engine_http.rs:prepare_http_request` after `resolve_payload`, before content-type-aware request serialization and trace request capture.
 
 **Test cases:**
 - JSON pointer `/name` replaces top-level key
@@ -546,7 +495,7 @@ G2 (Retry-After) ─── Phase 2 (engine_actions — depends on nothing)
                       │
 G5 ($workflows) ─────── Phase 3 (EvalContext + VarStore)
                           │
-G1 (replacements) ──── Phase 4 (spec model → validate → helpers → engine_http)
+G1 (replacements) ──── Phase 4 (spec model → validate → payload → engine_http)
                          │
 G6 (dependsOn) ──────── Phase 5 (spec model → validate → CLI)
                           │
@@ -653,7 +602,7 @@ Replace existing `parse_ignores_unknown_fields_and_drops_them_on_serialize` with
 | 1 | **Low** | Isolated to `arazzo-expr/src/lib.rs`. Additive code paths. Existing proptest fuzzing catches regressions. `!` must guard against consuming `!=`. |
 | 2 | **Low** | ~40 lines in one function in `engine_actions.rs`. Additive — only activates when `Retry-After` header present. |
 | 3 | **Low** | Adds a new `$workflows` branch in the expression evaluator. The `_` fallback currently returns `Null`, so no existing behavior changes. New `WorkflowEvalState` map in `VarStore` is additive. |
-| 4 | **Moderate** | Touches `resolve_payload` in `helpers.rs` — the payload construction hot path. JSON Pointer mutation after expression resolution could interact with existing interpolation. Needs careful ordering: resolve first, then replace. |
+| 4 | **Moderate** | Touches the payload construction hot path. JSON Pointer and XPath mutation after expression resolution could interact with existing interpolation. Needs careful ordering: resolve first, then replace. |
 | 5 | **Moderate** | Adds a new scheduling layer above the existing workflow execution loop. Cross-workflow state management is new surface area. The parallel step scheduler (Kahn's algorithm) is well-tested and the workflow-level version mirrors it. |
 | 6 | **Low** | `serde(flatten)` on structs. Deserialization of existing fields is unaffected. Custom `Step` serde needs careful handling. |
 
@@ -668,7 +617,7 @@ Replace existing `parse_ignores_unknown_fields_and_drops_them_on_serialize` with
 | 1 | ~~NOT + grouping operators~~ | ~~Low~~ | ✅ Done |
 | 2 | ~~`Retry-After` header~~ | ~~Low~~ | ✅ Done |
 | 3 | ~~`$workflows.*` expressions~~ | ~~Medium~~ | ✅ Done |
-| 4 | `requestBody.replacements` | High — spec model + runtime + JSON Pointer mutation | 2–3 days |
+| 4 | `requestBody.replacements` | Done — spec model + runtime + JSON Pointer/XPath mutation | ac-36bi |
 | 5 | `workflow.dependsOn` | Medium — spec model + DAG + CLI command | 1.5–2 days |
 | 6 | ~~Vendor extensions (`x-*`)~~ | ~~Medium — serde flatten + custom Step serde~~ | ✅ Done (`5846c73`) |
 | 7 | Arazzo-as-source runtime | Very high — multi-engine dispatch, deferred | — |
@@ -685,7 +634,7 @@ Replace existing `parse_ignores_unknown_fields_and_drops_them_on_serialize` with
 
 **Phase 3 third** — `$workflows.*` expressions require adding a map to `EvalContext` and threading it through `VarStore`, but it touches no HTTP pipeline code. A prerequisite for workflows that pass state between siblings.
 
-**Phase 4 fourth** — `requestBody.replacements` is the only remaining runtime feature that affects the HTTP dispatch path. It depends on the spec model being complete (phases 1–3 do not change the spec model, so this can be done at any point, but is more impactful after expression correctness is solid).
+**Phase 4 completed** — `requestBody.replacements` affects the HTTP dispatch path and now runs after payload resolution and before serialization.
 
 **Phase 5 fifth** — `dependsOn` is a CLI-level concern, not a runtime-core concern. It requires a new command or flag and touches the spec model. Independent, but lower value than correctness features.
 

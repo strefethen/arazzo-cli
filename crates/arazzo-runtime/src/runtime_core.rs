@@ -75,7 +75,7 @@ pub use events::{
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::evaluate_jsonpath_condition;
-use payload::{resolve_payload, to_json_path, value_to_string};
+use payload::{apply_replacements, resolve_payload, to_json_path, value_to_string};
 use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use state::Engine;
 use state::ExecutionContext;

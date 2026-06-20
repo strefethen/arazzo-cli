@@ -1,0 +1,68 @@
+# httpbin-replacements.arazzo.yaml
+#
+# Demonstrates Arazzo 1.0.1 requestBody.replacements overlays against a
+# templated JSON payload.
+#
+# Usage:
+#   cargo run -p arazzo-cli -- validate examples/httpbin-replacements.arazzo.yaml
+#   cargo run -p arazzo-cli -- run examples/httpbin-replacements.arazzo.yaml replacements-demo --dry-run --json
+
+arazzo: 1.0.0
+info:
+  title: HTTPBin Request Body Replacements
+  version: 1.0.0
+  description: >
+    Shows JSON Pointer replacements applied after payload resolution and before
+    request serialization.
+
+sourceDescriptions:
+  - name: httpbin
+    url: https://httpbin.org
+    type: openapi
+
+workflows:
+  - workflowId: replacements-demo
+    summary: Overlay a templated JSON request body before sending
+    steps:
+      - stepId: post-replaced-body
+        operationPath: POST /post
+        requestBody:
+          contentType: application/json
+          payload:
+            operation: template
+            user:
+              id: template
+              roles:
+                - reader
+                - writer
+            metadata:
+              method: template
+              note: template
+            special:
+              a/b: old-slash
+              a~b: old-tilde
+            conflict: first
+          replacements:
+            - target: /operation
+              value: create
+            - target: /user/id
+              value: "$method"
+            - target: /user/roles/1
+              value: admin
+            - target: /metadata/note
+              value: "prepared via {$method}"
+            - target: /special/a~1b
+              value: slash-key-updated
+            - target: /special/a~0b
+              value: tilde-key-updated
+            - target: /conflict
+              value: overwritten-once
+            - target: /conflict
+              value: final-value
+            - target: /missing/path
+              value: skipped-with-warning
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          echoed_operation: $response.body.json.operation
+          echoed_conflict: $response.body.json.conflict
