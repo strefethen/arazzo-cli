@@ -28,7 +28,7 @@ if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 
 echo "Running release preflight checks..."
-bash "$ROOT_DIR/scripts/release/verify-local-release.sh"
+bash "$ROOT_DIR/scripts/release/verify-readiness.sh"
 
 echo "Creating annotated tag $TAG..."
 git -C "$ROOT_DIR" tag -a "$TAG" -m "Release $TAG"
