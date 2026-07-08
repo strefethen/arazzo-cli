@@ -743,3 +743,99 @@ grep -n '<symbol>' <file>
 - Existing MCP security notes (to be superseded by item 8):
   `docs/future/mcp-security.md`
 - Related future-work proposals: `docs/future/`, `plans/current/`
+
+---
+
+## Appendix B — Implementer checklist (verified on `main` @ `7a3b049`, 2026-06-24)
+
+Line numbers here were re-verified against the working tree on `main` (code identical to
+`d0015f1`; commit `7a3b049` added only this plan). The per-item bodies above still carry
+the original `e5dfede` numbers — prefer the numbers in this appendix, and re-grep before
+editing.
+
+**Suggested order** (quick wins → large): 6 → 4 → 3 → 5 → 1 → 2, then 7 and 8.
+
+> **Working-tree caveat:** `crates/arazzo-cli/tests/cli_integration.rs` currently has
+> uncommitted edits (+50 lines) that shift item-1 line numbers by +50 vs committed HEAD.
+> The numbers below are working-tree; committed HEAD matches the original
+> `1853/1881/1913`.
+
+### Test-automation coverage (CI = `.github/workflows/ci.yml`)
+
+The pipeline already runs `cargo test --workspace` in the `test` job (`ci.yml:70-71`) and
+`msrv` job (`ci.yml:137-138`), plus `cargo audit` (`ci.yml:153`). New Rust tests for items
+1, 3, 4, 5, 6, 8 are auto-discovered by Cargo and run in those jobs with **no new wiring**.
+Two automation gaps are **not** covered by the item bodies above:
+
+- [ ] **Item 1 — no standing hermeticity guard.** The `test` job runs on `ubuntu-latest`
+  with full network (`ci.yml:51-71`), so a future live-URL test would pass CI and only
+  fail offline. Add a network-disabled test run (or a fixture lint rejecting live hosts)
+  so hermeticity can't silently regress.
+- [ ] **Item 7b — transcript test needs the Rust binary in a Node-only job.** The
+  `vscode-extension` job (`ci.yml:156-178`) has no Rust toolchain / `cargo build`. Adding
+  `npm test` (7b) is insufficient — the job must first build/provision
+  `arazzo-debug-adapter` (e.g. `needs: build` + artifact download, or a `cargo build`
+  step) or the transcript test fails.
+
+### Per-item tasks
+
+**Item 6 — `$ref` cycle guards.** Bug: `refs.rs:26` / `refs.rs:41` (no visited set);
+pattern to copy `refs.rs:7` (check at `:16`); test at `refs.rs:72`.
+- [ ] Thread `visited: &mut HashSet<String>` through both resolvers; `None` on reinsert.
+- [ ] Update call sites (`grep resolve_request_body_ref\|resolve_response_ref`).
+- [ ] Add requestBodies + responses self-cycle tests → assert `None`.
+
+**Item 4 — goto index skip** (filtered path only). Bug: `engine_impl.rs:295`
+(`run_cursor += 1`), block at `engine_impl.rs:289`; **not** the normal-path `Next` at
+`:500`; `steps_to_run` sorted via `compute_transitive_deps` at `:194`.
+- [ ] Replace the `else if next_idx > idx` branch with a seek `position(|&i| i >= next_idx)`; terminal `else` → `break`.
+- [ ] Runtime test: ≥6 steps, sparse set with a gap, goto into gap resumes at first step ≥ target.
+
+**Item 3 — action `type` override** (~15 sites, all drifted). Enum `spec/lib.rs:552`;
+field `spec/lib.rs:576`; merge bug `validate/lib.rs:693-694`.
+- Readers → `action_type()`: `engine_actions.rs:206` + `.to_string()` at 223/231/246/258/269/281/317/344/355; `engine_impl.rs:815`; `engine_trace.rs:145`; `validate/lib.rs:395/441/445/451`.
+- Literals → `Some(...)`: `crud.rs:756`; validate test ctors at `lib.rs:1540/1706/1720/1744/1758/1780/1794/1808` (+ runtime `lib.rs` test ctors).
+- [ ] Field → `Option<ActionType>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`); add `action_type()` + `has_declared_type()`.
+- [ ] Merge → `if action.type_.is_some()`; update all readers/literals.
+- [ ] Test: component `type: retry` + local `type: end` → resolves `End` (red before, green after); serde roundtrip keeps omitted `type` omitted.
+
+**Item 5 — JSONPath silent `false`.** Evaluator `jsonpath.rs:3` (silent fallthrough `:26`);
+`CriterionEvaluation.error/warnings` at `criteria.rs:39-40`; mirror the regex arm
+`criteria.rs:70` (`error = Some` at `:75`); jsonpath arm to fix `criteria.rs:80`.
+- [ ] Add `JsonPathOutcome { Matched(bool), Unsupported(String) }`; detect `..`, `[*]`/bare `*`, `[a:b]`.
+- [ ] jsonpath arm maps `Unsupported` → `error = Some(...)`, result `false`.
+- [ ] Document subset (README + rustdoc). Tests: `$..foo`, `$[*]`, `$.items[0:2]` → non-empty error; supported exprs unchanged.
+
+**Item 1 — hermetic CLI tests.** Add `[dev-dependencies] tiny_http = "0.12"` to
+`crates/arazzo-cli/Cargo.toml`. Helpers: `TempDir` `cli_integration.rs:10` (`new` `:15`),
+`fixture_spec` `:66`, `run()` `:72`, copy pattern `:1868`. The 3 tests (working-tree):
+`:1903`, `:1931`, `:1963`.
+- [ ] Add tiny_http dev-dep + a background server helper (canned `/get` + chained-post JSON at `http://127.0.0.1:<port>`).
+- [ ] Rewrite the 3 tests to generate a temp spec with `sourceDescriptions[0].url` = local server; assert `origin`/`url`/`enriched_action`; reproduce `post-initial`→`post-enriched` dep. Leave `examples/httpbin-*.yaml` unchanged.
+- [ ] Add the hermeticity CI guard (see Test-automation coverage).
+
+**Item 2 — CHANGELOG / release** (tags + tooling already landed). Version `Cargo.toml:15`;
+misfiled bullets `CHANGELOG.md:24-25`.
+- [ ] Add `## [0.2.0]` / `[0.2.1]` / `[0.2.2]` sections (newest first) from git log by heading.
+- [ ] Move `--step` / `--no-deps` bullets into the correct 0.2.x section.
+- [ ] Optional CI guard: top CHANGELOG version == `Cargo.toml` version.
+
+**Item 7 — VS Code extension** (DAP refs remapped after the `dap/` module split).
+`resolve_source_breakpoints` now `dap/source_index.rs:138`; callers `dap/handlers.rs:134`,
+`dap/session.rs:172`; `verified` field `dap/responses.rs:6/48`. Client stubs to delete:
+`vscode-arazzo-debug/src/yamlStepIndex.ts`, `breakpointMapper.ts`. Trivial
+`src/test/smoke.test.ts:5`. `adapterClient.ts`: `getBundledBinaryPath:6`, override
+`:24-33`, missing-binary error `:41`. `debugConfigProvider.ts:6`. CI job `ci.yml:156`
+(lint `:173` + build `:177`, no test).
+- [ ] 7a delete stubs + imports.
+- [ ] 7b DAP transcript + `debugConfigProvider` / `adapterClient` unit tests; add `npm test` to the CI job **and** provision the Rust binary in that job (see automation gap).
+- [ ] 7c per-platform VSIX + checksum. 7d docs, drop `preview`, bump `1.0.0`.
+
+**Item 8 — MCP security** (only baseline path allowlist present). `check_path_allowed`
+`state.rs:62` at `handlers.rs:298/357/392`; `allowed_dirs` `lib.rs:27`. Confirmed absent:
+`UrlPolicy`, `deny_private`, `allow_hosts`, `allowed_env`, `Semaphore`. `ClientConfig`
+`client.rs:23`; `HttpClient::request` `client.rs:139` (send after rate-limit `:159` —
+insert SSRF check before send).
+- [ ] 8.1 `--allowed-dirs` CLI flag + transitive-ref coverage + symlink-escape test.
+- [ ] 8.2 `UrlPolicy` + resolved-IP block in `request()` + `BlockedByUrlPolicy` + opt-in flags.
+- [ ] 8.3 env allowlist into `arazzo-expr` `$env`. 8.4 concurrency semaphore + configurable timeouts. 8.5 error hygiene. Update `docs/future/mcp-security.md` + `README.md`.
