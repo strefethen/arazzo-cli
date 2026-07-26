@@ -667,7 +667,7 @@ pub fn build_sources(spec: &ArazzoSpec) -> Vec<SourceInfo> {
         .map(|src| SourceInfo {
             name: src.name.clone(),
             url: src.url.clone(),
-            type_: format!("{:?}", src.type_).to_lowercase(),
+            type_: src.type_.to_string(),
         })
         .collect()
 }

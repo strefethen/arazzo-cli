@@ -117,6 +117,24 @@ pub enum SourceType {
     #[default]
     OpenApi,
     Arazzo,
+    AsyncApi,
+}
+
+impl SourceType {
+    /// Returns the exact lowercase discriminator used by Arazzo documents.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenApi => "openapi",
+            Self::Arazzo => "arazzo",
+            Self::AsyncApi => "asyncapi",
+        }
+    }
+}
+
+impl std::fmt::Display for SourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// API source descriptor.

@@ -752,6 +752,21 @@ workflows:
         operationPath: /test
 "#;
 
+    const ASYNCAPI_SOURCE_YAML: &str = r#"arazzo: "1.1.0"
+info:
+  title: AsyncAPI Source
+  version: "1.0.0"
+sourceDescriptions:
+  - name: events
+    url: https://example.com/asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: inspect-source
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#;
+
     fn valid_spec() -> ArazzoSpec {
         ArazzoSpec {
             arazzo: "1.0.0".to_string(),
@@ -821,6 +836,19 @@ workflows:
             Err(err) => panic!("expected no error, got: {err}"),
         };
         assert_eq!(spec.info.title, "Test");
+    }
+
+    #[test]
+    fn parse_bytes_accepts_arazzo_1_1_asyncapi_source_description() {
+        let spec = match parse_bytes(ASYNCAPI_SOURCE_YAML.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected Arazzo 1.1 AsyncAPI source to validate: {err}"),
+        };
+
+        assert_eq!(spec.arazzo, "1.1.0");
+        assert_eq!(spec.source_descriptions.len(), 1);
+        assert_eq!(spec.source_descriptions[0].type_, SourceType::AsyncApi);
+        assert_eq!(spec.workflows[0].workflow_id, "inspect-source");
     }
 
     #[test]

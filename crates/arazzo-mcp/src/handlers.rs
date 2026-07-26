@@ -60,7 +60,7 @@ fn build_sources(spec: &ArazzoSpec) -> Vec<Value> {
             json!({
                 "name": src.name,
                 "url": src.url,
-                "type": format!("{:?}", src.type_).to_lowercase(),
+                "type": src.type_.to_string(),
             })
         })
         .collect()
@@ -419,4 +419,51 @@ pub fn generate_example(args: &Value) -> Result<Value, String> {
     let example =
         arazzo_generate::standalone_example::generate_from_json_schema(schema, field_name);
     tool_ok(&example)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_sources;
+
+    #[test]
+    fn source_summaries_preserve_exact_source_type_wire_values() {
+        let yaml = r#"
+arazzo: "1.1.0"
+info:
+  title: Source Summary
+  version: "1.0.0"
+sourceDescriptions:
+  - name: openapiSource
+    type: openapi
+    url: https://example.com/openapi.yaml
+  - name: arazzoSource
+    type: arazzo
+    url: https://example.com/child.arazzo.yaml
+  - name: asyncapiSource
+    type: asyncapi
+    url: https://example.com/asyncapi.yaml
+workflows:
+  - workflowId: inspect-sources
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#;
+        let spec = match arazzo_validate::parse_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("source summary fixture should validate: {err}"),
+        };
+
+        let sources = build_sources(&spec);
+        let source_types = sources
+            .iter()
+            .map(|source| {
+                source
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_else(|| panic!("source summary should contain a string type"))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(source_types, ["openapi", "arazzo", "asyncapi"]);
+    }
 }

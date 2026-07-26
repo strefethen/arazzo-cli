@@ -75,6 +75,91 @@ fn parse_serialize_parse_roundtrip_for_all_examples() {
 }
 
 #[test]
+fn source_description_types_roundtrip_with_exact_wire_values() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Source Type Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: openapiSource
+    type: openapi
+    url: https://example.com/openapi.yaml
+  - name: arazzoSource
+    type: arazzo
+    url: https://example.com/child.arazzo.yaml
+  - name: asyncapiSource
+    type: asyncapi
+    url: https://example.com/asyncapi.yaml
+workflows:
+  - workflowId: inspect-sources
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "spec with all source description types");
+    assert_eq!(
+        spec.source_descriptions
+            .iter()
+            .map(|source| source.type_)
+            .collect::<Vec<_>>(),
+        [
+            SourceType::OpenApi,
+            SourceType::Arazzo,
+            SourceType::AsyncApi
+        ]
+    );
+
+    let serialized = serialize_spec(&spec, "spec with all source description types");
+    let serialized_value = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized) {
+        Ok(value) => value,
+        Err(err) => panic!("failed parsing serialized source types: {err}"),
+    };
+    let source_types = match serialized_value.get("sourceDescriptions") {
+        Some(serde_yaml_ng::Value::Sequence(sources)) => sources
+            .iter()
+            .map(|source| {
+                source
+                    .get("type")
+                    .and_then(serde_yaml_ng::Value::as_str)
+                    .unwrap_or_else(|| panic!("serialized source should contain string type"))
+            })
+            .collect::<Vec<_>>(),
+        other => panic!("serialized sourceDescriptions should be a sequence, got {other:?}"),
+    };
+    assert_eq!(source_types, ["openapi", "arazzo", "asyncapi"]);
+
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "serialized spec with all source description types",
+    );
+    assert_eq!(reparsed, spec);
+}
+
+#[test]
+fn invalid_source_description_type_is_rejected() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Invalid Source Type
+  version: "1.0.0"
+sourceDescriptions:
+  - name: invalidSource
+    type: graphql
+    url: https://example.com/schema.graphql
+workflows:
+  - workflowId: inspect-source
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#;
+
+    let result = parse_unvalidated_bytes(raw.as_bytes());
+    assert!(result.is_err(), "unknown source types must remain rejected");
+}
+
+#[test]
 fn parse_preserves_vendor_extensions_on_root() {
     let raw = r#"
 arazzo: "1.0.0"

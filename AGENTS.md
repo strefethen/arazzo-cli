@@ -45,6 +45,12 @@ Run all three before committing.
 3. `engine.execute(workflow_id, inputs)` executes workflow steps, evaluates criteria, applies actions (`end`, `goto`, `retry`), and returns workflow outputs.
 4. Supports dry-run capture and trace hooks.
 
+## Source Description Version Scope
+
+- Parsing and structural validation accept Arazzo `1.x` documents.
+- Source description metadata supports the exact typed discriminators `openapi`, `arazzo`, and Arazzo 1.1 `asyncapi`.
+- `asyncapi` support is metadata-only; source loading and asynchronous transport execution are not implemented.
+
 ## Expression Language
 
 - `$inputs.name` -> workflow input

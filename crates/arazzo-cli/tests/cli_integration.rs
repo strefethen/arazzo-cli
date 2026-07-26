@@ -140,6 +140,25 @@ workflows:
 "#
 }
 
+fn asyncapi_source_spec() -> &'static str {
+    r#"
+arazzo: 1.1.0
+info:
+  title: AsyncAPI Source
+  version: 1.0.0
+sourceDescriptions:
+  - name: events
+    url: https://example.com/asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: inspect-source
+    summary: Inspect source metadata
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#
+}
+
 fn read_json_file(path: &Path) -> Value {
     let raw = match fs::read_to_string(path) {
         Ok(value) => value,
@@ -172,6 +191,96 @@ fn validate_json_reports_valid_metadata() {
         Some(&Value::String("HTTPBin Demo".to_string()))
     );
     assert_eq!(body.get("workflows"), Some(&Value::Number(3.into())));
+}
+
+#[test]
+fn validate_json_accepts_arazzo_1_1_asyncapi_source() {
+    let temp = TempDir::new("arazzo-asyncapi-validate");
+    let spec_path = temp.path().join("asyncapi.arazzo.yaml");
+    write_file(&spec_path, asyncapi_source_spec());
+
+    let output = run(
+        ["--json", "validate", &spec_path.to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert_eq!(
+        body.get("version"),
+        Some(&Value::String("1.1.0".to_string()))
+    );
+    assert_eq!(body.get("sources"), Some(&Value::Number(1.into())));
+}
+
+#[test]
+fn catalog_json_reports_asyncapi_source_type() {
+    let temp = TempDir::new("arazzo-asyncapi-catalog");
+    let spec_path = temp.path().join("asyncapi.arazzo.yaml");
+    write_file(&spec_path, asyncapi_source_spec());
+
+    let output = run(
+        ["--json", "catalog", &temp.path().to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(
+        body.pointer("/0/sources/0/type"),
+        Some(&Value::String("asyncapi".to_string()))
+    );
+}
+
+#[test]
+fn show_json_reports_asyncapi_source_type() {
+    let temp = TempDir::new("arazzo-asyncapi-show");
+    let spec_path = temp.path().join("asyncapi.arazzo.yaml");
+    write_file(&spec_path, asyncapi_source_spec());
+
+    let output = run(
+        [
+            "--json",
+            "show",
+            "inspect-source",
+            "--dir",
+            &temp.path().to_string_lossy(),
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(
+        body.pointer("/sources/0/type"),
+        Some(&Value::String("asyncapi".to_string()))
+    );
+}
+
+#[test]
+fn list_json_does_not_add_source_descriptions() {
+    let temp = TempDir::new("arazzo-asyncapi-list");
+    let spec_path = temp.path().join("asyncapi.arazzo.yaml");
+    write_file(&spec_path, asyncapi_source_spec());
+
+    let output = run(
+        ["--json", "list", &spec_path.to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    let workflow = body
+        .get(0)
+        .unwrap_or_else(|| panic!("list output should contain one workflow: {body}"));
+    assert_eq!(
+        workflow.get("id"),
+        Some(&Value::String("inspect-source".to_string()))
+    );
+    assert!(workflow.get("sources").is_none());
+    assert!(workflow.get("sourceDescriptions").is_none());
 }
 
 #[test]
