@@ -11,6 +11,7 @@ use arazzo_spec::{
     parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, Parameter,
     StepTarget, SuccessCriterion,
 };
+use iri_string::types::UriReferenceStr;
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
@@ -128,6 +129,22 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             path: "arazzo".to_string(),
             message: format!("unsupported arazzo version: {} (expected 1.x)", spec.arazzo),
         });
+    }
+
+    if let Some(self_uri) = &spec.self_uri {
+        match UriReferenceStr::new(self_uri) {
+            Ok(uri) if uri.fragment().is_some() => errs.push(ValidationError {
+                kind: ValidationErrorKind::InvalidReference,
+                path: "$self".to_string(),
+                message: "$self must not contain a fragment identifier".to_string(),
+            }),
+            Ok(_) => {}
+            Err(err) => errs.push(ValidationError {
+                kind: ValidationErrorKind::InvalidReference,
+                path: "$self".to_string(),
+                message: format!("$self must be a valid RFC 3986 URI-reference: {err}"),
+            }),
+        }
     }
 
     if spec.info.title.is_empty() {
@@ -1254,6 +1271,41 @@ workflows:
         let errs = expect_validation_errors(validate(&spec));
         assert_eq!(errs[0].kind, ValidationErrorKind::UnsupportedVersion);
         assert!(errs[0].message.contains("unsupported arazzo version"));
+    }
+
+    #[test]
+    fn validate_self_uri_accepts_absolute_and_relative_references() {
+        for self_uri in [
+            "https://api.example.com/workflows/purchase.arazzo.yaml",
+            "workflows/purchase.arazzo.yaml",
+            "../purchase.arazzo.yaml?revision=2",
+        ] {
+            let mut spec = valid_spec();
+            spec.self_uri = Some(self_uri.to_string());
+            if let Err(err) = validate(&spec) {
+                panic!("expected valid $self URI-reference {self_uri:?}, got: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_self_uri_rejects_fragment_identifier() {
+        let mut spec = valid_spec();
+        spec.self_uri = Some("workflows/purchase.arazzo.yaml#purchase".to_string());
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidReference);
+        assert_eq!(errs[0].path, "$self");
+        assert!(errs[0].message.contains("must not contain a fragment"));
+    }
+
+    #[test]
+    fn validate_self_uri_rejects_invalid_uri_reference() {
+        let mut spec = valid_spec();
+        spec.self_uri = Some("https://example.com/%GG".to_string());
+        let errs = expect_validation_errors(validate(&spec));
+        assert_eq!(errs[0].kind, ValidationErrorKind::InvalidReference);
+        assert_eq!(errs[0].path, "$self");
+        assert!(errs[0].message.contains("valid RFC 3986 URI-reference"));
     }
 
     #[test]

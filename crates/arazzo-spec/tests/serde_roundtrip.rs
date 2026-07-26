@@ -138,6 +138,47 @@ workflows:
 }
 
 #[test]
+fn self_uri_roundtrips_with_exact_wire_name() {
+    let raw = r#"
+arazzo: "1.1.0"
+$self: workflows/purchase.arazzo.yaml
+info:
+  title: Self URI Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    type: openapi
+    url: ../openapi.yaml
+workflows:
+  - workflowId: purchase
+    steps:
+      - stepId: inspect
+        operationPath: /inspect
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "spec with $self");
+    assert_eq!(
+        spec.self_uri.as_deref(),
+        Some("workflows/purchase.arazzo.yaml")
+    );
+
+    let serialized = serialize_spec(&spec, "spec with $self");
+    let serialized_value = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized) {
+        Ok(value) => value,
+        Err(err) => panic!("failed parsing serialized $self spec: {err}"),
+    };
+    assert_eq!(
+        serialized_value
+            .get("$self")
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some("workflows/purchase.arazzo.yaml")
+    );
+
+    let reparsed = parse_spec(serialized.as_bytes(), "serialized spec with $self");
+    assert_eq!(reparsed, spec);
+}
+
+#[test]
 fn invalid_source_description_type_is_rejected() {
     let raw = r#"
 arazzo: "1.1.0"
@@ -499,6 +540,7 @@ workflows:
 "#;
 
     let spec = parse_spec(raw.as_bytes(), "defaults test spec");
+    assert_eq!(spec.self_uri, None);
     assert_eq!(spec.components, None);
     assert_eq!(spec.info.summary, "");
     assert_eq!(spec.info.description, "");

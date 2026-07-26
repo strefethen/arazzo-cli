@@ -71,6 +71,7 @@ fn rich_context() -> EvalContext {
         request_query: BTreeMap::new(),
         request_path: BTreeMap::new(),
         request_body: None,
+        self_uri: None,
         source_descriptions: BTreeMap::new(),
         response_headers,
         response_body: Some(json!({

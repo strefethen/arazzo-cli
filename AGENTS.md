@@ -56,9 +56,11 @@ Run all three before committing.
 - `$inputs.name` -> workflow input
 - `$steps.<id>.outputs.<name>` -> previous step output
 - `$env.VAR_NAME` -> environment variable
+- `$self` -> current Arazzo Description URI
 - `$statusCode` -> response status
 - `$response.header.Name` -> header extraction
 - `$response.body.path.to.field` -> JSON extraction
+- `$sourceDescriptions.<name>.url` / `$sourceDescriptions.<name>.type` -> source metadata
 - `//xpath/expression` -> XML extraction
 
 ## Adding CLI Behavior

@@ -134,7 +134,7 @@ impl VarStore {
 pub(crate) struct WorkflowIndex {
     pub spec: ArazzoSpec,
     pub base_url: String,
-    pub source_descriptions_map: BTreeMap<String, String>,
+    pub source_descriptions_map: BTreeMap<String, arazzo_expr::SourceDescriptionContext>,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
     pub(super) openapi_specs_raw: Vec<Vec<u8>>,

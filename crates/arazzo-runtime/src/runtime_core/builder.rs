@@ -130,7 +130,13 @@ impl EngineBuilder {
 
         let mut source_descriptions_map = BTreeMap::new();
         for sd in &self.spec.source_descriptions {
-            source_descriptions_map.insert(sd.name.clone(), sd.url.clone());
+            source_descriptions_map.insert(
+                sd.name.clone(),
+                arazzo_expr::SourceDescriptionContext {
+                    url: sd.url.clone(),
+                    type_: sd.type_.as_str().to_string(),
+                },
+            );
         }
 
         let mut workflow_index = BTreeMap::new();

@@ -182,6 +182,7 @@ name = "arazzo-validate"
 version = "0.2.2"
 dependencies = [
  "arazzo-spec",
+ "iri-string",
  "serde_yaml_ng",
 ]
 

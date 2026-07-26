@@ -783,7 +783,8 @@ async fn request_body_expression_in_outputs() {
 #[tokio::test]
 async fn source_descriptions_url_expression() {
     let spec = ArazzoSpec {
-        arazzo: "1.0.0".to_string(),
+        arazzo: "1.1.0".to_string(),
+        self_uri: Some("workflows/source-expressions.arazzo.yaml".to_string()),
         info: Info {
             title: "test".to_string(),
             summary: String::new(),
@@ -801,7 +802,7 @@ async fn source_descriptions_url_expression() {
             SourceDescription {
                 name: "secondary".to_string(),
                 url: "https://api.example.com".to_string(),
-                type_: SourceType::OpenApi,
+                type_: SourceType::AsyncApi,
                 ..SourceDescription::default()
             },
         ],
@@ -820,6 +821,15 @@ async fn source_descriptions_url_expression() {
                 (
                     "secondary_url".to_string(),
                     "$sourceDescriptions.secondary.url".to_string(),
+                ),
+                ("self_uri".to_string(), "$self".to_string()),
+                (
+                    "primary_type".to_string(),
+                    "$sourceDescriptions.primary.type".to_string(),
+                ),
+                (
+                    "secondary_type".to_string(),
+                    "$sourceDescriptions.secondary.type".to_string(),
                 ),
                 (
                     "missing_url".to_string(),
@@ -844,6 +854,12 @@ async fn source_descriptions_url_expression() {
         result.get("secondary_url"),
         Some(&json!("https://api.example.com"))
     );
+    assert_eq!(
+        result.get("self_uri"),
+        Some(&json!("workflows/source-expressions.arazzo.yaml"))
+    );
+    assert_eq!(result.get("primary_type"), Some(&json!("openapi")));
+    assert_eq!(result.get("secondary_type"), Some(&json!("asyncapi")));
     assert_eq!(result.get("missing_url"), Some(&Value::Null));
 }
 

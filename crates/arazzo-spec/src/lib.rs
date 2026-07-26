@@ -48,6 +48,8 @@ where
 pub struct ArazzoSpec {
     #[serde(default)]
     pub arazzo: String,
+    #[serde(rename = "$self", default, skip_serializing_if = "Option::is_none")]
+    pub self_uri: Option<String>,
     #[serde(default)]
     pub info: Info,
     #[serde(default)]

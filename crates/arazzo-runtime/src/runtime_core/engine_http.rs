@@ -423,8 +423,8 @@ impl Engine {
         let (resolved_base, resolved_path) = if let Some((name, path)) =
             parse_source_prefix(op_path)
         {
-            if let Some(source_url) = self.inner.index.source_descriptions_map.get(name) {
-                (source_url.as_str(), path)
+            if let Some(source) = self.inner.index.source_descriptions_map.get(name) {
+                (source.url.as_str(), path)
             } else {
                 return Err(RuntimeError::new(
                         RuntimeErrorKind::SourceDescriptionNotFound,

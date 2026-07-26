@@ -59,6 +59,13 @@ pub struct WorkflowEvalState {
     pub outputs: BTreeMap<String, Value>,
 }
 
+/// Runtime-visible fields from a Source Description Object.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceDescriptionContext {
+    pub url: String,
+    pub type_: String,
+}
+
 /// Evaluation context for expression resolution.
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
@@ -74,7 +81,8 @@ pub struct EvalContext {
     pub request_query: BTreeMap<String, String>,
     pub request_path: BTreeMap<String, String>,
     pub request_body: Option<Value>,
-    pub source_descriptions: BTreeMap<String, String>,
+    pub self_uri: Option<String>,
+    pub source_descriptions: BTreeMap<String, SourceDescriptionContext>,
     pub response_headers: BTreeMap<String, String>,
     pub response_body: Option<Value>,
 }
@@ -234,24 +242,57 @@ impl ExpressionEvaluator {
 
             "request" => self.resolve_request(remainder.unwrap_or("")),
 
+            "self" => {
+                if remainder.is_some() {
+                    warnings.push(ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: "invalid $self expression: no sub-path is supported".to_string(),
+                    });
+                    Value::Null
+                } else {
+                    self.ctx.self_uri.as_ref().map_or_else(
+                        || {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: "self URI not found in context".to_string(),
+                            });
+                            Value::Null
+                        },
+                        |self_uri| Value::String(self_uri.clone()),
+                    )
+                }
+            }
+
             "sourceDescriptions" => {
                 let after = remainder.unwrap_or("");
-                if let Some(name) = after.strip_suffix(".url") {
-                    self.ctx
-                        .source_descriptions
-                        .get(name)
-                        .map(|u| Value::String(u.clone()))
-                        .unwrap_or_else(|| {
+                let Some((name, reference)) = after.split_once('.') else {
+                    warnings.push(ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: "invalid $sourceDescriptions expression: expected $sourceDescriptions.<name>.<reference>".to_string(),
+                    });
+                    return (Value::Null, warnings);
+                };
+                match self.ctx.source_descriptions.get(name) {
+                    Some(source) => match reference {
+                        "url" => Value::String(source.url.clone()),
+                        "type" => Value::String(source.type_.clone()),
+                        _ => {
                             warnings.push(ExpressionWarning {
                                 expression: expr.to_string(),
                                 message: format!(
-                                    "source description \"{name}\" not found in context"
+                                    "source description reference \"{reference}\" for \"{name}\" cannot be resolved without loaded source document metadata"
                                 ),
                             });
                             Value::Null
-                        })
-                } else {
-                    Value::Null
+                        }
+                    },
+                    None => {
+                        warnings.push(ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: format!("source description \"{name}\" not found in context"),
+                        });
+                        Value::Null
+                    }
                 }
             }
 
@@ -1345,7 +1386,10 @@ mod tests {
     use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use super::{compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator};
+    use super::{
+        compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator,
+        SourceDescriptionContext,
+    };
     use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -2022,6 +2066,70 @@ mod tests {
         assert!(warnings[0]
             .message
             .contains("source description \"missing\""));
+    }
+
+    #[test]
+    fn self_expression_resolves_configured_uri() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            self_uri: Some("workflows/purchase.arazzo.yaml".to_string()),
+            ..EvalContext::default()
+        });
+        let (value, warnings) = eval.evaluate_with_diagnostics("$self");
+        assert_eq!(value, json!("workflows/purchase.arazzo.yaml"));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn self_expression_without_uri_warns() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let (value, warnings) = eval.evaluate_with_diagnostics("$self");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("self URI not found"));
+    }
+
+    #[test]
+    fn source_description_url_and_type_resolve() {
+        let mut ctx = EvalContext::default();
+        ctx.source_descriptions.insert(
+            "petstore".to_string(),
+            SourceDescriptionContext {
+                url: "https://api.example.com/openapi.yaml".to_string(),
+                type_: "openapi".to_string(),
+            },
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(
+            eval.evaluate("$sourceDescriptions.petstore.url"),
+            json!("https://api.example.com/openapi.yaml")
+        );
+        assert_eq!(
+            eval.evaluate("$sourceDescriptions.petstore.type"),
+            json!("openapi")
+        );
+    }
+
+    #[test]
+    fn unsupported_source_description_reference_warns() {
+        let mut ctx = EvalContext::default();
+        ctx.source_descriptions.insert(
+            "petstore".to_string(),
+            SourceDescriptionContext {
+                url: "https://api.example.com/openapi.yaml".to_string(),
+                type_: "openapi".to_string(),
+            },
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+        let (value, warnings) =
+            eval.evaluate_with_diagnostics("$sourceDescriptions.petstore.getPetById");
+
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("getPetById"));
+        assert!(warnings[0]
+            .message
+            .contains("without loaded source document metadata"));
     }
 
     #[test]

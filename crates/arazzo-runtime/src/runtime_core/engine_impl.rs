@@ -734,6 +734,7 @@ impl Engine {
         response: Option<&Response>,
     ) -> EvalContext {
         let mut ctx = vars.eval_context(response);
+        ctx.self_uri = self.inner.index.spec.self_uri.clone();
         ctx.source_descriptions = self.inner.index.source_descriptions_map.clone();
         ctx
     }
