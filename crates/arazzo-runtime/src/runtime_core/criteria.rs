@@ -159,3 +159,30 @@ fn default_criterion_context(response: Option<&Response>) -> Value {
         None => Value::Null,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use arazzo_expr::EvalContext;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn pointer_suffix_value_can_be_consumed_by_output_evaluation() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            inputs: BTreeMap::from([(
+                "user".to_string(),
+                json!({"profile": {"email": "alice@example.com"}}),
+            )]),
+            ..EvalContext::default()
+        });
+
+        let (value, warnings) =
+            evaluate_output_expression_detailed("$inputs.user#/profile/email", &eval, None);
+
+        assert_eq!(value, json!("alice@example.com"));
+        assert!(warnings.is_empty());
+    }
+}

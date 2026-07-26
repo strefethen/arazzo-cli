@@ -81,6 +81,10 @@ pub struct EvalContext {
     pub request_query: BTreeMap<String, String>,
     pub request_path: BTreeMap<String, String>,
     pub request_body: Option<Value>,
+    /// Headers from an asynchronous message when message execution is available.
+    pub message_headers: BTreeMap<String, String>,
+    /// Payload from an asynchronous message when message execution is available.
+    pub message_payload: Option<Value>,
     pub self_uri: Option<String>,
     pub source_descriptions: BTreeMap<String, SourceDescriptionContext>,
     pub response_headers: BTreeMap<String, String>,
@@ -153,24 +157,30 @@ impl ExpressionEvaluator {
 
             "inputs" => {
                 let full = remainder.unwrap_or("");
-                let (key, sub_path) = match full.split_once('.') {
-                    Some((k, rest)) => (k, rest),
-                    None => (full, ""),
-                };
-                match self.ctx.inputs.get(key) {
-                    Some(root) => {
-                        if sub_path.is_empty() {
-                            root.clone()
-                        } else {
-                            resolve_dot_path(root, sub_path).unwrap_or(Value::Null)
+                if full.contains('#') || !full.contains('.') {
+                    resolve_named_value(&self.ctx.inputs, full, expr, &mut warnings, |name| {
+                        format!("input \"{name}\" not found in context")
+                    })
+                } else {
+                    let (key, sub_path) = match full.split_once('.') {
+                        Some((k, rest)) => (k, rest),
+                        None => (full, ""),
+                    };
+                    match self.ctx.inputs.get(key) {
+                        Some(root) => {
+                            if sub_path.is_empty() {
+                                root.clone()
+                            } else {
+                                resolve_dot_path(root, sub_path).unwrap_or(Value::Null)
+                            }
                         }
-                    }
-                    None => {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!("input \"{key}\" not found in context"),
-                        });
-                        Value::Null
+                        None => {
+                            warnings.push(ExpressionWarning {
+                                expression: expr.to_string(),
+                                message: format!("input \"{key}\" not found in context"),
+                            });
+                            Value::Null
+                        }
                     }
                 }
             }
@@ -179,15 +189,11 @@ impl ExpressionEvaluator {
                 let after = remainder.unwrap_or("");
                 if let Some((step_id, output_name)) = after.split_once(".outputs.") {
                     match self.ctx.steps.get(step_id) {
-                        Some(outputs) => outputs.get(output_name).cloned().unwrap_or_else(|| {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: format!(
-                                    "output \"{output_name}\" not found in step \"{step_id}\""
-                                ),
-                            });
-                            Value::Null
-                        }),
+                        Some(outputs) => {
+                            resolve_named_value(outputs, output_name, expr, &mut warnings, |name| {
+                                format!("output \"{name}\" not found in step \"{step_id}\"")
+                            })
+                        }
                         None => {
                             warnings.push(ExpressionWarning {
                                 expression: expr.to_string(),
@@ -228,19 +234,14 @@ impl ExpressionEvaluator {
 
             "outputs" => {
                 let after = remainder.unwrap_or("");
-                if let Some((name, pointer)) = after.split_once('#') {
-                    self.ctx
-                        .outputs
-                        .get(name)
-                        .and_then(|v| v.pointer(pointer))
-                        .cloned()
-                        .unwrap_or(Value::Null)
-                } else {
-                    self.ctx.outputs.get(after).cloned().unwrap_or(Value::Null)
-                }
+                resolve_named_value(&self.ctx.outputs, after, expr, &mut warnings, |name| {
+                    format!("output \"{name}\" not found in context")
+                })
             }
 
             "request" => self.resolve_request(remainder.unwrap_or("")),
+
+            "message" => self.resolve_message(expr, remainder.unwrap_or(""), &mut warnings),
 
             "self" => {
                 if remainder.is_some() {
@@ -313,9 +314,13 @@ impl ExpressionEvaluator {
                 match self.ctx.workflows.get(wf_id) {
                     Some(state) => {
                         if let Some(rest) = tail.strip_prefix("inputs.") {
-                            state.inputs.get(rest).cloned().unwrap_or(Value::Null)
+                            resolve_named_value(&state.inputs, rest, expr, &mut warnings, |name| {
+                                format!("input \"{name}\" not found in workflow \"{wf_id}\"")
+                            })
                         } else if let Some(rest) = tail.strip_prefix("outputs.") {
-                            state.outputs.get(rest).cloned().unwrap_or(Value::Null)
+                            resolve_named_value(&state.outputs, rest, expr, &mut warnings, |name| {
+                                format!("output \"{name}\" not found in workflow \"{wf_id}\"")
+                            })
                         } else {
                             warnings.push(ExpressionWarning {
                                 expression: expr.to_string(),
@@ -382,6 +387,49 @@ impl ExpressionEvaluator {
         } else if let Some(suffix) = remainder.strip_prefix("body") {
             resolve_body_access(&self.ctx.response_body, suffix)
         } else {
+            Value::Null
+        }
+    }
+
+    /// Dispatch `$message.<sub>` expressions without assuming a transport.
+    fn resolve_message(
+        &self,
+        expr: &str,
+        remainder: &str,
+        warnings: &mut Vec<ExpressionWarning>,
+    ) -> Value {
+        if let Some(name) = remainder.strip_prefix("header.") {
+            get_header_case_insensitive(&self.ctx.message_headers, name).map_or_else(
+                || {
+                    warnings.push(ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: format!("message header \"{name}\" not found in context"),
+                    });
+                    Value::Null
+                },
+                |value| Value::String(value.clone()),
+            )
+        } else if let Some(suffix) = remainder.strip_prefix("payload") {
+            let Some(payload) = self.ctx.message_payload.as_ref() else {
+                warnings.push(ExpressionWarning {
+                    expression: expr.to_string(),
+                    message: "message payload not found in context".to_string(),
+                });
+                return Value::Null;
+            };
+
+            resolve_body_value(payload, suffix).unwrap_or_else(|| {
+                warnings.push(ExpressionWarning {
+                    expression: expr.to_string(),
+                    message: format!("message payload suffix \"{suffix}\" did not resolve"),
+                });
+                Value::Null
+            })
+        } else {
+            warnings.push(ExpressionWarning {
+                expression: expr.to_string(),
+                message: "invalid $message expression: expected $message.header.<name> or $message.payload[#/pointer]".to_string(),
+            });
             Value::Null
         }
     }
@@ -566,6 +614,40 @@ fn get_header_case_insensitive<'a>(
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
         .map(|(_, value)| value)
+}
+
+fn resolve_named_value(
+    values: &BTreeMap<String, Value>,
+    reference: &str,
+    expression: &str,
+    warnings: &mut Vec<ExpressionWarning>,
+    missing_value_message: impl FnOnce(&str) -> String,
+) -> Value {
+    let (name, pointer) = reference
+        .split_once('#')
+        .map_or((reference, None), |(name, pointer)| (name, Some(pointer)));
+    let Some(value) = values.get(name) else {
+        warnings.push(ExpressionWarning {
+            expression: expression.to_string(),
+            message: missing_value_message(name),
+        });
+        return Value::Null;
+    };
+
+    pointer.map_or_else(
+        || value.clone(),
+        |pointer| {
+            value.pointer(pointer).cloned().unwrap_or_else(|| {
+                warnings.push(ExpressionWarning {
+                    expression: expression.to_string(),
+                    message: format!(
+                        "JSON Pointer \"{pointer}\" did not resolve in value \"{name}\""
+                    ),
+                });
+                Value::Null
+            })
+        },
+    )
 }
 
 fn resolve_operand_with_diagnostics(
@@ -899,29 +981,26 @@ pub fn is_truthy(value: &Value) -> bool {
 }
 
 fn resolve_body_access(body: &Option<Value>, suffix: &str) -> Value {
+    body.as_ref()
+        .and_then(|body| resolve_body_value(body, suffix))
+        .unwrap_or(Value::Null)
+}
+
+fn resolve_body_value(body: &Value, suffix: &str) -> Option<Value> {
     if suffix.is_empty() {
-        return body.clone().unwrap_or(Value::Null);
+        return Some(body.clone());
     }
     if let Some(pointer) = suffix.strip_prefix('#') {
-        if let Some(b) = body {
-            return b.pointer(pointer).cloned().unwrap_or(Value::Null);
-        }
-        return Value::Null;
+        return body.pointer(pointer).cloned();
     }
     if let Some(path) = suffix.strip_prefix('.') {
-        if let Some(b) = body {
-            return resolve_dot_path(b, path).unwrap_or(Value::Null);
-        }
-        return Value::Null;
+        return resolve_dot_path(body, path).ok();
     }
     // Handle bracket notation directly after body: $response.body['key']
     if suffix.starts_with('[') {
-        if let Some(b) = body {
-            return resolve_dot_path(b, suffix).unwrap_or(Value::Null);
-        }
-        return Value::Null;
+        return resolve_dot_path(body, suffix).ok();
     }
-    Value::Null
+    None
 }
 
 fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
@@ -1990,6 +2069,105 @@ mod tests {
         assert_eq!(eval.evaluate("$outputs.data#/items/0/id"), json!(1));
         assert_eq!(eval.evaluate("$outputs.data#/items/1/id"), json!(2));
         assert_eq!(eval.evaluate("$outputs.data#/missing"), Value::Null);
+    }
+
+    #[test]
+    fn evaluate_named_value_json_pointers() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert(
+            "user".to_string(),
+            json!({"profile": {"email": "alice@example.com"}}),
+        );
+        Arc::make_mut(&mut ctx.steps).insert(
+            "lookup".to_string(),
+            BTreeMap::from([("payload".to_string(), json!({"items": [{"id": "item-1"}]}))]),
+        );
+        ctx.workflows.insert(
+            "auth".to_string(),
+            super::WorkflowEvalState {
+                inputs: BTreeMap::from([("config".to_string(), json!({"env": "production"}))]),
+                outputs: BTreeMap::from([(
+                    "tokenPayload".to_string(),
+                    json!({"token": "abc-123"}),
+                )]),
+            },
+        );
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(
+            eval.evaluate("$inputs.user#/profile/email"),
+            json!("alice@example.com")
+        );
+        assert_eq!(
+            eval.evaluate("$steps.lookup.outputs.payload#/items/0/id"),
+            json!("item-1")
+        );
+        assert_eq!(
+            eval.evaluate("$workflows.auth.outputs.tokenPayload#/token"),
+            json!("abc-123")
+        );
+        assert_eq!(
+            eval.evaluate("$workflows.auth.inputs.config#/env"),
+            json!("production")
+        );
+    }
+
+    #[test]
+    fn evaluate_message_header_and_payload() {
+        let ctx = EvalContext {
+            message_headers: BTreeMap::from([(
+                "x-request-id".to_string(),
+                "request-123".to_string(),
+            )]),
+            message_payload: Some(json!({"order": {"id": "order-42"}})),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert_eq!(
+            eval.evaluate("$message.header.X-Request-Id"),
+            json!("request-123")
+        );
+        assert_eq!(
+            eval.evaluate("$message.payload"),
+            json!({"order": {"id": "order-42"}})
+        );
+        assert_eq!(
+            eval.evaluate("$message.payload#/order/id"),
+            json!("order-42")
+        );
+    }
+
+    #[test]
+    fn missing_json_pointer_returns_null_with_diagnostic() {
+        let ctx = EvalContext {
+            inputs: BTreeMap::from([("user".to_string(), json!({"profile": {}}))]),
+            ..EvalContext::default()
+        };
+        let eval = ExpressionEvaluator::new(ctx);
+
+        let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.user#/profile/email");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("JSON Pointer"));
+        assert!(warnings[0].message.contains("/profile/email"));
+    }
+
+    #[test]
+    fn missing_message_context_returns_null_with_diagnostics() {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+
+        let (header, header_warnings) =
+            eval.evaluate_with_diagnostics("$message.header.X-Request-Id");
+        assert_eq!(header, Value::Null);
+        assert_eq!(header_warnings.len(), 1);
+        assert!(header_warnings[0].message.contains("message header"));
+
+        let (payload, payload_warnings) =
+            eval.evaluate_with_diagnostics("$message.payload#/order/id");
+        assert_eq!(payload, Value::Null);
+        assert_eq!(payload_warnings.len(), 1);
+        assert!(payload_warnings[0].message.contains("message payload"));
     }
 
     #[test]

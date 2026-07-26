@@ -54,13 +54,17 @@ Run all three before committing.
 ## Expression Language
 
 - `$inputs.name` -> workflow input
+- `$inputs.name#/json/pointer` -> JSON Pointer within a workflow input
 - `$steps.<id>.outputs.<name>` -> previous step output
+- `$steps.<id>.outputs.<name>#/json/pointer` -> JSON Pointer within a step output
 - `$env.VAR_NAME` -> environment variable
 - `$self` -> current Arazzo Description URI
 - `$statusCode` -> response status
 - `$response.header.Name` -> header extraction
 - `$response.body.path.to.field` -> JSON extraction
 - `$sourceDescriptions.<name>.url` / `$sourceDescriptions.<name>.type` -> source metadata
+- `$workflows.<id>.inputs.<name>#/json/pointer` / `$workflows.<id>.outputs.<name>#/json/pointer` -> prior workflow state
+- `$message.header.Name` / `$message.payload` / `$message.payload#/pointer` -> evaluator message context only; asynchronous transport execution is not implemented
 - `//xpath/expression` -> XML extraction
 
 ## Adding CLI Behavior
