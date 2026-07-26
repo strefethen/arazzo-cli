@@ -85,6 +85,11 @@ fn schema_show_matches_checked_in_file() {
 }
 
 #[test]
+fn schema_steps_matches_checked_in_file() {
+    assert_schema_matches_file("steps", "steps.schema.json");
+}
+
+#[test]
 fn schema_run_matches_checked_in_file() {
     assert_schema_matches_file("run", "run.schema.json");
 }

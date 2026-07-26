@@ -67,33 +67,70 @@ fn build_sources(spec: &ArazzoSpec) -> Vec<Value> {
 }
 
 fn build_step_summary(step: &Step) -> Value {
-    let (method, url, operation_id, referenced_workflow) = parse_step_target(step);
-    json!({
+    let target = parse_step_target(step);
+    let mut summary = json!({
         "stepId": step.step_id,
         "description": step.description,
-        "method": method,
-        "url": url,
-        "operationId": operation_id,
-        "referencedWorkflow": referenced_workflow,
-    })
+        "method": target.method,
+        "url": target.url,
+        "operationId": target.operation_id,
+        "referencedWorkflow": target.referenced_workflow,
+    });
+    if let Some(fields) = summary.as_object_mut() {
+        if let Some(channel_path) = target.channel_path {
+            fields.insert("channelPath".to_string(), Value::String(channel_path));
+        }
+        if let Some(action) = step.action {
+            fields.insert("action".to_string(), Value::String(action.to_string()));
+        }
+        if let Some(timeout) = step.timeout {
+            fields.insert("timeout".to_string(), Value::from(timeout));
+        }
+        if let Some(correlation_id) = &step.correlation_id {
+            fields.insert(
+                "correlationId".to_string(),
+                Value::String(correlation_id.clone()),
+            );
+        }
+        if !step.depends_on.is_empty() {
+            fields.insert("dependsOn".to_string(), json!(step.depends_on));
+        }
+    }
+    summary
 }
 
-fn parse_step_target(
-    step: &Step,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+#[derive(Default)]
+struct ParsedStepTarget {
+    method: Option<String>,
+    url: Option<String>,
+    operation_id: Option<String>,
+    channel_path: Option<String>,
+    referenced_workflow: Option<String>,
+}
+
+fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
             let (method, url) = parse_operation_path(path, step.request_body.is_some());
-            (Some(method), Some(url), None, None)
+            ParsedStepTarget {
+                method: Some(method),
+                url: Some(url),
+                ..ParsedStepTarget::default()
+            }
         }
-        Some(StepTarget::OperationId(id)) => (None, None, Some(id.clone()), None),
-        Some(StepTarget::WorkflowId(id)) => (None, None, None, Some(id.clone())),
-        None => (None, None, None, None),
+        Some(StepTarget::OperationId(id)) => ParsedStepTarget {
+            operation_id: Some(id.clone()),
+            ..ParsedStepTarget::default()
+        },
+        Some(StepTarget::ChannelPath(path)) => ParsedStepTarget {
+            channel_path: Some(path.clone()),
+            ..ParsedStepTarget::default()
+        },
+        Some(StepTarget::WorkflowId(id)) => ParsedStepTarget {
+            referenced_workflow: Some(id.clone()),
+            ..ParsedStepTarget::default()
+        },
+        None => ParsedStepTarget::default(),
     }
 }
 
@@ -423,7 +460,63 @@ pub fn generate_example(args: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_sources;
+    use super::{build_sources, build_step_summary};
+
+    #[test]
+    fn step_summary_exposes_async_metadata_without_http_defaults() {
+        let yaml = r#"
+arazzo: "1.1.0"
+info:
+  title: Async Summary
+  version: "1.0.0"
+sourceDescriptions:
+  - name: events
+    type: asyncapi
+    url: https://example.com/asyncapi.yaml
+workflows:
+  - workflowId: wait-for-event
+    steps:
+      - stepId: receive-event
+        channelPath: '{$sourceDescriptions.events.url}#/channels/events'
+        action: receive
+        timeout: 5000
+        correlationId: $inputs.eventId
+        dependsOn:
+          - publish-event
+"#;
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("async summary fixture should parse: {err}"),
+        };
+
+        let summary = build_step_summary(&spec.workflows[0].steps[0]);
+        assert_eq!(
+            summary
+                .get("channelPath")
+                .and_then(serde_json::Value::as_str),
+            Some("{$sourceDescriptions.events.url}#/channels/events")
+        );
+        assert_eq!(
+            summary.get("action").and_then(serde_json::Value::as_str),
+            Some("receive")
+        );
+        assert_eq!(
+            summary.get("timeout").and_then(serde_json::Value::as_u64),
+            Some(5000)
+        );
+        assert_eq!(
+            summary
+                .get("correlationId")
+                .and_then(serde_json::Value::as_str),
+            Some("$inputs.eventId")
+        );
+        assert_eq!(
+            summary.get("dependsOn"),
+            Some(&serde_json::json!(["publish-event"]))
+        );
+        assert_eq!(summary.get("method"), Some(&serde_json::Value::Null));
+        assert_eq!(summary.get("url"), Some(&serde_json::Value::Null));
+    }
 
     #[test]
     fn source_summaries_preserve_exact_source_type_wire_values() {

@@ -96,6 +96,30 @@
     "StepSummary": {
       "type": "object",
       "properties": {
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "correlationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "description": {
           "type": "string"
         },
@@ -107,6 +131,14 @@
         },
         "stepId": {
           "type": "string"
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         },
         "url": {
           "type": [

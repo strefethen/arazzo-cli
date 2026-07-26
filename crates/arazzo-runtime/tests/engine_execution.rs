@@ -2,8 +2,8 @@ mod common;
 
 use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
 use arazzo_spec::{
-    ActionType, OnAction, ParamLocation, Parameter, Replacement, RequestBody, Step, StepTarget,
-    SuccessCriterion, Workflow,
+    ActionType, OnAction, ParamLocation, Parameter, Replacement, RequestBody, Step, StepAction,
+    StepTarget, SuccessCriterion, Workflow,
 };
 use common::*;
 use serde_json::json;
@@ -13,6 +13,55 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 // ── Basic execution tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::json(200, r#"{"unexpected":true}"#)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "async-channel".to_string(),
+            steps: vec![Step {
+                step_id: "receive-event".to_string(),
+                target: Some(StepTarget::ChannelPath(
+                    "{$sourceDescriptions.api.url}#/channels/events".to_string(),
+                )),
+                action: Some(StepAction::Receive),
+                timeout: Some(5000),
+                correlation_id: Some("event-1".to_string()),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    let mut observed = Vec::new();
+    for dry_run in [false, true] {
+        let engine = match EngineBuilder::new(spec.clone()).dry_run(dry_run).build() {
+            Ok(engine) => engine,
+            Err(err) => panic!("building channel engine: {err}"),
+        };
+        let err = match engine
+            .execute_collect("async-channel", BTreeMap::new())
+            .await
+            .outputs
+        {
+            Ok(_) => panic!("channel execution should fail closed (dry_run={dry_run})"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
+        assert_eq!(err.code(), "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT");
+        observed.push((err.kind, err.message));
+    }
+
+    assert_eq!(observed[0], observed[1]);
+    assert_eq!(hits.load(Ordering::Relaxed), 0);
+}
 
 #[tokio::test]
 async fn execute_sequential_steps() {

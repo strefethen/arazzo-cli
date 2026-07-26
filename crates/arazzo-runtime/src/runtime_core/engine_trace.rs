@@ -503,6 +503,8 @@ pub(super) fn duration_ns_u64(duration: Duration) -> u64 {
 pub(super) fn step_kind(step: &Step) -> String {
     if matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
         "workflow".to_string()
+    } else if matches!(&step.target, Some(StepTarget::ChannelPath(_))) || step.action.is_some() {
+        "asyncapi".to_string()
     } else {
         "http".to_string()
     }
@@ -512,6 +514,7 @@ pub(super) fn step_operation_path(step: &Step) -> String {
     match &step.target {
         Some(StepTarget::OperationPath(p)) => p.clone(),
         Some(StepTarget::OperationId(id)) => id.clone(),
+        Some(StepTarget::ChannelPath(path)) => path.clone(),
         _ => String::new(),
     }
 }

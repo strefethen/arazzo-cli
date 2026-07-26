@@ -159,6 +159,36 @@ workflows:
 "#
 }
 
+fn asyncapi_channel_spec() -> &'static str {
+    r#"
+arazzo: 1.1.0
+info:
+  title: AsyncAPI Channel
+  version: 1.0.0
+sourceDescriptions:
+  - name: events
+    url: https://example.com/asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: inspect-async
+    steps:
+      - stepId: prepare
+        operationPath: /prepare
+      - stepId: receive-event
+        channelPath: '{$sourceDescriptions.events.url}#/channels/events'
+        action: receive
+        timeout: 5000
+        correlationId: $inputs.eventId
+        dependsOn:
+          - prepare
+  - workflowId: run-async
+    steps:
+      - stepId: receive-event
+        channelPath: '{$sourceDescriptions.events.url}#/channels/events'
+        action: receive
+"#
+}
+
 fn read_json_file(path: &Path) -> Value {
     let raw = match fs::read_to_string(path) {
         Ok(value) => value,
@@ -212,6 +242,76 @@ fn validate_json_accepts_arazzo_1_1_asyncapi_source() {
         Some(&Value::String("1.1.0".to_string()))
     );
     assert_eq!(body.get("sources"), Some(&Value::Number(1.into())));
+}
+
+#[test]
+fn validate_json_accepts_supported_async_step_metadata() {
+    let temp = TempDir::new("arazzo-async-step-validate");
+    let spec_path = temp.path().join("async-step.arazzo.yaml");
+    write_file(&spec_path, asyncapi_channel_spec());
+
+    let output = run(
+        ["--json", "validate", &spec_path.to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert_eq!(
+        body.get("version"),
+        Some(&Value::String("1.1.0".to_string()))
+    );
+}
+
+#[test]
+fn validate_json_reports_specific_async_and_dependency_diagnostics() {
+    let temp = TempDir::new("arazzo-async-step-invalid");
+    let spec_path = temp.path().join("invalid-async-step.arazzo.yaml");
+    write_file(
+        &spec_path,
+        r#"
+arazzo: 1.1.0
+info:
+  title: Invalid AsyncAPI Channel
+  version: 1.0.0
+sourceDescriptions:
+  - name: events
+    url: https://example.com/asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: invalid-async
+    steps:
+      - stepId: publish-event
+        channelPath: '{$sourceDescriptions.events.url}#/channels/events'
+        action: send
+        correlationId: event-1
+        dependsOn:
+          - $workflows.other.steps.done
+"#,
+    );
+
+    let output = run(
+        ["--json", "validate", &spec_path.to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    let kinds = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("validation output should contain errors: {body}"))
+        .iter()
+        .filter_map(|error| error.get("kind").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"invalidAsyncStep"), "diagnostics: {body}");
+    assert!(
+        kinds.contains(&"unsupportedDependencyScope"),
+        "diagnostics: {body}"
+    );
 }
 
 #[test]
@@ -1835,6 +1935,112 @@ fn steps_json_returns_step_array_with_expected_fields() {
     assert_eq!(step.get("method"), Some(&Value::String("GET".to_string())));
     assert_eq!(step.get("url"), Some(&Value::String("/get".to_string())));
     assert_eq!(step.get("position"), Some(&Value::Number(0.into())));
+    for field in [
+        "channelPath",
+        "action",
+        "timeout",
+        "correlationId",
+        "dependsOn",
+    ] {
+        assert!(
+            step.get(field).is_none(),
+            "existing HTTP step output should omit optional async field {field}"
+        );
+    }
+}
+
+#[test]
+fn steps_and_show_json_expose_async_metadata_without_http_defaults() {
+    let temp = TempDir::new("arazzo-async-step-output");
+    let spec_path = temp.path().join("async-step.arazzo.yaml");
+    write_file(&spec_path, asyncapi_channel_spec());
+    let spec_path_str = spec_path.to_string_lossy().to_string();
+
+    let steps_output = run(
+        ["--json", "steps", &spec_path_str, "inspect-async"].as_slice(),
+        None,
+    );
+    assert!(steps_output.status.success());
+    let steps = stdout_json(&steps_output);
+    let channel = &steps
+        .as_array()
+        .unwrap_or_else(|| panic!("steps output should be an array: {steps}"))[1];
+    assert_eq!(
+        channel.get("channelPath").and_then(Value::as_str),
+        Some("{$sourceDescriptions.events.url}#/channels/events")
+    );
+    assert_eq!(
+        channel.get("action").and_then(Value::as_str),
+        Some("receive")
+    );
+    assert_eq!(channel.get("timeout").and_then(Value::as_u64), Some(5000));
+    assert_eq!(
+        channel.get("correlationId").and_then(Value::as_str),
+        Some("$inputs.eventId")
+    );
+    assert_eq!(
+        channel.get("dependsOn"),
+        Some(&serde_json::json!(["prepare"]))
+    );
+    assert!(channel.get("method").is_none());
+    assert!(channel.get("url").is_none());
+
+    let show_output = run(
+        [
+            "--json",
+            "show",
+            "inspect-async",
+            "--dir",
+            &temp.path().to_string_lossy(),
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(show_output.status.success());
+    let show = stdout_json(&show_output);
+    let show_channel = show
+        .get("steps")
+        .and_then(Value::as_array)
+        .and_then(|steps| steps.get(1))
+        .unwrap_or_else(|| panic!("show output should include channel summary: {show}"));
+    assert_eq!(show_channel.get("channelPath"), channel.get("channelPath"));
+    assert_eq!(show_channel.get("action"), channel.get("action"));
+    assert_eq!(show_channel.get("timeout"), channel.get("timeout"));
+    assert_eq!(
+        show_channel.get("correlationId"),
+        channel.get("correlationId")
+    );
+    assert_eq!(show_channel.get("dependsOn"), channel.get("dependsOn"));
+}
+
+#[test]
+fn run_json_channel_normal_and_dry_run_share_fail_closed_error() {
+    let temp = TempDir::new("arazzo-async-step-run");
+    let spec_path = temp.path().join("async-step.arazzo.yaml");
+    write_file(&spec_path, asyncapi_channel_spec());
+    let spec_path_str = spec_path.to_string_lossy().to_string();
+
+    let normal = run(
+        ["--json", "run", &spec_path_str, "run-async"].as_slice(),
+        None,
+    );
+    let dry_run = run(
+        ["--json", "run", &spec_path_str, "run-async", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(!normal.status.success());
+    assert!(!dry_run.status.success());
+
+    let normal_body = stdout_json(&normal);
+    let dry_run_body = stdout_json(&dry_run);
+    for body in [&normal_body, &dry_run_body] {
+        assert_run_json_kind(body, "error");
+        assert_eq!(
+            body.get("code").and_then(Value::as_str),
+            Some("RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT")
+        );
+    }
+    assert_eq!(normal_body.get("error"), dry_run_body.get("error"));
 }
 
 #[test]
@@ -1912,6 +2118,36 @@ fn steps_schema_is_available() {
         body.get("title"),
         Some(&Value::String("Array_of_StepInfo".to_string()))
     );
+
+    let schema = body.to_string();
+    for field in [
+        "channelPath",
+        "action",
+        "timeout",
+        "correlationId",
+        "dependsOn",
+    ] {
+        assert!(
+            schema.contains(field),
+            "steps schema should expose additive field {field}: {body}"
+        );
+    }
+
+    let show_output = run(["schema", "show"].as_slice(), None);
+    assert!(show_output.status.success());
+    let show_schema = stdout_json(&show_output).to_string();
+    for field in [
+        "channelPath",
+        "action",
+        "timeout",
+        "correlationId",
+        "dependsOn",
+    ] {
+        assert!(
+            show_schema.contains(field),
+            "show schema should expose additive step field {field}: {show_schema}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -38,6 +38,16 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
     ) -> Result<PreparedRequest, RuntimeError> {
+        if matches!(&step.target, Some(StepTarget::ChannelPath(_))) || step.action.is_some() {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::UnsupportedAsyncApiTransport,
+                format!(
+                    "step \"{}\" requires AsyncAPI channel transport, which is not implemented",
+                    step.step_id
+                ),
+            ));
+        }
+
         let operation_path = match &step.target {
             Some(StepTarget::OperationPath(path)) => path.clone(),
             Some(StepTarget::OperationId(id)) => {

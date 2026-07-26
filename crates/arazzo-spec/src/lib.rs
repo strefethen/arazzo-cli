@@ -260,12 +260,37 @@ pub struct PropertyDef {
     pub extensions: VendorExtensions,
 }
 
-/// Step target discriminator — exactly one of operationId, operationPath, or workflowId.
+/// Step target discriminator — exactly one target field is permitted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepTarget {
     OperationId(String),
     OperationPath(String),
+    ChannelPath(String),
     WorkflowId(String),
+}
+
+/// Message-flow intent for an AsyncAPI step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepAction {
+    Send,
+    Receive,
+}
+
+impl StepAction {
+    /// Returns the exact lowercase discriminator used by Arazzo documents.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Receive => "receive",
+        }
+    }
+}
+
+impl std::fmt::Display for StepAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Workflow step definition.
@@ -274,6 +299,10 @@ pub struct Step {
     pub step_id: String,
     pub description: String,
     pub target: Option<StepTarget>,
+    pub action: Option<StepAction>,
+    pub timeout: Option<u64>,
+    pub correlation_id: Option<String>,
+    pub depends_on: Vec<String>,
     pub parameters: Vec<Parameter>,
     pub request_body: Option<RequestBody>,
     pub success_criteria: Vec<SuccessCriterion>,
@@ -296,7 +325,17 @@ struct StepSerde {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     operation_path: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    channel_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     workflow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action: Option<StepAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    correlation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parameters: Vec<Parameter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,18 +360,32 @@ struct StepSerde {
 
 impl Serialize for Step {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (operation_id, operation_path, workflow_id) = match &self.target {
-            Some(StepTarget::OperationId(v)) => (v.clone(), String::new(), String::new()),
-            Some(StepTarget::OperationPath(v)) => (String::new(), v.clone(), String::new()),
-            Some(StepTarget::WorkflowId(v)) => (String::new(), String::new(), v.clone()),
-            None => (String::new(), String::new(), String::new()),
+        let (operation_id, operation_path, channel_path, workflow_id) = match &self.target {
+            Some(StepTarget::OperationId(v)) => {
+                (v.clone(), String::new(), String::new(), String::new())
+            }
+            Some(StepTarget::OperationPath(v)) => {
+                (String::new(), v.clone(), String::new(), String::new())
+            }
+            Some(StepTarget::ChannelPath(v)) => {
+                (String::new(), String::new(), v.clone(), String::new())
+            }
+            Some(StepTarget::WorkflowId(v)) => {
+                (String::new(), String::new(), String::new(), v.clone())
+            }
+            None => (String::new(), String::new(), String::new(), String::new()),
         };
         StepSerde {
             step_id: self.step_id.clone(),
             description: self.description.clone(),
             operation_id,
             operation_path,
+            channel_path,
             workflow_id,
+            action: self.action,
+            timeout: self.timeout,
+            correlation_id: self.correlation_id.clone(),
+            depends_on: self.depends_on.clone(),
             parameters: self.parameters.clone(),
             request_body: self.request_body.clone(),
             success_criteria: self.success_criteria.clone(),
@@ -350,19 +403,23 @@ impl<'de> Deserialize<'de> for Step {
         let raw = StepSerde::deserialize(deserializer)?;
         let has_operation_id = !raw.operation_id.is_empty();
         let has_operation_path = !raw.operation_path.is_empty();
+        let has_channel_path = !raw.channel_path.is_empty();
         let has_workflow_id = !raw.workflow_id.is_empty();
         let target_count = usize::from(has_operation_id)
             + usize::from(has_operation_path)
+            + usize::from(has_channel_path)
             + usize::from(has_workflow_id);
 
         if target_count > 1 {
             return Err(serde::de::Error::custom(
-                "step must specify exactly one of operationId, operationPath, or workflowId",
+                "step must specify exactly one of operationId, operationPath, channelPath, or workflowId",
             ));
         }
 
         let target = if has_workflow_id {
             Some(StepTarget::WorkflowId(raw.workflow_id))
+        } else if has_channel_path {
+            Some(StepTarget::ChannelPath(raw.channel_path))
         } else if has_operation_path {
             Some(StepTarget::OperationPath(raw.operation_path))
         } else if has_operation_id {
@@ -374,6 +431,10 @@ impl<'de> Deserialize<'de> for Step {
             step_id: raw.step_id,
             description: raw.description,
             target,
+            action: raw.action,
+            timeout: raw.timeout,
+            correlation_id: raw.correlation_id,
+            depends_on: raw.depends_on,
             parameters: raw.parameters,
             request_body: raw.request_body,
             success_criteria: raw.success_criteria,

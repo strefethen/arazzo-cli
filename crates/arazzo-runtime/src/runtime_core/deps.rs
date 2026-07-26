@@ -85,6 +85,12 @@ pub(crate) fn build_levels(workflow: &Workflow) -> Result<Vec<Vec<usize>>, Runti
 pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
     let mut refs = BTreeSet::<String>::new();
 
+    for dependency in &step.depends_on {
+        if !dependency.is_empty() && !dependency.starts_with('$') {
+            refs.insert(dependency.clone());
+        }
+    }
+
     let mut scan = |s: &str| {
         for captures in STEP_REF_RE.captures_iter(s) {
             if let Some(m) = captures.get(1) {

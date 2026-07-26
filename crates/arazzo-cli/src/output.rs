@@ -97,7 +97,17 @@ pub struct StepInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub referenced_workflow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
     pub position: usize,
 }
 
@@ -111,6 +121,16 @@ pub struct StepSummary {
     pub method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -371,6 +391,9 @@ fn validation_error_kind_name(kind: &ValidationErrorKind) -> &'static str {
         ValidationErrorKind::MissingParameterValue => "missingParameterValue",
         ValidationErrorKind::InvalidExpression => "invalidExpression",
         ValidationErrorKind::InvalidReference => "invalidReference",
+        ValidationErrorKind::InvalidAsyncStep => "invalidAsyncStep",
+        ValidationErrorKind::UnsupportedDependencyScope => "unsupportedDependencyScope",
+        ValidationErrorKind::DependencyCycle => "dependencyCycle",
         ValidationErrorKind::InvalidRetryField => "invalidRetryField",
         ValidationErrorKind::InvalidCriterionType => "invalidCriterionType",
         _ => "unknown",
@@ -692,22 +715,38 @@ pub fn build_workflow_info(wf: &Workflow) -> WorkflowInfo {
 /// `OperationPath` strings like `"POST /post"` are split on the first space.
 /// If no explicit HTTP verb is found, the method defaults to `GET` (no body)
 /// or `POST` (has body).
-fn parse_step_target(
-    step: &Step,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+#[derive(Default)]
+struct ParsedStepTarget {
+    method: Option<String>,
+    url: Option<String>,
+    operation_id: Option<String>,
+    channel_path: Option<String>,
+    referenced_workflow: Option<String>,
+}
+
+fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
             let (method, url) = parse_operation_path(path, step.request_body.is_some());
-            (Some(method), Some(url), None, None)
+            ParsedStepTarget {
+                method: Some(method),
+                url: Some(url),
+                ..ParsedStepTarget::default()
+            }
         }
-        Some(StepTarget::OperationId(id)) => (None, None, Some(id.clone()), None),
-        Some(StepTarget::WorkflowId(id)) => (None, None, None, Some(id.clone())),
-        None => (None, None, None, None),
+        Some(StepTarget::OperationId(id)) => ParsedStepTarget {
+            operation_id: Some(id.clone()),
+            ..ParsedStepTarget::default()
+        },
+        Some(StepTarget::ChannelPath(path)) => ParsedStepTarget {
+            channel_path: Some(path.clone()),
+            ..ParsedStepTarget::default()
+        },
+        Some(StepTarget::WorkflowId(id)) => ParsedStepTarget {
+            referenced_workflow: Some(id.clone()),
+            ..ParsedStepTarget::default()
+        },
+        None => ParsedStepTarget::default(),
     }
 }
 
@@ -726,25 +765,35 @@ fn parse_operation_path(path: &str, has_body: bool) -> (String, String) {
 }
 
 pub fn build_step_info(step: &Step, position: usize) -> StepInfo {
-    let (method, url, operation_id, referenced_workflow) = parse_step_target(step);
+    let target = parse_step_target(step);
     StepInfo {
         step_id: step.step_id.clone(),
         description: step.description.clone(),
-        method,
-        url,
-        operation_id,
-        referenced_workflow,
+        method: target.method,
+        url: target.url,
+        operation_id: target.operation_id,
+        channel_path: target.channel_path,
+        referenced_workflow: target.referenced_workflow,
+        action: step.action.map(|action| action.to_string()),
+        timeout: step.timeout,
+        correlation_id: step.correlation_id.clone(),
+        depends_on: step.depends_on.clone(),
         position,
     }
 }
 
 pub fn build_step_summary(step: &Step) -> StepSummary {
-    let (method, url, _, _) = parse_step_target(step);
+    let target = parse_step_target(step);
     StepSummary {
         step_id: step.step_id.clone(),
         description: step.description.clone(),
-        method,
-        url,
+        method: target.method,
+        url: target.url,
+        channel_path: target.channel_path,
+        action: step.action.map(|action| action.to_string()),
+        timeout: step.timeout,
+        correlation_id: step.correlation_id.clone(),
+        depends_on: step.depends_on.clone(),
     }
 }
 
@@ -773,6 +822,8 @@ pub fn emit_step_list(spec_file: &str, workflow: &Workflow, json: bool) -> Resul
             format!("{m} {u}")
         } else if let Some(wf) = &info.referenced_workflow {
             format!("workflow:{wf}")
+        } else if let Some(channel) = &info.channel_path {
+            format!("channel:{channel}")
         } else if let Some(op) = &info.operation_id {
             format!("op:{op}")
         } else {

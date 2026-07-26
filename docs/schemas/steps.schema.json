@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_StepInfo",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/StepInfo"
+  },
+  "$defs": {
+    "StepInfo": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "correlationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "referencedWorkflow": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stepId": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "stepId",
+        "position"
+      ]
+    }
+  }
+}

@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use arazzo_spec::{
-    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, SourceType, StepTarget,
+    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, SourceType, StepAction,
+    StepTarget,
 };
 
 fn examples_dir() -> PathBuf {
@@ -135,6 +136,166 @@ workflows:
         "serialized spec with all source description types",
     );
     assert_eq!(reparsed, spec);
+}
+
+#[test]
+fn async_step_fields_roundtrip_without_wire_loss() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Async Step Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: events
+    type: asyncapi
+    url: https://example.com/asyncapi.yaml
+workflows:
+  - workflowId: process-order
+    steps:
+      - stepId: publish
+        operationId: $sourceDescriptions.events.publishOrder
+        action: send
+      - stepId: confirm
+        channelPath: '{$sourceDescriptions.events.url}#/channels/order-confirmed'
+        action: receive
+        timeout: 6000
+        correlationId: $inputs.orderId
+        dependsOn:
+          - publish
+          - $workflows.audit.steps.record
+          - $sourceDescriptions.external.archive.steps.store
+        x-step-mode: async
+"#;
+
+    let original_wire = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(raw) {
+        Ok(value) => value,
+        Err(err) => panic!("failed parsing original async fixture: {err}"),
+    };
+    let original_steps = original_wire
+        .get("workflows")
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .and_then(|workflows| workflows.first())
+        .and_then(|workflow| workflow.get("steps"))
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .unwrap_or_else(|| panic!("original workflow should contain steps"));
+
+    let original = parse_spec(raw.as_bytes(), "Arazzo 1.1 async step fields");
+    let serialized = serialize_spec(&original, "Arazzo 1.1 async step fields");
+    let wire = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized) {
+        Ok(value) => value,
+        Err(err) => panic!("failed parsing serialized async step fields: {err}"),
+    };
+    let steps = wire
+        .get("workflows")
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .and_then(|workflows| workflows.first())
+        .and_then(|workflow| workflow.get("steps"))
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .unwrap_or_else(|| panic!("serialized workflow should contain steps"));
+
+    assert_eq!(
+        steps[0]
+            .get("action")
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some("send")
+    );
+    assert_eq!(
+        original.workflows[0].steps[0].action,
+        Some(StepAction::Send)
+    );
+    let confirm = &original.workflows[0].steps[1];
+    assert_eq!(
+        confirm.target,
+        Some(StepTarget::ChannelPath(
+            "{$sourceDescriptions.events.url}#/channels/order-confirmed".to_string()
+        ))
+    );
+    assert_eq!(confirm.action, Some(StepAction::Receive));
+    assert_eq!(confirm.timeout, Some(6000));
+    assert_eq!(confirm.correlation_id.as_deref(), Some("$inputs.orderId"));
+    assert_eq!(
+        confirm.depends_on,
+        [
+            "publish",
+            "$workflows.audit.steps.record",
+            "$sourceDescriptions.external.archive.steps.store"
+        ]
+    );
+    for field in [
+        "channelPath",
+        "action",
+        "timeout",
+        "correlationId",
+        "dependsOn",
+    ] {
+        assert_eq!(
+            steps[1].get(field),
+            original_steps[1].get(field),
+            "field {field} changed or was dropped"
+        );
+    }
+    assert_eq!(
+        steps[1]
+            .get("x-step-mode")
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some("async")
+    );
+
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "serialized Arazzo 1.1 async step fields",
+    );
+    assert_eq!(reparsed, original);
+}
+
+#[test]
+fn async_step_target_collisions_are_rejected_during_deserialization() {
+    let raw = r#"
+stepId: ambiguous
+operationId: publishOrder
+channelPath: '{$sourceDescriptions.events.url}#/channels/orders'
+action: send
+"#;
+    let err = match serde_yaml_ng::from_str::<arazzo_spec::Step>(raw) {
+        Ok(_) => panic!("multiple async target fields must be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string()
+            .contains("exactly one of operationId, operationPath, channelPath, or workflowId"),
+        "unexpected target collision error: {err}"
+    );
+}
+
+#[test]
+fn async_step_action_and_timeout_wire_types_are_fail_closed() {
+    let invalid_action = r#"
+stepId: invalid-action
+channelPath: /events
+action: publish
+"#;
+    let action_err = match serde_yaml_ng::from_str::<arazzo_spec::Step>(invalid_action) {
+        Ok(_) => panic!("unknown async actions must be rejected"),
+        Err(err) => err,
+    };
+    assert!(action_err.to_string().contains("unknown variant `publish`"));
+
+    let negative_timeout = r#"
+stepId: invalid-timeout
+channelPath: /events
+action: receive
+timeout: -1
+"#;
+    let timeout_err = match serde_yaml_ng::from_str::<arazzo_spec::Step>(negative_timeout) {
+        Ok(_) => panic!("negative millisecond timeouts must be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        timeout_err.to_string().contains("invalid type")
+            || timeout_err.to_string().contains("invalid value")
+            || timeout_err.to_string().contains("negative"),
+        "unexpected timeout error: {timeout_err}"
+    );
 }
 
 #[test]

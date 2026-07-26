@@ -50,6 +50,7 @@ Run all three before committing.
 - Parsing and structural validation accept Arazzo `1.x` documents.
 - Source description metadata supports the exact typed discriminators `openapi`, `arazzo`, and Arazzo 1.1 `asyncapi`.
 - `asyncapi` support is metadata-only; source loading and asynchronous transport execution are not implemented.
+- Arazzo 1.1 async step metadata (`channelPath`, `action`, `timeout`, `correlationId`, and `dependsOn`) is preserved; channel/send/receive execution fails with `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` before HTTP request preparation.
 
 ## Expression Language
 

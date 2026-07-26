@@ -1,13 +1,14 @@
 mod common;
 
 use arazzo_runtime::{
-    EngineBuilder, ExecutionEventKind, ExecutionObserver, TraceDecisionPath, TraceHook,
+    EngineBuilder, ExecutionEventKind, ExecutionObserver, RuntimeErrorKind, TraceDecisionPath,
+    TraceHook,
 };
 use arazzo_spec::{ActionType, OnAction, ParamLocation, Step, StepTarget, Workflow};
 use common::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -181,6 +182,109 @@ async fn execute_parallel_with_dependencies() {
         Err(err) => panic!("expected success, got: {err}"),
     };
     assert_eq!(outputs.get("name"), Some(&json!("Alice")));
+}
+
+#[tokio::test]
+async fn execute_parallel_respects_explicit_local_depends_on() {
+    let prerequisite_completed = Arc::new(AtomicBool::new(false));
+    let dependent_started_early = Arc::new(AtomicBool::new(false));
+    let prerequisite_completed_ref = Arc::clone(&prerequisite_completed);
+    let dependent_started_early_ref = Arc::clone(&dependent_started_early);
+    let server = start_server_concurrent(move |_method, url, _headers, _body| {
+        if url == "/prerequisite" {
+            thread::sleep(Duration::from_millis(100));
+            prerequisite_completed_ref.store(true, Ordering::SeqCst);
+        } else if url == "/dependent" && !prerequisite_completed_ref.load(Ordering::SeqCst) {
+            dependent_started_early_ref.store(true, Ordering::SeqCst);
+        }
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "explicit-dependency".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "prerequisite".to_string(),
+                    target: Some(StepTarget::OperationPath("/prerequisite".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "dependent".to_string(),
+                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    depends_on: vec!["prerequisite".to_string()],
+                    success_criteria: success_200(),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("explicit-dependency", BTreeMap::new())
+        .await
+        .outputs;
+    if let Err(err) = result {
+        panic!("explicit dependency workflow should succeed: {err}");
+    }
+    assert!(prerequisite_completed.load(Ordering::SeqCst));
+    assert!(
+        !dependent_started_early.load(Ordering::SeqCst),
+        "dependsOn should place the dependent step in a later execution level"
+    );
+}
+
+#[tokio::test]
+async fn execute_parallel_detects_explicit_depends_on_cycle_before_http() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "explicit-cycle".to_string(),
+            steps: vec![
+                Step {
+                    step_id: "a".to_string(),
+                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    depends_on: vec!["b".to_string()],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "b".to_string(),
+                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    depends_on: vec!["a".to_string()],
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let err = match engine
+        .execute_collect("explicit-cycle", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("explicit dependency cycle should fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::DependencyCycle);
+    assert_eq!(hits.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

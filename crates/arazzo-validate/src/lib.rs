@@ -2,14 +2,14 @@
 
 //! Validation layer for parsed Arazzo specifications.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
     parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, Parameter,
-    StepTarget, SuccessCriterion,
+    StepAction, StepTarget, SuccessCriterion, Workflow,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -95,6 +95,9 @@ pub enum ValidationErrorKind {
     MissingParameterValue,
     InvalidExpression,
     InvalidReference,
+    InvalidAsyncStep,
+    UnsupportedDependencyScope,
+    DependencyCycle,
     InvalidRetryField,
     InvalidCriterionType,
 }
@@ -270,21 +273,108 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                     kind: ValidationErrorKind::InvalidStepTarget,
                     path: step_path.clone(),
                     message: format!(
-                        "{step_path} must have operationId, operationPath, or workflowId"
+                        "{step_path} must have operationId, operationPath, channelPath, or workflowId"
                     ),
                 });
             }
-            if let Some(StepTarget::OperationPath(operation_path)) = &step.target {
-                if let Some(source_name) = parse_operation_source_name(operation_path) {
-                    if !source_names.contains(source_name) {
+            match &step.target {
+                Some(StepTarget::OperationPath(operation_path)) => {
+                    if let Some(source_name) = parse_operation_source_name(operation_path) {
+                        if !source_names.contains(source_name) {
+                            errs.push(ValidationError {
+                                kind: ValidationErrorKind::InvalidReference,
+                                path: format!("{step_path}.operationPath"),
+                                message: format!(
+                                    "{step_path}.operationPath references unknown sourceDescription \"{source_name}\""
+                                ),
+                            });
+                        }
+                    }
+                    if step.action.is_some() {
                         errs.push(ValidationError {
-                            kind: ValidationErrorKind::InvalidReference,
-                            path: format!("{step_path}.operationPath"),
+                            kind: ValidationErrorKind::InvalidAsyncStep,
+                            path: format!("{step_path}.action"),
                             message: format!(
-                                "{step_path}.operationPath references unknown sourceDescription \"{source_name}\""
+                                "{step_path}.action is only supported with operationId or channelPath async targets"
                             ),
                         });
                     }
+                }
+                Some(StepTarget::ChannelPath(_)) if step.action.is_none() => {
+                    errs.push(ValidationError {
+                        kind: ValidationErrorKind::InvalidAsyncStep,
+                        path: format!("{step_path}.action"),
+                        message: format!("{step_path}.channelPath requires action send or receive"),
+                    });
+                }
+                Some(StepTarget::WorkflowId(_)) if step.action.is_some() => {
+                    errs.push(ValidationError {
+                        kind: ValidationErrorKind::InvalidAsyncStep,
+                        path: format!("{step_path}.action"),
+                        message: format!(
+                            "{step_path}.action is not applicable to workflowId targets"
+                        ),
+                    });
+                }
+                _ => {}
+            }
+
+            let supports_async_fields = matches!(
+                &step.target,
+                Some(StepTarget::OperationId(_) | StepTarget::ChannelPath(_))
+            );
+            if step.correlation_id.is_some()
+                && (step.action != Some(StepAction::Receive) || !supports_async_fields)
+            {
+                errs.push(ValidationError {
+                    kind: ValidationErrorKind::InvalidAsyncStep,
+                    path: format!("{step_path}.correlationId"),
+                    message: format!(
+                        "{step_path}.correlationId is only applicable to async steps with action receive"
+                    ),
+                });
+            }
+
+            for (dependency_idx, dependency) in step.depends_on.iter().enumerate() {
+                let dependency_path = format!("{step_path}.dependsOn[{dependency_idx}]");
+                match classify_step_dependency(dependency) {
+                    StepDependency::Local(step_id) if !step_ids.contains(step_id) => {
+                        errs.push(ValidationError {
+                            kind: ValidationErrorKind::InvalidReference,
+                            path: dependency_path,
+                            message: format!(
+                                "{step_path}.dependsOn references unknown local step \"{step_id}\""
+                            ),
+                        });
+                    }
+                    StepDependency::CrossWorkflow => {
+                        errs.push(ValidationError {
+                            kind: ValidationErrorKind::UnsupportedDependencyScope,
+                            path: dependency_path,
+                            message: format!(
+                                "{step_path}.dependsOn cross-workflow references are valid Arazzo 1.1 syntax but are not supported by this runtime"
+                            ),
+                        });
+                    }
+                    StepDependency::ExternalSource => {
+                        errs.push(ValidationError {
+                            kind: ValidationErrorKind::UnsupportedDependencyScope,
+                            path: dependency_path,
+                            message: format!(
+                                "{step_path}.dependsOn external-source references are valid Arazzo 1.1 syntax but are not supported by this runtime"
+                            ),
+                        });
+                    }
+                    StepDependency::Invalid => {
+                        errs.push(ValidationError {
+                            kind: ValidationErrorKind::InvalidReference,
+                            path: dependency_path,
+                            message: format!(
+                                "{step_path}.dependsOn contains invalid step reference \"{dependency}\""
+                            ),
+                        });
+                    }
+                    StepDependency::Local(_) => {}
                 }
             }
 
@@ -325,6 +415,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             );
         }
 
+        if local_depends_on_has_cycle(wf) {
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::DependencyCycle,
+                path: format!("{path}.steps"),
+                message: format!(
+                    "{path} contains a dependency cycle in local dependsOn references"
+                ),
+            });
+        }
+
         for (name, expr) in &wf.outputs {
             if let Some(after) = expr.strip_prefix("$steps.") {
                 let step_name = after.split('.').next().unwrap_or_default();
@@ -345,6 +445,78 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         return Ok(());
     }
     Err(Error::Validation(ValidationReport { errors: errs }))
+}
+
+enum StepDependency<'a> {
+    Local(&'a str),
+    CrossWorkflow,
+    ExternalSource,
+    Invalid,
+}
+
+fn classify_step_dependency(value: &str) -> StepDependency<'_> {
+    if value.is_empty() {
+        return StepDependency::Invalid;
+    }
+    if !value.starts_with('$') {
+        return StepDependency::Local(value);
+    }
+
+    let parts = value.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["$workflows", workflow_id, "steps", step_id]
+            if !workflow_id.is_empty() && !step_id.is_empty() =>
+        {
+            StepDependency::CrossWorkflow
+        }
+        ["$sourceDescriptions", source_name, workflow_id, "steps", step_id]
+            if !source_name.is_empty() && !workflow_id.is_empty() && !step_id.is_empty() =>
+        {
+            StepDependency::ExternalSource
+        }
+        _ => StepDependency::Invalid,
+    }
+}
+
+fn local_depends_on_has_cycle(workflow: &Workflow) -> bool {
+    let positions = workflow
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| (step.step_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut states = vec![0_u8; workflow.steps.len()];
+
+    fn visit(
+        index: usize,
+        workflow: &Workflow,
+        positions: &HashMap<&str, usize>,
+        states: &mut [u8],
+    ) -> bool {
+        if states[index] == 1 {
+            return true;
+        }
+        if states[index] == 2 {
+            return false;
+        }
+
+        states[index] = 1;
+        for dependency in &workflow.steps[index].depends_on {
+            let StepDependency::Local(step_id) = classify_step_dependency(dependency) else {
+                continue;
+            };
+            let Some(&dependency_index) = positions.get(step_id) else {
+                continue;
+            };
+            if visit(dependency_index, workflow, positions, states) {
+                return true;
+            }
+        }
+        states[index] = 2;
+        false
+    }
+
+    (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
 }
 
 fn parse_operation_source_name(operation_path: &str) -> Option<&str> {
@@ -739,7 +911,7 @@ mod tests {
 
     use arazzo_spec::{
         ActionType, CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation,
-        Replacement, RequestBody, SourceDescription, SourceType, Step, StepTarget,
+        Replacement, RequestBody, SourceDescription, SourceType, Step, StepAction, StepTarget,
         SuccessCriterion, Workflow,
     };
 
@@ -1397,7 +1569,153 @@ workflows:
         assert_eq!(errs[0].kind, ValidationErrorKind::InvalidStepTarget);
         assert!(errs[0]
             .message
-            .contains("must have operationId, operationPath, or workflowId"));
+            .contains("must have operationId, operationPath, channelPath, or workflowId"));
+    }
+
+    #[test]
+    fn validate_async_channel_step_and_timeout_boundaries() {
+        let mut spec = valid_spec();
+        spec.source_descriptions[0].type_ = SourceType::AsyncApi;
+        spec.workflows[0].steps[0].target = Some(StepTarget::ChannelPath(
+            "{$sourceDescriptions.api.url}#/channels/events".to_string(),
+        ));
+        spec.workflows[0].steps[0].action = Some(StepAction::Receive);
+        spec.workflows[0].steps[0].correlation_id = Some("$inputs.eventId".to_string());
+
+        for timeout in [0, u64::MAX] {
+            spec.workflows[0].steps[0].timeout = Some(timeout);
+            if let Err(err) = validate(&spec) {
+                panic!("expected unsigned timeout {timeout} to validate: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_async_operation_id_send_step() {
+        let mut spec = valid_spec();
+        spec.source_descriptions[0].type_ = SourceType::AsyncApi;
+        let step = &mut spec.workflows[0].steps[0];
+        step.target = Some(StepTarget::OperationId(
+            "$sourceDescriptions.api.publish".to_string(),
+        ));
+        step.action = Some(StepAction::Send);
+
+        if let Err(err) = validate(&spec) {
+            panic!("expected operationId async send step to validate: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_async_field_combinations_fail_with_specific_diagnostics() {
+        let mut channel_without_action = valid_spec();
+        channel_without_action.workflows[0].steps[0].target =
+            Some(StepTarget::ChannelPath("/events".to_string()));
+
+        let mut operation_path_with_action = valid_spec();
+        operation_path_with_action.workflows[0].steps[0].action = Some(StepAction::Send);
+
+        let mut workflow_with_action = valid_spec();
+        workflow_with_action.workflows[0].steps[0].target =
+            Some(StepTarget::WorkflowId("wf1".to_string()));
+        workflow_with_action.workflows[0].steps[0].action = Some(StepAction::Receive);
+
+        let mut workflow_with_correlation = valid_spec();
+        workflow_with_correlation.workflows[0].steps[0].target =
+            Some(StepTarget::WorkflowId("wf1".to_string()));
+        workflow_with_correlation.workflows[0].steps[0].correlation_id =
+            Some("order-1".to_string());
+
+        let mut send_with_correlation = valid_spec();
+        send_with_correlation.workflows[0].steps[0].target =
+            Some(StepTarget::OperationId("publish".to_string()));
+        send_with_correlation.workflows[0].steps[0].action = Some(StepAction::Send);
+        send_with_correlation.workflows[0].steps[0].correlation_id = Some("order-1".to_string());
+
+        for (name, spec, expected_path) in [
+            ("channel without action", channel_without_action, ".action"),
+            (
+                "operationPath with action",
+                operation_path_with_action,
+                ".action",
+            ),
+            ("workflow with action", workflow_with_action, ".action"),
+            (
+                "workflow with correlationId",
+                workflow_with_correlation,
+                ".correlationId",
+            ),
+            (
+                "send with correlationId",
+                send_with_correlation,
+                ".correlationId",
+            ),
+        ] {
+            let errors = expect_validation_errors(validate(&spec));
+            assert!(
+                errors.iter().any(|error| {
+                    error.kind == ValidationErrorKind::InvalidAsyncStep
+                        && error.path.ends_with(expected_path)
+                }),
+                "{name} should produce a specific async validation diagnostic: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_local_depends_on_accepts_existing_ids_and_rejects_missing_ids() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps.push(Step {
+            step_id: "s2".to_string(),
+            target: Some(StepTarget::OperationPath("/second".to_string())),
+            depends_on: vec!["s1".to_string()],
+            ..Step::default()
+        });
+        if let Err(err) = validate(&spec) {
+            panic!("existing local dependsOn ID should validate: {err}");
+        }
+
+        spec.workflows[0].steps[1].depends_on = vec!["missing".to_string()];
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidReference
+                && error.path.ends_with(".dependsOn[0]")
+                && error.message.contains("unknown local step \"missing\"")
+        }));
+    }
+
+    #[test]
+    fn validate_local_depends_on_cycles_are_rejected() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].depends_on = vec!["s2".to_string()];
+        spec.workflows[0].steps.push(Step {
+            step_id: "s2".to_string(),
+            target: Some(StepTarget::OperationPath("/second".to_string())),
+            depends_on: vec!["s1".to_string()],
+            ..Step::default()
+        });
+
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::DependencyCycle
+                && error.message.contains("dependency cycle")
+        }));
+    }
+
+    #[test]
+    fn validate_cross_scope_depends_on_references_fail_as_unsupported() {
+        for dependency in [
+            "$workflows.audit.steps.record",
+            "$sourceDescriptions.external.archive.steps.store",
+        ] {
+            let mut spec = valid_spec();
+            spec.workflows[0].steps[0].depends_on = vec![dependency.to_string()];
+            let errors = expect_validation_errors(validate(&spec));
+            assert!(errors.iter().any(|error| {
+                error.kind == ValidationErrorKind::UnsupportedDependencyScope
+                    && error.path.ends_with(".dependsOn[0]")
+                    && error.message.contains("valid Arazzo 1.1 syntax")
+            }));
+        }
     }
 
     #[test]
@@ -1474,7 +1792,9 @@ workflows:
             Ok(_) => panic!("expected error for step with multiple targets"),
             Err(err) => {
                 let msg = err.to_string();
-                if !msg.contains("exactly one of operationId, operationPath, or workflowId") {
+                if !msg.contains(
+                    "exactly one of operationId, operationPath, channelPath, or workflowId",
+                ) {
                     panic!("unexpected error: {msg}");
                 }
             }
