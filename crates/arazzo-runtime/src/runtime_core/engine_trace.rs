@@ -142,7 +142,7 @@ impl Engine {
         insert_action_branch_locals(&mut locals, branch, action_index);
         locals.insert(
             "actionType".to_string(),
-            Value::String(action.type_.to_string()),
+            Value::String(action.action_type().to_string()),
         );
         if !action.name.is_empty() {
             locals.insert("actionName".to_string(), Value::String(action.name.clone()));

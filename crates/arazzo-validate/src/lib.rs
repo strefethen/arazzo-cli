@@ -581,7 +581,7 @@ fn validate_actions(
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
-        if action.type_ == ActionType::Goto {
+        if action.action_type() == ActionType::Goto {
             let has_step = !action.step_id.is_empty();
             let has_workflow = !action.workflow_id.is_empty();
             if !has_step && !has_workflow {
@@ -627,17 +627,17 @@ fn validate_actions(
                 });
             }
         }
-        if action.type_ != ActionType::Retry {
+        if action.action_type() != ActionType::Retry {
             if action.retry_limit.is_some() {
                 eprintln!(
                     "warning: {action_path}.retryLimit has no effect on {} action",
-                    action.type_
+                    action.action_type()
                 );
             }
             if action.retry_after > 0 {
                 eprintln!(
                     "warning: {action_path}.retryAfter has no effect on {} action",
-                    action.type_
+                    action.action_type()
                 );
             }
         }
@@ -877,9 +877,9 @@ fn resolve_action_ref(
             let Some(resolved) = component_map.get(name) else {
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
-            // Merge: start with resolved component, overlay non-default local fields
+            // Merge: start with resolved component, overlay locally declared fields
             let mut merged = resolved.clone();
-            if action.type_ != ActionType::default() {
+            if action.type_.is_some() {
                 merged.type_ = action.type_;
             }
             if !action.workflow_id.is_empty() {
@@ -1299,7 +1299,7 @@ workflows:
 
         let actions = &spec.workflows[0].steps[0].on_success;
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].type_, ActionType::End);
+        assert_eq!(actions[0].action_type(), ActionType::End);
         assert_eq!(actions[0].name, "terminate");
     }
 
@@ -1372,7 +1372,7 @@ workflows:
 
         let actions = &spec.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].type_, ActionType::Retry);
+        assert_eq!(actions[0].action_type(), ActionType::Retry);
         assert_eq!(actions[0].retry_after, 2);
         assert_eq!(actions[0].retry_limit, Some(5));
     }
@@ -1412,11 +1412,11 @@ workflows:
         let actions = &spec.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 2);
         // First action: resolved from component ref
-        assert_eq!(actions[0].type_, ActionType::Retry);
+        assert_eq!(actions[0].action_type(), ActionType::Retry);
         assert_eq!(actions[0].retry_after, 2);
         assert_eq!(actions[0].retry_limit, Some(5));
         // Second action: inline end
-        assert_eq!(actions[1].type_, ActionType::End);
+        assert_eq!(actions[1].action_type(), ActionType::End);
     }
 
     #[test]
@@ -1937,7 +1937,7 @@ workflows:
     fn validate_action_criteria_follow_criterion_rules() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_failure = vec![OnAction {
-            type_: ActionType::Retry,
+            type_: Some(ActionType::Retry),
             criteria: vec![SuccessCriterion {
                 condition: "//item[1]".to_string(),
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
@@ -2042,9 +2042,9 @@ workflows:
         assert_eq!(wf.parameters.len(), 1);
         assert_eq!(wf.parameters[0].name, "Authorization");
         assert_eq!(wf.success_actions.len(), 1);
-        assert_eq!(wf.success_actions[0].type_, ActionType::End);
+        assert_eq!(wf.success_actions[0].action_type(), ActionType::End);
         assert_eq!(wf.failure_actions.len(), 1);
-        assert_eq!(wf.failure_actions[0].type_, ActionType::Retry);
+        assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 5);
         assert_eq!(wf.steps[0].description, "First step");
     }
@@ -2087,10 +2087,10 @@ workflows:
         };
         let wf = &spec.workflows[0];
         assert_eq!(wf.success_actions.len(), 1);
-        assert_eq!(wf.success_actions[0].type_, ActionType::End);
+        assert_eq!(wf.success_actions[0].action_type(), ActionType::End);
         assert_eq!(wf.success_actions[0].name, "stop");
         assert_eq!(wf.failure_actions.len(), 1);
-        assert_eq!(wf.failure_actions[0].type_, ActionType::Retry);
+        assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 1);
     }
 
@@ -2103,7 +2103,7 @@ workflows:
             ..Step::default()
         });
         spec.workflows[0].steps[0].on_success = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             step_id: "s2".to_string(),
             ..OnAction::default()
         }];
@@ -2117,7 +2117,7 @@ workflows:
     fn validate_goto_invalid_step_id() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_success = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             step_id: "nonexistent".to_string(),
             ..OnAction::default()
         }];
@@ -2141,7 +2141,7 @@ workflows:
             ..Workflow::default()
         });
         spec.workflows[0].steps[0].on_failure = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             workflow_id: "wf2".to_string(),
             ..OnAction::default()
         }];
@@ -2155,7 +2155,7 @@ workflows:
     fn validate_goto_invalid_workflow_id() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_failure = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             workflow_id: "missing_wf".to_string(),
             ..OnAction::default()
         }];
@@ -2177,7 +2177,7 @@ workflows:
             ..SourceDescription::default()
         });
         spec.workflows[0].steps[0].on_success = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             workflow_id: "$sourceDescriptions.external.someWorkflow".to_string(),
             ..OnAction::default()
         }];
@@ -2191,7 +2191,7 @@ workflows:
     fn validate_goto_runtime_expression_step_id() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_success = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             step_id: "$steps.decide.outputs.nextStep".to_string(),
             ..OnAction::default()
         }];
@@ -2205,7 +2205,7 @@ workflows:
     fn validate_goto_missing_step_and_workflow() {
         let mut spec = valid_spec();
         spec.workflows[0].steps[0].on_success = vec![OnAction {
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             ..OnAction::default()
         }];
         let errs = expect_validation_errors(validate(&spec));
@@ -2494,8 +2494,56 @@ workflows:
 
         let actions = &spec.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].type_, ActionType::Retry, "type from component");
+        assert_eq!(
+            actions[0].action_type(),
+            ActionType::Retry,
+            "type from component"
+        );
         assert_eq!(actions[0].retry_limit, Some(5), "retryLimit from component");
         assert_eq!(actions[0].retry_after, 10, "retryAfter overridden locally");
+    }
+
+    #[test]
+    fn parse_bytes_component_action_explicit_end_overrides_component_type() {
+        // Component defines retry; the local reference explicitly sets type: end.
+        // The explicit end must survive the merge instead of being treated as
+        // an omitted (default) type.
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  failureActions:
+    retryPolicy:
+      type: retry
+      retryAfter: 2
+      retryLimit: 5
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onFailure:
+          - name: "$components.failureActions.retryPolicy"
+            type: end
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        let actions = &spec.workflows[0].steps[0].on_failure;
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].action_type(),
+            ActionType::End,
+            "explicit type: end must override the component's retry"
+        );
     }
 }

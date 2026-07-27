@@ -309,7 +309,7 @@ async fn execute_parallel_fallback_on_control_flow() {
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: ActionType::End,
+                        type_: Some(ActionType::End),
                         ..OnAction::default()
                     }],
                     ..Step::default()
@@ -881,7 +881,7 @@ async fn trace_records_retry_attempts_increment() {
                 target: Some(StepTarget::OperationPath("/retry".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::Retry,
+                    type_: Some(ActionType::Retry),
                     retry_limit: Some(2),
                     ..OnAction::default()
                 }],

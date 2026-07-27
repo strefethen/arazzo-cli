@@ -653,8 +653,8 @@ impl std::fmt::Display for ActionType {
 pub struct OnAction {
     #[serde(default)]
     pub name: String,
-    #[serde(rename = "type", default)]
-    pub type_: ActionType,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub type_: Option<ActionType>,
     #[serde(default)]
     pub workflow_id: String,
     #[serde(default)]
@@ -673,6 +673,18 @@ pub struct OnAction {
         deserialize_with = "deserialize_vendor_extensions"
     )]
     pub extensions: VendorExtensions,
+}
+
+impl OnAction {
+    /// Returns the effective action type (`End` when omitted).
+    pub fn action_type(&self) -> ActionType {
+        self.type_.unwrap_or_default()
+    }
+
+    /// Returns true when the document declared an explicit `type` key.
+    pub fn has_declared_type(&self) -> bool {
+        self.type_.is_some()
+    }
 }
 
 /// Parses raw YAML bytes into an unvalidated specification model.

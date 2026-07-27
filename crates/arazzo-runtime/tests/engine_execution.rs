@@ -119,7 +119,7 @@ async fn execute_on_success_goto_interpolation_bug() {
                     target: Some(StepTarget::OperationPath("/s1".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: ActionType::Goto,
+                        type_: Some(ActionType::Goto),
                         step_id: "target_{$inputs.target}".to_string(), // Dynamic target
                         ..OnAction::default()
                     }],
@@ -189,7 +189,7 @@ async fn execute_on_failure_end() {
                 target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::End,
+                    type_: Some(ActionType::End),
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -235,7 +235,7 @@ async fn execute_on_success_end() {
                 target: Some(StepTarget::OperationPath("/ok".to_string())),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
-                    type_: ActionType::End,
+                    type_: Some(ActionType::End),
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -289,7 +289,7 @@ async fn execute_on_failure_goto() {
                 target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     step_id: "fallback".to_string(),
                     ..OnAction::default()
                 }],
@@ -349,7 +349,7 @@ async fn execute_on_success_goto() {
                 target: Some(StepTarget::OperationPath("/start".to_string())),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     step_id: "s3".to_string(),
                     ..OnAction::default()
                 }],
@@ -406,7 +406,7 @@ async fn execute_on_failure_retry() {
             target: Some(StepTarget::OperationPath("/flaky".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 ..OnAction::default()
             }],
             ..Step::default()
@@ -436,7 +436,7 @@ async fn execute_retry_exceeds_max() {
             target: Some(StepTarget::OperationPath("/always-fail".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 ..OnAction::default()
             }],
             ..Step::default()
@@ -475,7 +475,7 @@ async fn execute_retry_custom_limit() {
             target: Some(StepTarget::OperationPath("/flaky".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 retry_limit: Some(6),
                 ..OnAction::default()
             }],
@@ -506,7 +506,7 @@ async fn execute_retry_custom_limit_exceeded() {
             target: Some(StepTarget::OperationPath("/always-fail".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 retry_limit: Some(2),
                 ..OnAction::default()
             }],
@@ -543,7 +543,7 @@ async fn execute_retry_limit_zero_means_no_retries() {
             target: Some(StepTarget::OperationPath("/fail".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 retry_limit: Some(0),
                 ..OnAction::default()
             }],
@@ -585,7 +585,7 @@ async fn execute_retry_with_delay() {
             target: Some(StepTarget::OperationPath("/flaky".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 retry_after: 1,
                 ..OnAction::default()
             }],
@@ -623,7 +623,7 @@ async fn execute_retry_delay_honors_execution_timeout() {
             target: Some(StepTarget::OperationPath("/flaky".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 retry_after: 2,
                 ..OnAction::default()
             }],
@@ -712,7 +712,7 @@ async fn execute_on_failure_criteria_matching() {
                 success_criteria: success_200(),
                 on_failure: vec![
                     OnAction {
-                        type_: ActionType::Goto,
+                        type_: Some(ActionType::Goto),
                         step_id: "rate-handler".to_string(),
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 429".to_string(),
@@ -721,7 +721,7 @@ async fn execute_on_failure_criteria_matching() {
                         ..OnAction::default()
                     },
                     OnAction {
-                        type_: ActionType::Goto,
+                        type_: Some(ActionType::Goto),
                         step_id: "server-error-handler".to_string(),
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 500".to_string(),
@@ -730,7 +730,7 @@ async fn execute_on_failure_criteria_matching() {
                         ..OnAction::default()
                     },
                     OnAction {
-                        type_: ActionType::End,
+                        type_: Some(ActionType::End),
                         ..OnAction::default()
                     },
                 ],
@@ -780,7 +780,7 @@ async fn execute_on_failure_criteria_none_match() {
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
-                    type_: ActionType::Retry,
+                    type_: Some(ActionType::Retry),
                     criteria: vec![SuccessCriterion {
                         condition: "$statusCode == 429".to_string(),
                         ..SuccessCriterion::default()
@@ -788,7 +788,7 @@ async fn execute_on_failure_criteria_none_match() {
                     ..OnAction::default()
                 },
                 OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     step_id: "handler".to_string(),
                     criteria: vec![SuccessCriterion {
                         condition: "$statusCode == 500".to_string(),
@@ -827,7 +827,7 @@ async fn execute_goto_errors() {
             target: Some(StepTarget::OperationPath("/fail".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Goto,
+                type_: Some(ActionType::Goto),
                 step_id: "nonexistent".to_string(),
                 ..OnAction::default()
             }],
@@ -857,7 +857,7 @@ async fn execute_goto_errors() {
             target: Some(StepTarget::OperationPath("/fail".to_string())),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
-                type_: ActionType::Goto,
+                type_: Some(ActionType::Goto),
                 ..OnAction::default()
             }],
             ..Step::default()
@@ -1121,7 +1121,7 @@ async fn execute_goto_workflow() {
                 target: Some(StepTarget::OperationPath("/main".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     workflow_id: "fallback-wf".to_string(),
                     ..OnAction::default()
                 }],
@@ -2093,7 +2093,7 @@ async fn execute_step_retries_on_failure() {
                 target: Some(StepTarget::OperationPath("/flaky".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::Retry,
+                    type_: Some(ActionType::Retry),
                     ..OnAction::default()
                 }],
                 ..Step::default()
@@ -2132,7 +2132,7 @@ async fn execute_step_retry_limit_exceeded() {
                 target: Some(StepTarget::OperationPath("/fail".to_string())),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
-                    type_: ActionType::Retry,
+                    type_: Some(ActionType::Retry),
                     retry_limit: Some(1),
                     ..OnAction::default()
                 }],
@@ -2176,7 +2176,7 @@ async fn execute_step_on_success_end_stops_early() {
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
-                        type_: ActionType::End,
+                        type_: Some(ActionType::End),
                         ..OnAction::default()
                     }],
                     ..Step::default()
@@ -2327,7 +2327,7 @@ async fn execute_circular_goto_returns_iteration_limit_exceeded() {
                 target: Some(StepTarget::OperationPath("/ping".to_string())),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     step_id: "b".to_string(),
                     ..OnAction::default()
                 }],
@@ -2338,7 +2338,7 @@ async fn execute_circular_goto_returns_iteration_limit_exceeded() {
                 target: Some(StepTarget::OperationPath("/pong".to_string())),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
-                    type_: ActionType::Goto,
+                    type_: Some(ActionType::Goto),
                     step_id: "a".to_string(),
                     ..OnAction::default()
                 }],

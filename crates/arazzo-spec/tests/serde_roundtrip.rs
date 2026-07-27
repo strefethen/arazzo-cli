@@ -722,10 +722,56 @@ workflows:
     assert!(step.success_criteria.is_empty());
     assert!(step.on_failure.is_empty());
     assert!(step.outputs.is_empty());
-    assert_eq!(step.on_success[0].type_, ActionType::End);
+    assert_eq!(step.on_success[0].type_, None);
+    assert_eq!(step.on_success[0].action_type(), ActionType::End);
     assert_eq!(step.on_success[0].workflow_id, "");
     assert_eq!(step.on_success[0].step_id, "");
     assert_eq!(step.on_success[0].retry_after, 0);
     assert_eq!(step.on_success[0].retry_limit, None);
     assert!(step.on_success[0].criteria.is_empty());
+}
+
+#[test]
+fn omitted_action_type_stays_omitted_across_roundtrip() {
+    let raw = r#"
+arazzo: "1.0.0"
+info:
+  title: Action Type Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        onSuccess:
+          - name: done
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "action type roundtrip spec");
+    let action = &spec.workflows[0].steps[0].on_success[0];
+    assert_eq!(action.type_, None, "omitted type must parse as None");
+    assert_eq!(action.action_type(), ActionType::End);
+
+    let serialized = serialize_spec(&spec, "action type roundtrip spec");
+    let wire = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized) {
+        Ok(value) => value,
+        Err(err) => panic!("reparsing serialized spec as raw YAML: {err}"),
+    };
+    let on_success = wire["workflows"][0]["steps"][0]["onSuccess"][0]
+        .as_mapping()
+        .unwrap_or_else(|| panic!("onSuccess[0] should serialize as a mapping"));
+    assert!(
+        !on_success.contains_key("type"),
+        "omitted action type must not serialize a type key, got: {serialized}"
+    );
+
+    let reparsed = parse_spec(
+        serialized.as_bytes(),
+        "reserialized action type roundtrip spec",
+    );
+    assert_eq!(reparsed.workflows[0].steps[0].on_success[0].type_, None);
 }

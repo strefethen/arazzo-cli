@@ -753,7 +753,7 @@ fn build_step(
 
     let on_failure = vec![OnAction {
         name: "fail-fast".to_string(),
-        type_: ActionType::End,
+        type_: Some(ActionType::End),
         ..OnAction::default()
     }];
 

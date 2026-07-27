@@ -272,7 +272,7 @@ async fn workflow_level_success_actions_as_default() {
         vec![Workflow {
             workflow_id: "wf".to_string(),
             success_actions: vec![OnAction {
-                type_: ActionType::End,
+                type_: Some(ActionType::End),
                 ..OnAction::default()
             }],
             steps: vec![
@@ -311,7 +311,7 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
         vec![Workflow {
             workflow_id: "wf".to_string(),
             success_actions: vec![OnAction {
-                type_: ActionType::End,
+                type_: Some(ActionType::End),
                 ..OnAction::default()
             }],
             steps: vec![
@@ -324,7 +324,7 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
                     }],
                     // Step has its own on_success (goto s2), so workflow-level "end" is ignored
                     on_success: vec![OnAction {
-                        type_: ActionType::Goto,
+                        type_: Some(ActionType::Goto),
                         step_id: "s2".to_string(),
                         ..OnAction::default()
                     }],
@@ -365,7 +365,7 @@ async fn workflow_level_failure_actions_as_default() {
         vec![Workflow {
             workflow_id: "wf".to_string(),
             failure_actions: vec![OnAction {
-                type_: ActionType::End,
+                type_: Some(ActionType::End),
                 ..OnAction::default()
             }],
             steps: vec![Step {

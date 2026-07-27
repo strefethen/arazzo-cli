@@ -203,7 +203,7 @@ impl Engine {
         action: &OnAction,
         debug_ctx: Option<SelectedActionDebugContext<'_>>,
     ) -> RoutedDecision {
-        match action.type_ {
+        match action.action_type() {
             ActionType::End => {
                 if ctx.is_failure_path {
                     // Preserve the original error kind (e.g. HttpRequest, ExecutionTimeout)
@@ -220,7 +220,7 @@ impl Engine {
                             ),
                         )),
                         trace: TraceDecision {
-                            action_type: action.type_.to_string(),
+                            action_type: action.action_type().to_string(),
                             ..TraceDecision::with_path(TraceDecisionPath::Done)
                         },
                     }
@@ -228,7 +228,7 @@ impl Engine {
                     RoutedDecision {
                         flow: FlowDecision::Done,
                         trace: TraceDecision {
-                            action_type: action.type_.to_string(),
+                            action_type: action.action_type().to_string(),
                             ..TraceDecision::with_path(TraceDecisionPath::Done)
                         },
                     }
@@ -243,7 +243,7 @@ impl Engine {
                         return RoutedDecision {
                             flow: FlowDecision::Next(idx),
                             trace: TraceDecision {
-                                action_type: action.type_.to_string(),
+                                action_type: action.action_type().to_string(),
                                 target_step_id: resolved_step_id,
                                 ..TraceDecision::with_path(TraceDecisionPath::GotoStep)
                             },
@@ -255,7 +255,7 @@ impl Engine {
                             format!("goto: step \"{resolved_step_id}\" not found"),
                         )),
                         trace: TraceDecision {
-                            action_type: action.type_.to_string(),
+                            action_type: action.action_type().to_string(),
                             target_step_id: resolved_step_id,
                             ..TraceDecision::with_path(TraceDecisionPath::Error)
                         },
@@ -266,7 +266,7 @@ impl Engine {
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow(resolved_workflow_id.clone()),
                         trace: TraceDecision {
-                            action_type: action.type_.to_string(),
+                            action_type: action.action_type().to_string(),
                             target_workflow_id: resolved_workflow_id,
                             ..TraceDecision::with_path(TraceDecisionPath::GotoWorkflow)
                         },
@@ -278,7 +278,7 @@ impl Engine {
                         "goto: no stepId or workflowId specified",
                     )),
                     trace: TraceDecision {
-                        action_type: action.type_.to_string(),
+                        action_type: action.action_type().to_string(),
                         ..TraceDecision::with_path(TraceDecisionPath::Error)
                     },
                 }
@@ -314,7 +314,7 @@ impl Engine {
                             ),
                         )),
                         trace: TraceDecision {
-                            action_type: action.type_.to_string(),
+                            action_type: action.action_type().to_string(),
                             retry_after_seconds: Some(action.retry_after),
                             retry_limit: action.retry_limit,
                             ..TraceDecision::with_path(TraceDecisionPath::Error)
@@ -341,7 +341,7 @@ impl Engine {
                         return RoutedDecision {
                             flow: FlowDecision::Error(err),
                             trace: TraceDecision {
-                                action_type: action.type_.to_string(),
+                                action_type: action.action_type().to_string(),
                                 retry_after_seconds: Some(action.retry_after),
                                 retry_limit: action.retry_limit,
                                 ..TraceDecision::with_path(TraceDecisionPath::Error)
@@ -352,7 +352,7 @@ impl Engine {
                 RoutedDecision {
                     flow: FlowDecision::Retry(ctx.current_idx),
                     trace: TraceDecision {
-                        action_type: action.type_.to_string(),
+                        action_type: action.action_type().to_string(),
                         retry_after_seconds: Some(action.retry_after),
                         retry_limit: action.retry_limit,
                         ..TraceDecision::with_path(TraceDecisionPath::Retry)

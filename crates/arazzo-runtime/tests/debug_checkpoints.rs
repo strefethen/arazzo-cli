@@ -306,7 +306,7 @@ fn build_failure_engine(
                 }],
                 on_failure: vec![
                     OnAction {
-                        type_: ActionType::End,
+                        type_: Some(ActionType::End),
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 502".to_string(),
                             ..SuccessCriterion::default()
@@ -314,7 +314,7 @@ fn build_failure_engine(
                         ..OnAction::default()
                     },
                     OnAction {
-                        type_: ActionType::Retry,
+                        type_: Some(ActionType::Retry),
                         criteria: vec![SuccessCriterion {
                             condition: "$statusCode == 503".to_string(),
                             ..SuccessCriterion::default()
@@ -368,7 +368,7 @@ fn build_retry_engine(
                     ..SuccessCriterion::default()
                 }],
                 on_failure: vec![OnAction {
-                    type_: ActionType::Retry,
+                    type_: Some(ActionType::Retry),
                     retry_after,
                     retry_limit,
                     criteria: vec![SuccessCriterion {

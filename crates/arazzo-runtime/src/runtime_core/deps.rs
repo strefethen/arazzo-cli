@@ -16,7 +16,7 @@ pub(super) fn can_execute_parallel(workflow: &Workflow) -> bool {
 fn actions_have_control_flow(actions: &[OnAction]) -> bool {
     actions.iter().any(|a| {
         matches!(
-            a.type_,
+            a.action_type(),
             ActionType::Goto | ActionType::Retry | ActionType::End
         )
     })

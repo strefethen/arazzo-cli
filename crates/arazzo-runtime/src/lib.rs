@@ -201,17 +201,17 @@ mod tests {
         let vars = VarStore::default();
 
         let no_criteria = vec![OnAction {
-            type_: ActionType::End,
+            type_: Some(ActionType::End),
             ..OnAction::default()
         }];
         let first = engine.find_matching_action(&no_criteria, &vars, None);
         assert!(first.is_some());
         if let Some(action) = first {
-            assert_eq!(action.type_, ActionType::End);
+            assert_eq!(action.action_type(), ActionType::End);
         }
 
         let with_criteria = vec![OnAction {
-            type_: ActionType::Retry,
+            type_: Some(ActionType::Retry),
             criteria: vec![SuccessCriterion {
                 condition: "$statusCode == 429".to_string(),
                 ..SuccessCriterion::default()
@@ -231,7 +231,7 @@ mod tests {
         let ordered = vec![
             OnAction {
                 name: "first".to_string(),
-                type_: ActionType::Retry,
+                type_: Some(ActionType::Retry),
                 criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 429".to_string(),
                     ..SuccessCriterion::default()
@@ -240,7 +240,7 @@ mod tests {
             },
             OnAction {
                 name: "second".to_string(),
-                type_: ActionType::End,
+                type_: Some(ActionType::End),
                 ..OnAction::default()
             },
         ];
@@ -259,7 +259,7 @@ mod tests {
         };
         let typed = vec![OnAction {
             name: "typed".to_string(),
-            type_: ActionType::Goto,
+            type_: Some(ActionType::Goto),
             step_id: "next".to_string(),
             criteria: vec![SuccessCriterion {
                 context: "$response.body".to_string(),

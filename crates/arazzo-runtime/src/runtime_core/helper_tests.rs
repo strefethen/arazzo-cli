@@ -155,7 +155,7 @@ fn extract_step_refs_and_control_flow() {
         }],
         outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
         on_failure: vec![OnAction {
-            type_: ActionType::Retry,
+            type_: Some(ActionType::Retry),
             criteria: vec![SuccessCriterion {
                 condition: "$steps.s1.outputs.code == 429".to_string(),
                 ..SuccessCriterion::default()
@@ -185,7 +185,7 @@ fn extract_step_refs_and_control_flow() {
             step_id: "s1".to_string(),
             target: Some(StepTarget::OperationPath("/ok".to_string())),
             on_failure: vec![OnAction {
-                type_: ActionType::Goto,
+                type_: Some(ActionType::Goto),
                 step_id: "fallback".to_string(),
                 ..OnAction::default()
             }],

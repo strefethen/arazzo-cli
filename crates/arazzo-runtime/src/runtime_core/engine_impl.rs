@@ -813,7 +813,7 @@ fn compute_max_iterations<'a>(
 fn max_retry_from_actions(actions: &[OnAction]) -> usize {
     actions
         .iter()
-        .filter(|a| a.type_ == ActionType::Retry)
+        .filter(|a| a.action_type() == ActionType::Retry)
         .filter_map(|a| a.retry_limit)
         .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
         .max()
