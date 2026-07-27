@@ -59,6 +59,9 @@ jobs:
       - name: Verify publish settings
         run: bash scripts/ci/verify-private-workspace.sh
 
+      - name: Verify CHANGELOG version matches Cargo.toml
+        run: bash scripts/ci/verify-changelog-version.sh
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 

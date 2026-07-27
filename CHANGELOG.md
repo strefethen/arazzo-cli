@@ -5,6 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-06
+
+### Fixed
+
+#### Workflow Engine
+- Preserve multi-valued HTTP response headers instead of last-write-wins
+- Special-case `Set-Cookie` handling to avoid comma-join corruption of multi-value headers
+- Encode quotes and backslashes in cookie values per RFC 6265
+- Return raw body text for non-JSON responses instead of null
+- Preserve retry counts across goto cycles and skip retry-count increments on goto self-loops
+- Account for per-step retry limits in the workflow iteration cap
+- Reject goto actions that specify both `stepId` and `workflowId` at validation time
+- Warn on retry fields set on non-retry actions (stderr warning instead of a fatal validation error)
+
+#### Expression Language
+- Use approximate (epsilon) equality for f64 comparisons, applied consistently to ordered comparisons
+- Handle escaped quotes when splitting list elements in `in` conditions
+
+#### CLI
+- Load `.env` before starting the tokio runtime so `$env.*` sees dotenv values in every execution path
+
+#### Security
+- Avoid URL normalization during query-parameter redaction so traces record the URL as sent
+- Truncate trace body previews at a character boundary to keep valid UTF-8
+
+### Changed
+
+#### Quality
+- Reduced debug build size via line-tables-only debug info
+
+## [0.2.1] - 2026-03-29
+
+### Added
+
+#### MCP Server
+- `generate_workflow`, `describe_openapi`, and `generate_example` MCP tools
+
+#### CLI
+- Improved OpenAPI example value generation in `generate`
+
+### Changed
+
+#### Quality
+- Extracted the `arazzo-generate` crate from `arazzo-cli`
+- Reduced allocations in the expression evaluator, runtime engine, and validator
+
+### Security
+- Upgraded `rustls-webpki` to 0.103.10 (RUSTSEC-2026-0049)
+
+## [0.2.0] - 2026-03-21
+
+### Added
+
+#### MCP Server
+- New `arazzo-mcp` crate: Model Context Protocol server exposing workflow tools for AI agent integration
+- `serve` CLI subcommand to start the MCP server over stdio
+
+## [0.1.3] - 2026-03-17
+
+### Fixed
+
+#### Workflow Engine
+- Honor control-flow decisions (goto, retry, end) in single-step and parallel execution
+
+## [0.1.2] - 2026-03-15
+
+### Fixed
+
+#### Workflow Engine
+- Route runtime errors through `onFailure` handlers and preserve original error kinds in step results
+
+## [0.1.1] - 2026-03-15
+
+### Added
+
+#### Expression Language
+- `!` (NOT) and parenthesized grouping operators in conditions
+- `$workflows.<id>` expressions
+- `Retry-After` response header support for retry actions
+
+### Fixed
+
+#### Workflow Engine
+- Resolved 8 correctness bugs across expression evaluation, runtime, and the spec model found in cross-agent review
+
+### Changed
+
+#### Quality
+- Migrated YAML serialization from `serde_yml` to `serde_yaml_ng` (unmaintained upstream)
+
 ## [0.1.0] - 2026-03-13
 
 ### Added
