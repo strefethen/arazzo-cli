@@ -569,7 +569,7 @@ fn build_workflow(
         wf_parameters.push(Parameter {
             name: auth_req.param_name.clone(),
             in_: Some(auth_req.param_in),
-            value: serde_yaml_ng::Value::String(auth_req.param_value_expr.clone()),
+            value: serde_yaml_ng::Value::String(auth_req.param_value_expr.clone()).into(),
             reference: String::new(),
             ..Parameter::default()
         });
@@ -623,7 +623,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yaml_ng::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr).into(),
                 reference: String::new(),
                 ..Parameter::default()
             });
@@ -651,7 +651,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yaml_ng::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr).into(),
                 reference: String::new(),
                 ..Parameter::default()
             });
@@ -679,7 +679,7 @@ fn build_workflow(
             step.parameters.push(Parameter {
                 name: param_name.clone(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yaml_ng::Value::String(id_expr),
+                value: serde_yaml_ng::Value::String(id_expr).into(),
                 reference: String::new(),
                 ..Parameter::default()
             });
@@ -691,7 +691,7 @@ fn build_workflow(
     if has_create {
         outputs.insert(
             "created_id".to_string(),
-            format!("$steps.create-{}.outputs.{id_body_field}", group.name),
+            format!("$steps.create-{}.outputs.{id_body_field}", group.name).into(),
         );
     }
 
@@ -738,7 +738,7 @@ fn build_step(
 
         Some(RequestBody {
             content_type: "application/json".to_string(),
-            payload: Some(json_to_yml(example)),
+            payload: Some(json_to_yml(example).into()),
             reference: String::new(),
             ..RequestBody::default()
         })
@@ -759,7 +759,10 @@ fn build_step(
 
     let mut outputs = BTreeMap::new();
     if let Some(id_field) = output_id_field {
-        outputs.insert(id_field.to_string(), format!("$response.body.{id_field}"));
+        outputs.insert(
+            id_field.to_string(),
+            format!("$response.body.{id_field}").into(),
+        );
     }
 
     Step {

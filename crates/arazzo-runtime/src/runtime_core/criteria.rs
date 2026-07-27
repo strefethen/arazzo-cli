@@ -100,7 +100,13 @@ pub(crate) fn evaluate_criterion_detailed(
                 other => other.to_string(),
             };
             context_value = Value::String(xml_text.clone());
-            is_truthy(&extract_xpath(xml_text.as_bytes(), &criterion.condition))
+            match select_xpath(xml_text.as_bytes(), &criterion.condition) {
+                Ok(selection) => is_truthy(&selection.value),
+                Err(message) => {
+                    error = Some(message);
+                    false
+                }
+            }
         }
         _ => {
             let (result, cond_warnings) =
@@ -138,9 +144,31 @@ pub(crate) fn evaluate_output_expression_detailed(
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
     if expr.starts_with('/') {
         if let Some(resp) = response {
-            return (extract_xpath(&resp.body, expr), Vec::new());
+            return match select_xpath(&resp.body, expr) {
+                Ok(selection) if selection.match_count > 0 => (selection.value, Vec::new()),
+                Ok(selection) => (
+                    selection.value,
+                    vec![arazzo_expr::ExpressionWarning {
+                        expression: expr.to_string(),
+                        message: "XPath matched no values".to_string(),
+                    }],
+                ),
+                Err(message) => (
+                    Value::Null,
+                    vec![arazzo_expr::ExpressionWarning {
+                        expression: expr.to_string(),
+                        message,
+                    }],
+                ),
+            };
         }
-        return (Value::Null, Vec::new());
+        return (
+            Value::Null,
+            vec![arazzo_expr::ExpressionWarning {
+                expression: expr.to_string(),
+                message: "XPath output has no response context".to_string(),
+            }],
+        );
     }
 
     if expr.starts_with('$') {
@@ -149,6 +177,19 @@ pub(crate) fn evaluate_output_expression_detailed(
 
     let json_path = to_json_path(expr);
     eval.evaluate_with_diagnostics(&format!("$response.body.{json_path}"))
+}
+
+pub(crate) fn evaluate_output_value_detailed(
+    output: &OutputValue,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+    match output {
+        OutputValue::RuntimeExpression(expression) => {
+            evaluate_output_expression_detailed(expression, eval, response)
+        }
+        OutputValue::Selector(selector) => resolve_selector(selector, eval),
+    }
 }
 
 fn default_criterion_context(response: Option<&Response>) -> Value {

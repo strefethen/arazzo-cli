@@ -285,10 +285,10 @@ mod tests {
         let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
         let workflow = Workflow {
             outputs: BTreeMap::from([
-                ("inputName".to_string(), "$inputs.name".to_string()),
+                ("inputName".to_string(), "$inputs.name".to_string().into()),
                 (
                     "stepResult".to_string(),
-                    "$steps.s1.outputs.result".to_string(),
+                    "$steps.s1.outputs.result".to_string().into(),
                 ),
             ]),
             ..Workflow::default()
@@ -385,7 +385,7 @@ mod tests {
             parameters: vec![arazzo_spec::Parameter {
                 name: "ids".to_string(),
                 in_: Some(ParamLocation::Query),
-                value: serde_yaml_ng::Value::String("$inputs.ids".to_string()),
+                value: serde_yaml_ng::Value::String("$inputs.ids".to_string()).into(),
                 ..arazzo_spec::Parameter::default()
             }],
             ..Step::default()
@@ -411,7 +411,7 @@ mod tests {
             parameters: vec![arazzo_spec::Parameter {
                 name: "session".to_string(),
                 in_: Some(ParamLocation::Cookie),
-                value: serde_yaml_ng::Value::String("hello;world".to_string()),
+                value: serde_yaml_ng::Value::String("hello;world".to_string()).into(),
                 ..arazzo_spec::Parameter::default()
             }],
             ..Step::default()
@@ -439,7 +439,7 @@ mod tests {
             parameters: vec![arazzo_spec::Parameter {
                 name: "X-Metadata".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("$inputs.metadata".to_string()),
+                value: serde_yaml_ng::Value::String("$inputs.metadata".to_string()).into(),
                 ..arazzo_spec::Parameter::default()
             }],
             ..Step::default()
@@ -468,13 +468,13 @@ mod tests {
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$inputs.q".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.q".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 },
                 arazzo_spec::Parameter {
                     name: "tag".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("a=b".to_string()),
+                    value: serde_yaml_ng::Value::String("a=b".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 },
             ],

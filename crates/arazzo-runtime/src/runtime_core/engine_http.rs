@@ -70,13 +70,18 @@ impl Engine {
             explicit_method.to_string()
         };
 
-        let mut prep_warnings = Vec::<String>::new();
+        let mut prep_warnings = url_result.warnings.clone();
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
                 let mut ctx = self.make_eval_context(vars, None);
                 ctx.method = Some(method.clone());
                 let eval = ExpressionEvaluator::new(ctx);
-                let mut body = resolve_payload(payload, &eval);
+                let (mut body, payload_warnings) = resolve_payload_detailed(payload, &eval);
+                prep_warnings.extend(
+                    payload_warnings
+                        .into_iter()
+                        .map(|warning| format!("requestBody.payload: {warning}")),
+                );
                 if !req_body.replacements.is_empty() {
                     let (mutated, warnings) = apply_replacements(
                         body,
@@ -126,12 +131,22 @@ impl Engine {
         let mut cookie_parts = Vec::new();
         for param in &step.parameters {
             if param.in_ == Some(ParamLocation::Header) {
-                let value_str = param.value_as_str();
-                let resolved = value_to_string(&eval.resolve_value(&value_str));
+                let (value, warnings) = resolve_value_source(&param.value, &eval);
+                prep_warnings.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| format!("parameter {:?}: {warning}", param.name)),
+                );
+                let resolved = value_to_string(&value);
                 headers.insert(param.name.clone(), resolved);
             } else if param.in_ == Some(ParamLocation::Cookie) {
-                let value_str = param.value_as_str();
-                let resolved = value_to_string(&eval.resolve_value(&value_str));
+                let (value, warnings) = resolve_value_source(&param.value, &eval);
+                prep_warnings.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| format!("parameter {:?}: {warning}", param.name)),
+                );
+                let resolved = value_to_string(&value);
                 let encoded = encode_cookie_value(&resolved);
                 cookie_parts.push(format!("{}={}", param.name, encoded));
             }
@@ -266,7 +281,7 @@ impl Engine {
         let mut warnings = prep.warnings.clone();
         for (name, expr) in &step.outputs {
             let (value, expr_warnings) =
-                evaluate_output_expression_detailed(expr, &dry_eval, Some(&fake));
+                evaluate_output_value_detailed(expr, &dry_eval, Some(&fake));
             outputs.insert(name.clone(), value);
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));
@@ -387,7 +402,7 @@ impl Engine {
         let mut outputs = BTreeMap::new();
         for (name, expr) in &step.outputs {
             let (value, expr_warnings) =
-                evaluate_output_expression_detailed(expr, &eval, Some(response));
+                evaluate_output_value_detailed(expr, &eval, Some(response));
             outputs.insert(name.clone(), value.clone());
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {
@@ -457,10 +472,15 @@ impl Engine {
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut path_params = BTreeMap::<String, String>::new();
         let mut query_params_vec = Vec::<(String, String)>::new();
+        let mut warnings = Vec::<String>::new();
 
         for param in &step.parameters {
-            let value_str = param.value_as_str();
-            let value = eval.resolve_value(&value_str);
+            let (value, param_warnings) = resolve_value_source(&param.value, &eval);
+            warnings.extend(
+                param_warnings
+                    .into_iter()
+                    .map(|warning| format!("parameter {:?}: {warning}", param.name)),
+            );
             match param.in_ {
                 Some(ParamLocation::Path) => {
                     path_params.insert(param.name.clone(), value_to_string(&value));
@@ -521,6 +541,7 @@ impl Engine {
             url: target,
             path_params,
             query_params,
+            warnings,
         })
     }
 }

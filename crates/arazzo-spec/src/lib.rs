@@ -174,7 +174,7 @@ pub struct Workflow {
     #[serde(default)]
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub outputs: BTreeMap<String, String>,
+    pub outputs: BTreeMap<String, OutputValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub success_actions: Vec<OnAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -308,7 +308,7 @@ pub struct Step {
     pub success_criteria: Vec<SuccessCriterion>,
     pub on_success: Vec<OnAction>,
     pub on_failure: Vec<OnAction>,
-    pub outputs: BTreeMap<String, String>,
+    pub outputs: BTreeMap<String, OutputValue>,
     pub extensions: VendorExtensions,
 }
 
@@ -347,7 +347,7 @@ struct StepSerde {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     on_failure: Vec<OnAction>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    outputs: BTreeMap<String, String>,
+    outputs: BTreeMap<String, OutputValue>,
     #[serde(
         flatten,
         default,
@@ -465,7 +465,7 @@ pub struct Parameter {
     #[serde(rename = "in", default, skip_serializing_if = "Option::is_none")]
     pub in_: Option<ParamLocation>,
     #[serde(default)]
-    pub value: serde_yaml_ng::Value,
+    pub value: ValueSource,
     #[serde(default)]
     pub reference: String,
     #[serde(
@@ -482,8 +482,8 @@ impl Parameter {
     /// Returns the value as a string suitable for expression evaluation.
     pub fn value_as_str(&self) -> String {
         match &self.value {
-            serde_yaml_ng::Value::String(s) => s.clone(),
-            serde_yaml_ng::Value::Number(n) => {
+            ValueSource::Literal(serde_yaml_ng::Value::String(s)) => s.clone(),
+            ValueSource::Literal(serde_yaml_ng::Value::Number(n)) => {
                 if let Some(u) = n.as_u64() {
                     u.to_string()
                 } else if let Some(i) = n.as_i64() {
@@ -494,9 +494,9 @@ impl Parameter {
                     String::new()
                 }
             }
-            serde_yaml_ng::Value::Bool(b) => b.to_string(),
-            serde_yaml_ng::Value::Null => String::new(),
-            other => {
+            ValueSource::Literal(serde_yaml_ng::Value::Bool(b)) => b.to_string(),
+            ValueSource::Literal(serde_yaml_ng::Value::Null) => String::new(),
+            ValueSource::Literal(other) => {
                 // Convert YAML mappings/sequences to JSON strings so that
                 // downstream expression evaluation (which operates on JSON)
                 // receives a valid representation.
@@ -504,14 +504,15 @@ impl Parameter {
                     serde_json::to_value(other).unwrap_or(serde_json::Value::Null);
                 serde_json::to_string(&json_val).unwrap_or_default()
             }
+            ValueSource::Selector(selector) => serde_json::to_string(selector).unwrap_or_default(),
         }
     }
 
     /// Returns true if the value is empty (null or empty string).
     pub fn is_value_empty(&self) -> bool {
         match &self.value {
-            serde_yaml_ng::Value::Null => true,
-            serde_yaml_ng::Value::String(s) => s.is_empty(),
+            ValueSource::Literal(serde_yaml_ng::Value::Null) => true,
+            ValueSource::Literal(serde_yaml_ng::Value::String(s)) => s.is_empty(),
             _ => false,
         }
     }
@@ -524,7 +525,7 @@ pub struct RequestBody {
     #[serde(default)]
     pub content_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_yaml_ng::Value>,
+    pub payload: Option<ValueSource>,
     #[serde(default)]
     pub reference: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -552,7 +553,7 @@ pub struct Replacement {
     /// Value to inject. May be a literal scalar, mapping, sequence, or an
     /// Arazzo runtime expression string resolved at send time.
     #[serde(default)]
-    pub value: serde_yaml_ng::Value,
+    pub value: ValueSource,
 }
 
 /// Step success criterion.
@@ -575,18 +576,18 @@ pub struct SuccessCriterion {
     pub extensions: VendorExtensions,
 }
 
-/// Criterion expression type selector.
+/// Selector or criterion expression type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum CriterionType {
+pub enum SelectorType {
     Name(String),
-    ExpressionType(CriterionExpressionType),
+    ExpressionType(ExpressionType),
 }
 
-/// Object form of criterion expression type.
+/// Object form of a selector or criterion expression type.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CriterionExpressionType {
+pub struct ExpressionType {
     #[serde(rename = "type", default)]
     pub type_: String,
     #[serde(default)]
@@ -601,24 +602,179 @@ pub struct CriterionExpressionType {
     pub extensions: VendorExtensions,
 }
 
+/// Arazzo Selector Object.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectorObject {
+    pub context: String,
+    pub selector: String,
+    #[serde(rename = "type")]
+    pub type_: SelectorType,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
+}
+
+/// Step or workflow output expression.
+///
+/// Arazzo 1.1 permits either the existing runtime-expression string form or a
+/// structured [`SelectorObject`]. Object values are intentionally strict here:
+/// a malformed selector is a parse error instead of becoming a silent literal.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum OutputValue {
+    RuntimeExpression(String),
+    Selector(SelectorObject),
+}
+
+impl<'de> Deserialize<'de> for OutputValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_yaml_ng::Value::deserialize(deserializer)?;
+        match value {
+            serde_yaml_ng::Value::String(expression) => Ok(Self::RuntimeExpression(expression)),
+            serde_yaml_ng::Value::Mapping(_) => serde_yaml_ng::from_value::<SelectorObject>(value)
+                .map(Self::Selector)
+                .map_err(serde::de::Error::custom),
+            other => Err(serde::de::Error::custom(format!(
+                "output must be a runtime-expression string or Selector Object, got {other:?}"
+            ))),
+        }
+    }
+}
+
+impl From<String> for OutputValue {
+    fn from(value: String) -> Self {
+        Self::RuntimeExpression(value)
+    }
+}
+
+impl From<&str> for OutputValue {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
+impl OutputValue {
+    /// Returns the runtime-expression string when this is the legacy form.
+    pub fn as_runtime_expression(&self) -> Option<&str> {
+        match self {
+            Self::RuntimeExpression(expression) => Some(expression),
+            Self::Selector(_) => None,
+        }
+    }
+
+    /// Returns the structured selector when this is the object form.
+    pub const fn as_selector(&self) -> Option<&SelectorObject> {
+        match self {
+            Self::Selector(selector) => Some(selector),
+            Self::RuntimeExpression(_) => None,
+        }
+    }
+}
+
+/// Literal/runtime-expression value or a structured Selector Object.
+///
+/// The selector variant is attempted first. A mapping that does not contain
+/// all required Selector Object fields with compatible shapes remains a
+/// literal mapping.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ValueSource {
+    Selector(SelectorObject),
+    Literal(serde_yaml_ng::Value),
+}
+
+impl Default for ValueSource {
+    fn default() -> Self {
+        Self::Literal(serde_yaml_ng::Value::Null)
+    }
+}
+
+impl From<serde_yaml_ng::Value> for ValueSource {
+    fn from(value: serde_yaml_ng::Value) -> Self {
+        match serde_yaml_ng::from_value::<Self>(value.clone()) {
+            Ok(Self::Selector(selector)) => Self::Selector(selector),
+            _ => Self::Literal(value),
+        }
+    }
+}
+
+impl From<String> for ValueSource {
+    fn from(value: String) -> Self {
+        Self::Literal(serde_yaml_ng::Value::String(value))
+    }
+}
+
+impl From<&str> for ValueSource {
+    fn from(value: &str) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
+impl ValueSource {
+    /// Returns the literal YAML value, when this is not a Selector Object.
+    pub const fn as_literal(&self) -> Option<&serde_yaml_ng::Value> {
+        match self {
+            Self::Literal(value) => Some(value),
+            Self::Selector(_) => None,
+        }
+    }
+
+    /// Returns the structured selector, when present.
+    pub const fn as_selector(&self) -> Option<&SelectorObject> {
+        match self {
+            Self::Selector(selector) => Some(selector),
+            Self::Literal(_) => None,
+        }
+    }
+}
+
+impl SelectorType {
+    /// Returns the normalized selector/criterion type name.
+    pub fn resolved_name(&self) -> String {
+        match self {
+            Self::Name(name) => name.trim().to_lowercase(),
+            Self::ExpressionType(expression_type) => expression_type.type_.trim().to_lowercase(),
+        }
+    }
+
+    /// Returns the declared version from the object form, when non-empty.
+    pub fn declared_version(&self) -> Option<&str> {
+        match self {
+            Self::ExpressionType(expression_type) if !expression_type.version.is_empty() => {
+                Some(expression_type.version.as_str())
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Backward-compatible name for criterion type declarations.
+pub type CriterionType = SelectorType;
+
+/// Backward-compatible name for the former criterion-specific object type.
+pub type CriterionExpressionType = ExpressionType;
+
 impl SuccessCriterion {
     /// Returns the effective criterion type name (`simple` when omitted).
     pub fn resolved_type_name(&self) -> String {
         match &self.type_ {
             None => "simple".to_string(),
-            Some(CriterionType::Name(name)) => name.trim().to_lowercase(),
-            Some(CriterionType::ExpressionType(expr)) => expr.type_.trim().to_lowercase(),
+            Some(type_) => type_.resolved_name(),
         }
     }
 
     /// Returns the declared criterion type version when object form is used.
     pub fn declared_type_version(&self) -> Option<&str> {
-        match &self.type_ {
-            Some(CriterionType::ExpressionType(expr)) if !expr.version.is_empty() => {
-                Some(expr.version.as_str())
-            }
-            _ => None,
-        }
+        self.type_.as_ref().and_then(SelectorType::declared_version)
     }
 
     /// Returns whether `type` was explicitly declared in the specification.
@@ -717,11 +873,11 @@ mod tests {
             replacements: vec![
                 Replacement {
                     target: "/foo".to_string(),
-                    value: serde_yaml_ng::Value::String("bar".to_string()),
+                    value: serde_yaml_ng::Value::String("bar".to_string()).into(),
                 },
                 Replacement {
                     target: "/count".to_string(),
-                    value: serde_yaml_ng::Value::Number(2.into()),
+                    value: serde_yaml_ng::Value::Number(2.into()).into(),
                 },
             ],
             ..RequestBody::default()

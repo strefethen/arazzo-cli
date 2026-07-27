@@ -52,6 +52,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
 | **JSON output** | `--json` on every command for scripting and CI integration |
 | **Expression language** | `$inputs`, `$steps`, `$response`, `$env`, XPath, JSON Pointer, interpolation |
+| **Arazzo 1.1 selectors** | Typed JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and JSONPath criterion types |
 | **Control flow** | `onSuccess`/`onFailure` actions with goto, retry (with backoff), and end |
 | **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
@@ -404,7 +405,25 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 
 **Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
 
-**JSONPath criteria (supported subset):** `type: jsonpath` success criteria support dot paths and bracket indexing (`$.items[0].name`), filter predicates (`$[?(@.price > 10)]`) with `&&`/`||`, comparison operators, `count(...)` over resolved nodes, and bare existence checks (`$.name`). Recursive descent (`$..foo`), wildcards (`$[*]`, `$.*`), and array slices (`$.items[0:2]`) are **not** supported — a criterion using them fails with an `unsupported JSONPath` diagnostic rather than silently evaluating to false.
+**JSONPath criteria (supported subset):** `type: jsonpath` success criteria support dot paths, bracket indexing (`$.items[0].name`), wildcards (`$.items[*].id`, `$.*`), filter predicates (`$[?(@.price > 10)]`) with `&&`/`||`, comparison operators, `count(...)` over resolved nodes, and bare existence checks (`$.name`). Recursive descent (`$..foo`) and array slices (`$.items[0:2]`) are **not** supported — a criterion using them fails with an `unsupported JSONPath` diagnostic rather than silently evaluating to false.
+
+### Arazzo 1.1 Selector Objects
+
+Step/workflow outputs, parameter values, request-body values, and replacement values accept structured Selector Objects in addition to existing literal and runtime-expression forms:
+
+```yaml
+outputs:
+  enabledIds:
+    context: $response.body
+    selector: $.items[?(@.enabled == true)].id
+    type:
+      type: jsonpath
+      version: rfc9535
+```
+
+`type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `10` / `20` / `30` / `31`. Runtime XPath execution currently supports XPath 1.0 (`10`); later XPath versions are preserved and validated but resolve to `null` with a visible unsupported-version diagnostic.
+
+All selector callers use the same selection engine. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in traversal/document order. Invalid syntax, unsupported runtime versions, and zero matches produce trace or dry-run warnings. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
 
 ## How It Works
 
@@ -428,10 +447,10 @@ YAML spec ──> Parse & Validate ──> Build Engine ──> Execute Steps �
 
 For each step, the engine:
 
-1. **Resolves parameters and request body** — substitutes `$inputs`, `$steps`, `$env`, and interpolated `{$expr}` values into the URL, headers, query params, and body
+1. **Resolves parameters and request body** — evaluates literals, runtime expressions, interpolation, and typed Selector Objects through one value-selection path
 2. **Sends the HTTP request** — through a rate-limited client with configurable timeout
 3. **Evaluates success criteria** — checks conditions like `$statusCode == 200`, regex patterns, XPath queries, or JSONPath filters against the response
-4. **Extracts outputs** — pulls values from the response (headers, body paths, JSON Pointers) into the step's output map for downstream steps to consume
+4. **Extracts outputs** — pulls values through runtime expressions or typed JSONPath/JSON Pointer/XPath selectors into the step's output map for downstream steps to consume
 5. **Routes control flow** — matches `onSuccess` or `onFailure` action criteria to decide: advance to the next step, jump to another step (`goto`), retry with a delay, or end the workflow
 
 The engine streams events as it runs. CLI output, traces, verbose logging, and the VS Code debugger all consume the same event stream — there is no special path for any consumer.

@@ -17,11 +17,11 @@ pub(super) enum JsonPathOutcome {
 ///   operators (`==`, `!=`, `>`, `<`, `>=`, `<=`), and `count(...)`
 /// - bare existence checks (`$.name`, `@.name`)
 ///
-/// Unsupported constructs — recursive descent (`..`), wildcards (`*` / `[*]`),
-/// and array slices (`[a:b]`) — return [`JsonPathOutcome::Unsupported`] with a
-/// diagnostic instead of silently evaluating to `false`.
+/// Unsupported constructs — including recursive descent (`..`) and array
+/// slices (`[a:b]`) — return [`JsonPathOutcome::Unsupported`] with a diagnostic
+/// instead of silently evaluating to `false`.
 pub(super) fn evaluate_jsonpath_condition(
-    eval: &ExpressionEvaluator,
+    _eval: &ExpressionEvaluator,
     context_value: &Value,
     condition: &str,
 ) -> JsonPathOutcome {
@@ -41,22 +41,15 @@ pub(super) fn evaluate_jsonpath_condition(
         ));
     }
 
-    let mut scoped_ctx = eval.context().clone();
-    scoped_ctx.response_body = Some(context_value.clone());
-    let scoped_eval = ExpressionEvaluator::new(scoped_ctx);
-
-    let normalized = normalize_jsonpath_path(trimmed);
-    if normalized.is_empty() {
-        return JsonPathOutcome::Matched(!context_value.is_null());
+    match arazzo_expr::select_json_path(context_value, trimmed) {
+        Ok(selection) => JsonPathOutcome::Matched(is_truthy(&selection.value)),
+        Err(err) => JsonPathOutcome::Unsupported(err.to_string()),
     }
-
-    let value = scoped_eval.evaluate(&format!("$response.body.{normalized}"));
-    JsonPathOutcome::Matched(is_truthy(&value))
 }
 
 /// Returns a diagnostic when `condition` uses JSONPath syntax outside the
-/// supported subset: recursive descent (`..`), wildcards (`*` / `[*]`), or
-/// array slices (`[a:b]`). Quoted string literals are ignored so filter
+/// supported subset: recursive descent (`..`) or array slices (`[a:b]`).
+/// Quoted string literals are ignored so filter
 /// predicates like `$[?(@.name == "a..b")]` are not misflagged.
 fn detect_unsupported_jsonpath(condition: &str) -> Option<String> {
     let masked = mask_quoted_spans(condition);
@@ -64,11 +57,6 @@ fn detect_unsupported_jsonpath(condition: &str) -> Option<String> {
     if masked.contains("..") {
         return Some(format!(
             "recursive descent \"..\" is not supported (in {condition:?})"
-        ));
-    }
-    if masked.contains('*') {
-        return Some(format!(
-            "wildcard \"*\" is not supported (in {condition:?})"
         ));
     }
     let mut rest = masked.as_str();
@@ -352,46 +340,15 @@ fn evaluate_jsonpath_comparison_predicate(context_value: &Value, predicate: &str
 }
 
 fn extract_jsonpath_relative(context_value: &Value, path: &str) -> Value {
-    let normalized = normalize_jsonpath_path(path);
-    if normalized.is_empty() {
-        return context_value.clone();
-    }
-    let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: Some(context_value.clone()),
-        ..EvalContext::default()
-    });
-    eval.evaluate(&format!("$response.body.{normalized}"))
+    arazzo_expr::select_json_path(context_value, path)
+        .map(|selection| selection.value)
+        .unwrap_or(Value::Null)
 }
 
 fn count_jsonpath_relative_nodes(context_value: &Value, path: &str) -> Option<usize> {
-    let normalized = normalize_jsonpath_path(path);
-    if normalized.is_empty() {
-        return Some(1);
-    }
-    arazzo_expr::count_resolved_path_nodes(context_value, &normalized).ok()
-}
-
-fn normalize_jsonpath_path(path: &str) -> String {
-    let trimmed = path.trim();
-    if let Some(value) = trimmed.strip_prefix("$.") {
-        return value.to_string();
-    }
-    if trimmed == "$" {
-        return String::new();
-    }
-    if let Some(value) = trimmed.strip_prefix('$') {
-        return value.trim_start_matches('.').to_string();
-    }
-    if let Some(value) = trimmed.strip_prefix("@.") {
-        return value.to_string();
-    }
-    if trimmed == "@" {
-        return String::new();
-    }
-    if let Some(value) = trimmed.strip_prefix('@') {
-        return value.trim_start_matches('.').to_string();
-    }
-    trimmed.to_string()
+    arazzo_expr::select_json_path(context_value, path)
+        .map(|selection| selection.match_count)
+        .ok()
 }
 
 fn parse_leading_comparison(input: &str) -> Option<(&str, &str)> {
@@ -531,14 +488,11 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_reports_unsupported() {
+    fn wildcard_selects_values() {
         match evaluate(&json!([1, 2, 3]), "$[*]") {
+            JsonPathOutcome::Matched(result) => assert!(result),
             JsonPathOutcome::Unsupported(reason) => {
-                assert!(!reason.is_empty());
-                assert!(reason.contains('*'), "reason should name the construct");
-            }
-            JsonPathOutcome::Matched(result) => {
-                panic!("expected unsupported diagnostic, got Matched({result})")
+                panic!("wildcard should be supported, got: {reason}")
             }
         }
     }

@@ -144,7 +144,10 @@ async fn execute_parallel_with_dependencies() {
                     step_id: "a".to_string(),
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "id".to_string(),
+                        "$response.body.id".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
@@ -153,18 +156,22 @@ async fn execute_parallel_with_dependencies() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string())
+                            .into(),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "name".to_string(),
-                        "$response.body.name".to_string(),
+                        "$response.body.name".to_string().into(),
                     )]),
                     ..Step::default()
                 },
             ],
-            outputs: BTreeMap::from([("name".to_string(), "$steps.b.outputs.name".to_string())]),
+            outputs: BTreeMap::from([(
+                "name".to_string(),
+                "$steps.b.outputs.name".to_string().into(),
+            )]),
             ..Workflow::default()
         }],
     );
@@ -480,7 +487,10 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     step_id: "a".to_string(),
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("x".to_string(), "$response.body.val".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "x".to_string(),
+                        "$response.body.val".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
@@ -489,11 +499,15 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string())
+                            .into(),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("y".to_string(), "$response.body.val".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "y".to_string(),
+                        "$response.body.val".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
@@ -502,11 +516,15 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.x".to_string())
+                            .into(),
                         ..arazzo_spec::Parameter::default()
                     }],
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("z".to_string(), "$response.body.val".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "z".to_string(),
+                        "$response.body.val".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
@@ -516,13 +534,15 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml_ng::Value::String("$steps.b.outputs.y".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.b.outputs.y".to_string())
+                                .into(),
                             ..arazzo_spec::Parameter::default()
                         },
                         arazzo_spec::Parameter {
                             name: "z".to_string(),
                             in_: Some(ParamLocation::Query),
-                            value: serde_yaml_ng::Value::String("$steps.c.outputs.z".to_string()),
+                            value: serde_yaml_ng::Value::String("$steps.c.outputs.z".to_string())
+                                .into(),
                             ..arazzo_spec::Parameter::default()
                         },
                     ],
@@ -531,9 +551,9 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                 },
             ],
             outputs: BTreeMap::from([
-                ("a_val".to_string(), "$steps.a.outputs.x".to_string()),
-                ("b_val".to_string(), "$steps.b.outputs.y".to_string()),
-                ("c_val".to_string(), "$steps.c.outputs.z".to_string()),
+                ("a_val".to_string(), "$steps.a.outputs.x".to_string().into()),
+                ("b_val".to_string(), "$steps.b.outputs.y".to_string().into()),
+                ("c_val".to_string(), "$steps.c.outputs.z".to_string().into()),
             ]),
             ..Workflow::default()
         }],
@@ -805,11 +825,14 @@ async fn trace_records_sequential_include_request_response_criteria_decision() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "value".to_string(),
-                    "$response.body.value".to_string(),
+                    "$response.body.value".to_string().into(),
                 )]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("value".to_string(), "$steps.s1.outputs.value".to_string())]),
+            outputs: BTreeMap::from([(
+                "value".to_string(),
+                "$steps.s1.outputs.value".to_string().into(),
+            )]),
             ..Workflow::default()
         }],
     );

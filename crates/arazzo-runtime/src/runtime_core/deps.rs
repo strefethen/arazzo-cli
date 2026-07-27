@@ -105,20 +105,25 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
         _ => {}
     }
     for p in &step.parameters {
-        let v = p.value_as_str();
-        scan(&v);
+        scan_value_source_refs(&p.value, &mut scan);
     }
     if let Some(body) = &step.request_body {
         if let Some(payload) = &body.payload {
-            scan_payload_refs(payload, &mut scan);
+            scan_value_source_refs(payload, &mut scan);
+        }
+        for replacement in &body.replacements {
+            scan_value_source_refs(&replacement.value, &mut scan);
         }
     }
     for c in &step.success_criteria {
         scan(&c.condition);
         scan(&c.context);
     }
-    for expr in step.outputs.values() {
-        scan(expr);
+    for output in step.outputs.values() {
+        match output {
+            OutputValue::RuntimeExpression(expression) => scan(expression),
+            OutputValue::Selector(selector) => scan(&selector.context),
+        }
     }
     for action in &step.on_success {
         for c in &action.criteria {
@@ -134,7 +139,14 @@ pub(crate) fn extract_step_refs(step: &Step) -> Vec<String> {
     refs.into_iter().collect()
 }
 
-fn scan_payload_refs(value: &serde_yaml_ng::Value, scan: &mut impl FnMut(&str)) {
+fn scan_value_source_refs(value: &ValueSource, scan: &mut impl FnMut(&str)) {
+    match value {
+        ValueSource::Selector(selector) => scan(&selector.context),
+        ValueSource::Literal(value) => scan_literal_refs(value, scan),
+    }
+}
+
+fn scan_literal_refs(value: &serde_yaml_ng::Value, scan: &mut impl FnMut(&str)) {
     match value {
         serde_yaml_ng::Value::String(s) => {
             if s.starts_with('$') {
@@ -150,12 +162,12 @@ fn scan_payload_refs(value: &serde_yaml_ng::Value, scan: &mut impl FnMut(&str)) 
         }
         serde_yaml_ng::Value::Sequence(seq) => {
             for item in seq {
-                scan_payload_refs(item, scan);
+                scan_value_source_refs(&item.clone().into(), scan);
             }
         }
         serde_yaml_ng::Value::Mapping(map) => {
             for (_, v) in map {
-                scan_payload_refs(v, scan);
+                scan_value_source_refs(&v.clone().into(), scan);
             }
         }
         _ => {}

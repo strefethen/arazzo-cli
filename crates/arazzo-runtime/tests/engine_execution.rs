@@ -2,8 +2,9 @@ mod common;
 
 use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
 use arazzo_spec::{
-    ActionType, OnAction, ParamLocation, Parameter, Replacement, RequestBody, Step, StepAction,
-    StepTarget, SuccessCriterion, Workflow,
+    ActionType, CriterionExpressionType, CriterionType, OnAction, OutputValue, ParamLocation,
+    Parameter, Replacement, RequestBody, SelectorObject, SelectorType, Step, StepAction,
+    StepTarget, SuccessCriterion, ValueSource, Workflow,
 };
 use common::*;
 use serde_json::json;
@@ -970,7 +971,7 @@ async fn execute_sub_workflow_step() {
             }],
             outputs: BTreeMap::from([(
                 "token".to_string(),
-                "$steps.call-child.outputs.token".to_string(),
+                "$steps.call-child.outputs.token".to_string().into(),
             )]),
             ..Workflow::default()
         },
@@ -982,13 +983,13 @@ async fn execute_sub_workflow_step() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
-                    "$response.body.token".to_string(),
+                    "$response.body.token".to_string().into(),
                 )]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([(
                 "token".to_string(),
-                "$steps.get-token.outputs.token".to_string(),
+                "$steps.get-token.outputs.token".to_string().into(),
             )]),
             ..Workflow::default()
         },
@@ -1026,7 +1027,7 @@ async fn execute_sub_workflow_with_inputs() {
                 target: Some(StepTarget::WorkflowId("child".to_string())),
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
-                    value: serde_yaml_ng::Value::String("$inputs.uid".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.uid".to_string()).into(),
                     ..Parameter::default()
                 }],
                 ..Step::default()
@@ -1041,7 +1042,7 @@ async fn execute_sub_workflow_with_inputs() {
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1137,11 +1138,14 @@ async fn execute_goto_workflow() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "ok".to_string(),
-                    "$response.body.fallback".to_string(),
+                    "$response.body.fallback".to_string().into(),
                 )]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("ok".to_string(), "$steps.fb.outputs.ok".to_string())]),
+            outputs: BTreeMap::from([(
+                "ok".to_string(),
+                "$steps.fb.outputs.ok".to_string().into(),
+            )]),
             ..Workflow::default()
         },
     ]);
@@ -1322,7 +1326,7 @@ async fn execute_operation_id_and_path_params() {
                 parameters: vec![Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1391,7 +1395,7 @@ fn request_body_with_replacements(
 ) -> RequestBody {
     RequestBody {
         content_type: "application/json".to_string(),
-        payload: Some(to_yaml(payload)),
+        payload: Some(to_yaml(payload).into()),
         replacements,
         ..RequestBody::default()
     }
@@ -1400,8 +1404,251 @@ fn request_body_with_replacements(
 fn replacement(target: &str, value: serde_yaml_ng::Value) -> Replacement {
     Replacement {
         target: target.to_string(),
-        value,
+        value: value.into(),
     }
+}
+
+fn selector(context: &str, selector: &str, type_: SelectorType) -> SelectorObject {
+    SelectorObject {
+        context: context.to_string(),
+        selector: selector.to_string(),
+        type_,
+        extensions: BTreeMap::new(),
+    }
+}
+
+#[tokio::test]
+async fn structured_selectors_share_one_runtime_across_callers() {
+    let captured_url = Arc::new(Mutex::new(String::new()));
+    let captured_headers = Arc::new(Mutex::new(BTreeMap::new()));
+    let captured_body = Arc::new(Mutex::new(String::new()));
+    let url_ref = Arc::clone(&captured_url);
+    let headers_ref = Arc::clone(&captured_headers);
+    let body_ref = Arc::clone(&captured_body);
+    let server = start_server(move |_method, url, headers, body| {
+        *url_ref.lock().unwrap_or_else(|err| err.into_inner()) = url;
+        *headers_ref.lock().unwrap_or_else(|err| err.into_inner()) = headers;
+        *body_ref.lock().unwrap_or_else(|err| err.into_inner()) = body;
+        MockHttpResponse::json(
+            200,
+            r#"{"items":[{"id":2,"enabled":true},{"id":1,"enabled":true}]}"#,
+        )
+    });
+
+    let jsonpath = SelectorType::Name("jsonpath".to_string());
+    let jsonpointer = SelectorType::Name("jsonpointer".to_string());
+    let payload = to_yaml(json!({
+        "selected": {
+            "context": "$inputs.document",
+            "selector": "$.items[*].id",
+            "type": "jsonpath"
+        },
+        "first": null,
+        "literalMap": {
+            "context": "literal-context",
+            "selector": "literal-selector"
+        }
+    }));
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "selectors".to_string(),
+            steps: vec![Step {
+                step_id: "select".to_string(),
+                target: Some(StepTarget::OperationPath("POST /select".to_string())),
+                parameters: vec![
+                    Parameter {
+                        name: "selected".to_string(),
+                        in_: Some(ParamLocation::Query),
+                        value: ValueSource::Selector(selector(
+                            "$inputs.document",
+                            "$.items[*].id",
+                            jsonpath.clone(),
+                        )),
+                        ..Parameter::default()
+                    },
+                    Parameter {
+                        name: "X-First".to_string(),
+                        in_: Some(ParamLocation::Header),
+                        value: ValueSource::Selector(selector(
+                            "$inputs.document",
+                            "/items/0/id",
+                            jsonpointer.clone(),
+                        )),
+                        ..Parameter::default()
+                    },
+                ],
+                request_body: Some(RequestBody {
+                    content_type: "application/json".to_string(),
+                    payload: Some(payload.into()),
+                    replacements: vec![Replacement {
+                        target: "/first".to_string(),
+                        value: ValueSource::Selector(selector(
+                            "$inputs.document",
+                            "/items/0/id",
+                            jsonpointer.clone(),
+                        )),
+                    }],
+                    ..RequestBody::default()
+                }),
+                success_criteria: vec![SuccessCriterion {
+                    context: "$response.body".to_string(),
+                    condition: "$.items[*].id".to_string(),
+                    type_: Some(CriterionType::Name("jsonpath".to_string())),
+                    ..SuccessCriterion::default()
+                }],
+                outputs: BTreeMap::from([(
+                    "ids".to_string(),
+                    OutputValue::Selector(selector(
+                        "$response.body",
+                        "$.items[*].id",
+                        SelectorType::ExpressionType(CriterionExpressionType {
+                            type_: "jsonpath".to_string(),
+                            version: "rfc9535".to_string(),
+                            ..CriterionExpressionType::default()
+                        }),
+                    )),
+                )]),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([(
+                "first".to_string(),
+                OutputValue::Selector(selector("$steps.select.outputs.ids", "/0", jsonpointer)),
+            )]),
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
+        Ok(engine) => engine,
+        Err(error) => panic!("building selector engine: {error}"),
+    };
+    let inputs = BTreeMap::from([(
+        "document".to_string(),
+        json!({"items": [{"id": 2}, {"id": 1}]}),
+    )]);
+    let result = engine.execute_collect("selectors", inputs).await;
+    let outputs = match &result.outputs {
+        Ok(outputs) => outputs,
+        Err(error) => panic!("executing selector workflow: {error}"),
+    };
+
+    assert_eq!(outputs.get("first"), Some(&json!(2)));
+    assert_eq!(
+        captured_url
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .as_str(),
+        "/select?selected=2&selected=1"
+    );
+    assert_eq!(
+        captured_headers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("X-First"))
+            .map(|(_, value)| value.as_str()),
+        Some("2")
+    );
+    assert_eq!(
+        parse_json_body(
+            captured_body
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .as_str()
+        ),
+        json!({
+            "selected": [2, 1],
+            "first": 2,
+            "literalMap": {
+                "context": "literal-context",
+                "selector": "literal-selector"
+            }
+        })
+    );
+    assert_eq!(
+        result.trace_steps()[0].outputs.get("ids"),
+        Some(&json!([2, 1]))
+    );
+    assert!(result.trace_steps()[0].warnings.is_empty());
+}
+
+#[tokio::test]
+async fn selector_failures_return_null_and_visible_trace_diagnostics() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"items":[]}"#)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "selector-diagnostics".to_string(),
+            steps: vec![Step {
+                step_id: "select".to_string(),
+                target: Some(StepTarget::OperationPath("/select".to_string())),
+                outputs: BTreeMap::from([
+                    (
+                        "zero".to_string(),
+                        OutputValue::Selector(selector(
+                            "$response.body",
+                            "$.items[*].id",
+                            SelectorType::Name("jsonpath".to_string()),
+                        )),
+                    ),
+                    (
+                        "invalid".to_string(),
+                        OutputValue::Selector(selector(
+                            "$response.body",
+                            "$.items[0:1]",
+                            SelectorType::Name("jsonpath".to_string()),
+                        )),
+                    ),
+                    (
+                        "unsupportedVersion".to_string(),
+                        OutputValue::Selector(selector(
+                            "$response.body",
+                            "//item",
+                            SelectorType::ExpressionType(CriterionExpressionType {
+                                type_: "xpath".to_string(),
+                                version: "20".to_string(),
+                                ..CriterionExpressionType::default()
+                            }),
+                        )),
+                    ),
+                ]),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
+        Ok(engine) => engine,
+        Err(error) => panic!("building diagnostic engine: {error}"),
+    };
+    let result = engine
+        .execute_collect("selector-diagnostics", BTreeMap::new())
+        .await;
+    if let Err(error) = &result.outputs {
+        panic!("executing diagnostic workflow: {error}");
+    }
+
+    let trace = result.trace_steps()[0];
+    assert_eq!(trace.outputs.get("zero"), Some(&serde_json::Value::Null));
+    assert_eq!(trace.outputs.get("invalid"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        trace.outputs.get("unsupportedVersion"),
+        Some(&serde_json::Value::Null)
+    );
+    assert!(trace
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("selector matched no values")));
+    assert!(trace
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("array slices are not supported")));
+    assert!(trace
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("unsupported by this XPath 1.0 runtime")));
 }
 
 fn captured_string(captured: &Arc<Mutex<String>>) -> String {
@@ -1535,7 +1782,10 @@ async fn replacements_with_dependent_step_outputs_resolves_in_order() {
                 step_id: "create".to_string(),
                 target: Some(StepTarget::OperationPath("POST /create".to_string())),
                 success_criteria: success_200(),
-                outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
+                outputs: BTreeMap::from([(
+                    "id".to_string(),
+                    "$response.body.id".to_string().into(),
+                )]),
                 ..Step::default()
             },
             Step {
@@ -1666,7 +1916,7 @@ async fn dry_run_captures_requests_and_headers() {
                 step_id: "s2".to_string(),
                 target: Some(StepTarget::OperationPath("POST /items".to_string())),
                 request_body: Some(RequestBody {
-                    payload: Some(to_yaml(json!({"name":"test"}))),
+                    payload: Some(to_yaml(json!({"name":"test"})).into()),
                     ..RequestBody::default()
                 }),
                 success_criteria: success_200(),
@@ -1716,19 +1966,19 @@ async fn dry_run_resolves_expressions_and_skips_http_calls() {
                 Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.userId".to_string()).into(),
                     ..Parameter::default()
                 },
                 Parameter {
                     name: "Authorization".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml_ng::Value::String("$inputs.token".to_string()),
+                    value: serde_yaml_ng::Value::String("$inputs.token".to_string()).into(),
                     ..Parameter::default()
                 },
                 Parameter {
                     name: "format".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("json".to_string()),
+                    value: serde_yaml_ng::Value::String("json".to_string()).into(),
                     ..Parameter::default()
                 },
             ],
@@ -1772,7 +2022,10 @@ async fn dry_run_multi_step_and_custom_headers() {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/create".to_string())),
                 success_criteria: success_200(),
-                outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
+                outputs: BTreeMap::from([(
+                    "id".to_string(),
+                    "$response.body.id".to_string().into(),
+                )]),
                 ..Step::default()
             },
             Step {
@@ -1781,7 +2034,7 @@ async fn dry_run_multi_step_and_custom_headers() {
                 parameters: vec![Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
@@ -1793,12 +2046,12 @@ async fn dry_run_multi_step_and_custom_headers() {
                 parameters: vec![Parameter {
                     name: "X-Custom".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml_ng::Value::String("custom-value".to_string()),
+                    value: serde_yaml_ng::Value::String("custom-value".to_string()).into(),
                     ..Parameter::default()
                 }],
                 request_body: Some(RequestBody {
                     content_type: "application/xml".to_string(),
-                    payload: Some(to_yaml(json!({"key":"val"}))),
+                    payload: Some(to_yaml(json!({"key":"val"})).into()),
                     ..RequestBody::default()
                 }),
                 success_criteria: success_200(),
@@ -1847,14 +2100,20 @@ async fn execute_step_standalone_no_deps() {
                     step_id: "s1".to_string(),
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "v".to_string(),
+                        "$response.body.v".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
                     target: Some(StepTarget::OperationPath("/b".to_string())),
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "v".to_string(),
+                        "$response.body.v".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
             ],
@@ -1898,7 +2157,10 @@ async fn execute_step_with_transitive_deps() {
                     step_id: "s1".to_string(),
                     target: Some(StepTarget::OperationPath("/a".to_string())),
                     success_criteria: success_200(),
-                    outputs: BTreeMap::from([("id".to_string(), "$response.body.id".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "id".to_string(),
+                        "$response.body.id".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {
@@ -1908,12 +2170,13 @@ async fn execute_step_with_transitive_deps() {
                     parameters: vec![Parameter {
                         name: "ref_id".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string())
+                            .into(),
                         ..Parameter::default()
                     }],
                     outputs: BTreeMap::from([(
                         "result".to_string(),
-                        "$response.body.result".to_string(),
+                        "$response.body.result".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -2008,7 +2271,7 @@ async fn execute_step_no_deps_flag_standalone_succeeds() {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/a".to_string())),
                 success_criteria: success_200(),
-                outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string())]),
+                outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string().into())]),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -2046,7 +2309,7 @@ async fn execute_step_no_deps_flag_with_refs_fails() {
                     target: Some(StepTarget::OperationPath("/b".to_string())),
                     outputs: BTreeMap::from([(
                         "val".to_string(),
-                        "$steps.s1.outputs.id".to_string(),
+                        "$steps.s1.outputs.id".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -2440,7 +2703,7 @@ async fn execute_path_param_with_special_chars_is_percent_encoded() {
             parameters: vec![Parameter {
                 name: "name".to_string(),
                 in_: Some(ParamLocation::Path),
-                value: serde_yaml_ng::Value::String("hello world/foo#bar".to_string()),
+                value: serde_yaml_ng::Value::String("hello world/foo#bar".to_string()).into(),
                 ..Parameter::default()
             }],
             success_criteria: success_200(),
@@ -2484,14 +2747,14 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
                 target: Some(StepTarget::WorkflowId("child".to_string())),
                 parameters: vec![Parameter {
                     name: "count".to_string(),
-                    value: serde_yaml_ng::Value::String("{$inputs.count}".to_string()),
+                    value: serde_yaml_ng::Value::String("{$inputs.count}".to_string()).into(),
                     ..Parameter::default()
                 }],
                 ..Step::default()
             }],
             outputs: BTreeMap::from([(
                 "result".to_string(),
-                "$steps.call-child.outputs.received".to_string(),
+                "$steps.call-child.outputs.received".to_string().into(),
             )]),
             ..Workflow::default()
         },
@@ -2503,7 +2766,7 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
                 success_criteria: success_200(),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("received".to_string(), "$inputs.count".to_string())]),
+            outputs: BTreeMap::from([("received".to_string(), "$inputs.count".to_string().into())]),
             ..Workflow::default()
         },
     ]);
@@ -2522,4 +2785,56 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
         "interpolated param should preserve numeric type, got: {:?}",
         outputs.get("result")
     );
+}
+
+#[tokio::test]
+async fn sub_workflow_selector_param_preserves_number_type() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "parent".to_string(),
+            steps: vec![Step {
+                step_id: "call-child".to_string(),
+                target: Some(StepTarget::WorkflowId("child".to_string())),
+                parameters: vec![Parameter {
+                    name: "count".to_string(),
+                    value: ValueSource::Selector(selector(
+                        "$inputs.document",
+                        "/count",
+                        SelectorType::Name("jsonpointer".to_string()),
+                    )),
+                    ..Parameter::default()
+                }],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([(
+                "result".to_string(),
+                "$steps.call-child.outputs.received".to_string().into(),
+            )]),
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "child".to_string(),
+            steps: vec![Step {
+                step_id: "noop".to_string(),
+                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([("received".to_string(), "$inputs.count".to_string().into())]),
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let inputs = BTreeMap::from([("document".to_string(), json!({"count": 42}))]);
+    let outputs = match engine.execute_collect("parent", inputs).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    assert_eq!(outputs.get("result"), Some(&json!(42)));
 }

@@ -150,10 +150,13 @@ fn extract_step_refs_and_control_flow() {
         parameters: vec![arazzo_spec::Parameter {
             name: "q".to_string(),
             in_: Some(ParamLocation::Query),
-            value: serde_yaml_ng::Value::String("$steps.s1.outputs.query".to_string()),
+            value: serde_yaml_ng::Value::String("$steps.s1.outputs.query".to_string()).into(),
             ..arazzo_spec::Parameter::default()
         }],
-        outputs: BTreeMap::from([("val".to_string(), "$steps.s1.outputs.value".to_string())]),
+        outputs: BTreeMap::from([(
+            "val".to_string(),
+            "$steps.s1.outputs.value".to_string().into(),
+        )]),
         on_failure: vec![OnAction {
             type_: Some(ActionType::Retry),
             criteria: vec![SuccessCriterion {
@@ -284,7 +287,7 @@ fn build_levels_supports_independent_chain_and_cycle() {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "from".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 }],
                 ..Step::default()
@@ -306,7 +309,7 @@ fn build_levels_supports_independent_chain_and_cycle() {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "from".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$steps.s2.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.s2.outputs.id".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 }],
                 ..Step::default()
@@ -316,7 +319,7 @@ fn build_levels_supports_independent_chain_and_cycle() {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "from".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.s1.outputs.id".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 }],
                 ..Step::default()
@@ -354,13 +357,15 @@ fn build_levels_supports_diamond_dependency() {
                     arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string())
+                            .into(),
                         ..arazzo_spec::Parameter::default()
                     },
                     arazzo_spec::Parameter {
                         name: "y".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("$steps.b.outputs.id".to_string()),
+                        value: serde_yaml_ng::Value::String("$steps.b.outputs.id".to_string())
+                            .into(),
                         ..arazzo_spec::Parameter::default()
                     },
                 ],
@@ -424,7 +429,7 @@ fn compute_transitive_deps_direct_dependency() {
                 target: Some(StepTarget::OperationPath("/b".to_string())),
                 outputs: BTreeMap::from([(
                     "val".to_string(),
-                    "$steps.a.outputs.result".to_string(),
+                    "$steps.a.outputs.result".to_string().into(),
                 )]),
                 ..Step::default()
             },
@@ -456,14 +461,17 @@ fn compute_transitive_deps_transitive_chain() {
                 target: Some(StepTarget::OperationPath("/b".to_string())),
                 outputs: BTreeMap::from([(
                     "val".to_string(),
-                    "$steps.a.outputs.result".to_string(),
+                    "$steps.a.outputs.result".to_string().into(),
                 )]),
                 ..Step::default()
             },
             Step {
                 step_id: "c".to_string(),
                 target: Some(StepTarget::OperationPath("/c".to_string())),
-                outputs: BTreeMap::from([("val".to_string(), "$steps.b.outputs.val".to_string())]),
+                outputs: BTreeMap::from([(
+                    "val".to_string(),
+                    "$steps.b.outputs.val".to_string().into(),
+                )]),
                 ..Step::default()
             },
         ],
@@ -495,7 +503,7 @@ fn compute_transitive_deps_diamond() {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "x".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 }],
                 ..Step::default()
@@ -505,7 +513,7 @@ fn compute_transitive_deps_diamond() {
                 parameters: vec![arazzo_spec::Parameter {
                     name: "y".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()),
+                    value: serde_yaml_ng::Value::String("$steps.a.outputs.id".to_string()).into(),
                     ..arazzo_spec::Parameter::default()
                 }],
                 ..Step::default()
@@ -513,8 +521,8 @@ fn compute_transitive_deps_diamond() {
             Step {
                 step_id: "d".to_string(),
                 outputs: BTreeMap::from([
-                    ("v1".to_string(), "$steps.b.outputs.r".to_string()),
-                    ("v2".to_string(), "$steps.c.outputs.r".to_string()),
+                    ("v1".to_string(), "$steps.b.outputs.r".to_string().into()),
+                    ("v2".to_string(), "$steps.c.outputs.r".to_string().into()),
                 ]),
                 ..Step::default()
             },
@@ -666,7 +674,8 @@ proptest! {
                         in_: Some(ParamLocation::Query),
                         value: serde_yaml_ng::Value::String(format!(
                             "$steps.s{dep}.outputs.value"
-                        )),
+                        ))
+                        .into(),
                         ..arazzo_spec::Parameter::default()
                     });
                 }

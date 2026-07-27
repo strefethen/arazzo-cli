@@ -149,7 +149,10 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
                 }],
                 outputs: {
                     let mut m = BTreeMap::new();
-                    m.insert("value".to_string(), "$response.body.value".to_string());
+                    m.insert(
+                        "value".to_string(),
+                        "$response.body.value".to_string().into(),
+                    );
                     m
                 },
                 ..Step::default()
@@ -158,7 +161,7 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
                 let mut m = BTreeMap::new();
                 m.insert(
                     "value".to_string(),
-                    "$steps.fetch.outputs.value".to_string(),
+                    "$steps.fetch.outputs.value".to_string().into(),
                 );
                 m
             },
@@ -191,25 +194,26 @@ fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
                     Parameter {
                         name: "Authorization".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml_ng::Value::String("Bearer top-secret-jwt".to_string()),
+                        value: serde_yaml_ng::Value::String("Bearer top-secret-jwt".to_string())
+                            .into(),
                         ..Parameter::default()
                     },
                     Parameter {
                         name: "Accept".to_string(),
                         in_: Some(ParamLocation::Header),
-                        value: serde_yaml_ng::Value::String("application/json".to_string()),
+                        value: serde_yaml_ng::Value::String("application/json".to_string()).into(),
                         ..Parameter::default()
                     },
                     Parameter {
                         name: "token".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("query-secret-123".to_string()),
+                        value: serde_yaml_ng::Value::String("query-secret-123".to_string()).into(),
                         ..Parameter::default()
                     },
                     Parameter {
                         name: "page".to_string(),
                         in_: Some(ParamLocation::Query),
-                        value: serde_yaml_ng::Value::String("1".to_string()),
+                        value: serde_yaml_ng::Value::String("1".to_string()).into(),
                         ..Parameter::default()
                     },
                 ],
@@ -221,7 +225,8 @@ fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
                             "safeName": "alice",
                             "nested": { "dbPassword": "hunter2" }
                         }))
-                        .unwrap_or_else(|err| panic!("building YAML payload: {err}")),
+                        .unwrap_or_else(|err| panic!("building YAML payload: {err}"))
+                        .into(),
                     ),
                     ..RequestBody::default()
                 }),

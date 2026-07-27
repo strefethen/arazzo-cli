@@ -49,6 +49,14 @@ Run all three before committing.
 3. `engine.execute(workflow_id, inputs)` executes workflow steps, evaluates criteria, applies actions (`end`, `goto`, `retry`), and returns workflow outputs.
 4. Supports dry-run capture and trace hooks.
 
+### Arazzo 1.1 Selector Objects
+
+- Step/workflow outputs, parameters, request-body values, and replacement values share one typed Selector Object model and runtime dispatcher.
+- `type` accepts `jsonpath`, `jsonpointer`, or `xpath` in string or versioned object form.
+- Zero/one/many matches normalize to `null`/scalar/ordered array. Zero matches, invalid syntax, and unsupported runtime versions produce visible diagnostics.
+- JSONPath supports fields, indexes, wildcards, and simple filters. JSON Pointer uses RFC 6901. XPath execution uses XPath 1.0; later schema-valid XPath versions are preserved but fail visibly at runtime.
+- A mapping is treated as a selector only when it satisfies the complete `context` + `selector` + `type` contract; other mappings remain literal values.
+
 ## Source Description Version Scope
 
 - Parsing and structural validation accept Arazzo `1.x` documents.

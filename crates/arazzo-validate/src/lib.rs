@@ -8,8 +8,9 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, Parameter,
-    StepAction, StepTarget, SuccessCriterion, Workflow,
+    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, OutputValue,
+    Parameter, SelectorObject, SelectorType, StepAction, StepTarget, SuccessCriterion, ValueSource,
+    Workflow,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -100,6 +101,7 @@ pub enum ValidationErrorKind {
     DependencyCycle,
     InvalidRetryField,
     InvalidCriterionType,
+    InvalidSelectorType,
 }
 
 /// Parses and validates an Arazzo spec file from disk.
@@ -383,7 +385,18 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 &step.parameters,
                 &mut errs,
             );
+            for (name, output) in &step.outputs {
+                let output_path = format!("{step_path}.outputs.{name}");
+                validate_output_value(&output_path, output, &mut errs);
+            }
             if let Some(request_body) = &step.request_body {
+                if let Some(payload) = &request_body.payload {
+                    validate_value_source(
+                        &format!("{step_path}.requestBody.payload"),
+                        payload,
+                        &mut errs,
+                    );
+                }
                 validate_replacements(
                     &format!("{step_path}.requestBody.replacements"),
                     &request_body.replacements,
@@ -425,19 +438,10 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             });
         }
 
-        for (name, expr) in &wf.outputs {
-            if let Some(after) = expr.strip_prefix("$steps.") {
-                let step_name = after.split('.').next().unwrap_or_default();
-                if !step_ids.contains(step_name) {
-                    errs.push(ValidationError {
-                        kind: ValidationErrorKind::InvalidReference,
-                        path: format!("{path}.outputs.{name}"),
-                        message: format!(
-                            "{path}.outputs.{name} references unknown step '{step_name}'"
-                        ),
-                    });
-                }
-            }
+        for (name, output) in &wf.outputs {
+            let output_path = format!("{path}.outputs.{name}");
+            validate_output_value(&output_path, output, &mut errs);
+            validate_output_step_reference(&output_path, output, &step_ids, &mut errs);
         }
     }
 
@@ -548,10 +552,112 @@ fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<V
         if param.is_value_empty() && param.reference.is_empty() {
             errs.push(ValidationError {
                 kind: ValidationErrorKind::MissingParameterValue,
-                path: param_path,
+                path: param_path.clone(),
                 message: format!("{path_prefix}[{param_idx}] must have value or reference"),
             });
         }
+        validate_value_source(&format!("{param_path}.value"), &param.value, errs);
+    }
+}
+
+fn validate_output_value(path: &str, output: &OutputValue, errs: &mut Vec<ValidationError>) {
+    if let OutputValue::Selector(selector) = output {
+        validate_selector(path, selector, errs);
+    }
+}
+
+fn validate_output_step_reference(
+    path: &str,
+    output: &OutputValue,
+    step_ids: &HashSet<&str>,
+    errs: &mut Vec<ValidationError>,
+) {
+    let expression = match output {
+        OutputValue::RuntimeExpression(expression) => expression,
+        OutputValue::Selector(selector) => &selector.context,
+    };
+    if let Some(after) = expression.strip_prefix("$steps.") {
+        let step_name = after.split('.').next().unwrap_or_default();
+        if !step_ids.contains(step_name) {
+            errs.push(ValidationError {
+                kind: ValidationErrorKind::InvalidReference,
+                path: path.to_string(),
+                message: format!("{path} references unknown step '{step_name}'"),
+            });
+        }
+    }
+}
+
+fn validate_value_source(path: &str, value: &ValueSource, errs: &mut Vec<ValidationError>) {
+    match value {
+        ValueSource::Selector(selector) => validate_selector(path, selector, errs),
+        ValueSource::Literal(serde_yaml_ng::Value::Sequence(values)) => {
+            for (index, value) in values.iter().enumerate() {
+                validate_value_source(&format!("{path}[{index}]"), &value.clone().into(), errs);
+            }
+        }
+        ValueSource::Literal(serde_yaml_ng::Value::Mapping(values)) => {
+            for (key, value) in values {
+                let key = key.as_str().unwrap_or("<non-string-key>");
+                validate_value_source(&format!("{path}.{key}"), &value.clone().into(), errs);
+            }
+        }
+        ValueSource::Literal(_) => {}
+    }
+}
+
+fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<ValidationError>) {
+    if selector.context.trim().is_empty() {
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{path}.context"),
+            message: format!("{path}.context is required"),
+        });
+    }
+
+    let type_name = selector.type_.resolved_name();
+    if selector.selector.trim().is_empty() && type_name != "jsonpointer" {
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{path}.selector"),
+            message: format!("{path}.selector is required"),
+        });
+    }
+
+    if !matches!(type_name.as_str(), "jsonpath" | "xpath" | "jsonpointer") {
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::InvalidSelectorType,
+            path: format!("{path}.type"),
+            message: format!("{path}.type must be one of jsonpath, xpath, or jsonpointer"),
+        });
+        return;
+    }
+
+    let SelectorType::ExpressionType(expression_type) = &selector.type_ else {
+        return;
+    };
+    let version = expression_type.version.trim();
+    if version.is_empty() {
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{path}.type.version"),
+            message: format!("{path}.type.version is required"),
+        });
+        return;
+    }
+
+    let supported = match type_name.as_str() {
+        "jsonpath" => matches!(version, "rfc9535" | "draft-goessner-dispatch-jsonpath-00"),
+        "xpath" => matches!(version, "10" | "20" | "30" | "31"),
+        "jsonpointer" => version == "rfc6901",
+        _ => false,
+    };
+    if !supported {
+        errs.push(ValidationError {
+            kind: ValidationErrorKind::InvalidSelectorType,
+            path: format!("{path}.type.version"),
+            message: format!("{path}.type.version {version:?} is not supported for {type_name}"),
+        });
     }
 }
 
@@ -569,6 +675,11 @@ fn validate_replacements(
                 message: format!("{path} is required"),
             });
         }
+        validate_value_source(
+            &format!("{path_prefix}[{replacement_idx}].value"),
+            &replacement.value,
+            errs,
+        );
     }
 }
 
@@ -910,9 +1021,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use arazzo_spec::{
-        ActionType, CriterionExpressionType, CriterionType, Info, OnAction, ParamLocation,
-        Replacement, RequestBody, SourceDescription, SourceType, Step, StepAction, StepTarget,
-        SuccessCriterion, Workflow,
+        ActionType, CriterionExpressionType, CriterionType, Info, OnAction, OutputValue,
+        ParamLocation, Replacement, RequestBody, SelectorObject, SelectorType, SourceDescription,
+        SourceType, Step, StepAction, StepTarget, SuccessCriterion, Workflow,
     };
 
     use super::{parse, parse_bytes, validate, ArazzoSpec, Error, ValidationErrorKind};
@@ -1114,7 +1225,7 @@ workflows:
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "Authorization");
         assert_eq!(params[0].in_, Some(ParamLocation::Header));
-        assert_eq!(params[0].value, "Bearer abc123");
+        assert_eq!(params[0].value, "Bearer abc123".into());
         assert!(params[0].reference.is_empty());
     }
 
@@ -1192,7 +1303,7 @@ workflows:
             Err(err) => panic!("expected no error, got: {err}"),
         };
         let params = &spec.workflows[0].steps[0].parameters;
-        assert_eq!(params[0].value, "Bearer custom-token");
+        assert_eq!(params[0].value, "Bearer custom-token".into());
     }
 
     #[test]
@@ -1724,7 +1835,7 @@ workflows:
         spec.workflows[0].steps[0].request_body = Some(RequestBody {
             replacements: vec![Replacement {
                 target: "  ".to_string(),
-                value: serde_yaml_ng::Value::String("bar".to_string()),
+                value: serde_yaml_ng::Value::String("bar".to_string()).into(),
             }],
             ..RequestBody::default()
         });
@@ -1744,7 +1855,7 @@ workflows:
         spec.workflows[0].steps[0].request_body = Some(RequestBody {
             replacements: vec![Replacement {
                 target: "/foo".to_string(),
-                value: serde_yaml_ng::Value::Null,
+                value: serde_yaml_ng::Value::Null.into(),
             }],
             ..RequestBody::default()
         });
@@ -1760,7 +1871,7 @@ workflows:
         spec.workflows[0].steps[0].request_body = Some(RequestBody {
             replacements: vec![Replacement {
                 target: "/foo".to_string(),
-                value: serde_yaml_ng::Value::String("bar".to_string()),
+                value: serde_yaml_ng::Value::String("bar".to_string()).into(),
             }],
             ..RequestBody::default()
         });
@@ -1867,13 +1978,71 @@ workflows:
         let mut spec = valid_spec();
         spec.workflows[0].outputs = BTreeMap::from([(
             "result".to_string(),
-            "$steps.nonexistent.outputs.value".to_string(),
+            "$steps.nonexistent.outputs.value".to_string().into(),
         )]);
         let errs = expect_validation_errors(validate(&spec));
         assert_eq!(errs[0].kind, ValidationErrorKind::InvalidReference);
         assert!(errs[0]
             .message
             .contains("references unknown step 'nonexistent'"));
+    }
+
+    #[test]
+    fn validate_selector_accepts_schema_type_version_combinations() {
+        for (type_name, version) in [
+            ("jsonpath", "rfc9535"),
+            ("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+            ("xpath", "10"),
+            ("xpath", "20"),
+            ("xpath", "30"),
+            ("xpath", "31"),
+            ("jsonpointer", "rfc6901"),
+        ] {
+            let mut spec = valid_spec();
+            spec.workflows[0].outputs = BTreeMap::from([(
+                "selected".to_string(),
+                OutputValue::Selector(SelectorObject {
+                    context: "$inputs.document".to_string(),
+                    selector: if type_name == "jsonpointer" {
+                        "/items".to_string()
+                    } else {
+                        "$.items".to_string()
+                    },
+                    type_: SelectorType::ExpressionType(CriterionExpressionType {
+                        type_: type_name.to_string(),
+                        version: version.to_string(),
+                        ..CriterionExpressionType::default()
+                    }),
+                    extensions: BTreeMap::new(),
+                }),
+            )]);
+
+            if let Err(error) = validate(&spec) {
+                panic!("expected {type_name} {version} selector to validate: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_selector_rejects_unsupported_type_version_combination() {
+        let mut spec = valid_spec();
+        spec.workflows[0].outputs = BTreeMap::from([(
+            "selected".to_string(),
+            OutputValue::Selector(SelectorObject {
+                context: "$inputs.document".to_string(),
+                selector: "$.items".to_string(),
+                type_: SelectorType::ExpressionType(CriterionExpressionType {
+                    type_: "jsonpath".to_string(),
+                    version: "xpath-10".to_string(),
+                    ..CriterionExpressionType::default()
+                }),
+                extensions: BTreeMap::new(),
+            }),
+        )]);
+
+        let errors = expect_validation_errors(validate(&spec));
+        assert_eq!(errors[0].kind, ValidationErrorKind::InvalidSelectorType);
+        assert!(errors[0].message.contains("not supported for jsonpath"));
     }
 
     #[test]

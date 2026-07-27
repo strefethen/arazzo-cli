@@ -91,7 +91,7 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
                 Step {
                     step_id: "s1".to_string(),
                     target: Some(StepTarget::OperationPath("/echo".to_string())),
-                    outputs: BTreeMap::from([("code".to_string(), "code".to_string())]),
+                    outputs: BTreeMap::from([("code".to_string(), "code".to_string().into())]),
                     ..Step::default()
                 },
                 Step {

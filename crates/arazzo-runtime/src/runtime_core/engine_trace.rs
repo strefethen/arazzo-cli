@@ -90,7 +90,7 @@ impl Engine {
         &self,
         gate: &DebugGateContext<'_>,
         output_name: &str,
-        output_expr: &str,
+        output_expr: &OutputValue,
     ) -> Result<(), RuntimeError> {
         let mut locals = BTreeMap::new();
         let status_code = gate
@@ -104,7 +104,7 @@ impl Engine {
         );
         locals.insert(
             "outputExpression".to_string(),
-            Value::String(output_expr.to_string()),
+            serde_json::to_value(output_expr).unwrap_or(Value::Null),
         );
         for (name, value) in gate.current_outputs {
             locals.insert(name.clone(), value.clone());

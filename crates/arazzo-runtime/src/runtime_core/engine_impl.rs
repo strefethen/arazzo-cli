@@ -633,20 +633,32 @@ impl Engine {
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
         for param in &step.parameters {
-            let value_str = param.value_as_str();
-            let value = if let Some(inner) = value_str
-                .strip_prefix('{')
-                .and_then(|s| s.strip_suffix('}'))
-                .filter(|s| s.starts_with('$') && !s.contains('{'))
-            {
-                // Single expression like {$inputs.count} — preserve type
-                eval.evaluate(inner)
-            } else if value_str.contains("{$") {
-                // Mixed text + expressions — must stringify
-                Value::String(eval.interpolate_string(&value_str))
-            } else {
-                eval.evaluate(&value_str)
+            let (value, warnings) = match &param.value {
+                ValueSource::Selector(_) => resolve_value_source(&param.value, &eval),
+                ValueSource::Literal(_) => {
+                    let value_str = param.value_as_str();
+                    let value = if let Some(inner) = value_str
+                        .strip_prefix('{')
+                        .and_then(|s| s.strip_suffix('}'))
+                        .filter(|s| s.starts_with('$') && !s.contains('{'))
+                    {
+                        // Single expression like {$inputs.count} — preserve type
+                        eval.evaluate(inner)
+                    } else if value_str.contains("{$") {
+                        // Mixed text + expressions — must stringify
+                        Value::String(eval.interpolate_string(&value_str))
+                    } else {
+                        eval.evaluate(&value_str)
+                    };
+                    (value, Vec::new())
+                }
             };
+            for warning in warnings {
+                eprintln!(
+                    "warning: sub-workflow parameter {:?}: {warning}",
+                    param.name
+                );
+            }
             sub_inputs.insert(param.name.clone(), value);
         }
 
@@ -743,9 +755,17 @@ impl Engine {
         vars: &VarStore,
     ) -> BTreeMap<String, Value> {
         let mut ctx = self.make_eval_context(vars, None);
-        for (name, expr) in &workflow.outputs {
+        for (name, output) in &workflow.outputs {
             let eval = ExpressionEvaluator::new(ctx.clone());
-            let value = eval.resolve_value(expr);
+            let (value, warnings) = match output {
+                OutputValue::RuntimeExpression(expression) => {
+                    eval.resolve_value_with_diagnostics(expression)
+                }
+                OutputValue::Selector(selector) => resolve_selector(selector, &eval),
+            };
+            for warning in warnings {
+                eprintln!("warning: workflow output {name:?}: {warning}");
+            }
             ctx.outputs.insert(name.clone(), value);
         }
         ctx.outputs

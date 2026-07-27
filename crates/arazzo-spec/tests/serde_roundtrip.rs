@@ -76,6 +76,93 @@ fn parse_serialize_parse_roundtrip_for_all_examples() {
 }
 
 #[test]
+fn selector_outputs_roundtrip_string_and_object_type_forms() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Selector Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: select
+    steps:
+      - stepId: fetch
+        operationPath: /items
+        outputs:
+          ids:
+            context: $response.body
+            selector: $.items[*].id
+            type: jsonpath
+    outputs:
+      firstId:
+        context: $steps.fetch.outputs.ids
+        selector: /0
+        type:
+          type: jsonpointer
+          version: rfc6901
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "selector output roundtrip spec");
+    let serialized = serialize_spec(&spec, "selector output roundtrip spec");
+    let reparsed = parse_spec(serialized.as_bytes(), "serialized selector output spec");
+
+    assert_eq!(reparsed, spec);
+}
+
+#[test]
+fn malformed_output_selector_reports_the_missing_field() {
+    let raw = br#"
+arazzo: "1.1.0"
+info: {title: Selector Error, version: "1.0.0"}
+sourceDescriptions: []
+workflows:
+  - workflowId: select
+    outputs:
+      result:
+        context: $inputs.document
+        type: jsonpath
+"#;
+
+    let error = match parse_unvalidated_bytes(raw) {
+        Ok(_) => panic!("selector missing its selector field should not parse"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("missing field `selector`"),
+        "unexpected parse diagnostic: {error}"
+    );
+}
+
+#[test]
+fn selector_shaped_literal_mapping_without_full_contract_stays_literal() {
+    let raw = br#"
+arazzo: "1.1.0"
+info: {title: Literal Mapping, version: "1.0.0"}
+sourceDescriptions: []
+workflows:
+  - workflowId: literal
+    parameters:
+      - name: config
+        in: header
+        value:
+          context: literal-context
+          selector: literal-selector
+    steps: []
+"#;
+
+    let spec = match parse_unvalidated_bytes(raw) {
+        Ok(spec) => spec,
+        Err(error) => panic!("literal mapping should parse: {error}"),
+    };
+    let value = &spec.workflows[0].parameters[0].value;
+    assert!(value.as_literal().is_some());
+    assert!(value.as_selector().is_none());
+}
+
+#[test]
 fn source_description_types_roundtrip_with_exact_wire_values() {
     let raw = r#"
 arazzo: "1.1.0"

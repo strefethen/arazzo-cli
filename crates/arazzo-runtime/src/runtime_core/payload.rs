@@ -12,12 +12,32 @@ pub(super) fn value_to_string(value: &Value) -> String {
     }
 }
 
-pub(super) fn resolve_payload(value: &serde_yaml_ng::Value, eval: &ExpressionEvaluator) -> Value {
+pub(super) fn resolve_payload_detailed(
+    value: &ValueSource,
+    eval: &ExpressionEvaluator,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+    resolve_value_source(value, eval)
+}
+
+pub(super) fn resolve_value_source(
+    value: &ValueSource,
+    eval: &ExpressionEvaluator,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
     match value {
-        serde_yaml_ng::Value::Null => Value::Null,
-        serde_yaml_ng::Value::Bool(v) => Value::Bool(*v),
+        ValueSource::Selector(selector) => resolve_selector(selector, eval),
+        ValueSource::Literal(value) => resolve_literal_value(value, eval),
+    }
+}
+
+fn resolve_literal_value(
+    value: &serde_yaml_ng::Value,
+    eval: &ExpressionEvaluator,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+    match value {
+        serde_yaml_ng::Value::Null => (Value::Null, Vec::new()),
+        serde_yaml_ng::Value::Bool(v) => (Value::Bool(*v), Vec::new()),
         serde_yaml_ng::Value::Number(v) => {
-            if let Some(i) = v.as_i64() {
+            let value = if let Some(i) = v.as_i64() {
                 json!(i)
             } else if let Some(u) = v.as_u64() {
                 json!(u)
@@ -25,25 +45,113 @@ pub(super) fn resolve_payload(value: &serde_yaml_ng::Value, eval: &ExpressionEva
                 json!(f)
             } else {
                 Value::Null
-            }
+            };
+            (value, Vec::new())
         }
-        serde_yaml_ng::Value::String(v) => eval.resolve_value(v),
+        serde_yaml_ng::Value::String(v) => eval.resolve_value_with_diagnostics(v),
         serde_yaml_ng::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
+            let mut warnings = Vec::new();
             for item in seq {
-                out.push(resolve_payload(item, eval));
+                let (value, item_warnings) = resolve_value_source(&item.clone().into(), eval);
+                out.push(value);
+                warnings.extend(item_warnings);
             }
-            Value::Array(out)
+            (Value::Array(out), warnings)
         }
         serde_yaml_ng::Value::Mapping(map) => {
             let mut out = serde_json::Map::new();
+            let mut warnings = Vec::new();
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
-                out.insert(key, resolve_payload(v, eval));
+                let (value, item_warnings) = resolve_value_source(&v.clone().into(), eval);
+                out.insert(key, value);
+                warnings.extend(item_warnings);
             }
-            Value::Object(out)
+            (Value::Object(out), warnings)
         }
-        _ => Value::Null,
+        _ => (Value::Null, Vec::new()),
+    }
+}
+
+pub(super) fn resolve_selector(
+    selector: &SelectorObject,
+    eval: &ExpressionEvaluator,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+    let (context, mut warnings) = eval.evaluate_with_diagnostics(&selector.context);
+    if !warnings.is_empty() {
+        return (Value::Null, warnings);
+    }
+
+    let type_name = selector.type_.resolved_name();
+    let version = selector.type_.declared_version();
+    let selected = match type_name.as_str() {
+        "jsonpath" => {
+            if !matches!(
+                version,
+                None | Some("rfc9535") | Some("draft-goessner-dispatch-jsonpath-00")
+            ) {
+                Err(format!(
+                    "unsupported JSONPath version {:?}",
+                    version.unwrap_or_default()
+                ))
+            } else {
+                arazzo_expr::select_json_path(&context, &selector.selector)
+                    .map(|selection| (selection.value, selection.match_count))
+                    .map_err(|err| err.to_string())
+            }
+        }
+        "jsonpointer" => {
+            if !matches!(version, None | Some("rfc6901")) {
+                Err(format!(
+                    "unsupported JSON Pointer version {:?}",
+                    version.unwrap_or_default()
+                ))
+            } else if !selector.selector.is_empty() && !selector.selector.starts_with('/') {
+                Err("JSON Pointer selector must be empty or start with '/'".to_string())
+            } else {
+                Ok(context
+                    .pointer(&selector.selector)
+                    .cloned()
+                    .map_or((Value::Null, 0), |value| (value, 1)))
+            }
+        }
+        "xpath" => {
+            if !matches!(version, None | Some("10")) {
+                Err(format!(
+                    "XPath version {:?} is valid Arazzo metadata but is unsupported by this XPath 1.0 runtime",
+                    version.unwrap_or_default()
+                ))
+            } else if let Value::String(xml) = &context {
+                select_xpath(xml.as_bytes(), &selector.selector)
+                    .map(|selection| (selection.value, selection.match_count))
+            } else {
+                Err(format!(
+                    "XPath selector context must resolve to an XML string, got {}",
+                    json_type_name(&context)
+                ))
+            }
+        }
+        other => Err(format!("unsupported selector type {other:?}")),
+    };
+
+    match selected {
+        Ok((value, 0)) => {
+            warnings.push(selector_warning(selector, "selector matched no values"));
+            (value, warnings)
+        }
+        Ok((value, _)) => (value, warnings),
+        Err(message) => {
+            warnings.push(selector_warning(selector, &message));
+            (Value::Null, warnings)
+        }
+    }
+}
+
+fn selector_warning(selector: &SelectorObject, message: &str) -> arazzo_expr::ExpressionWarning {
+    arazzo_expr::ExpressionWarning {
+        expression: selector.selector.clone(),
+        message: message.to_string(),
     }
 }
 
@@ -69,7 +177,12 @@ pub(super) fn apply_replacements(
             continue;
         }
 
-        let resolved = resolve_replacement_value(&replacement.value, eval);
+        let (resolved, selector_warnings) = resolve_replacement_value(&replacement.value, eval);
+        warnings.extend(
+            selector_warnings
+                .into_iter()
+                .map(|warning| replacement_warning(index, &warning.to_string())),
+        );
         if !is_xml_payload(&body, content_type) {
             if target.starts_with('/') {
                 if let Err(message) = apply_json_pointer_replacement(&mut body, target, resolved) {
@@ -120,11 +233,11 @@ fn is_xml_payload(body: &Value, content_type: &str) -> bool {
     matches!(body, Value::String(_)) && !content_type.to_ascii_lowercase().contains("json")
 }
 
-fn resolve_replacement_value(value: &serde_yaml_ng::Value, eval: &ExpressionEvaluator) -> Value {
-    match value {
-        serde_yaml_ng::Value::String(s) => eval.resolve_value(s),
-        other => resolve_payload(other, eval),
-    }
+fn resolve_replacement_value(
+    value: &ValueSource,
+    eval: &ExpressionEvaluator,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+    resolve_value_source(value, eval)
 }
 
 fn replacement_warning(index: usize, message: &str) -> String {
@@ -319,7 +432,7 @@ mod tests {
     fn replacement(target: &str, value: serde_yaml_ng::Value) -> Replacement {
         Replacement {
             target: target.to_string(),
-            value,
+            value: value.into(),
         }
     }
 

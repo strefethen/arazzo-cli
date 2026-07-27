@@ -260,7 +260,10 @@ fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_ru
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
                 }],
-                outputs: BTreeMap::from([("link_1".to_string(), "//item[1]/link".to_string())]),
+                outputs: BTreeMap::from([(
+                    "link_1".to_string(),
+                    "//item[1]/link".to_string().into(),
+                )]),
                 ..Step::default()
             }],
             ..Workflow::default()

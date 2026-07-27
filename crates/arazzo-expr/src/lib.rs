@@ -41,6 +41,16 @@ pub struct ExpressionWarning {
     pub message: String,
 }
 
+/// Value and cardinality produced by a supported JSONPath selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonPathSelection {
+    /// `Null` for zero matches, the selected value for one match, or an array
+    /// preserving traversal order for multiple matches.
+    pub value: Value,
+    /// Number of nodes selected before cardinality collapse.
+    pub match_count: usize,
+}
+
 impl std::fmt::Display for ExpressionWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.expression, self.message)
@@ -115,12 +125,18 @@ impl ExpressionEvaluator {
     /// - contains `{$...}` → [`interpolate_string`](Self::interpolate_string)
     /// - otherwise → literal string
     pub fn resolve_value(&self, value: &str) -> Value {
+        self.resolve_value_with_diagnostics(value).0
+    }
+
+    /// Resolve a value string using the canonical dispatch while retaining
+    /// diagnostics for full runtime expressions.
+    pub fn resolve_value_with_diagnostics(&self, value: &str) -> (Value, Vec<ExpressionWarning>) {
         if value.starts_with('$') {
-            self.evaluate(value)
+            self.evaluate_with_diagnostics(value)
         } else if value.contains("{$") {
-            Value::String(self.interpolate_string(value))
+            (Value::String(self.interpolate_string(value)), Vec::new())
         } else {
-            Value::String(value.to_string())
+            (Value::String(value.to_string()), Vec::new())
         }
     }
 
@@ -1031,6 +1047,109 @@ fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
     }
 }
 
+/// Select JSON nodes with the runtime's supported JSONPath subset.
+///
+/// Supported selectors include root (`$`), dot/bracket fields, array indexes,
+/// wildcards, and simple filter predicates. Syntax outside that subset returns
+/// [`PathError`] instead of silently producing no match.
+pub fn select_json_path(root: &Value, selector: &str) -> Result<JsonPathSelection, PathError> {
+    let trimmed = selector.trim();
+    validate_json_path_subset(trimmed)?;
+    let normalized = normalize_json_path(trimmed);
+    let value = resolve_dot_path(root, normalized)?;
+    let match_count = count_resolved_path_nodes(root, normalized)?;
+    Ok(JsonPathSelection { value, match_count })
+}
+
+fn normalize_json_path(path: &str) -> &str {
+    if path == "$" || path == "@" {
+        return "";
+    }
+    path.strip_prefix("$.")
+        .or_else(|| path.strip_prefix("@."))
+        .or_else(|| path.strip_prefix('$'))
+        .or_else(|| path.strip_prefix('@'))
+        .unwrap_or(path)
+        .trim_start_matches('.')
+}
+
+fn validate_json_path_subset(path: &str) -> Result<(), PathError> {
+    if path.is_empty() {
+        return Err(PathError::InvalidSyntax {
+            path: path.to_string(),
+            detail: "selector is empty".to_string(),
+        });
+    }
+
+    let masked = mask_json_path_literals(path);
+    let unsupported = if masked.contains("..") {
+        Some("recursive descent '..' is not supported")
+    } else if masked.contains("&&") || masked.contains("||") {
+        Some("compound filter predicates are not supported")
+    } else {
+        bracket_subset_error(&masked)
+    };
+
+    if let Some(detail) = unsupported {
+        return Err(PathError::InvalidSyntax {
+            path: path.to_string(),
+            detail: detail.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn bracket_subset_error(masked: &str) -> Option<&'static str> {
+    let mut rest = masked;
+    while let Some(open) = rest.find('[') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find(']') else {
+            break;
+        };
+        let inner = &after_open[..close];
+        if inner.contains(':') {
+            return Some("array slices are not supported");
+        }
+        if inner.contains(',') {
+            return Some("union selectors are not supported");
+        }
+        rest = &after_open[close + 1..];
+    }
+    None
+}
+
+fn mask_json_path_literals(path: &str) -> String {
+    let mut masked = String::with_capacity(path.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for character in path.chars() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+                masked.push('_');
+                continue;
+            }
+            if character == '\\' {
+                escaped = true;
+                masked.push('_');
+                continue;
+            }
+            if character == active_quote {
+                quote = None;
+                masked.push(character);
+            } else {
+                masked.push('_');
+            }
+            continue;
+        }
+        if character == '\'' || character == '"' {
+            quote = Some(character);
+        }
+        masked.push(character);
+    }
+    masked
+}
+
 /// Count the JSON nodes selected by an Arazzo dot-notation path before the
 /// public evaluator collapses the result into a JSON value.
 pub fn count_resolved_path_nodes(root: &Value, path: &str) -> Result<usize, PathError> {
@@ -1472,6 +1591,20 @@ mod tests {
     use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
+
+    fn selected(root: &Value, path: &str) -> super::JsonPathSelection {
+        match super::select_json_path(root, path) {
+            Ok(selection) => selection,
+            Err(error) => panic!("selecting {path:?}: {error}"),
+        }
+    }
+
+    fn selection_error(root: &Value, path: &str) -> super::PathError {
+        match super::select_json_path(root, path) {
+            Ok(selection) => panic!("expected {path:?} to fail, got {selection:?}"),
+            Err(error) => error,
+        }
+    }
 
     #[test]
     fn evaluate_literal_and_unknown_expression() {
@@ -2013,6 +2146,44 @@ mod tests {
             Ok(0)
         );
         assert_eq!(super::count_resolved_path_nodes(&root, "items[0]"), Ok(1));
+    }
+
+    #[test]
+    fn select_json_path_preserves_zero_one_and_many_cardinality() {
+        let root = json!({
+            "items": [
+                {"id": 1, "enabled": true},
+                {"id": 2, "enabled": false},
+                {"id": 3, "enabled": true}
+            ]
+        });
+
+        let one = selected(&root, "$.items[0].id");
+        assert_eq!(one.value, json!(1));
+        assert_eq!(one.match_count, 1);
+
+        let many = selected(&root, "$.items[*].id");
+        assert_eq!(many.value, json!([1, 2, 3]));
+        assert_eq!(many.match_count, 3);
+
+        let filtered = selected(&root, "$.items[?(@.enabled == true)].id");
+        assert_eq!(filtered.value, json!([1, 3]));
+        assert_eq!(filtered.match_count, 2);
+
+        let zero = selected(&root, "$.missing");
+        assert_eq!(zero.value, Value::Null);
+        assert_eq!(zero.match_count, 0);
+    }
+
+    #[test]
+    fn select_json_path_reports_unsupported_syntax() {
+        let root = json!({"items": [1, 2, 3]});
+
+        let recursive = selection_error(&root, "$..items");
+        assert!(recursive.to_string().contains("recursive descent"));
+
+        let slice = selection_error(&root, "$.items[0:2]");
+        assert!(slice.to_string().contains("array slices"));
     }
 
     #[test]

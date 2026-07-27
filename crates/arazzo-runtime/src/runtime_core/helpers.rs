@@ -15,7 +15,8 @@ pub(super) use super::deps::{
     has_control_flow,
 };
 pub(super) use super::payload::{
-    apply_replacements, resolve_payload, to_json_path, value_to_string,
+    apply_replacements, resolve_payload_detailed, resolve_value_source, to_json_path,
+    value_to_string,
 };
 pub(super) use super::url::{
     encode_cookie_value, parse_method, parse_source_prefix, replace_path_params, UrlBuildResult,

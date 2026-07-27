@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use crate::{DebugController, DebugScopes, StepCheckpoint};
 use arazzo_expr::{is_truthy, EvalContext, ExpressionEvaluator};
 use arazzo_spec::{
-    ActionType, ArazzoSpec, OnAction, ParamLocation, Parameter, Step, StepTarget, SuccessCriterion,
-    Workflow,
+    ActionType, ArazzoSpec, OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, Step,
+    StepTarget, SuccessCriterion, ValueSource, Workflow,
 };
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
@@ -58,7 +58,7 @@ use control::{sleep_with_cancel, step_result_error};
 use criteria::RegexCache;
 pub(crate) use criteria::{
     evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
-    evaluate_output_expression_detailed, CriterionEvaluation,
+    evaluate_output_value_detailed, CriterionEvaluation,
 };
 use deps::can_execute_parallel;
 #[cfg(test)]
@@ -75,7 +75,10 @@ pub use events::{
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::{evaluate_jsonpath_condition, JsonPathOutcome};
-use payload::{apply_replacements, resolve_payload, to_json_path, value_to_string};
+use payload::{
+    apply_replacements, resolve_payload_detailed, resolve_selector, resolve_value_source,
+    to_json_path, value_to_string,
+};
 use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use state::Engine;
 use state::ExecutionContext;
@@ -83,7 +86,7 @@ pub(crate) use state::VarStore;
 use state::{EngineInner, OperationEntry, StepExecution, StepResult, StepTraceData, WorkflowIndex};
 pub(crate) use url::parse_method;
 use url::{encode_cookie_value, parse_source_prefix, replace_path_params, UrlBuildResult};
-pub(crate) use xpath::extract_xpath;
+pub(crate) use xpath::{extract_xpath, select_xpath};
 
 pub use redaction::{
     is_sensitive_key, redact_dry_run_request, redact_headers, redact_json_object,

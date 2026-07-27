@@ -26,11 +26,14 @@ fn replay_spec() -> arazzo_spec::ArazzoSpec {
                 }],
                 outputs: BTreeMap::from([(
                     "value".to_string(),
-                    "$response.body.value".to_string(),
+                    "$response.body.value".to_string().into(),
                 )]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("final".to_string(), "$steps.s1.outputs.value".to_string())]),
+            outputs: BTreeMap::from([(
+                "final".to_string(),
+                "$steps.s1.outputs.value".to_string().into(),
+            )]),
             ..Workflow::default()
         }],
     )

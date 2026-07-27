@@ -35,13 +35,13 @@ async fn execute_response_header_expression() {
             success_criteria: success_200(),
             outputs: BTreeMap::from([(
                 "request_id".to_string(),
-                "$response.header.X-Request-Id".to_string(),
+                "$response.header.X-Request-Id".to_string().into(),
             )]),
             ..Step::default()
         }],
         outputs: BTreeMap::from([(
             "request_id".to_string(),
-            "$steps.s1.outputs.request_id".to_string(),
+            "$steps.s1.outputs.request_id".to_string().into(),
         )]),
         ..Workflow::default()
     }]);
@@ -74,14 +74,21 @@ async fn execute_env_expression() {
             parameters: vec![arazzo_spec::Parameter {
                 name: "Authorization".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string()),
+                value: serde_yaml_ng::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string())
+                    .into(),
                 ..arazzo_spec::Parameter::default()
             }],
             success_criteria: success_200(),
-            outputs: BTreeMap::from([("auth".to_string(), "$response.body.auth".to_string())]),
+            outputs: BTreeMap::from([(
+                "auth".to_string(),
+                "$response.body.auth".to_string().into(),
+            )]),
             ..Step::default()
         }],
-        outputs: BTreeMap::from([("auth".to_string(), "$steps.s1.outputs.auth".to_string())]),
+        outputs: BTreeMap::from([(
+            "auth".to_string(),
+            "$steps.s1.outputs.auth".to_string().into(),
+        )]),
         ..Workflow::default()
     }]);
 
@@ -123,7 +130,7 @@ async fn execute_request_body_content_type_and_method_selection() {
             target: Some(StepTarget::OperationPath("PUT /users/123".to_string())),
             request_body: Some(RequestBody {
                 content_type: "application/x-www-form-urlencoded".to_string(),
-                payload: Some(to_yaml(json!({"key":"val"}))),
+                payload: Some(to_yaml(json!({"key":"val"})).into()),
                 ..RequestBody::default()
             }),
             success_criteria: success_200(),
@@ -204,7 +211,7 @@ async fn execute_request_body_content_type_and_method_selection() {
             step_id: "s1".to_string(),
             target: Some(StepTarget::OperationPath("PATCH /items/42".to_string())),
             request_body: Some(RequestBody {
-                payload: Some(to_yaml(json!({"status":"active"}))),
+                payload: Some(to_yaml(json!({"status":"active"})).into()),
                 ..RequestBody::default()
             }),
             success_criteria: success_200(),
@@ -333,13 +340,16 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
                 Step {
                     step_id: "s2".to_string(),
                     target: Some(StepTarget::OperationPath("/b".to_string())),
-                    outputs: BTreeMap::from([("reached".to_string(), "$statusCode".to_string())]),
+                    outputs: BTreeMap::from([(
+                        "reached".to_string(),
+                        "$statusCode".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
             ],
             outputs: BTreeMap::from([(
                 "s2_reached".to_string(),
-                "$steps.s2.outputs.reached".to_string(),
+                "$steps.s2.outputs.reached".to_string().into(),
             )]),
             ..Workflow::default()
         }],
@@ -403,7 +413,7 @@ async fn workflow_level_parameters_merge_into_steps() {
             parameters: vec![Parameter {
                 name: "X-Workflow-Header".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("workflow-value".to_string()),
+                value: serde_yaml_ng::Value::String("workflow-value".to_string()).into(),
                 ..Parameter::default()
             }],
             steps: vec![Step {
@@ -439,7 +449,7 @@ async fn step_params_override_workflow_params() {
             parameters: vec![Parameter {
                 name: "X-Auth".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("default-token".to_string()),
+                value: serde_yaml_ng::Value::String("default-token".to_string()).into(),
                 ..Parameter::default()
             }],
             steps: vec![Step {
@@ -448,7 +458,7 @@ async fn step_params_override_workflow_params() {
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml_ng::Value::String("step-token".to_string()),
+                    value: serde_yaml_ng::Value::String("step-token".to_string()).into(),
                     ..Parameter::default()
                 }],
                 ..Step::default()
@@ -482,7 +492,7 @@ async fn workflow_params_not_merged_into_subworkflow_steps() {
                 parameters: vec![Parameter {
                     name: "X-Parent".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml_ng::Value::String("parent-val".to_string()),
+                    value: serde_yaml_ng::Value::String("parent-val".to_string()).into(),
                     ..Parameter::default()
                 }],
                 steps: vec![Step {
@@ -490,7 +500,7 @@ async fn workflow_params_not_merged_into_subworkflow_steps() {
                     target: Some(StepTarget::WorkflowId("child".to_string())),
                     parameters: vec![Parameter {
                         name: "input_val".to_string(),
-                        value: serde_yaml_ng::Value::String("hello".to_string()),
+                        value: serde_yaml_ng::Value::String("hello".to_string()).into(),
                         ..Parameter::default()
                     }],
                     ..Step::default()
@@ -532,14 +542,17 @@ async fn build_outputs_with_interpolation_and_outputs_ref() {
             steps: vec![Step {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/a".to_string())),
-                outputs: BTreeMap::from([("sum".to_string(), "total".to_string())]),
+                outputs: BTreeMap::from([("sum".to_string(), "total".to_string().into())]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([
-                ("amount".to_string(), "$steps.s1.outputs.sum".to_string()),
+                (
+                    "amount".to_string(),
+                    "$steps.s1.outputs.sum".to_string().into(),
+                ),
                 (
                     "summary".to_string(),
-                    "Total is {$outputs.amount}".to_string(),
+                    "Total is {$outputs.amount}".to_string().into(),
                 ),
             ]),
             ..Workflow::default()
@@ -571,14 +584,14 @@ async fn url_expression_in_outputs() {
                 target: Some(StepTarget::OperationPath("/api/test".to_string())),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([
-                    ("captured_url".to_string(), "$url".to_string()),
-                    ("captured_method".to_string(), "$method".to_string()),
+                    ("captured_url".to_string(), "$url".to_string().into()),
+                    ("captured_method".to_string(), "$method".to_string().into()),
                 ]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([(
                 "url".to_string(),
-                "$steps.s1.outputs.captured_url".to_string(),
+                "$steps.s1.outputs.captured_url".to_string().into(),
             )]),
             ..Workflow::default()
         }],
@@ -614,17 +627,20 @@ async fn request_header_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
-                    value: serde_yaml_ng::Value::String("Bearer token123".to_string()),
+                    value: serde_yaml_ng::Value::String("Bearer token123".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "auth".to_string(),
-                    "$request.header.X-Auth".to_string(),
+                    "$request.header.X-Auth".to_string().into(),
                 )]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("auth".to_string(), "$steps.s1.outputs.auth".to_string())]),
+            outputs: BTreeMap::from([(
+                "auth".to_string(),
+                "$steps.s1.outputs.auth".to_string().into(),
+            )]),
             ..Workflow::default()
         }],
     );
@@ -652,14 +668,20 @@ async fn request_query_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "page".to_string(),
                     in_: Some(ParamLocation::Query),
-                    value: serde_yaml_ng::Value::String("5".to_string()),
+                    value: serde_yaml_ng::Value::String("5".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
-                outputs: BTreeMap::from([("page".to_string(), "$request.query.page".to_string())]),
+                outputs: BTreeMap::from([(
+                    "page".to_string(),
+                    "$request.query.page".to_string().into(),
+                )]),
                 ..Step::default()
             }],
-            outputs: BTreeMap::from([("page".to_string(), "$steps.s1.outputs.page".to_string())]),
+            outputs: BTreeMap::from([(
+                "page".to_string(),
+                "$steps.s1.outputs.page".to_string().into(),
+            )]),
             ..Workflow::default()
         }],
     );
@@ -689,19 +711,19 @@ async fn request_path_expression_in_outputs() {
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
                     in_: Some(ParamLocation::Path),
-                    value: serde_yaml_ng::Value::String("42".to_string()),
+                    value: serde_yaml_ng::Value::String("42".to_string()).into(),
                     ..Parameter::default()
                 }],
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "user_id".to_string(),
-                    "$request.path.userId".to_string(),
+                    "$request.path.userId".to_string().into(),
                 )]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([(
                 "user_id".to_string(),
-                "$steps.s1.outputs.user_id".to_string(),
+                "$steps.s1.outputs.user_id".to_string().into(),
             )]),
             ..Workflow::default()
         }],
@@ -729,16 +751,19 @@ async fn request_body_expression_in_outputs() {
                 target: Some(StepTarget::OperationPath("POST /api/items".to_string())),
                 request_body: Some(RequestBody {
                     content_type: "application/json".to_string(),
-                    payload: Some(to_yaml(json!({"name": "widget", "count": 3}))),
+                    payload: Some(to_yaml(json!({"name": "widget", "count": 3})).into()),
                     ..RequestBody::default()
                 }),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([
-                    ("full_body".to_string(), "$request.body".to_string()),
-                    ("body_name".to_string(), "$request.body.name".to_string()),
+                    ("full_body".to_string(), "$request.body".to_string().into()),
+                    (
+                        "body_name".to_string(),
+                        "$request.body.name".to_string().into(),
+                    ),
                     (
                         "body_count_ptr".to_string(),
-                        "$request.body#/count".to_string(),
+                        "$request.body#/count".to_string().into(),
                     ),
                 ]),
                 ..Step::default()
@@ -746,15 +771,15 @@ async fn request_body_expression_in_outputs() {
             outputs: BTreeMap::from([
                 (
                     "full_body".to_string(),
-                    "$steps.s1.outputs.full_body".to_string(),
+                    "$steps.s1.outputs.full_body".to_string().into(),
                 ),
                 (
                     "body_name".to_string(),
-                    "$steps.s1.outputs.body_name".to_string(),
+                    "$steps.s1.outputs.body_name".to_string().into(),
                 ),
                 (
                     "body_count_ptr".to_string(),
-                    "$steps.s1.outputs.body_count_ptr".to_string(),
+                    "$steps.s1.outputs.body_count_ptr".to_string().into(),
                 ),
             ]),
             ..Workflow::default()
@@ -816,24 +841,24 @@ async fn source_descriptions_url_expression() {
             outputs: BTreeMap::from([
                 (
                     "primary_url".to_string(),
-                    "$sourceDescriptions.primary.url".to_string(),
+                    "$sourceDescriptions.primary.url".to_string().into(),
                 ),
                 (
                     "secondary_url".to_string(),
-                    "$sourceDescriptions.secondary.url".to_string(),
+                    "$sourceDescriptions.secondary.url".to_string().into(),
                 ),
-                ("self_uri".to_string(), "$self".to_string()),
+                ("self_uri".to_string(), "$self".to_string().into()),
                 (
                     "primary_type".to_string(),
-                    "$sourceDescriptions.primary.type".to_string(),
+                    "$sourceDescriptions.primary.type".to_string().into(),
                 ),
                 (
                     "secondary_type".to_string(),
-                    "$sourceDescriptions.secondary.type".to_string(),
+                    "$sourceDescriptions.secondary.type".to_string().into(),
                 ),
                 (
                     "missing_url".to_string(),
-                    "$sourceDescriptions.nope.url".to_string(),
+                    "$sourceDescriptions.nope.url".to_string().into(),
                 ),
             ]),
             ..Workflow::default()
@@ -894,26 +919,35 @@ async fn multiple_source_descriptions_routing() {
                 Step {
                     step_id: "s1".to_string(),
                     target: Some(StepTarget::OperationPath("{api1}./v1/users".to_string())),
-                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
                     target: Some(StepTarget::OperationPath("{api2}./v2/items".to_string())),
-                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
                     target: Some(StepTarget::OperationPath("/v1/default".to_string())),
-                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string())]),
+                    outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
             ],
             outputs: BTreeMap::from([
-                ("url1".to_string(), "$steps.s1.outputs.url".to_string()),
-                ("url2".to_string(), "$steps.s2.outputs.url".to_string()),
-                ("url3".to_string(), "$steps.s3.outputs.url".to_string()),
+                (
+                    "url1".to_string(),
+                    "$steps.s1.outputs.url".to_string().into(),
+                ),
+                (
+                    "url2".to_string(),
+                    "$steps.s2.outputs.url".to_string().into(),
+                ),
+                (
+                    "url3".to_string(),
+                    "$steps.s3.outputs.url".to_string().into(),
+                ),
             ]),
             ..Workflow::default()
         }],
@@ -952,19 +986,19 @@ async fn evaluate_output_expression_routes_dollar_expressions_correctly() {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/test".to_string())),
                 outputs: BTreeMap::from([
-                    ("method_out".to_string(), "$method".to_string()),
-                    ("input_out".to_string(), "$inputs.name".to_string()),
+                    ("method_out".to_string(), "$method".to_string().into()),
+                    ("input_out".to_string(), "$inputs.name".to_string().into()),
                 ]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([
                 (
                     "method".to_string(),
-                    "$steps.s1.outputs.method_out".to_string(),
+                    "$steps.s1.outputs.method_out".to_string().into(),
                 ),
                 (
                     "input".to_string(),
-                    "$steps.s1.outputs.input_out".to_string(),
+                    "$steps.s1.outputs.input_out".to_string().into(),
                 ),
             ]),
             ..Workflow::default()

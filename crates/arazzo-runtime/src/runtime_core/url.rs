@@ -26,6 +26,7 @@ pub(crate) struct UrlBuildResult {
     pub url: String,
     pub path_params: BTreeMap<String, String>,
     pub query_params: BTreeMap<String, String>,
+    pub warnings: Vec<String>,
 }
 
 /// Parse `{sourceName}./path` prefix from an operationPath.

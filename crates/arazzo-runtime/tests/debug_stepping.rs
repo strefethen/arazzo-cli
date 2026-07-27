@@ -127,7 +127,7 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
                         target: Some(StepTarget::OperationPath("/status/200".to_string())),
                         outputs: BTreeMap::from([(
                             "observed".to_string(),
-                            "$inputs.code".to_string(),
+                            "$inputs.code".to_string().into(),
                         )]),
                         ..Step::default()
                     },

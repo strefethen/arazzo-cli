@@ -21,7 +21,7 @@ fn xml_response(body: &str) -> MockHttpResponse {
 fn replacement(target: &str, value: &str) -> Replacement {
     Replacement {
         target: target.to_string(),
-        value: serde_yaml_ng::Value::String(value.to_string()),
+        value: serde_yaml_ng::Value::String(value.to_string()).into(),
     }
 }
 
@@ -46,19 +46,19 @@ fn soap_step(
             Parameter {
                 name: "Content-Type".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("text/xml".to_string()),
+                value: serde_yaml_ng::Value::String("text/xml".to_string()).into(),
                 ..Parameter::default()
             },
             Parameter {
                 name: "SOAPAction".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String(soap_action.to_string()),
+                value: serde_yaml_ng::Value::String(soap_action.to_string()).into(),
                 ..Parameter::default()
             },
         ],
         request_body: Some(RequestBody {
             content_type: "text/xml".to_string(),
-            payload: Some(serde_yaml_ng::Value::String(payload.to_string())),
+            payload: Some(serde_yaml_ng::Value::String(payload.to_string()).into()),
             ..RequestBody::default()
         }),
         success_criteria: vec![
@@ -78,7 +78,7 @@ fn soap_step(
         ],
         outputs: outputs
             .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_string(), v.to_string().into()))
             .collect(),
         ..Step::default()
     }
@@ -110,15 +110,18 @@ async fn replacements_overlay_xml_payload_before_send() {
             target: Some(StepTarget::OperationPath("POST /soap".to_string())),
             request_body: Some(RequestBody {
                 content_type: "text/xml".to_string(),
-                payload: Some(serde_yaml_ng::Value::String(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
+                payload: Some(
+                    serde_yaml_ng::Value::String(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="urn:test">
   <soap:Body>
     <tns:UpdateCustomer><tns:CustomerId>old</tns:CustomerId></tns:UpdateCustomer>
   </soap:Body>
 </soap:Envelope>"#
-                        .to_string(),
-                )),
+                            .to_string(),
+                    )
+                    .into(),
+                ),
                 replacements: vec![replacement("//*[local-name()='CustomerId']", "C-99")],
                 ..RequestBody::default()
             }),
@@ -169,15 +172,18 @@ async fn replacements_attribute_target_on_xml_payload() {
             target: Some(StepTarget::OperationPath("POST /soap".to_string())),
             request_body: Some(RequestBody {
                 content_type: "text/xml".to_string(),
-                payload: Some(serde_yaml_ng::Value::String(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
+                payload: Some(
+                    serde_yaml_ng::Value::String(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="urn:test">
   <soap:Body>
     <tns:UpdateCustomer><tns:Customer id="old"/></tns:UpdateCustomer>
   </soap:Body>
 </soap:Envelope>"#
-                        .to_string(),
-                )),
+                            .to_string(),
+                    )
+                    .into(),
+                ),
                 replacements: vec![replacement("//*[local-name()='Customer']/@id", "X-1")],
                 ..RequestBody::default()
             }),
@@ -253,11 +259,13 @@ async fn soap_xml_body_sent_as_raw_bytes() {
         outputs: BTreeMap::from([
             (
                 "customer_id".to_string(),
-                "$steps.get-customer.outputs.customer_id".to_string(),
+                "$steps.get-customer.outputs.customer_id".to_string().into(),
             ),
             (
                 "customer_name".to_string(),
-                "$steps.get-customer.outputs.customer_name".to_string(),
+                "$steps.get-customer.outputs.customer_name"
+                    .to_string()
+                    .into(),
             ),
         ]),
         ..Workflow::default()
@@ -361,13 +369,22 @@ async fn soap_multi_step_with_interpolation() {
             ),
         ],
         outputs: BTreeMap::from([
-            ("total".to_string(), "$steps.list.outputs.total".to_string()),
+            (
+                "total".to_string(),
+                "$steps.list.outputs.total".to_string().into(),
+            ),
             (
                 "first_id".to_string(),
-                "$steps.list.outputs.first_id".to_string(),
+                "$steps.list.outputs.first_id".to_string().into(),
             ),
-            ("name".to_string(), "$steps.get.outputs.name".to_string()),
-            ("email".to_string(), "$steps.get.outputs.email".to_string()),
+            (
+                "name".to_string(),
+                "$steps.get.outputs.name".to_string().into(),
+            ),
+            (
+                "email".to_string(),
+                "$steps.get.outputs.email".to_string().into(),
+            ),
         ]),
         ..Workflow::default()
     }]);
