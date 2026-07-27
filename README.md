@@ -404,6 +404,8 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 
 **Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
 
+**JSONPath criteria (supported subset):** `type: jsonpath` success criteria support dot paths and bracket indexing (`$.items[0].name`), filter predicates (`$[?(@.price > 10)]`) with `&&`/`||`, comparison operators, `count(...)` over resolved nodes, and bare existence checks (`$.name`). Recursive descent (`$..foo`), wildcards (`$[*]`, `$.*`), and array slices (`$.items[0:2]`) are **not** supported — a criterion using them fails with an `unsupported JSONPath` diagnostic rather than silently evaluating to false.
+
 ## How It Works
 
 arazzo-cli is a pure **interpreter** — it reads your Arazzo YAML spec, resolves every expression at runtime, executes real HTTP requests, and routes control flow based on the results. There is no code generation step and no intermediate representation.

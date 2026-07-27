@@ -1,17 +1,44 @@
 use super::*;
 
+/// Result of evaluating a JSONPath criterion condition.
+pub(super) enum JsonPathOutcome {
+    /// The condition was evaluated against the context value.
+    Matched(bool),
+    /// The condition uses JSONPath syntax outside the supported subset; the
+    /// message names the offending construct.
+    Unsupported(String),
+}
+
+/// Evaluates a JSONPath criterion condition against `context_value`.
+///
+/// Supported subset of the JSONPath grammar:
+/// - dot paths and bracket indexing (`$.items[0].name`)
+/// - filter predicates (`$[?(@.price > 10)]`) with `&&`, `||`, comparison
+///   operators (`==`, `!=`, `>`, `<`, `>=`, `<=`), and `count(...)`
+/// - bare existence checks (`$.name`, `@.name`)
+///
+/// Unsupported constructs — recursive descent (`..`), wildcards (`*` / `[*]`),
+/// and array slices (`[a:b]`) — return [`JsonPathOutcome::Unsupported`] with a
+/// diagnostic instead of silently evaluating to `false`.
 pub(super) fn evaluate_jsonpath_condition(
     eval: &ExpressionEvaluator,
     context_value: &Value,
     condition: &str,
-) -> bool {
+) -> JsonPathOutcome {
     let trimmed = condition.trim();
     if trimmed.is_empty() {
-        return false;
+        return JsonPathOutcome::Matched(false);
+    }
+
+    if let Some(reason) = detect_unsupported_jsonpath(trimmed) {
+        return JsonPathOutcome::Unsupported(reason);
     }
 
     if let Some(predicate) = parse_jsonpath_filter_predicate(trimmed) {
-        return evaluate_jsonpath_filter_predicate(context_value, predicate);
+        return JsonPathOutcome::Matched(evaluate_jsonpath_filter_predicate(
+            context_value,
+            predicate,
+        ));
     }
 
     let mut scoped_ctx = eval.context().clone();
@@ -20,11 +47,83 @@ pub(super) fn evaluate_jsonpath_condition(
 
     let normalized = normalize_jsonpath_path(trimmed);
     if normalized.is_empty() {
-        return !context_value.is_null();
+        return JsonPathOutcome::Matched(!context_value.is_null());
     }
 
     let value = scoped_eval.evaluate(&format!("$response.body.{normalized}"));
-    is_truthy(&value)
+    JsonPathOutcome::Matched(is_truthy(&value))
+}
+
+/// Returns a diagnostic when `condition` uses JSONPath syntax outside the
+/// supported subset: recursive descent (`..`), wildcards (`*` / `[*]`), or
+/// array slices (`[a:b]`). Quoted string literals are ignored so filter
+/// predicates like `$[?(@.name == "a..b")]` are not misflagged.
+fn detect_unsupported_jsonpath(condition: &str) -> Option<String> {
+    let masked = mask_quoted_spans(condition);
+
+    if masked.contains("..") {
+        return Some(format!(
+            "recursive descent \"..\" is not supported (in {condition:?})"
+        ));
+    }
+    if masked.contains('*') {
+        return Some(format!(
+            "wildcard \"*\" is not supported (in {condition:?})"
+        ));
+    }
+    let mut rest = masked.as_str();
+    while let Some(open) = rest.find('[') {
+        let segment = &rest[open + 1..];
+        let Some(close) = segment.find(']') else {
+            break;
+        };
+        let inner = &segment[..close];
+        if inner.contains(':')
+            && inner
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == ':' || c == '-' || c.is_whitespace())
+        {
+            return Some(format!(
+                "array slice \"[{inner}]\" is not supported (in {condition:?})"
+            ));
+        }
+        rest = &segment[close + 1..];
+    }
+    None
+}
+
+/// Replaces the contents of single- and double-quoted string literals with
+/// `_` so syntax detection only sees structural characters.
+fn mask_quoted_spans(condition: &str) -> String {
+    let mut out = String::with_capacity(condition.len());
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in condition.chars() {
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                out.push('_');
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                out.push('_');
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+                out.push(ch);
+            } else {
+                out.push('_');
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            in_quote = Some(ch);
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn parse_jsonpath_filter_predicate(condition: &str) -> Option<&str> {
@@ -403,5 +502,100 @@ fn compare_with_op<T: PartialOrd + PartialEq>(lhs: &T, rhs: &T, op: &str) -> boo
         ">=" => lhs >= rhs,
         "<=" => lhs <= rhs,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arazzo_expr::EvalContext;
+    use serde_json::json;
+
+    use super::*;
+
+    fn evaluate(context_value: &Value, condition: &str) -> JsonPathOutcome {
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+        evaluate_jsonpath_condition(&eval, context_value, condition)
+    }
+
+    #[test]
+    fn recursive_descent_reports_unsupported() {
+        match evaluate(&json!({"foo": 1}), "$..foo") {
+            JsonPathOutcome::Unsupported(reason) => {
+                assert!(!reason.is_empty());
+                assert!(reason.contains(".."), "reason should name the construct");
+            }
+            JsonPathOutcome::Matched(result) => {
+                panic!("expected unsupported diagnostic, got Matched({result})")
+            }
+        }
+    }
+
+    #[test]
+    fn wildcard_reports_unsupported() {
+        match evaluate(&json!([1, 2, 3]), "$[*]") {
+            JsonPathOutcome::Unsupported(reason) => {
+                assert!(!reason.is_empty());
+                assert!(reason.contains('*'), "reason should name the construct");
+            }
+            JsonPathOutcome::Matched(result) => {
+                panic!("expected unsupported diagnostic, got Matched({result})")
+            }
+        }
+    }
+
+    #[test]
+    fn array_slice_reports_unsupported() {
+        match evaluate(&json!({"items": [1, 2, 3]}), "$.items[0:2]") {
+            JsonPathOutcome::Unsupported(reason) => {
+                assert!(!reason.is_empty());
+                assert!(reason.contains("0:2"), "reason should name the construct");
+            }
+            JsonPathOutcome::Matched(result) => {
+                panic!("expected unsupported diagnostic, got Matched({result})")
+            }
+        }
+    }
+
+    #[test]
+    fn supported_filter_predicate_still_evaluates() {
+        match evaluate(&json!([{"price": 15}]), "$[?(@.price > 10)]") {
+            JsonPathOutcome::Matched(result) => assert!(result),
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("filter predicate should stay supported, got: {reason}")
+            }
+        }
+        match evaluate(&json!([{"price": 5}]), "$[?(@.price > 10)]") {
+            JsonPathOutcome::Matched(result) => assert!(!result),
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("filter predicate should stay supported, got: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn supported_count_predicate_still_evaluates() {
+        // count(...) counts resolved nodes: a present path resolves to one node.
+        match evaluate(&json!({"items": [1, 2, 3]}), "$[?(count(@.items) == 1)]") {
+            JsonPathOutcome::Matched(result) => assert!(result),
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("count predicate should stay supported, got: {reason}")
+            }
+        }
+        match evaluate(&json!({"items": [1, 2, 3]}), "$[?(count(@.missing) == 1)]") {
+            JsonPathOutcome::Matched(result) => assert!(!result),
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("count predicate should stay supported, got: {reason}")
+            }
+        }
+    }
+
+    #[test]
+    fn quoted_literals_are_not_misflagged() {
+        match evaluate(&json!([{"name": "a..b"}]), r#"$[?(@.name == "a..b")]"#) {
+            JsonPathOutcome::Matched(result) => assert!(result),
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("quoted literal should not trigger detection: {reason}")
+            }
+        }
     }
 }

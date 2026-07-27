@@ -81,7 +81,13 @@ pub(crate) fn evaluate_criterion_detailed(
             if context_value.is_null() {
                 false
             } else {
-                evaluate_jsonpath_condition(eval, &context_value, &criterion.condition)
+                match evaluate_jsonpath_condition(eval, &context_value, &criterion.condition) {
+                    JsonPathOutcome::Matched(result) => result,
+                    JsonPathOutcome::Unsupported(reason) => {
+                        error = Some(format!("unsupported JSONPath: {reason}"));
+                        false
+                    }
+                }
             }
         }
         "xpath" => {
@@ -184,5 +190,29 @@ mod tests {
 
         assert_eq!(value, json!("alice@example.com"));
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn unsupported_jsonpath_criterion_surfaces_error_diagnostic() {
+        let criterion = SuccessCriterion {
+            condition: "$..foo".to_string(),
+            context: "$response.body".to_string(),
+            type_: Some(arazzo_spec::CriterionType::Name("jsonpath".to_string())),
+            ..SuccessCriterion::default()
+        };
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!({"foo": 1})),
+            ..EvalContext::default()
+        });
+
+        let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
+
+        assert!(!evaluation.matched);
+        let error = match &evaluation.error {
+            Some(error) => error,
+            None => panic!("unsupported JSONPath must surface an error diagnostic"),
+        };
+        assert!(!error.is_empty());
+        assert!(error.contains("unsupported JSONPath"), "got: {error}");
     }
 }

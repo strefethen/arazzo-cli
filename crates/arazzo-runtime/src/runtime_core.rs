@@ -74,7 +74,7 @@ pub use events::{
     TraceDecision, TraceDecisionPath, TraceHook, TraceRequest, TraceResponse, TraceStepRecord,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
-use jsonpath::evaluate_jsonpath_condition;
+use jsonpath::{evaluate_jsonpath_condition, JsonPathOutcome};
 use payload::{apply_replacements, resolve_payload, to_json_path, value_to_string};
 use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use state::Engine;
