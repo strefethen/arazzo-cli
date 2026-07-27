@@ -30,8 +30,8 @@ and consistent with existing conventions (no `unwrap`/`expect`/`todo`; these are
 
 | # | Item | Severity | Status (reconciled 2026-06-24 vs `main` @ `d0015f1`) | Owner |
 |---|------|----------|------------------------------------------------------|-------|
-| 1 | Hermetic CLI tests (remove live httpbin dependency) | High (CI correctness) | **Outstanding** — 3 tests still load `examples/httpbin-*.yaml`; `arazzo-cli/Cargo.toml` still has no `[dev-dependencies]` | — |
-| 2 | CHANGELOG / release hygiene for 0.2.x | High (release blocker) | **Partial** — tags `v0.1.0`–`v0.2.2` + release-readiness tooling landed; CHANGELOG `0.2.x` backfill still open (see §2 note) | — |
+| 1 | Hermetic CLI tests (remove live httpbin dependency) | High (CI correctness) | **Done (2026-07-27)** — `2f134b2`, epic ac-c2bfc / ticket ac-34a0a | — |
+| 2 | CHANGELOG / release hygiene for 0.2.x | High (release blocker) | **Done (2026-07-27)** — `102fda0`, epic ac-c2bfc / ticket ac-1058e; `--step`/`--no-deps` verified as genuine 0.1.0 features, left in place | — |
 | 3 | Component action merge loses explicit `type` override | Medium (correctness) | **Done (2026-07-27)** — `3795c89`, epic ac-83365 / ticket ac-59ea7 | — |
 | 4 | Goto target index skip in filtered execution | Medium (correctness) | **Done (2026-07-27)** — `1375272`, epic ac-83365 / ticket ac-d2719 | — |
 | 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Done (2026-07-27)** — `6048931`, epic ac-83365 / ticket ac-e19d1 | — |
