@@ -91,6 +91,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "tiny_http",
  "tokio",
  "url",
 ]

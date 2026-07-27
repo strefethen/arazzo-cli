@@ -70,6 +70,16 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Hermeticity guard: rerun the full suite inside a network namespace with
+      # only loopback up, so a test that reintroduces a live external host
+      # (e.g. httpbin.org) fails here instead of silently depending on network.
+      # Test binaries are already built by the step above; --offline keeps
+      # cargo itself off the network inside the namespace.
+      - name: Hermeticity guard (tests offline)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare --map-root-user --net -- sh -c 'ip link set lo up && cargo test --workspace --offline'
+
       - name: Performance baseline (non-blocking)
         continue-on-error: true
         run: bash scripts/ci/perf-baseline.sh "$RUNNER_TEMP/arazzo-perf"

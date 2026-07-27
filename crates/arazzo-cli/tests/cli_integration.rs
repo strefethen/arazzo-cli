@@ -3,9 +3,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 struct TempDir {
     path: PathBuf,
@@ -216,6 +219,115 @@ fn write_file(path: &Path, contents: &str) {
     if let Err(err) = fs::write(path, contents) {
         panic!("writing {}: {err}", path.display());
     }
+}
+
+// ── Hermetic httpbin-like server ────────────────────────────────────
+//
+// The run --step tests execute the CLI subprocess against a local
+// tiny_http server instead of the live httpbin.org, so the suite passes
+// with no outbound network access.
+
+struct MockHttpbin {
+    base_url: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for MockHttpbin {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Starts a local server emulating the httpbin endpoints the example specs
+/// use: GET /get echoes origin/url, POST /post echoes the JSON body under
+/// "json" the way httpbin.org does.
+fn start_mock_httpbin() -> MockHttpbin {
+    let server = match tiny_http::Server::http("127.0.0.1:0") {
+        Ok(server) => server,
+        Err(err) => panic!("binding mock httpbin server: {err}"),
+    };
+    let base_url = format!("http://{}", server.server_addr());
+    let responses_base = base_url.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match server.recv_timeout(Duration::from_millis(20)) {
+                Ok(Some(mut request)) => {
+                    let method = request.method().as_str().to_string();
+                    let path = request.url().split('?').next().unwrap_or("").to_string();
+                    let mut body = String::new();
+                    let _ = request.as_reader().read_to_string(&mut body);
+
+                    let payload = match (method.as_str(), path.as_str()) {
+                        ("GET", "/get") => json!({
+                            "origin": "127.0.0.1",
+                            "url": format!("{responses_base}/get"),
+                        }),
+                        ("POST", "/post") | ("PUT", "/put") => {
+                            let parsed =
+                                serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                            json!({
+                                "origin": "127.0.0.1",
+                                "url": format!("{responses_base}{path}"),
+                                "json": parsed,
+                            })
+                        }
+                        _ => json!({"error": format!("unhandled {method} {path}")}),
+                    };
+                    let status = if payload.get("error").is_some() {
+                        404
+                    } else {
+                        200
+                    };
+
+                    let header = match tiny_http::Header::from_bytes(
+                        &b"Content-Type"[..],
+                        &b"application/json"[..],
+                    ) {
+                        Ok(header) => header,
+                        Err(()) => panic!("building content-type header"),
+                    };
+                    let response = tiny_http::Response::from_string(payload.to_string())
+                        .with_status_code(tiny_http::StatusCode(status))
+                        .with_header(header);
+                    let _ = request.respond(response);
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    MockHttpbin {
+        base_url,
+        stop,
+        handle: Some(handle),
+    }
+}
+
+/// Copies an example spec into `dir` with its live httpbin.org source URL
+/// rewritten to the local mock server. The example file itself is unchanged.
+fn hermetic_example_spec(example: &str, base_url: &str, dir: &Path) -> PathBuf {
+    let mut source = repo_root();
+    source.push("examples");
+    source.push(example);
+    let raw = match fs::read_to_string(&source) {
+        Ok(value) => value,
+        Err(err) => panic!("reading example {}: {err}", source.display()),
+    };
+    assert!(
+        raw.contains("https://httpbin.org"),
+        "example {example} should target https://httpbin.org"
+    );
+    let rewritten = raw.replace("https://httpbin.org", base_url);
+    let dest = dir.join(example);
+    write_file(&dest, &rewritten);
+    dest
 }
 
 #[test]
@@ -2246,7 +2358,9 @@ fn show_json_includes_step_details() {
 
 #[test]
 fn run_step_json_single_step_no_deps() {
-    let spec = fixture_spec();
+    let server = start_mock_httpbin();
+    let temp = TempDir::new("arazzo-run-step-single");
+    let spec = hermetic_example_spec("httpbin-get.arazzo.yaml", &server.base_url, temp.path());
     let spec_str = spec.to_string_lossy().to_string();
 
     let output = run(
@@ -2268,14 +2382,27 @@ fn run_step_json_single_step_no_deps() {
         Some(o) => o,
         None => panic!("should have outputs field"),
     };
-    assert!(outputs.get("origin").is_some(), "should have origin output");
-    assert!(outputs.get("url").is_some(), "should have url output");
+    assert_eq!(
+        outputs.get("origin"),
+        Some(&Value::String("127.0.0.1".to_string())),
+        "origin output should come from the mock server"
+    );
+    assert_eq!(
+        outputs.get("url"),
+        Some(&Value::String(format!("{}/get", server.base_url))),
+        "url output should come from the mock server"
+    );
 }
 
 #[test]
 fn run_step_json_with_dependency_resolution() {
-    let mut spec = repo_root();
-    spec.push("examples/httpbin-chained-posts.arazzo.yaml");
+    let server = start_mock_httpbin();
+    let temp = TempDir::new("arazzo-run-step-deps");
+    let spec = hermetic_example_spec(
+        "httpbin-chained-posts.arazzo.yaml",
+        &server.base_url,
+        temp.path(),
+    );
     let spec_str = spec.to_string_lossy().to_string();
 
     // post-enriched depends on post-initial — should auto-resolve
@@ -2298,15 +2425,18 @@ fn run_step_json_with_dependency_resolution() {
         Some(o) => o,
         None => panic!("should have outputs field"),
     };
-    assert!(
-        outputs.get("enriched_action").is_some(),
-        "should have enriched_action output"
+    assert_eq!(
+        outputs.get("enriched_action"),
+        Some(&Value::String("enrich".to_string())),
+        "enriched_action should echo the payload posted by post-enriched"
     );
 }
 
 #[test]
 fn run_step_no_deps_succeeds_for_standalone_step() {
-    let spec = fixture_spec();
+    let server = start_mock_httpbin();
+    let temp = TempDir::new("arazzo-run-step-standalone");
+    let spec = hermetic_example_spec("httpbin-get.arazzo.yaml", &server.base_url, temp.path());
     let spec_str = spec.to_string_lossy().to_string();
 
     let output = run(

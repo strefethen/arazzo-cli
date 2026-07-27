@@ -28,3 +28,6 @@ serde_yaml_ng = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 url = "2"
 regex = "1.12.3"
+
+[dev-dependencies]
+tiny_http = "0.12"
