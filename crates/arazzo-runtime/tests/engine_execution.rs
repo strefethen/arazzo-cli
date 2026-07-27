@@ -1938,6 +1938,66 @@ async fn execute_step_with_transitive_deps() {
 }
 
 #[tokio::test]
+async fn execute_step_goto_into_filtered_gap_resumes_at_or_after_target() {
+    // Filtered set is [s0, s2, s5] (s5 declares dependsOn s0 and s2). A goto
+    // from s0 targeting s3 — inside the gap — must resume at s5, the first
+    // in-scope step at or after the target, and never execute s2, which
+    // precedes the target.
+    let hits = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_m, url, _h, _b| {
+        if let Ok(mut log) = hits_ref.lock() {
+            log.push(url.clone());
+        }
+        MockHttpResponse::json(200, r#"{"v":"ok"}"#)
+    });
+
+    let mut steps: Vec<Step> = (0..6)
+        .map(|i| Step {
+            step_id: format!("s{i}"),
+            target: Some(StepTarget::OperationPath(format!("/s{i}"))),
+            success_criteria: success_200(),
+            ..Step::default()
+        })
+        .collect();
+    steps[0].on_success = vec![OnAction {
+        name: "jump-into-gap".to_string(),
+        type_: Some(ActionType::Goto),
+        step_id: "s3".to_string(),
+        ..OnAction::default()
+    }];
+    steps[5].depends_on = vec!["s0".to_string(), "s2".to_string()];
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps,
+            ..Workflow::default()
+        }],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+
+    let exec_result = engine
+        .execute_step("wf", "s5", BTreeMap::new(), false)
+        .collect()
+        .await;
+    if let Err(err) = exec_result.outputs {
+        panic!("goto into filtered gap should not error: {err}");
+    }
+
+    let observed = match hits.lock() {
+        Ok(log) => log.clone(),
+        Err(err) => panic!("hit log poisoned: {err}"),
+    };
+    assert_eq!(
+        observed,
+        vec!["/s0".to_string(), "/s5".to_string()],
+        "goto targeting s3 must resume at s5 and never execute s2"
+    );
+}
+
+#[tokio::test]
 async fn execute_step_no_deps_flag_standalone_succeeds() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"v":1}"#));
     let spec = make_spec_with_base(

@@ -14,7 +14,7 @@ Three parallel agents searched the codebase for bugs:
 3. **Agent 3** — Runtime logic deep-dive (execution flow, retries, criteria, parallelism)
 
 Total bugs reported: **16**
-After skeptic review: **1 accepted**, **15 disproved**
+After skeptic review: **1 accepted** (since fixed), **15 disproved**
 
 ---
 
@@ -180,48 +180,6 @@ After skeptic review: **1 accepted**, **15 disproved**
 
 ---
 
-### ACCEPTED — Goto Target Index Skip in Filtered Mode (Agent 3, Bug 3)
-
-| Field | Value |
-|---|---|
-| Claim | `run_cursor += 1` fallback can land on a step BEFORE the goto target |
-| Score at risk | P2 |
-| Confidence | 85% that this is real |
-| Decision | **ACCEPT** |
-| File | `crates/arazzo-runtime/src/runtime_core/engine_impl.rs:289-303` |
-
-**Analysis:** In `execute_step_inner`, `steps_to_run` is a filtered subset (transitive deps of a target step). When a goto target `next_idx` isn't in `steps_to_run`, the fallback at line 294 increments `run_cursor` by 1:
-
-```rust
-} else if next_idx > idx {
-    run_cursor += 1;
-}
-```
-
-**Example:** `steps_to_run = [0, 2, 5]`, current step is index 0 (run_cursor=0), goto targets index 3:
-- `position()` fails (3 not in [0, 2, 5])
-- `3 > 0` → true → `run_cursor = 1`
-- Next step: `steps_to_run[1] = 2` — but step 2 is BEFORE the goto target (3)!
-- Should have jumped to step 5 (next available step at or after index 3)
-
-**Fix:** Replace `run_cursor += 1` with a position search for the next step >= the goto target:
-```rust
-} else if let Some(pos) = steps_to_run.iter().position(|&i| i >= next_idx) {
-    run_cursor = pos;
-} else {
-    break; // past all steps in set
-}
-```
-
-**Impact:** Edge case — only triggers when:
-1. User runs specific steps (filtered execution via `arazzo run <workflow> <step>`)
-2. An onSuccess/onFailure action gotos a step NOT in the dependency set
-3. There are gaps in the `steps_to_run` indices
-
-**Severity:** P2 — incorrect execution order in filtered mode with goto actions
-
----
-
 ## Final Scorecard
 
 | Metric | Count |
@@ -235,7 +193,7 @@ After skeptic review: **1 accepted**, **15 disproved**
 
 | ID | Severity | File | Description |
 |---|---|---|---|
-| GOTO-SKIP-1 | P2 | `engine_impl.rs:289-303` | Goto fallback in filtered execution can jump to wrong step |
+| GOTO-SKIP-1 | P2 | `engine_impl.rs:289-303` | Goto fallback in filtered execution can jump to wrong step — fixed: filtered goto now seeks the first in-scope step at or after the target |
 
 ---
 

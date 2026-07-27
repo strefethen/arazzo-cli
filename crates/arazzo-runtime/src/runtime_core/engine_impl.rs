@@ -290,16 +290,14 @@ impl Engine {
                         // Find the position of next_idx in our filtered steps_to_run set.
                         if let Some(pos) = steps_to_run.iter().position(|&i| i == next_idx) {
                             run_cursor = pos;
-                        } else if next_idx > idx {
-                            // Goto target is past us but not in our filtered set — advance.
-                            run_cursor += 1;
+                        } else if let Some(pos) = steps_to_run.iter().position(|&i| i >= next_idx) {
+                            // Target is not in the filtered set (steps_to_run is
+                            // sorted ascending) — resume at the first in-scope
+                            // step at or after it, never before it.
+                            run_cursor = pos;
                         } else {
-                            return Err(RuntimeError::new(
-                                RuntimeErrorKind::GotoTargetNotFound,
-                                format!(
-                                    "goto target step index {next_idx} not in execute_step scope"
-                                ),
-                            ));
+                            // Target is past the filtered tail — nothing left in scope.
+                            break;
                         }
                     }
                     FlowDecision::Retry(retry_idx) => {
