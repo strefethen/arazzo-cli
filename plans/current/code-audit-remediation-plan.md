@@ -32,10 +32,10 @@ and consistent with existing conventions (no `unwrap`/`expect`/`todo`; these are
 |---|------|----------|------------------------------------------------------|-------|
 | 1 | Hermetic CLI tests (remove live httpbin dependency) | High (CI correctness) | **Outstanding** — 3 tests still load `examples/httpbin-*.yaml`; `arazzo-cli/Cargo.toml` still has no `[dev-dependencies]` | — |
 | 2 | CHANGELOG / release hygiene for 0.2.x | High (release blocker) | **Partial** — tags `v0.1.0`–`v0.2.2` + release-readiness tooling landed; CHANGELOG `0.2.x` backfill still open (see §2 note) | — |
-| 3 | Component action merge loses explicit `type` override | Medium (correctness) | **Outstanding** — bug intact; lines moved to `validate/src/lib.rs:691-694` (see §3 note) | — |
-| 4 | Goto target index skip in filtered execution | Medium (correctness) | **Outstanding** — bug intact at `engine_impl.rs:293-295` (lines unchanged) | — |
-| 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Outstanding** — `jsonpath.rs` unchanged | — |
-| 6 | Missing `$ref` cycle guards in generator | Medium (crash/DoS) | **Outstanding** — `refs.rs:26`/`:41` still unbounded | — |
+| 3 | Component action merge loses explicit `type` override | Medium (correctness) | **Done (2026-07-27)** — `3795c89`, epic ac-83365 / ticket ac-59ea7 | — |
+| 4 | Goto target index skip in filtered execution | Medium (correctness) | **Done (2026-07-27)** — `1375272`, epic ac-83365 / ticket ac-d2719 | — |
+| 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Done (2026-07-27)** — `6048931`, epic ac-83365 / ticket ac-e19d1 | — |
+| 6 | Missing `$ref` cycle guards in generator | Medium (crash/DoS) | **Done (2026-07-27)** — `d4899b3`, epic ac-83365 / ticket ac-53232 | — |
 | 7 | Finish the VS Code extension | Feature completion | **Outstanding** — stubs + trivial smoke test unchanged; DAP backend split, so 7a `dap.rs` line refs are stale (see §7 note) | — |
 | 8 | MCP security hardening | Security | **Outstanding** — only the pre-existing path allowlist is present; 8.2–8.5 (SSRF/env/quota/error-hygiene) not started | — |
 
