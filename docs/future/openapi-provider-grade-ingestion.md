@@ -81,6 +81,11 @@ later phase. Each item has a named condition for when to revisit.
   entries, configurable via `ARAZZO_MCP_CATALOG_CACHE_SIZE`. Local external
   refs included in the fingerprint so changes to a referenced file invalidate
   the root catalog.
+- **Local external ref scope:** relative file refs are allowed after
+  canonicalization, including refs that traverse out of the root spec's
+  directory. Reject absolute paths and non-file schemes. MCP must run each
+  resolved target through `check_path_allowed`; CLI treats the user-supplied
+  root spec as consent to read its relative local refs.
 - **`openapiv3` upgrade policy:** pinned in workspace `Cargo.toml`. Bump only
   when a fixture forces it; bumps require golden-snapshot reruns.
 - **Duplicate `operationId` policy:** emit `OPENAPI_OPERATION_ID_DUPLICATE`
@@ -88,8 +93,8 @@ later phase. Each item has a named condition for when to revisit.
   is ambiguous (`RUNTIME_OPERATION_ID_AMBIGUOUS`,
   `GENERATE_OPERATION_AMBIGUOUS`).
 - **`generate --json` envelope:** stable `kind: "generate"`,
-  `schemaVersion: "generate.v1"`, `yaml` field present without `--output`.
-  This fixes the existing bug where YAML leaks to stdout.
+  `schemaVersion: "generate.v1"`, `yaml` field always present, including with
+  `--output`. This fixes the existing bug where YAML leaks to stdout.
 
 ## Current System Map
 
@@ -217,8 +222,10 @@ testdata/openapi/external-local-refs.openapi.yaml
    parameters, headers, examples, security schemes — fixes the existing
    asymmetric-cycle-detection bug.
 4. Add path-item `$ref` resolution.
-5. Add local-external `$ref` resolution sandboxed to the root file's
-   directory. Reject absolute paths and `..` traversal.
+5. Add local-external `$ref` resolution for relative file refs. Canonicalize
+   targets before reading, allow `..` traversal, reject absolute paths and
+   non-file schemes, and require MCP-resolved targets to pass
+   `check_path_allowed`.
 6. Detect `openapi: 3.1.x` and emit `OPENAPI_VERSION_31_UNSUPPORTED_KEYWORDS`
    listing keywords found that the typed model cannot represent. One bucketed
    diagnostic per spec is enough at this stage.
@@ -235,7 +242,9 @@ testdata/openapi/external-local-refs.openapi.yaml
   `by_operation_id` return all candidates.
 - 3.1 fixture produces `OPENAPI_VERSION_31_UNSUPPORTED_KEYWORDS` and the
   catalog still constructs (no panic, no abort).
-- External refs cannot escape the root sandbox.
+- Local external refs can traverse outside the root spec directory only through
+  canonicalized relative paths; absolute paths and non-file schemes are
+  rejected, and MCP access remains constrained by `check_path_allowed`.
 - `cargo test -p arazzo-openapi` passes.
 - Workspace fmt/clippy/test green.
 
@@ -488,20 +497,17 @@ runtime integration and depends on 5.
 
 These are the questions that genuinely remain after inline decisions:
 
-1. **`generate --json --output file.yaml` shape**: include the YAML string
-   in the `yaml` field, or only `file` + summary? Recommend including
-   `yaml` for streaming consumers; revisit if it hurts performance on
-   large outputs.
-2. **`OperationKey.pointer` field**: should the catalog include a JSON
+1. **`OperationKey.pointer` field**: should the catalog include a JSON
    Pointer to the operation in the source document for deep-link
    diagnostics? Cheap to add; defer until a diagnostic actually needs it.
-3. **MCP cache eviction signal**: do we need an explicit
+2. **MCP cache eviction signal**: do we need an explicit
    `clear_catalog_cache` MCP tool, or is restart-the-server good enough?
    Defer until users report needing it.
 
 Resolved by inline decisions: source-id derivation, Arazzo binding,
 `openapiv3` upgrade, MCP cache shape, strict default, JSON path privacy,
-duplicate-operationId severity, generate JSON envelope, 2.x strategy.
+duplicate-operationId severity, generate JSON envelope including `--output`,
+local external ref scope, 2.x strategy.
 
 ## Why This Plan Is Smaller Than Its Predecessors
 
