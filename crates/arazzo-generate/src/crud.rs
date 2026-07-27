@@ -463,7 +463,7 @@ fn find_id_in_response(
             continue;
         }
 
-        let resp = resolve_response_ref(resp_ref, components)?;
+        let resp = resolve_response_ref(resp_ref, components, &mut HashSet::new())?;
         let content = resp.content.get("application/json")?;
         let schema_ref = content.schema.as_ref()?;
         let mut visited = HashSet::new();
@@ -731,7 +731,7 @@ fn build_step(
 
     let request_body = operation.and_then(|op| {
         let rb_ref = op.request_body.as_ref()?;
-        let rb = crate::refs::resolve_request_body_ref(rb_ref, components)?;
+        let rb = crate::refs::resolve_request_body_ref(rb_ref, components, &mut HashSet::new())?;
         let json_content = rb.content.get("application/json")?;
         let schema_ref = json_content.schema.as_ref()?;
         let example = generate_example(schema_ref, "body", components, 0);

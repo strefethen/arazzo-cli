@@ -26,14 +26,18 @@ pub fn resolve_schema_ref<'a>(
 pub fn resolve_request_body_ref<'a>(
     rb_ref: &'a ReferenceOr<openapiv3::RequestBody>,
     components: &'a Option<openapiv3::Components>,
+    visited: &mut HashSet<String>,
 ) -> Option<&'a openapiv3::RequestBody> {
     match rb_ref {
         ReferenceOr::Item(rb) => Some(rb),
         ReferenceOr::Reference { reference } => {
             let name = reference.strip_prefix("#/components/requestBodies/")?;
+            if !visited.insert(name.to_string()) {
+                return None; // cycle
+            }
             let comps = components.as_ref()?;
             let next_ref = comps.request_bodies.get(name)?;
-            resolve_request_body_ref(next_ref, components)
+            resolve_request_body_ref(next_ref, components, visited)
         }
     }
 }
@@ -41,14 +45,18 @@ pub fn resolve_request_body_ref<'a>(
 pub fn resolve_response_ref<'a>(
     resp_ref: &'a ReferenceOr<openapiv3::Response>,
     components: &'a Option<openapiv3::Components>,
+    visited: &mut HashSet<String>,
 ) -> Option<&'a openapiv3::Response> {
     match resp_ref {
         ReferenceOr::Item(resp) => Some(resp),
         ReferenceOr::Reference { reference } => {
             let name = reference.strip_prefix("#/components/responses/")?;
+            if !visited.insert(name.to_string()) {
+                return None; // cycle
+            }
             let comps = components.as_ref()?;
             let next_ref = comps.responses.get(name)?;
-            resolve_response_ref(next_ref, components)
+            resolve_response_ref(next_ref, components, visited)
         }
     }
 }
@@ -88,6 +96,48 @@ mod tests {
         };
         let mut visited = HashSet::new();
         let result = resolve_schema_ref(&ref_, &components, &mut visited);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_request_body_ref_resolution_with_cycle() {
+        let mut request_bodies = IndexMap::new();
+        request_bodies.insert(
+            "A".to_string(),
+            ReferenceOr::Reference {
+                reference: "#/components/requestBodies/A".to_string(),
+            },
+        );
+        let components = Some(openapiv3::Components {
+            request_bodies,
+            ..openapiv3::Components::default()
+        });
+
+        let ref_ = ReferenceOr::Reference::<openapiv3::RequestBody> {
+            reference: "#/components/requestBodies/A".to_string(),
+        };
+        let result = resolve_request_body_ref(&ref_, &components, &mut HashSet::new());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_response_ref_resolution_with_cycle() {
+        let mut responses = IndexMap::new();
+        responses.insert(
+            "A".to_string(),
+            ReferenceOr::Reference {
+                reference: "#/components/responses/A".to_string(),
+            },
+        );
+        let components = Some(openapiv3::Components {
+            responses,
+            ..openapiv3::Components::default()
+        });
+
+        let ref_ = ReferenceOr::Reference::<openapiv3::Response> {
+            reference: "#/components/responses/A".to_string(),
+        };
+        let result = resolve_response_ref(&ref_, &components, &mut HashSet::new());
         assert!(result.is_none());
     }
 }
