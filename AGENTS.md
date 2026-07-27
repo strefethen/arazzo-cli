@@ -6,6 +6,10 @@ Instructions for AI coding agents working on this repository.
 
 A standalone CLI and Rust workspace for executing Arazzo 1.0 workflow specifications at runtime (no code generation).
 
+## Scope Boundary
+
+- **Smithy is not an arazzo-cli gap.** Native Smithy support does not currently fit the Arazzo/OpenAPI landscape of this project and should not be proposed as a feature plan by default. If Smithy comes up, treat Smithy-to-OpenAPI conversion as an external upstream workflow that can feed existing OpenAPI paths, not as a reason to add first-class Smithy runtime or source-description support.
+
 ## Build & Verify
 
 ```bash
