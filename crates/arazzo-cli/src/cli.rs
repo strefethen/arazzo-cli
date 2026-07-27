@@ -6,11 +6,17 @@ use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES}
 
 #[derive(Parser, Debug)]
 #[command(name = "arazzo")]
-#[command(about = "Execute Arazzo 1.0 workflows")]
+#[command(
+    about = "Execute Arazzo 1.0 workflows",
+    long_about = "Execute, validate, inspect, generate, and test Arazzo 1.0 workflows.\n\nFor agents: use --json for machine-readable output, use schema <command> to discover the JSON contract, and use run --dry-run --json before a live run.",
+    after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n  7. Expose workflows to agents: arazzo-cli serve --dir <dir> --allowed-dir <dir>\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."
+)]
 pub struct Cli {
+    /// Emit machine-readable JSON on stdout when the command has a JSON contract.
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Emit diagnostic progress to stderr without changing JSON stdout.
     #[arg(short = 'v', long, global = true)]
     pub verbose: bool,
 
@@ -20,8 +26,15 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Execute a workflow from an Arazzo spec.
+    #[command(
+        after_help = "For agents:\n  - Prefer --json for parseable success/error envelopes.\n  - Use --dry-run --json to preview requests without sending HTTP traffic.\n  - Use --trace <trace.json> to capture redacted replay evidence.\n  - Use schema run to inspect the JSON output contract."
+    )]
     Run {
+        /// Path to an Arazzo YAML spec file.
         spec: String,
+
+        /// workflowId to execute from the spec.
         workflow_id: String,
 
         /// Execute a single step within the workflow (auto-resolves dependencies)
@@ -32,12 +45,15 @@ pub enum Commands {
         #[arg(long = "no-deps", requires = "step")]
         no_deps: bool,
 
+        /// String input as key=value. Environment variables in values are expanded.
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
+        /// JSON-typed input as key=<json-value>, preserving numbers, booleans, arrays, and objects.
         #[arg(long = "input-json")]
         input_json: Vec<String>,
 
+        /// Per-request HTTP timeout, for example 500ms, 30s, or 2m.
         #[arg(
             short = 't',
             long = "http-timeout",
@@ -46,6 +62,7 @@ pub enum Commands {
         )]
         http_timeout: Duration,
 
+        /// Per-workflow execution timeout, for example 30s, 5m, or 1h.
         #[arg(
             long = "execution-timeout",
             default_value = "5m",
@@ -53,12 +70,15 @@ pub enum Commands {
         )]
         execution_timeout: Duration,
 
+        /// Custom HTTP header for every request, as 'Name: value' or Name=value. Repeatable.
         #[arg(short = 'H', long = "header")]
         header: Vec<String>,
 
+        /// OpenAPI file used to resolve operationId targets. Repeatable.
         #[arg(long = "openapi")]
         openapi: Vec<String>,
 
+        /// Expression evaluation diagnostics: off, warn, or error.
         #[arg(
             long = "expr-diagnostics",
             value_enum,
@@ -66,9 +86,11 @@ pub enum Commands {
         )]
         expr_diagnostics: ExpressionDiagnosticsMode,
 
+        /// Enable parallel step execution where dependencies allow it.
         #[arg(long)]
         parallel: bool,
 
+        /// Build and print the request plan without sending HTTP requests.
         #[arg(long = "dry-run")]
         dry_run: bool,
 
@@ -76,9 +98,11 @@ pub enum Commands {
         #[arg(long = "strict-inputs")]
         strict_inputs: bool,
 
+        /// Write a redacted trace.v1 JSON file for replay and debugging.
         #[arg(long = "trace")]
         trace: Option<String>,
 
+        /// Maximum response body preview bytes stored per trace step.
         #[arg(
             long = "trace-max-body-bytes",
             default_value_t = TRACE_BODY_PREVIEW_DEFAULT_BYTES,
@@ -91,6 +115,9 @@ pub enum Commands {
         max_response_size: Option<usize>,
     },
     /// Replay a recorded trace.v1 file with deterministic response injection
+    #[command(
+        after_help = "For agents:\n  - Replay is deterministic and does not need live upstream responses recorded in the trace.\n  - Use --json for parseable replay success/error envelopes.\n  - Use schema replay to inspect the JSON output contract."
+    )]
     Replay {
         /// Path to trace.v1 JSON file
         trace: String,
@@ -114,26 +141,56 @@ pub enum Commands {
         #[arg(long = "openapi")]
         openapi: Vec<String>,
     },
+    /// Validate an Arazzo spec and report structural errors.
+    #[command(
+        after_help = "For agents:\n  - Use --json for structured valid/error output.\n  - Use schema validate to inspect the JSON output contract."
+    )]
     Validate {
+        /// Path to an Arazzo YAML spec file.
         spec: String,
     },
+    /// List workflow IDs and summaries from one Arazzo spec.
+    #[command(
+        after_help = "For agents:\n  - Use --json to receive an array of workflows.\n  - Follow with show or steps for deeper inspection.\n  - Use schema list to inspect the JSON output contract."
+    )]
     List {
+        /// Path to an Arazzo YAML spec file.
         spec: String,
     },
+    /// Scan a directory for Arazzo specs and summarize available workflows.
+    #[command(
+        after_help = "For agents:\n  - Use --json to receive an array of catalog entries.\n  - Follow with show <workflow-id> --dir <dir> --json.\n  - Use schema catalog to inspect the JSON output contract."
+    )]
     Catalog {
+        /// Directory containing .yaml or .yml Arazzo specs.
         dir: String,
     },
+    /// Show one workflow's inputs, steps, and outputs from a spec directory.
+    #[command(
+        after_help = "For agents:\n  - Use --json to inspect inputs, outputs, and step summaries.\n  - Use steps <spec> <workflow-id> --json when you only need step rows.\n  - Use schema show to inspect the JSON output contract."
+    )]
     Show {
+        /// workflowId to find in the catalog directory.
         workflow_id: String,
+        /// Directory containing Arazzo spec files.
         #[arg(long = "dir", default_value = ".")]
         dir: String,
     },
     /// List steps within a workflow
+    #[command(
+        after_help = "For agents:\n  - Use --json to receive an array of step rows.\n  - Use show <workflow-id> --dir <dir> --json when you need workflow inputs and outputs too.\n  - Use schema steps to inspect the JSON output contract."
+    )]
     Steps {
+        /// Path to an Arazzo YAML spec file.
         spec: String,
+
+        /// workflowId whose steps should be listed.
         workflow_id: String,
     },
     /// Generate Arazzo workflows from an OpenAPI specification
+    #[command(
+        after_help = "For agents:\n  - Generated YAML is written to stdout unless --output is set.\n  - Use --json to receive generation metadata instead of YAML.\n  - Use schema generate to inspect the JSON output contract."
+    )]
     Generate {
         /// Path to the OpenAPI 3.x spec (YAML or JSON)
         #[arg(long = "spec")]
@@ -153,6 +210,9 @@ pub enum Commands {
         command: Option<String>,
     },
     /// Run Arazzo specs as tests and report results
+    #[command(
+        after_help = "For agents:\n  - Use --json for a structured test report regardless of --format.\n  - Directories are scanned recursively for .arazzo.yaml and .arazzo.yml.\n  - Use schema test to inspect the JSON output contract."
+    )]
     Test {
         /// Spec files or directories to test (directories scanned recursively
         /// for .arazzo.yaml / .arazzo.yml)
@@ -225,6 +285,9 @@ pub enum Commands {
         filter: Option<String>,
     },
     /// Start an MCP server for AI agent integration
+    #[command(
+        after_help = "For agents:\n  - Load specs with positional files, --dir, or both.\n  - Use --allowed-dir to constrain file access exposed through MCP tools.\n  - This command speaks MCP over stdio; stdout is reserved for protocol messages."
+    )]
     Serve {
         /// Arazzo spec files to load
         specs: Vec<String>,

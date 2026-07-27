@@ -91,6 +91,18 @@ fn stdout_json(output: &std::process::Output) -> Value {
     }
 }
 
+fn stdout_text(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn combined_text(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 fn assert_run_json_kind(body: &Value, expected: &str) {
     let kind = body.get("kind").and_then(Value::as_str).unwrap_or_default();
     assert_eq!(kind, expected, "unexpected run JSON envelope: {body}");
@@ -1660,6 +1672,44 @@ fn run_sequential_trace_records_parallel_false() {
 // ---------------------------------------------------------------------------
 // schema command tests
 // ---------------------------------------------------------------------------
+
+#[test]
+fn root_help_surfaces_agent_workflow() {
+    let output = run(["--help"].as_slice(), None);
+    assert!(output.status.success());
+    let help = stdout_text(&output);
+
+    assert!(help.contains("For agents: use --json"));
+    assert!(help.contains("For agents:"));
+    assert!(help.contains("arazzo-cli schema <command>"));
+    assert!(help.contains("arazzo-cli run <spec> <workflow-id> --dry-run --json"));
+    assert!(help.contains("Diagnostics go to stderr"));
+}
+
+#[test]
+fn bare_cli_surfaces_agent_guidance() {
+    let output = run([].as_slice(), None);
+    let help = combined_text(&output);
+
+    assert!(help.contains("For agents:"));
+    assert!(help.contains("arazzo-cli schema <command>"));
+    assert!(help.contains("arazzo-cli run <spec> <workflow-id> --dry-run --json"));
+}
+
+#[test]
+fn run_help_surfaces_agent_safe_execution_notes() {
+    let output = run(["run", "--help"].as_slice(), None);
+    assert!(output.status.success());
+    let help = stdout_text(&output);
+
+    assert!(help.contains("Execute a workflow from an Arazzo spec"));
+    assert!(help.contains("Path to an Arazzo YAML spec file"));
+    assert!(help.contains("String input as key=value"));
+    assert!(help.contains("Build and print the request plan without sending HTTP requests"));
+    assert!(help.contains("For agents:"));
+    assert!(help.contains("Use --dry-run --json to preview requests without sending HTTP traffic"));
+    assert!(help.contains("Use schema run to inspect the JSON output contract"));
+}
 
 #[test]
 fn schema_lists_available_commands() {
