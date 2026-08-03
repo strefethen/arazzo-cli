@@ -261,7 +261,9 @@ impl DebugController {
         let stop_info = if let Some(breakpoint) = matched_breakpoint {
             Some((
                 DebugStopReason::Breakpoint,
-                breakpoint.condition.filter(|value| !value.trim().is_empty()),
+                breakpoint
+                    .condition
+                    .filter(|value| !value.trim().is_empty()),
             ))
         } else if guard.pause_requested {
             Some((DebugStopReason::Pause, None))
