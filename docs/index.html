@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>arazzo-cli — Execute API workflows from YAML</title>
-    <meta name="description" content="Standalone Arazzo 1.0 workflow executor and VS Code debugger. Define multi-step API sequences in YAML, then run, trace, replay, and debug them interactively.">
+    <meta name="description" content="Standalone Arazzo 1.0.1 workflow executor, CI contract tester, MCP server, and VS Code debugger. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.">
     <meta property="og:title" content="arazzo-cli — Execute API workflows from YAML">
-    <meta property="og:description" content="Standalone Arazzo 1.0 workflow executor and VS Code debugger. Run, trace, replay, and debug API workflows from YAML.">
+    <meta property="og:description" content="Standalone Arazzo 1.0.1 workflow executor, CI contract tester, MCP server, and VS Code debugger. Run, test, trace, replay, and debug API workflows from YAML.">
     <meta property="og:image" content="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://strefethen.github.io/arazzo-cli/">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="arazzo-cli — Execute API workflows from YAML">
-    <meta name="twitter:description" content="Standalone Arazzo 1.0 workflow executor and VS Code debugger. Run, trace, replay, and debug API workflows from YAML.">
+    <meta name="twitter:description" content="Standalone Arazzo 1.0.1 workflow executor, CI contract tester, MCP server, and VS Code debugger. Run, test, trace, replay, and debug API workflows from YAML.">
     <meta name="twitter:image" content="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
     <link rel="canonical" href="https://strefethen.github.io/arazzo-cli/">
     <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
@@ -23,7 +23,7 @@
         "name": "arazzo-cli",
         "operatingSystem": "Linux, macOS, Windows",
         "applicationCategory": "DeveloperApplication",
-        "description": "Standalone Arazzo 1.0 workflow executor and VS Code debugger. Define multi-step API sequences in YAML, then run, trace, replay, and debug them interactively.",
+        "description": "Standalone Arazzo 1.0.1 workflow executor, CI contract tester, MCP server, and VS Code debugger. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "license": "https://opensource.org/licenses/MIT"
     }
@@ -192,14 +192,14 @@
         <div class="relative z-10 text-center px-6 max-w-4xl mx-auto mb-12 md:mb-16">
             <div id="hero-badge" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/50 mb-8">
                 <span class="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse"></span>
-                Arazzo 1.0 &middot; OpenAPI Initiative
+                Arazzo 1.0.1 &middot; 1.1 sources &middot; OpenAPI Initiative
             </div>
             <h1 id="hero-title" class="text-4xl sm:text-5xl md:text-7xl font-extrabold leading-[1.08] tracking-tight mb-6">
                 Execute API workflows<br>
                 <span class="gradient-text">from YAML.</span>
             </h1>
             <p id="hero-subtitle" class="text-lg md:text-xl text-white/40 max-w-2xl mx-auto mb-10 leading-relaxed">
-                No code generation. No glue scripts. Define multi-step API sequences in YAML, then run, trace, replay, and debug them interactively.
+                No code generation. No glue scripts. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.
             </p>
             <div id="hero-ctas" class="flex flex-col sm:flex-row gap-4 justify-center">
                 <a href="#get-started" id="scroll-to-start" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white bg-gradient-to-r from-accent-blue to-accent-teal hover:shadow-lg hover:shadow-accent-blue/25 transition-all">
@@ -277,7 +277,7 @@
                         <i data-lucide="file-code-2" class="w-7 h-7" style="color:#3b82f6"></i>
                     </div>
                     <h3 class="text-xl font-bold text-slate-900 mb-2">Define</h3>
-                    <p class="text-slate-500 leading-relaxed">Write your API workflow in YAML using the Arazzo 1.0 spec. Steps, parameters, criteria, control flow — all declarative.</p>
+                    <p class="text-slate-500 leading-relaxed">Write your API workflow in YAML using the Arazzo 1.0.1 spec. Steps, parameters, criteria, control flow — all declarative.</p>
                 </div>
                 <div class="step-card bg-white rounded-2xl p-8 shadow-sm border border-slate-100 text-center">
                     <div class="text-5xl font-extrabold gradient-text mb-5">02</div>
@@ -338,6 +338,13 @@
                     <p class="text-white/40 text-sm leading-relaxed">Re-execute traces offline with injected responses. Detect request drift for CI regression testing without network access.</p>
                 </div>
                 <div class="feature-card glass rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-green-400/10 flex items-center justify-center mb-4">
+                        <i data-lucide="check-check" class="w-6 h-6" style="color:#4ade80"></i>
+                    </div>
+                    <h3 class="text-lg font-bold mb-2">Contract Testing</h3>
+                    <p class="text-white/40 text-sm leading-relaxed">Run every workflow as a CI contract test with arazzo-cli test. TAP, JUnit XML, or JSON output, regex filtering, fail-fast, and non-zero exit on any failure.</p>
+                </div>
+                <div class="feature-card glass rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-amber-400/10 flex items-center justify-center mb-4">
                         <i data-lucide="braces" class="w-6 h-6" style="color:#fbbf24"></i>
                     </div>
@@ -371,6 +378,13 @@
                     </div>
                     <h3 class="text-lg font-bold mb-2">JSON Output</h3>
                     <p class="text-white/40 text-sm leading-relaxed">--json on every command. Stable schemas, structured errors, JSON Schema introspection. Built for CI and scripting.</p>
+                </div>
+                <div class="feature-card glass rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-sky-400/10 flex items-center justify-center mb-4">
+                        <i data-lucide="bot" class="w-6 h-6" style="color:#38bdf8"></i>
+                    </div>
+                    <h3 class="text-lg font-bold mb-2">MCP Server</h3>
+                    <p class="text-white/40 text-sm leading-relaxed">Expose workflow tools to AI agents over the Model Context Protocol. arazzo-cli serve runs an MCP server over stdio to generate, describe, and run Arazzo workflows.</p>
                 </div>
             </div>
         </div>
@@ -451,7 +465,7 @@
                         <i data-lucide="code-2" class="w-8 h-8" style="color:#818cf8"></i>
                     </div>
                     <h3 class="text-2xl font-bold mb-3">Open</h3>
-                    <p class="text-white/40 leading-relaxed">MIT licensed. 339 tests, all hermetic. Full Arazzo 1.0 expression surface. Programmatic Rust API via arazzo-runtime crate.</p>
+                    <p class="text-white/40 leading-relaxed">MIT licensed. 531 tests, all hermetic. Full Arazzo 1.0.1 expression surface. Programmatic Rust API via arazzo-runtime crate.</p>
                 </div>
             </div>
         </div>
@@ -479,7 +493,7 @@
                     <p class="text-white/50 text-sm font-medium mb-3">Or download a prebuilt binary</p>
                     <div class="terminal-block">
                         <span class="comment"># Linux, macOS, and Windows binaries on every release</span><br>
-                        <span class="prompt">$</span> <span class="cmd">gh release download v0.1.0</span> <span class="flag">-R</span> <span class="cv">strefethen/arazzo-cli</span>
+                        <span class="prompt">$</span> <span class="cmd">gh release download v0.3.0</span> <span class="flag">-R</span> <span class="cv">strefethen/arazzo-cli</span>
                     </div>
                 </div>
                 <div>
@@ -494,6 +508,18 @@
                     <div class="terminal-block">
                         <span class="prompt">$</span> <span class="cmd">arazzo-cli run</span> <span class="cv">spec.yaml</span> my-workflow <span class="flag">--trace</span> <span class="cv">./trace.json</span><br>
                         <span class="prompt">$</span> <span class="cmd">arazzo-cli replay</span> <span class="cv">./trace.json</span>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-white/50 text-sm font-medium mb-3">Test every workflow in CI</p>
+                    <div class="terminal-block">
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli test</span> <span class="cv">./specs</span> <span class="flag">--format</span> <span class="cv">junit</span>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-white/50 text-sm font-medium mb-3">Serve workflows to AI agents over MCP</p>
+                    <div class="terminal-block">
+                        <span class="prompt">$</span> <span class="cmd">arazzo-cli serve</span>
                     </div>
                 </div>
             </div>
