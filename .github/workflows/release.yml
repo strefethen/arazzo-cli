@@ -37,7 +37,7 @@ jobs:
             label: windows-x86_64
             exe_suffix: ".exe"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,7 +71,7 @@ jobs:
           cp "$BIN_PATH" "$OUT"
 
       - name: Upload release asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.label }}
           path: dist/*
@@ -82,14 +82,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Ensure tag exists
         run: git rev-parse "refs/tags/${RELEASE_TAG}"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
@@ -103,7 +103,7 @@ jobs:
           sha256sum * > SHA256SUMS.txt
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist/*
