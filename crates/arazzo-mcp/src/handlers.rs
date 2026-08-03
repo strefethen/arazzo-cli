@@ -1,6 +1,7 @@
 //! Tool handler implementations for the MCP server.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
@@ -258,6 +259,21 @@ pub fn run_workflow(
             .unwrap_or(DEFAULT_EXECUTION_TIMEOUT_SECS),
     );
 
+    // Relative `type: openapi` source urls resolve against the spec file's
+    // directory and are loaded from disk at engine build; vet every resolved
+    // path through the same gate as the file-based tools before building.
+    let spec_dir = Path::new(&loaded.file_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    for (source_name, resolved) in
+        arazzo_runtime::relative_openapi_source_paths(&loaded.spec, &spec_dir)
+    {
+        if let Err(err) = state.check_path_allowed(&resolved.to_string_lossy()) {
+            return tool_err(&format!("sourceDescription \"{source_name}\": {err}"));
+        }
+    }
+
     // Clone the spec because EngineBuilder takes ownership.
     let spec = loaded.spec.clone();
 
@@ -271,6 +287,7 @@ pub fn run_workflow(
         .parallel(parallel)
         .dry_run(dry_run)
         .strict_inputs(true)
+        .source_base_dir(spec_dir)
         .build()
     {
         Ok(e) => e,

@@ -1,0 +1,21 @@
+arazzo: 1.0.0
+info:
+  title: Petstore Relative Source
+  version: 1.0.0
+  description: >-
+    Exercises document-semantics sourceDescriptions — the OpenAPI file is
+    loaded from the relative url and the request base derives from its servers.
+sourceDescriptions:
+  - name: petstore
+    url: ./petstore.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: list-pets
+    summary: List pets via an operationId resolved from the loaded source document
+    steps:
+      - stepId: list
+        operationId: listPets
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs:
+      sourceUrl: $sourceDescriptions.petstore.url

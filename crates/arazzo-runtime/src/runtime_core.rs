@@ -51,7 +51,7 @@ mod xpath;
 
 use ::url as url_crate;
 use builder::parse_openapi_into_index;
-pub use builder::EngineBuilder;
+pub use builder::{relative_openapi_source_paths, EngineBuilder};
 use client::HttpClient;
 pub use client::{ClientConfig, ContentType, RateLimitConfig, RequestConfig, Response};
 use control::{sleep_with_cancel, step_result_error};
@@ -83,7 +83,10 @@ use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use state::Engine;
 use state::ExecutionContext;
 pub(crate) use state::VarStore;
-use state::{EngineInner, OperationEntry, StepExecution, StepResult, StepTraceData, WorkflowIndex};
+use state::{
+    EngineInner, OperationEntry, OperationOrigin, StepExecution, StepResult, StepTraceData,
+    WorkflowIndex,
+};
 pub(crate) use url::parse_method;
 use url::{encode_cookie_value, parse_source_prefix, replace_path_params, UrlBuildResult};
 pub(crate) use xpath::{extract_xpath, select_xpath};

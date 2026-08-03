@@ -95,6 +95,10 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         .strict_inputs(run.strict_inputs)
         .trace(trace_enabled);
 
+    if let Some(dir) = Path::new(&run.spec_path).parent() {
+        builder = builder.source_base_dir(dir);
+    }
+
     if let Some(max_bytes) = run.max_response_size {
         builder = builder.max_response_bytes(max_bytes);
     }
@@ -280,6 +284,10 @@ pub async fn replay_trace(
         .parallel(trace.run.parallel)
         .trace(true)
         .replay_trace_steps(trace.steps.clone());
+
+    if let Some(dir) = Path::new(&spec_path).parent() {
+        builder = builder.source_base_dir(dir);
+    }
 
     for openapi_path in openapi_flags {
         let bytes = match fs::read(openapi_path) {

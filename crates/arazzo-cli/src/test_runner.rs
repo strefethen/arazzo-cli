@@ -143,6 +143,10 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
             .strict_inputs(opts.strict_inputs)
             .trace(true);
 
+        if let Some(dir) = spec_path.parent() {
+            builder = builder.source_base_dir(dir);
+        }
+
         if let Some(max_bytes) = opts.max_response_size {
             builder = builder.max_response_bytes(max_bytes);
         }

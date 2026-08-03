@@ -33,9 +33,21 @@ impl ExecutionContext {
     }
 }
 
+/// Where an indexed operation came from, used for duplicate-operationId
+/// diagnostics and per-source attribution.
+#[derive(Debug, Clone)]
+pub(crate) enum OperationOrigin {
+    /// Loaded from a `sourceDescriptions[]` OpenAPI document at engine build.
+    Source { name: String, path: String },
+    /// Explicitly provided via `EngineBuilder::openapi_spec` (1-based order).
+    ExplicitSpec { ordinal: usize },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct OperationEntry {
     pub(super) method: String,
     pub(super) path: String,
+    pub(super) origin: OperationOrigin,
 }
 
 #[derive(Debug, Clone)]
@@ -133,8 +145,15 @@ impl VarStore {
 /// Immutable index built once from the parsed spec.
 pub(crate) struct WorkflowIndex {
     pub spec: ArazzoSpec,
+    /// Effective request base of the first source description. For document
+    /// sources this is derived from the loaded OpenAPI `servers`; for legacy
+    /// sources it is the literal `url` value.
     pub base_url: String,
     pub source_descriptions_map: BTreeMap<String, arazzo_expr::SourceDescriptionContext>,
+    /// Effective request base per source name (`{name}.` operationPath routing).
+    pub(super) source_bases: BTreeMap<String, String>,
+    /// Operations indexed from `sourceDescriptions[]` documents at build time.
+    pub(super) source_ops: BTreeMap<String, OperationEntry>,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
     pub(super) openapi_specs_raw: Vec<Vec<u8>>,

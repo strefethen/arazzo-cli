@@ -544,3 +544,103 @@ fn test_dry_run_redacts_sensitive_request_parts() {
         Some(&Value::String("alice".to_string()))
     );
 }
+
+// ---------------------------------------------------------------------------
+// sourceDescriptions document loading (relative urls)
+// ---------------------------------------------------------------------------
+
+fn testdata_path(rel: &str) -> String {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
+    let joined = if rel.is_empty() { dir } else { dir.join(rel) };
+    joined.to_string_lossy().to_string()
+}
+
+#[test]
+fn test_run_workflow_relative_source_dry_run() {
+    // Allowed-dirs restriction is active, so the resolved source path passes
+    // through check_path_allowed (and is allowed: it is inside testdata/).
+    let state = match ServerState::load(
+        &[testdata_path("petstore-relative.arazzo.yaml")],
+        Some(vec![testdata_path("")]),
+    ) {
+        Ok(state) => state,
+        Err(err) => panic!("loading server state: {err}"),
+    };
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"list-pets","dry_run":true}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(
+        responses.len() >= 2,
+        "expected 2 responses, got {responses:?}"
+    );
+    assert!(
+        !is_tool_error(&responses[1]),
+        "run_workflow should succeed, got: {}",
+        responses[1]
+    );
+
+    let run = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    assert_eq!(run["kind"], "dryRun", "unexpected result: {run}");
+    assert_eq!(run["requests"][0]["method"], "GET");
+    // The operationId resolves from the loaded source document and the base
+    // derives from its servers[0].url — no openapi input exists over MCP.
+    assert_eq!(
+        run["requests"][0]["url"],
+        "https://petstore.example.com/v1/pets"
+    );
+}
+
+#[test]
+fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
+    // The spec sits inside the allowed dir, but its relative source url
+    // resolves to a document outside it — check_path_allowed must refuse.
+    let state = match ServerState::load(
+        &[testdata_path("mcp-denied/spec.arazzo.yaml")],
+        Some(vec![testdata_path("mcp-denied")]),
+    ) {
+        Ok(state) => state,
+        Err(err) => panic!("loading server state: {err}"),
+    };
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"list-pets-denied","dry_run":true}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(
+        responses.len() >= 2,
+        "expected 2 responses, got {responses:?}"
+    );
+    assert!(
+        is_tool_error(&responses[1]),
+        "run_workflow should be denied, got: {}",
+        responses[1]
+    );
+
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("path not allowed"),
+        "expected path denial, got: {text}"
+    );
+    assert!(
+        text.contains("outside"),
+        "expected the source name in the denial, got: {text}"
+    );
+}

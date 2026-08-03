@@ -1,0 +1,13 @@
+openapi: "3.0.3"
+info:
+  title: Petstore Override
+  version: "1.0.0"
+servers:
+  - url: https://override.example.com/v2
+paths:
+  /pets-v2:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: OK

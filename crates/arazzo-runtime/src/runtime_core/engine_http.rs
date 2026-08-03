@@ -9,10 +9,16 @@ impl Engine {
         // Lazy-init: parse OpenAPI specs on first access (stable OnceLock pattern).
         // If two threads race, both compute the same deterministic index and one
         // `set()` silently no-ops — OnceLock guarantees a single stored value.
+        // Source-description documents (indexed eagerly at build) go first, then
+        // explicitly provided specs, so explicit specs win duplicate operationIds
+        // under last-insert-wins.
         if index.op_index.get().is_none() {
-            let mut idx = BTreeMap::new();
-            for spec_data in &index.openapi_specs_raw {
-                parse_openapi_into_index(spec_data, &mut idx)?;
+            let mut idx = index.source_ops.clone();
+            for (ordinal, spec_data) in index.openapi_specs_raw.iter().enumerate() {
+                let origin = OperationOrigin::ExplicitSpec {
+                    ordinal: ordinal + 1,
+                };
+                parse_openapi_into_index(spec_data, &origin, &mut idx)?;
             }
             let _ = index.op_index.set(idx);
         }
@@ -445,11 +451,15 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
     ) -> Result<UrlBuildResult, RuntimeError> {
+        // `{name}.` routing resolves to that source's *effective* request base
+        // (derived from `servers` for document sources, the literal url for
+        // legacy sources). `$sourceDescriptions.{name}.url` expressions keep
+        // evaluating to the literal url via `source_descriptions_map`.
         let (resolved_base, resolved_path) = if let Some((name, path)) =
             parse_source_prefix(op_path)
         {
-            if let Some(source) = self.inner.index.source_descriptions_map.get(name) {
-                (source.url.as_str(), path)
+            if let Some(base) = self.inner.index.source_bases.get(name) {
+                (base.as_str(), path)
             } else {
                 return Err(RuntimeError::new(
                         RuntimeErrorKind::SourceDescriptionNotFound,

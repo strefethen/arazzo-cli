@@ -2945,3 +2945,109 @@ workflows:
         "verbose stderr should show non-sensitive input value, got: {stderr}"
     );
 }
+
+// ── sourceDescriptions document loading (relative urls) ─────────────
+
+#[test]
+fn run_dry_run_relative_source_resolves_without_openapi_flag() {
+    let spec = repo_root().join("testdata/petstore-relative.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        ["--json", "run", &spec_str, "list-pets", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "expected success, got: {}",
+        combined_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "expected one dry-run request: {body}");
+    assert_eq!(
+        requests[0].get("method").and_then(Value::as_str),
+        Some("GET")
+    );
+    // The request base derives from the loaded document's servers[0].url —
+    // no --openapi flag involved.
+    assert_eq!(
+        requests[0].get("url").and_then(Value::as_str),
+        Some("https://petstore.example.com/v1/pets")
+    );
+}
+
+#[test]
+fn run_dry_run_httpbin_example_url_unchanged() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        ["--json", "run", &spec_str, "get-origin", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "expected success, got: {}",
+        combined_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "expected one dry-run request: {body}");
+    // Legacy absolute-url source: byte-identical to pre-change behavior —
+    // the literal source url joined with the operation path.
+    assert_eq!(
+        requests[0].get("url").and_then(Value::as_str),
+        Some("https://httpbin.org/get")
+    );
+}
+
+#[test]
+fn run_dry_run_openapi_flag_overrides_source_with_warning() {
+    let spec = repo_root().join("testdata/petstore-relative.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+    let override_spec = repo_root().join("testdata/petstore-override.openapi.yaml");
+    let override_str = override_spec.to_string_lossy().to_string();
+    let output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "list-pets",
+            "--dry-run",
+            "--openapi",
+            &override_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "expected success, got: {}",
+        combined_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "expected one dry-run request: {body}");
+    // The --openapi definition wins the duplicate operationId.
+    assert_eq!(
+        requests[0].get("url").and_then(Value::as_str),
+        Some("https://petstore.example.com/v1/pets-v2")
+    );
+
+    // A stderr warning names both origins.
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("operationId \"listPets\""),
+        "stderr should name the duplicated operationId, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("sourceDescription \"petstore\""),
+        "stderr should name the source origin, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("OpenAPI spec #1"),
+        "stderr should name the explicit spec origin, got: {stderr}"
+    );
+}

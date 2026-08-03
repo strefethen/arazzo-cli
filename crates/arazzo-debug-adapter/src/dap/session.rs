@@ -96,9 +96,13 @@ pub(super) fn ensure_runtime_started(
     }
 
     let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<CancellationToken>();
-    let engine = EngineBuilder::new(spec)
+    let mut engine_builder = EngineBuilder::new(spec)
         .debug_controller(Arc::clone(&controller))
-        .dry_run(launch.dry_run)
+        .dry_run(launch.dry_run);
+    if let Some(dir) = std::path::Path::new(&launch.spec).parent() {
+        engine_builder = engine_builder.source_base_dir(dir);
+    }
+    let engine = engine_builder
         .build()
         .map_err(|err| format!("creating runtime engine: {err}"))?;
     let inputs = launch.inputs.clone();

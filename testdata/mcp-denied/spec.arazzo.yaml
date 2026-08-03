@@ -1,0 +1,19 @@
+arazzo: 1.0.0
+info:
+  title: Denied Relative Source
+  version: 1.0.0
+  description: >-
+    The relative source url resolves outside this spec's directory; MCP
+    servers restricted to this directory must refuse to load it.
+sourceDescriptions:
+  - name: outside
+    url: ../petstore.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: list-pets-denied
+    summary: Source document resolves outside the allowed directory
+    steps:
+      - stepId: list
+        operationId: listPets
+        successCriteria:
+          - condition: $statusCode == 200

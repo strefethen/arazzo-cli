@@ -2,9 +2,10 @@ mod common;
 
 use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
 use arazzo_spec::{
-    ActionType, CriterionExpressionType, CriterionType, OnAction, OutputValue, ParamLocation,
-    Parameter, Replacement, RequestBody, SelectorObject, SelectorType, Step, StepAction,
-    StepTarget, SuccessCriterion, ValueSource, Workflow,
+    ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, OnAction, OutputValue,
+    ParamLocation, Parameter, Replacement, RequestBody, SelectorObject, SelectorType,
+    SourceDescription, SourceType, Step, StepAction, StepTarget, SuccessCriterion, ValueSource,
+    Workflow,
 };
 use common::*;
 use serde_json::json;
@@ -2837,4 +2838,207 @@ async fn sub_workflow_selector_param_preserves_number_type() {
     };
 
     assert_eq!(outputs.get("result"), Some(&json!(42)));
+}
+
+// ── sourceDescriptions document loading (relative urls) ─────────────
+
+fn testdata_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata")
+}
+
+fn relative_source_spec(url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
+    let mut spec = make_spec(workflows);
+    spec.source_descriptions = vec![SourceDescription {
+        name: "petstore".to_string(),
+        url: url.to_string(),
+        type_: SourceType::OpenApi,
+        ..SourceDescription::default()
+    }];
+    spec
+}
+
+fn list_pets_workflow() -> Vec<Workflow> {
+    vec![Workflow {
+        workflow_id: "list-pets".to_string(),
+        steps: vec![Step {
+            step_id: "list".to_string(),
+            target: Some(StepTarget::OperationId("listPets".to_string())),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        outputs: BTreeMap::from([(
+            "sourceUrl".to_string(),
+            "$sourceDescriptions.petstore.url".to_string().into(),
+        )]),
+        ..Workflow::default()
+    }]
+}
+
+#[tokio::test]
+async fn relative_source_dry_run_derives_base_from_servers() {
+    let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
+    let engine = match EngineBuilder::new(spec)
+        .dry_run(true)
+        .source_base_dir(testdata_dir())
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let exec_result = engine.execute_collect("list-pets", BTreeMap::new()).await;
+    let outputs = match &exec_result.outputs {
+        Ok(outputs) => outputs.clone(),
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    let reqs = exec_result.dry_run_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].method, "GET");
+    // Base derives from the loaded document's servers[0].url, joined with the
+    // operation path — no openapi_spec() input involved.
+    assert_eq!(reqs[0].url, "https://petstore.example.com/v1/pets");
+    // The literal document url stays visible to expressions.
+    assert_eq!(
+        outputs.get("sourceUrl"),
+        Some(&json!("./petstore.openapi.yaml"))
+    );
+}
+
+#[tokio::test]
+async fn relative_source_missing_file_fails_build() {
+    let spec = relative_source_spec("./no-such-file.openapi.yaml", list_pets_workflow());
+    let err = match EngineBuilder::new(spec)
+        .dry_run(true)
+        .source_base_dir(testdata_dir())
+        .build()
+    {
+        Ok(_) => panic!("build should fail for a missing source document"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionLoad);
+    assert_eq!(err.code(), "RUNTIME_SOURCE_DESCRIPTION_LOAD");
+    let expected_path = testdata_dir().join("./no-such-file.openapi.yaml");
+    assert!(
+        err.message.contains("petstore"),
+        "error should name the source: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains(&expected_path.display().to_string()),
+        "error should name the resolved path: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn relative_source_unparseable_file_fails_build() {
+    let spec = relative_source_spec("./unparseable.openapi.yaml", list_pets_workflow());
+    let err = match EngineBuilder::new(spec)
+        .dry_run(true)
+        .source_base_dir(testdata_dir())
+        .build()
+    {
+        Ok(_) => panic!("build should fail for an unparseable source document"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse);
+    let expected_path = testdata_dir().join("./unparseable.openapi.yaml");
+    assert!(
+        err.message.contains("petstore"),
+        "error should name the source: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains(&expected_path.display().to_string()),
+        "error should name the resolved path: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn relative_source_without_base_dir_fails_build() {
+    let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
+    let err = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(_) => panic!("build should fail when no source base dir is provided"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionLoad);
+    assert!(
+        err.message.contains("petstore"),
+        "error should name the source: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn explicit_openapi_spec_overrides_source_operation() {
+    let override_bytes = match std::fs::read(testdata_dir().join("petstore-override.openapi.yaml"))
+    {
+        Ok(bytes) => bytes,
+        Err(err) => panic!("reading override fixture: {err}"),
+    };
+
+    let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
+    let engine = match EngineBuilder::new(spec)
+        .dry_run(true)
+        .source_base_dir(testdata_dir())
+        .openapi_spec(override_bytes)
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let exec_result = engine.execute_collect("list-pets", BTreeMap::new()).await;
+    if let Err(err) = &exec_result.outputs {
+        panic!("expected success, got: {err}");
+    }
+
+    // The explicitly provided spec wins the duplicate operationId, so the
+    // resolved path is its /pets-v2 (joined to the first source's base).
+    let reqs = exec_result.dry_run_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].url, "https://petstore.example.com/v1/pets-v2");
+}
+
+#[tokio::test]
+async fn legacy_absolute_source_url_stays_literal_in_expressions() {
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "s1".to_string(),
+            target: Some(StepTarget::OperationPath("/get".to_string())),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        outputs: BTreeMap::from([(
+            "sourceUrl".to_string(),
+            "$sourceDescriptions.test.url".to_string().into(),
+        )]),
+        ..Workflow::default()
+    }]);
+    spec.source_descriptions[0].url = "https://api.example.com".to_string();
+
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    let outputs = match &exec_result.outputs {
+        Ok(outputs) => outputs.clone(),
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    let reqs = exec_result.dry_run_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].url, "https://api.example.com/get");
+    assert_eq!(
+        outputs.get("sourceUrl"),
+        Some(&json!("https://api.example.com"))
+    );
 }
