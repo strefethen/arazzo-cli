@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-08-02
+## [0.3.0] - 2026-08-03
 
 ### Added
 
@@ -25,6 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --json` now includes async step metadata (`action`, `channelPath`,
   `correlationId`, `dependsOn`, `timeout`).
 - `--version` flag on the CLI, reporting the crate version.
+- Transport trust controls on `run` and `test` (`replay` is offline and takes
+  none): `--insecure-host <host[:port]>` (repeatable) disables TLS certificate
+  verification for exactly that host while every other host in the same run
+  keeps full verification; `--insecure` is the blanket curl `-k` analog;
+  `--max-redirects <n>` caps redirect hops (default 10);
+  `--allow-downgrade-redirects` permits https→http downgrade hops;
+  `--no-transport-warnings` (or `ARAZZO_NO_TRANSPORT_WARNINGS=1`) silences
+  transport warning text on stderr.
+- Transport warnings with strict channel discipline: live runs emit a startup
+  notice listing active insecure exceptions (louder wording for blanket
+  `--insecure`), a once-per-host warning when an `Authorization`/`Cookie`
+  header would travel over non-loopback cleartext `http://` (loopback exempt),
+  and an end-of-run note naming `--insecure-host` entries no request targeted
+  (stale-flag detection for Makefiles/CI). Warning text goes to stderr only;
+  squelching removes the text while structured `transportWarnings` entries
+  persist in `run`/`test` `--json` envelopes and trace run metadata, because
+  degraded-trust facts are audit data. Replay runs emit none.
 
 #### Expression Language
 - `$self` expression (resolves the current workflow document; no sub-path).
@@ -40,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Arazzo 1.1 source/step model: typed AsyncAPI source descriptions, selector
   objects, and async step metadata are parsed, validated, and preserved.
 - Preserve Arazzo vendor extensions (`x-*`) through parse and serialize.
+- Relative `type: openapi` sourceDescriptions are loaded at engine build:
+  their operations are indexed for `operationId` resolution and the request
+  base is derived from the document's `servers[0].url` (server variables
+  substituted), so `run`/`test`/MCP/debugger workflows no longer need
+  `--openapi` for specs their sourceDescriptions already point at. Load or
+  parse failures are build errors naming the source and the resolved path —
+  never a silent fallback. Explicitly passed `--openapi` specs still win
+  duplicate operationIds, with a stderr warning. (#3)
 
 ### Changed
 
@@ -48,6 +73,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` before any HTTP request preparation.
   1.1 async source and step metadata is typed and preserved, but async
   transport execution is not yet supported.
+- Redirect policy is explicit instead of inherited from the HTTP client: the
+  engine follows redirects itself up to `--max-redirects` (default 10, the
+  previous limit), and https→http downgrade redirects are now refused by
+  default with an error naming both URLs
+  (`RUNTIME_REDIRECT_DOWNGRADE_REFUSED`); `--allow-downgrade-redirects`
+  restores the old following behavior. Exceeding the hop limit reports
+  `RUNTIME_REDIRECT_LIMIT_EXCEEDED`, naming the limit and the refused hop.
+  Same-scheme redirect semantics are unchanged and pinned by characterization
+  tests (301/302/303 method conversion, 307/308 method/body preservation,
+  credential-header stripping on cross-host hops, Referer stamping, and the
+  whole-chain timeout). Followed hops are recorded on the step's trace request
+  as `redirects` (oldest first) and survive into trace files and replay.
+- TLS certificate verification failures now name the failing `host:port` and
+  the `--insecure-host` remedy instead of surfacing a bare client error.
 
 #### CLI
 - `--json` mode no longer writes the human-readable summary to stderr (only
