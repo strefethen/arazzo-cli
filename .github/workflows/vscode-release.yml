@@ -22,6 +22,8 @@ jobs:
   build:
     name: Build VSIX (${{ matrix.vsce_target }})
     runs-on: ${{ matrix.os }}
+    # Experimental targets (win32-arm64) may fail without blocking the release
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +49,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             vsce_target: win32-x64
             exe_suffix: ".exe"
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            vsce_target: win32-arm64
+            exe_suffix: ".exe"
+            experimental: true
     steps:
       - uses: actions/checkout@v4
 
