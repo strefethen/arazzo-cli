@@ -12,6 +12,12 @@ const destDir = path.join(__dirname, "..", "bin");
 const dest = path.join(destDir, binaryName);
 
 if (!fs.existsSync(src)) {
+  // CI cross-compiles with `cargo build --target <triple>`, which outputs to
+  // target/<triple>/release/ and pre-stages the binary into bin/ itself.
+  if (fs.existsSync(dest)) {
+    console.log(`Using pre-staged ${path.relative(process.cwd(), dest)}`);
+    process.exit(0);
+  }
   console.error(
     `ERROR: ${src} not found.\n` +
       `Run \`cargo build --release -p arazzo-debug-adapter\` first.`
