@@ -227,6 +227,7 @@ mod tests {
             body: Vec::new(),
             body_json: None,
             content_type: ContentType::Json,
+            redirects: Vec::new(),
         };
         let ordered = vec![
             OnAction {
@@ -256,6 +257,7 @@ mod tests {
             body: br#"{"pets":[{"id":1}]}"#.to_vec(),
             body_json: Some(json!({"pets":[{"id":1}]})),
             content_type: ContentType::Json,
+            redirects: Vec::new(),
         };
         let typed = vec![OnAction {
             name: "typed".to_string(),

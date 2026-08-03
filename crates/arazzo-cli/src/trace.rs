@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_headers, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
-    TraceStepRecord,
+    TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,10 @@ pub struct TraceRun {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Structured transport-trust warnings recorded for this run;
+    /// persists regardless of the stderr squelch (audit data).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_warnings: Vec<TransportWarning>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,7 @@ pub struct TraceRunMetadata {
     pub finished_at: SystemTime,
     pub duration_ms: u64,
     pub run_error: Option<String>,
+    pub transport_warnings: Vec<TransportWarning>,
 }
 
 pub fn parse_trace_max_body_bytes(raw: &str) -> Result<usize, String> {
@@ -113,6 +118,7 @@ pub fn build_trace_file(
                 "success".to_string()
             },
             error: meta.run_error,
+            transport_warnings: meta.transport_warnings,
         },
         inputs,
         steps,
@@ -178,6 +184,10 @@ fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
         if let Some(request) = &mut step.request {
             redact_headers(&mut request.headers);
             redact_url_query(&mut request.url);
+            for hop in &mut request.redirects {
+                redact_url_query(&mut hop.from);
+                redact_url_query(&mut hop.to);
+            }
             if let Some(body) = &mut request.body {
                 redact_json_value(body);
             }
@@ -255,6 +265,7 @@ mod tests {
                 duration_ms: 0,
                 status: "success".to_string(),
                 error: None,
+                transport_warnings: Vec::new(),
             },
             inputs: BTreeMap::new(),
             steps: vec![TraceStepRecord {
@@ -271,6 +282,7 @@ mod tests {
                     url: "https://example.com/test".to_string(),
                     headers: BTreeMap::new(),
                     body: None,
+                    redirects: Vec::new(),
                 }),
                 response: Some(response),
                 criteria: Vec::new(),

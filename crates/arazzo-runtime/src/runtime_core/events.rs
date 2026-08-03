@@ -11,6 +11,7 @@ pub enum EngineEvent {
     DryRunRequest(DryRunRequest),
     Execution(ExecutionEvent),
     Observer(ObserverEvent),
+    TransportWarning(TransportWarning),
 }
 
 /// Handle returned by [`Engine::execute`] for streaming execution results.
@@ -198,6 +199,19 @@ impl TraceDecision {
     }
 }
 
+/// One followed redirect hop recorded for a step request.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TraceRedirectHop {
+    /// 30x status that triggered the hop.
+    pub status_code: i64,
+    /// URL that returned the redirect.
+    pub from: String,
+    /// Resolved Location the request was re-issued against.
+    pub to: String,
+}
+
 /// Trace request payload for one step attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +222,40 @@ pub struct TraceRequest {
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
+    /// Redirect chain followed before the final response, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redirects: Vec<TraceRedirectHop>,
+}
+
+/// Structured transport-trust warning. Emitted regardless of the
+/// stderr squelch (`transport_warnings: false` silences only the
+/// stderr text): degraded-trust facts are audit data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TransportWarning {
+    pub kind: TransportWarningKind,
+    /// Hosts or `host[:port]` exception entries the warning names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    /// Human-readable text (the same line written to stderr).
+    pub message: String,
+}
+
+/// Class of a [`TransportWarning`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum TransportWarningKind {
+    /// TLS verification disabled for the listed `host[:port]` entries.
+    InsecureHostsActive,
+    /// TLS verification disabled for every host (blanket `--insecure`).
+    InsecureAllHosts,
+    /// Authorization/Cookie sent over non-loopback cleartext http.
+    CleartextCredentials,
+    /// Configured insecure exceptions no request targeted.
+    UnusedInsecureHosts,
 }
 
 /// Trace response payload for one step attempt.

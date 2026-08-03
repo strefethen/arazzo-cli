@@ -1,14 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use arazzo_runtime::{ClientConfig, EngineBuilder, EngineEvent, RuntimeErrorKind};
+use arazzo_runtime::{
+    ClientConfig, EngineBuilder, EngineEvent, RuntimeErrorKind, TransportWarning,
+};
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::output::{
     TestCaseResult, TestOutput, TestStatus, TestStepResult, TestSuiteResult, TestSummary,
 };
+use crate::transport::{self, TransportFlags};
 
 /// Options for running the test suite (mirrors CLI flags).
 pub struct TestRunOptions {
@@ -23,6 +26,7 @@ pub struct TestRunOptions {
     pub max_response_size: Option<usize>,
     pub fail_fast: bool,
     pub filter: Option<regex::Regex>,
+    pub transport: TransportFlags,
 }
 
 /// Discover Arazzo test specs from a list of file paths and directories.
@@ -76,6 +80,20 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         duration_ms: 0,
     };
     let mut bail = false;
+    // Transport-trust bookkeeping across all suites: the engines stay
+    // stderr-silent (`apply(.., false)`); this run aggregates their
+    // structured warnings, deduplicates cleartext warnings by host so
+    // "once per host per run" holds across suites, and tracks which
+    // insecure exceptions any suite's request consumed.
+    let mut transport_warnings: Vec<TransportWarning> = Vec::new();
+    if let Some(startup) = opts.transport.startup_warning() {
+        transport_warnings.push(startup);
+    }
+    let mut warned_cleartext_hosts: BTreeSet<String> = BTreeSet::new();
+    let configured_insecure: BTreeSet<String> =
+        opts.transport.insecure_hosts.iter().cloned().collect();
+    let mut used_insecure: BTreeSet<String> = BTreeSet::new();
+    let mut any_live_suite = false;
 
     for spec_path in specs {
         if bail {
@@ -135,6 +153,7 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
             timeout: opts.http_timeout,
             ..ClientConfig::default()
         };
+        opts.transport.apply(&mut cfg, false);
         cfg.default_headers = opts.headers.clone();
 
         let mut builder = EngineBuilder::new(spec)
@@ -171,6 +190,7 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                 continue;
             }
         };
+        any_live_suite = true;
 
         // Execute each workflow.
         let mut cases = Vec::new();
@@ -180,6 +200,22 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                 .execute_with_timeout(workflow_id, opts.inputs.clone(), opts.execution_timeout)
                 .collect()
                 .await;
+
+            // Collect engine transport warnings, deduplicated by host
+            // across suites so "once per host per run" holds for the
+            // whole invocation.
+            for event in &exec_result.events {
+                if let EngineEvent::TransportWarning(warning) = event {
+                    if warning
+                        .hosts
+                        .iter()
+                        .any(|host| !warned_cleartext_hosts.contains(host))
+                    {
+                        warned_cleartext_hosts.extend(warning.hosts.iter().cloned());
+                        transport_warnings.push(warning.clone());
+                    }
+                }
+            }
 
             // Extract per-step results from trace events.
             let steps: Vec<TestStepResult> = exec_result
@@ -280,6 +316,11 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
             }
         }
 
+        // An exception is "used" for the whole run when any suite's
+        // request targeted it.
+        let engine_unused: BTreeSet<String> = engine.unused_insecure_hosts().into_iter().collect();
+        used_insecure.extend(configured_insecure.difference(&engine_unused).cloned());
+
         suites.push(TestSuiteResult {
             file: file_str,
             name: suite_name,
@@ -289,9 +330,23 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         });
     }
 
+    if any_live_suite && !opts.transport.insecure_all {
+        let unused: Vec<String> = configured_insecure
+            .difference(&used_insecure)
+            .cloned()
+            .collect();
+        if let Some(warning) = transport::unused_warning(unused) {
+            transport_warnings.push(warning);
+        }
+    }
+
     summary.duration_ms = run_start.elapsed().as_millis() as u64;
 
-    TestOutput::Results { summary, suites }
+    TestOutput::Results {
+        summary,
+        suites,
+        transport_warnings,
+    }
 }
 
 fn is_arazzo_spec_file(path: &str) -> bool {
@@ -301,7 +356,10 @@ fn is_arazzo_spec_file(path: &str) -> bool {
 // ── TAP formatter ────────────────────────────────────────────────
 
 pub fn format_tap(output: &TestOutput) -> String {
-    let TestOutput::Results { summary, suites } = output else {
+    let TestOutput::Results {
+        summary, suites, ..
+    } = output
+    else {
         if let TestOutput::Error { error, .. } = output {
             return format!("TAP version 13\n1..0\nBail out! {error}\n");
         }
@@ -352,7 +410,10 @@ fn yaml_escape(s: &str) -> String {
 // ── JUnit XML formatter ──────────────────────────────────────────
 
 pub fn format_junit(output: &TestOutput) -> String {
-    let TestOutput::Results { summary, suites } = output else {
+    let TestOutput::Results {
+        summary, suites, ..
+    } = output
+    else {
         if let TestOutput::Error { error, .. } = output {
             return format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -479,7 +540,10 @@ pub fn print_human_summary(output: &TestOutput) {
 
     let use_color = std::io::stderr().is_terminal();
 
-    let TestOutput::Results { summary, suites } = output else {
+    let TestOutput::Results {
+        summary, suites, ..
+    } = output
+    else {
         if let TestOutput::Error { error, .. } = output {
             eprintln!("{}", color_str("ERROR", "\x1b[31m", use_color));
             eprintln!("  {error}");

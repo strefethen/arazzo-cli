@@ -19,6 +19,13 @@
         },
         "summary": {
           "$ref": "#/$defs/TestSummary"
+        },
+        "transportWarnings": {
+          "description": "Structured transport-trust warnings (insecure exceptions,\ncleartext credentials, unused exceptions). Present even when\nstderr warning text is squelched.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportWarning"
+          }
         }
       },
       "required": [
@@ -215,6 +222,55 @@
         "errors",
         "suiteErrors",
         "durationMs"
+      ]
+    },
+    "TransportWarning": {
+      "description": "Structured transport-trust warning. Emitted regardless of the\nstderr squelch (`transport_warnings: false` silences only the\nstderr text): degraded-trust facts are audit data.",
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "description": "Hosts or `host[:port]` exception entries the warning names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/TransportWarningKind"
+        },
+        "message": {
+          "description": "Human-readable text (the same line written to stderr).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "TransportWarningKind": {
+      "description": "Class of a [`TransportWarning`].",
+      "oneOf": [
+        {
+          "description": "TLS verification disabled for the listed `host[:port]` entries.",
+          "type": "string",
+          "const": "insecureHostsActive"
+        },
+        {
+          "description": "TLS verification disabled for every host (blanket `--insecure`).",
+          "type": "string",
+          "const": "insecureAllHosts"
+        },
+        {
+          "description": "Authorization/Cookie sent over non-loopback cleartext http.",
+          "type": "string",
+          "const": "cleartextCredentials"
+        },
+        {
+          "description": "Configured insecure exceptions no request targeted.",
+          "type": "string",
+          "const": "unusedInsecureHosts"
+        }
       ]
     }
   }

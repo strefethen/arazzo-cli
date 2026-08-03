@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::cli::ExpressionDiagnosticsMode;
+use crate::transport::TransportFlags;
 
 /// Global CLI output and verbosity options shared by all commands.
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +30,7 @@ pub struct RunOptions {
     pub trace: Option<String>,
     pub trace_max_body_bytes: usize,
     pub max_response_size: Option<usize>,
+    pub transport: TransportFlags,
 }
 
 /// Centralized run context with global options.

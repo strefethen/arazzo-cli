@@ -114,6 +114,30 @@ pub enum Commands {
         /// Maximum response body size in bytes (default: 10485760 = 10 MiB)
         #[arg(long = "max-response-size")]
         max_response_size: Option<usize>,
+
+        /// Disable TLS certificate verification for one host or host:port. Repeatable; scoped, unlike --insecure.
+        #[arg(long = "insecure-host", value_name = "HOST[:PORT]")]
+        insecure_host: Vec<String>,
+
+        /// Disable TLS certificate verification for ALL hosts (curl -k parity). Prefer --insecure-host.
+        #[arg(long = "insecure")]
+        insecure: bool,
+
+        /// Follow redirects that downgrade https to http (refused by default).
+        #[arg(long = "allow-downgrade-redirects")]
+        allow_downgrade_redirects: bool,
+
+        /// Maximum redirect hops to follow per request.
+        #[arg(long = "max-redirects", default_value_t = arazzo_runtime::DEFAULT_MAX_REDIRECTS)]
+        max_redirects: usize,
+
+        /// Silence transport warnings on stderr. Structured warning entries remain in --json output and traces.
+        #[arg(
+            long = "no-transport-warnings",
+            env = "ARAZZO_NO_TRANSPORT_WARNINGS",
+            value_parser = clap::builder::FalseyValueParser::new()
+        )]
+        no_transport_warnings: bool,
     },
     /// Replay a recorded trace.v1 file with deterministic response injection
     #[command(
@@ -284,6 +308,30 @@ pub enum Commands {
         /// Regex filter on workflow IDs
         #[arg(long)]
         filter: Option<String>,
+
+        /// Disable TLS certificate verification for one host or host:port. Repeatable; scoped, unlike --insecure.
+        #[arg(long = "insecure-host", value_name = "HOST[:PORT]")]
+        insecure_host: Vec<String>,
+
+        /// Disable TLS certificate verification for ALL hosts (curl -k parity). Prefer --insecure-host.
+        #[arg(long = "insecure")]
+        insecure: bool,
+
+        /// Follow redirects that downgrade https to http (refused by default).
+        #[arg(long = "allow-downgrade-redirects")]
+        allow_downgrade_redirects: bool,
+
+        /// Maximum redirect hops to follow per request.
+        #[arg(long = "max-redirects", default_value_t = arazzo_runtime::DEFAULT_MAX_REDIRECTS)]
+        max_redirects: usize,
+
+        /// Silence transport warnings on stderr. Structured warning entries remain in --json output.
+        #[arg(
+            long = "no-transport-warnings",
+            env = "ARAZZO_NO_TRANSPORT_WARNINGS",
+            value_parser = clap::builder::FalseyValueParser::new()
+        )]
+        no_transport_warnings: bool,
     },
     /// Start an MCP server for AI agent integration
     #[command(

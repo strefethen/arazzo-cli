@@ -54,6 +54,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
             url: url.to_string(),
             headers: BTreeMap::new(),
             body: None,
+            redirects: Vec::new(),
         }),
         response: Some(TraceResponse {
             status_code: 200,
@@ -132,6 +133,7 @@ async fn replay_uses_full_body_not_truncated_preview() {
             url: "https://replay.invalid/items".to_string(),
             headers: BTreeMap::new(),
             body: None,
+            redirects: Vec::new(),
         }),
         response: Some(TraceResponse {
             status_code: 200,

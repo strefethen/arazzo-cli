@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord, REDACTED,
+    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord, TransportWarning,
+    REDACTED,
 };
 use arazzo_spec::ArazzoSpec;
 use arazzo_validate::Error as ValidateError;
@@ -17,6 +18,7 @@ use crate::trace::{
     build_trace_file, prepare_trace_for_write, read_trace_file, write_trace_file_atomic,
     TraceRunMetadata,
 };
+use crate::transport::{self, TransportFlags};
 
 pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
@@ -25,6 +27,16 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let trace_enabled = run.trace.is_some()
         || global.verbose
         || run.expr_diagnostics != ExpressionDiagnosticsMode::Off;
+
+    // Startup insecure-exception notice: live runs only (run is always
+    // live; replay has no transport flags). Stderr line unless
+    // squelched; the structured entry persists regardless.
+    let squelched = run.transport.no_transport_warnings;
+    let mut transport_warnings: Vec<TransportWarning> = Vec::new();
+    if let Some(warning) = run.transport.startup_warning() {
+        transport::eprint_warning(&warning, squelched);
+        transport_warnings.push(warning);
+    }
 
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,
@@ -35,6 +47,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                     &err.to_string(),
                     Some(run_parse_error_code(&err)),
                     &[],
+                    &transport_warnings,
                 )
             } else {
                 Err(format!("parsing spec: {err}"))
@@ -74,6 +87,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         timeout: run.http_timeout,
         ..ClientConfig::default()
     };
+    run.transport.apply(&mut cfg, true);
     for header in run.header_flags {
         let parsed = header
             .split_once(':')
@@ -109,7 +123,13 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             Err(err) => {
                 let msg = format!("reading OpenAPI file \"{openapi_path}\": {err}");
                 return if global.json {
-                    output::emit_run_error(true, &msg, Some("RUN_OPENAPI_READ_FILE"), &[])
+                    output::emit_run_error(
+                        true,
+                        &msg,
+                        Some("RUN_OPENAPI_READ_FILE"),
+                        &[],
+                        &transport_warnings,
+                    )
                 } else {
                     Err(msg)
                 };
@@ -152,6 +172,21 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         .err()
         .map(|e| e.kind.code().to_string());
 
+    // Engine-emitted transport warnings (already on stderr when not
+    // squelched) join the structured list for --json output and traces.
+    transport_warnings.extend(exec_result.events.iter().filter_map(|e| match e {
+        EngineEvent::TransportWarning(w) => Some(w.clone()),
+        _ => None,
+    }));
+    // End-of-run unused-exception note. Skipped for dry runs: nothing
+    // was sent, so "no request targeted it" would be vacuous noise.
+    if !run.dry_run {
+        if let Some(warning) = transport::unused_warning(engine.unused_insecure_hosts()) {
+            transport::eprint_warning(&warning, squelched);
+            transport_warnings.push(warning);
+        }
+    }
+
     let trace_steps: Vec<TraceStepRecord> = exec_result
         .events
         .iter()
@@ -189,6 +224,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 finished_at: run_finished_at,
                 duration_ms: u64::try_from(run_duration.as_millis()).unwrap_or(u64::MAX),
                 run_error: run_error_text.clone(),
+                transport_warnings: transport_warnings.clone(),
             },
             inputs,
             trace_steps.clone(),
@@ -208,6 +244,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             &run_error,
             run_error_code.as_deref(),
             &expression_warnings,
+            &transport_warnings,
         );
     }
 
@@ -232,20 +269,31 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                     ),
                     Some("RUNTIME_EXPRESSION_DIAGNOSTICS"),
                     &expression_warnings,
+                    &transport_warnings,
                 );
             }
         }
     }
 
     if run.dry_run {
-        return output::emit_dry_run_requests(global.json, dry_run_requests, &expression_warnings);
+        return output::emit_dry_run_requests(
+            global.json,
+            dry_run_requests,
+            &expression_warnings,
+            &transport_warnings,
+        );
     }
 
     let outputs = exec_result.outputs.unwrap_or_default();
     if global.verbose && !global.json {
         output::emit_run_steps(&trace_steps);
     }
-    output::emit_run_outputs(&outputs, global.json, &expression_warnings)
+    output::emit_run_outputs(
+        &outputs,
+        global.json,
+        &expression_warnings,
+        &transport_warnings,
+    )
 }
 
 pub async fn replay_trace(
@@ -705,9 +753,16 @@ pub async fn run_tests(
     max_response_size: Option<usize>,
     fail_fast: bool,
     filter: Option<String>,
+    transport_flags: TransportFlags,
     global: GlobalOptions,
 ) -> Result<(), String> {
     use crate::test_runner::{discover_test_specs, run_test_suite, TestRunOptions};
+
+    // Startup insecure-exception notice, before any suite runs.
+    let squelched = transport_flags.no_transport_warnings;
+    if let Some(warning) = transport_flags.startup_warning() {
+        transport::eprint_warning(&warning, squelched);
+    }
 
     let emit_error = |err: String| -> Result<(), String> {
         let result = output::TestOutput::Error {
@@ -786,9 +841,26 @@ pub async fn run_tests(
         max_response_size,
         fail_fast,
         filter: filter_re,
+        transport: transport_flags,
     };
 
     let result = run_test_suite(&specs, &opts).await;
+
+    // Print collected transport warning lines (cleartext, unused) once,
+    // deduplicated across suites. The startup line already printed; the
+    // structured entries stay in the JSON output regardless of squelch.
+    if let output::TestOutput::Results {
+        transport_warnings, ..
+    } = &result
+    {
+        for warning in transport_warnings {
+            if warning.kind != arazzo_runtime::TransportWarningKind::InsecureHostsActive
+                && warning.kind != arazzo_runtime::TransportWarningKind::InsecureAllHosts
+            {
+                transport::eprint_warning(warning, squelched);
+            }
+        }
+    }
 
     // Determine exit code: non-zero if any failures/errors.
     let has_failures = match &result {

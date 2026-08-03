@@ -296,10 +296,15 @@ async fn charac_default_redirect_limit_is_ten() {
         Ok(_) => panic!("endless chain must exceed the redirect limit"),
         Err(err) => err,
     };
-    assert_eq!(err.kind, RuntimeErrorKind::HttpRequest);
+    // Deliberate divergence from the pre-policy baseline (recorded at
+    // the ac-fd376 policy change): the limit error was an opaque
+    // reqwest "too many redirects" under `HttpRequest`; the explicit
+    // follow loop types it and names the limit and the refused hop.
+    // The hop budget itself is unchanged (10, reqwest's default).
+    assert_eq!(err.kind, RuntimeErrorKind::RedirectLimitExceeded);
     assert!(
-        err.message.contains("redirect"),
-        "error should mention redirects: {}",
+        err.message.contains("redirect limit of 10") && err.message.contains("/hop/11"),
+        "error should name the limit and the refused hop: {}",
         err.message
     );
     // Original request + 10 followed redirects; the 11th redirect is refused.

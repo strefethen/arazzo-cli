@@ -53,7 +53,10 @@ use ::url as url_crate;
 use builder::parse_openapi_into_index;
 pub use builder::{relative_openapi_source_paths, EngineBuilder};
 use client::HttpClient;
-pub use client::{ClientConfig, ContentType, RateLimitConfig, RequestConfig, Response};
+pub use client::{
+    decide_redirect, is_loopback_host, ClientConfig, ContentType, RateLimitConfig,
+    RedirectDecision, RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
+};
 use control::{sleep_with_cancel, step_result_error};
 use criteria::RegexCache;
 pub(crate) use criteria::{
@@ -71,7 +74,8 @@ pub use error::{RuntimeError, RuntimeErrorKind};
 pub use events::{
     DryRunRequest, EngineEvent, ExecutionEvent, ExecutionEventKind, ExecutionHandle,
     ExecutionObserver, ExecutionResult, ObserverEvent, StepEvent, TraceCriterionResult,
-    TraceDecision, TraceDecisionPath, TraceHook, TraceRequest, TraceResponse, TraceStepRecord,
+    TraceDecision, TraceDecisionPath, TraceHook, TraceRedirectHop, TraceRequest, TraceResponse,
+    TraceStepRecord, TransportWarning, TransportWarningKind,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::{evaluate_jsonpath_condition, JsonPathOutcome};

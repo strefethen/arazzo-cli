@@ -3081,3 +3081,731 @@ fn run_dry_run_openapi_32_relative_source_resolves_operation() {
         Some("https://localhost:5201/v1/banks")
     );
 }
+
+// ── Transport trust: --insecure-host, redirect policy, warnings (ac-fd376) ──
+//
+// Hermetic: local tiny_http / rustls listeners on 127.0.0.1 only; the
+// one intentionally unreachable host uses TEST-NET-1 (RFC 5737) with a
+// sub-second HTTP timeout.
+
+fn run_env(
+    args: &[&str],
+    current_dir: Option<&Path>,
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    let mut cmd = Command::new(cli_bin());
+    cmd.args(args);
+    if let Some(dir) = current_dir {
+        cmd.current_dir(dir);
+    }
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    match cmd.output() {
+        Ok(output) => output,
+        Err(err) => panic!("running command {args:?}: {err}"),
+    }
+}
+
+fn stderr_text(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+fn transport_spec(dir: &Path, name: &str, base_url: &str, extra_step: &str) -> PathBuf {
+    let spec = format!(
+        r#"
+arazzo: 1.0.0
+info:
+  title: Transport
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: {base_url}
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /ok
+        successCriteria:
+          - condition: $statusCode == 200
+{extra_step}
+"#
+    );
+    let path = dir.join(name);
+    if let Err(err) = fs::write(&path, spec) {
+        panic!("writing transport spec: {err}");
+    }
+    path
+}
+
+struct RouteServer {
+    base_url: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for RouteServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Plain-http test server: the handler maps a path to (status, headers,
+/// body).
+fn start_route_server<F>(handler: F) -> RouteServer
+where
+    F: Fn(&str) -> (u16, Vec<(String, String)>, String) + Send + Sync + 'static,
+{
+    let server = match tiny_http::Server::http("127.0.0.1:0") {
+        Ok(server) => server,
+        Err(err) => panic!("binding route server: {err}"),
+    };
+    let base_url = format!("http://{}", server.server_addr());
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match server.recv_timeout(Duration::from_millis(20)) {
+                Ok(Some(request)) => {
+                    let path = request.url().to_string();
+                    let (status, headers, body) = handler(&path);
+                    let mut response = tiny_http::Response::from_string(body)
+                        .with_status_code(tiny_http::StatusCode(status));
+                    for (name, value) in headers {
+                        if let Ok(header) =
+                            tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes())
+                        {
+                            response = response.with_header(header);
+                        }
+                    }
+                    let _ = request.respond(response);
+                }
+                Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    RouteServer {
+        base_url,
+        stop,
+        handle: Some(handle),
+    }
+}
+
+fn json_ok_route(path: &str) -> (u16, Vec<(String, String)>, String) {
+    if path == "/ok" {
+        (
+            200,
+            vec![("Content-Type".to_string(), "application/json".to_string())],
+            r#"{"ok":true}"#.to_string(),
+        )
+    } else {
+        (404, Vec::new(), String::new())
+    }
+}
+
+/// Minimal HTTPS server over rustls 0.23 with a fresh self-signed cert
+/// (mirrors the arazzo-runtime test helper; tiny_http's ssl feature
+/// pins audit-flagged rustls 0.20/ring 0.16, so it is avoided).
+fn start_cli_tls_server<F>(handler: F) -> RouteServer
+where
+    F: Fn(&str) -> (u16, Vec<(String, String)>, String) + Send + Sync + 'static,
+{
+    use std::io::{Read, Write};
+
+    let certified = match rcgen::generate_simple_self_signed(vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ]) {
+        Ok(v) => v,
+        Err(err) => panic!("generating self-signed certificate: {err}"),
+    };
+    let cert_der = certified.cert.der().clone();
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+    );
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let server_config = match rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .and_then(|builder| {
+            builder
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)
+        }) {
+        Ok(config) => Arc::new(config),
+        Err(err) => panic!("building rustls server config: {err}"),
+    };
+
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(err) => panic!("binding TLS server: {err}"),
+    };
+    if let Err(err) = listener.set_nonblocking(true) {
+        panic!("configuring TLS listener: {err}");
+    }
+    let addr = match listener.local_addr() {
+        Ok(addr) => addr,
+        Err(err) => panic!("reading TLS listener addr: {err}"),
+    };
+    let base_url = format!("https://{addr}");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handler = Arc::new(handler);
+    let handle = thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (tcp, _) = match listener.accept() {
+                Ok(conn) => conn,
+                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            if tcp.set_nonblocking(false).is_err() {
+                continue;
+            }
+            let conn = match rustls::ServerConnection::new(Arc::clone(&server_config)) {
+                Ok(conn) => conn,
+                Err(_) => continue,
+            };
+            let mut stream = rustls::StreamOwned::new(conn, tcp);
+
+            let mut buf = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let head_end = loop {
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos;
+                }
+                match stream.read(&mut chunk) {
+                    Ok(0) => break usize::MAX,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break usize::MAX,
+                }
+            };
+            if head_end == usize::MAX {
+                continue;
+            }
+            let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+            let path = head
+                .split("\r\n")
+                .next()
+                .and_then(|line| line.split(' ').nth(1))
+                .unwrap_or("/")
+                .to_string();
+
+            let (status, headers, body) = handler(&path);
+            let mut out = format!(
+                "HTTP/1.1 {status} Status\r\nContent-Length: {}\r\nConnection: close\r\n",
+                body.len()
+            );
+            for (name, value) in &headers {
+                out.push_str(&format!("{name}: {value}\r\n"));
+            }
+            out.push_str("\r\n");
+            out.push_str(&body);
+            if stream.write_all(out.as_bytes()).is_err() {
+                continue;
+            }
+            stream.conn.send_close_notify();
+            let _ = stream.flush();
+        }
+    });
+
+    RouteServer {
+        base_url,
+        stop,
+        handle: Some(handle),
+    }
+}
+
+fn host_port_of(base_url: &str) -> String {
+    base_url
+        .split_once("://")
+        .map(|(_, rest)| rest.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| base_url.to_string())
+}
+
+#[test]
+fn transport_help_documents_flags_on_run_and_test_but_not_replay() {
+    for command in ["run", "test"] {
+        let output = run(&[command, "--help"], None);
+        let text = stdout_text(&output);
+        for flag in [
+            "--insecure-host",
+            "--insecure",
+            "--allow-downgrade-redirects",
+            "--max-redirects",
+            "--no-transport-warnings",
+            "ARAZZO_NO_TRANSPORT_WARNINGS",
+        ] {
+            assert!(
+                text.contains(flag),
+                "{command} --help should document {flag}: {text}"
+            );
+        }
+    }
+    let replay = stdout_text(&run(&["replay", "--help"], None));
+    for flag in ["insecure", "redirect", "transport"] {
+        assert!(
+            !replay.to_lowercase().contains(flag),
+            "replay --help must not mention {flag}: {replay}"
+        );
+    }
+}
+
+#[test]
+fn transport_tls_default_fails_insecure_host_succeeds_second_host_verified() {
+    let excepted = start_cli_tls_server(json_ok_route);
+    let verified = start_cli_tls_server(json_ok_route);
+    let entry = host_port_of(&excepted.base_url);
+    let verified_entry = host_port_of(&verified.base_url);
+
+    let dir = TempDir::new("transport-tls");
+    let spec = transport_spec(dir.path(), "one.yaml", &excepted.base_url, "");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    // Default: untrusted self-signed cert fails with an actionable error.
+    let output = run(&["run", &spec_str, "wf"], None);
+    assert!(!output.status.success(), "default run must fail");
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains("certificate") && err_text.contains(&format!("--insecure-host {entry}")),
+        "error should be actionable: {err_text}"
+    );
+
+    // Same run with the scoped exception succeeds.
+    let output = run(&["run", &spec_str, "wf", "--insecure-host", &entry], None);
+    assert!(
+        output.status.success(),
+        "insecure-host run should succeed: {}",
+        combined_text(&output)
+    );
+
+    // A second, unlisted host in the same run still enforces verification.
+    let two_step = format!(
+        r#"      - stepId: s2
+        operationPath: GET {}/ok
+        successCriteria:
+          - condition: $statusCode == 200
+"#,
+        verified.base_url
+    );
+    let spec2 = transport_spec(dir.path(), "two.yaml", &excepted.base_url, &two_step);
+    let spec2_str = spec2.to_string_lossy().to_string();
+    let output = run(&["run", &spec2_str, "wf", "--insecure-host", &entry], None);
+    assert!(!output.status.success(), "verified host must still fail");
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains(&format!("--insecure-host {verified_entry}")),
+        "failure should name the verified host: {err_text}"
+    );
+}
+
+#[test]
+fn transport_downgrade_refused_by_default_followed_with_flag() {
+    let target = start_route_server(|path| {
+        if path == "/landed" {
+            (
+                200,
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+                r#"{"ok":true}"#.to_string(),
+            )
+        } else {
+            (404, Vec::new(), String::new())
+        }
+    });
+    let downgrade_url = format!("{}/landed", target.base_url);
+    let downgrade_for_server = downgrade_url.clone();
+    let tls = start_cli_tls_server(move |path| {
+        if path == "/ok" {
+            (
+                302,
+                vec![("Location".to_string(), downgrade_for_server.clone())],
+                String::new(),
+            )
+        } else {
+            (404, Vec::new(), String::new())
+        }
+    });
+    let entry = host_port_of(&tls.base_url);
+
+    let dir = TempDir::new("transport-downgrade");
+    let spec = transport_spec(dir.path(), "spec.yaml", &tls.base_url, "");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(&["run", &spec_str, "wf", "--insecure-host", &entry], None);
+    assert!(!output.status.success(), "downgrade must be refused");
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains("downgrade")
+            && err_text.contains(&format!("{}/ok", tls.base_url))
+            && err_text.contains(&downgrade_url),
+        "refusal should name both URLs: {err_text}"
+    );
+
+    let output = run(
+        &[
+            "run",
+            &spec_str,
+            "wf",
+            "--insecure-host",
+            &entry,
+            "--allow-downgrade-redirects",
+        ],
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "--allow-downgrade-redirects should follow: {}",
+        combined_text(&output)
+    );
+}
+
+#[test]
+fn transport_max_redirects_flag_errors_naming_limit_and_hop() {
+    let server = start_route_server(|path| {
+        let n: usize = path
+            .strip_prefix("/hop/")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (
+            302,
+            vec![("Location".to_string(), format!("/hop/{}", n + 1))],
+            String::new(),
+        )
+    });
+
+    let dir = TempDir::new("transport-limit");
+    let spec = format!(
+        r#"
+arazzo: 1.0.0
+info:
+  title: Limit
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: {}
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /hop/0
+        successCriteria:
+          - condition: $statusCode == 200
+"#,
+        server.base_url
+    );
+    let path = dir.path().join("limit.yaml");
+    if let Err(err) = fs::write(&path, spec) {
+        panic!("writing spec: {err}");
+    }
+    let output = run(
+        &["run", &path.to_string_lossy(), "wf", "--max-redirects", "2"],
+        None,
+    );
+    assert!(!output.status.success());
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains("redirect limit of 2") && err_text.contains("/hop/3"),
+        "error should name limit and refused hop: {err_text}"
+    );
+}
+
+#[test]
+fn transport_redirect_chain_recorded_in_json_trace() {
+    let server = start_route_server(|path| match path {
+        "/ok" => (
+            302,
+            vec![("Location".to_string(), "/hop".to_string())],
+            String::new(),
+        ),
+        "/hop" => (
+            200,
+            vec![("Content-Type".to_string(), "application/json".to_string())],
+            r#"{"ok":true}"#.to_string(),
+        ),
+        _ => (404, Vec::new(), String::new()),
+    });
+
+    let dir = TempDir::new("transport-trace");
+    let spec = transport_spec(dir.path(), "spec.yaml", &server.base_url, "");
+    let trace_path = dir.path().join("trace.json");
+    let output = run(
+        &[
+            "--json",
+            "run",
+            &spec.to_string_lossy(),
+            "wf",
+            "--trace",
+            &trace_path.to_string_lossy(),
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+
+    let trace_raw = match fs::read_to_string(&trace_path) {
+        Ok(raw) => raw,
+        Err(err) => panic!("reading trace: {err}"),
+    };
+    let trace: Value = match serde_json::from_str(&trace_raw) {
+        Ok(value) => value,
+        Err(err) => panic!("parsing trace JSON: {err}"),
+    };
+    let redirects = trace
+        .pointer("/steps/0/request/redirects")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("trace should record redirects: {trace}"));
+    assert_eq!(redirects.len(), 1, "one hop recorded: {redirects:?}");
+    assert_eq!(
+        redirects[0].get("statusCode").and_then(Value::as_i64),
+        Some(302)
+    );
+    let hop_to = redirects[0]
+        .get("to")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(hop_to.ends_with("/hop"), "hop target recorded: {hop_to}");
+}
+
+#[test]
+fn transport_warning_matrix_startup_unused_squelch_and_stdout_clean() {
+    let server = start_route_server(json_ok_route);
+    let entry = host_port_of(&server.base_url);
+    let dir = TempDir::new("transport-warnings");
+    let spec = transport_spec(dir.path(), "spec.yaml", &server.base_url, "");
+    let spec_str = spec.to_string_lossy().to_string();
+
+    // Startup line (scoped wording) + no unused note when targeted.
+    let output = run(&["run", &spec_str, "wf", "--insecure-host", &entry], None);
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains(&format!(
+            "warning: TLS verification disabled for: {entry} (--insecure-host)"
+        )),
+        "startup line expected: {err_text}"
+    );
+    assert!(
+        !err_text.contains("unused --insecure-host"),
+        "targeted exception must not be reported unused: {err_text}"
+    );
+
+    // Unused note for a stale entry; louder blanket wording for --insecure.
+    let output = run(
+        &[
+            "run",
+            &spec_str,
+            "wf",
+            "--insecure-host",
+            "stale.example:9443",
+        ],
+        None,
+    );
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains(
+            "warning: unused --insecure-host exception(s): stale.example:9443 (no request targeted them)"
+        ),
+        "unused note expected: {err_text}"
+    );
+    let output = run(&["run", &spec_str, "wf", "--insecure"], None);
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains("WARNING: TLS verification disabled for ALL hosts (--insecure)"),
+        "blanket wording expected: {err_text}"
+    );
+
+    // No flags → no transport warning lines.
+    let output = run(&["run", &spec_str, "wf"], None);
+    let err_text = stderr_text(&output);
+    assert!(
+        !err_text.contains("TLS verification") && !err_text.contains("unused --insecure-host"),
+        "no transport lines without flags: {err_text}"
+    );
+
+    // Squelch via flag and via env: stderr clean, --json entries persist.
+    for env in [&[][..], &[("ARAZZO_NO_TRANSPORT_WARNINGS", "1")][..]] {
+        let mut args = vec![
+            "--json",
+            "run",
+            &spec_str,
+            "wf",
+            "--insecure-host",
+            "stale.example:9443",
+        ];
+        if env.is_empty() {
+            args.push("--no-transport-warnings");
+        }
+        let output = run_env(&args, None, env);
+        let err_text = stderr_text(&output);
+        assert!(
+            !err_text.contains("TLS verification") && !err_text.contains("unused --insecure-host"),
+            "squelched stderr must carry no transport lines: {err_text}"
+        );
+        let body = stdout_json(&output);
+        let warnings = body
+            .get("transportWarnings")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("squelched --json output keeps entries: {body}"));
+        let kinds: Vec<&str> = warnings
+            .iter()
+            .filter_map(|w| w.get("kind").and_then(Value::as_str))
+            .collect();
+        assert!(
+            kinds.contains(&"insecureHostsActive") && kinds.contains(&"unusedInsecureHosts"),
+            "structured entries expected: {kinds:?}"
+        );
+    }
+
+    // Unsquelched --json: stderr lines AND structured entries; stdout
+    // JSON parses and carries no warning text outside the envelope.
+    let output = run(
+        &["--json", "run", &spec_str, "wf", "--insecure-host", &entry],
+        None,
+    );
+    let err_text = stderr_text(&output);
+    assert!(err_text.contains("TLS verification disabled"));
+    let body = stdout_json(&output);
+    assert!(
+        body.get("transportWarnings").is_some(),
+        "unsquelched --json keeps entries too: {body}"
+    );
+
+    // Human mode: stdout never carries warning text.
+    let output = run(&["run", &spec_str, "wf", "--insecure-host", &entry], None);
+    let out_text = stdout_text(&output);
+    assert!(
+        !out_text.to_lowercase().contains("warning"),
+        "stdout must never carry warning text: {out_text}"
+    );
+}
+
+#[test]
+fn transport_cleartext_credentials_warning_once_and_loopback_exempt() {
+    // Non-loopback cleartext with credentials: TEST-NET-1 target fails
+    // fast under a short timeout; the warning fires before send.
+    let dir = TempDir::new("transport-cleartext");
+    let spec = transport_spec(dir.path(), "spec.yaml", "http://192.0.2.1", "");
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        &[
+            "run",
+            &spec_str,
+            "wf",
+            "-H",
+            "Authorization: Bearer secret",
+            "-t",
+            "300ms",
+        ],
+        None,
+    );
+    assert!(!output.status.success(), "TEST-NET request must fail");
+    let err_text = stderr_text(&output);
+    let occurrences = err_text
+        .matches("credentials (Authorization/Cookie header) sent over cleartext http")
+        .count();
+    assert_eq!(occurrences, 1, "exactly one cleartext warning: {err_text}");
+    assert!(
+        err_text.contains("192.0.2.1"),
+        "warning names the host: {err_text}"
+    );
+
+    // Loopback exempt: same credentialed request to 127.0.0.1 warns not.
+    let server = start_route_server(json_ok_route);
+    let spec = transport_spec(dir.path(), "loop.yaml", &server.base_url, "");
+    let output = run(
+        &[
+            "run",
+            &spec.to_string_lossy(),
+            "wf",
+            "-H",
+            "Authorization: Bearer secret",
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+    assert!(
+        !stderr_text(&output).contains("cleartext"),
+        "loopback is exempt: {}",
+        stderr_text(&output)
+    );
+}
+
+#[test]
+fn transport_replay_emits_no_transport_warnings() {
+    let server = start_route_server(json_ok_route);
+    let dir = TempDir::new("transport-replay");
+    let spec = transport_spec(dir.path(), "spec.yaml", &server.base_url, "");
+    let trace_path = dir.path().join("trace.json");
+
+    let output = run(
+        &[
+            "run",
+            &spec.to_string_lossy(),
+            "wf",
+            "--trace",
+            &trace_path.to_string_lossy(),
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+
+    let output = run(&["replay", &trace_path.to_string_lossy()], None);
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let err_text = stderr_text(&output);
+    assert!(
+        !err_text.contains("TLS verification")
+            && !err_text.contains("cleartext")
+            && !err_text.contains("unused --insecure-host"),
+        "replay emits no transport warnings: {err_text}"
+    );
+}
+
+#[test]
+fn transport_test_command_warnings_and_json_entries() {
+    let server = start_route_server(json_ok_route);
+    let dir = TempDir::new("transport-test-cmd");
+    transport_spec(dir.path(), "suite.arazzo.yaml", &server.base_url, "");
+
+    let output = run(
+        &[
+            "--json",
+            "test",
+            &dir.path().to_string_lossy(),
+            "--insecure-host",
+            "stale.example:9443",
+        ],
+        None,
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let err_text = stderr_text(&output);
+    assert!(
+        err_text.contains("TLS verification disabled for: stale.example:9443"),
+        "test startup line expected: {err_text}"
+    );
+    assert!(
+        err_text.contains("unused --insecure-host exception(s): stale.example:9443"),
+        "test unused note expected: {err_text}"
+    );
+    let body = stdout_json(&output);
+    let kinds: Vec<&str> = body
+        .get("transportWarnings")
+        .and_then(Value::as_array)
+        .map(|warnings| {
+            warnings
+                .iter()
+                .filter_map(|w| w.get("kind").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        kinds.contains(&"insecureHostsActive") && kinds.contains(&"unusedInsecureHosts"),
+        "test --json carries structured entries: {body}"
+    );
+}

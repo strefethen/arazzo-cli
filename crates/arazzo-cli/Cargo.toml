@@ -17,7 +17,7 @@ arazzo-spec = { path = "../arazzo-spec" }
 arazzo-runtime = { path = "../arazzo-runtime", features = ["schema"] }
 arazzo-mcp = { path = "../arazzo-mcp" }
 arazzo-validate = { path = "../arazzo-validate" }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 humantime = "2"
 indexmap = "2"
 openapiv3 = "2"
@@ -30,4 +30,6 @@ url = "2"
 regex = "1.12.3"
 
 [dev-dependencies]
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tiny_http = "0.12"

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord};
+use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord, TransportWarning};
 use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Error as ValidateError, ValidationErrorKind};
 use schemars::JsonSchema;
@@ -18,6 +18,12 @@ pub enum TestOutput {
     Results {
         summary: TestSummary,
         suites: Vec<TestSuiteResult>,
+        /// Structured transport-trust warnings (insecure exceptions,
+        /// cleartext credentials, unused exceptions). Present even when
+        /// stderr warning text is squelched.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(rename = "transportWarnings")]
+        transport_warnings: Vec<TransportWarning>,
     },
     /// Could not run tests at all (no specs found, invalid filter regex, etc.)
     Error {
@@ -226,6 +232,9 @@ pub enum RunOutput {
         outputs: BTreeMap<String, Value>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(rename = "transportWarnings")]
+        transport_warnings: Vec<TransportWarning>,
     },
     Error {
         error: String,
@@ -233,11 +242,17 @@ pub enum RunOutput {
         code: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(rename = "transportWarnings")]
+        transport_warnings: Vec<TransportWarning>,
     },
     DryRun {
         requests: Vec<DryRunRequest>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(rename = "transportWarnings")]
+        transport_warnings: Vec<TransportWarning>,
     },
 }
 
@@ -535,12 +550,14 @@ pub fn emit_run_error(
     err: &str,
     code: Option<&str>,
     warnings: &[String],
+    transport_warnings: &[TransportWarning],
 ) -> Result<(), String> {
     if json {
         output_json(&RunOutput::Error {
             error: err.to_string(),
             code: code.map(String::from),
             warnings: warnings.to_vec(),
+            transport_warnings: transport_warnings.to_vec(),
         })?;
         // Return Err so main() exits with code 1. Empty string signals
         // that the error message was already written to stdout as JSON.
@@ -553,6 +570,7 @@ pub fn emit_dry_run_requests(
     json: bool,
     mut reqs: Vec<DryRunRequest>,
     warnings: &[String],
+    transport_warnings: &[TransportWarning],
 ) -> Result<(), String> {
     // Redact serialized dry-run requests for both JSON and human-readable paths.
     for r in &mut reqs {
@@ -562,6 +580,7 @@ pub fn emit_dry_run_requests(
         return output_json(&RunOutput::DryRun {
             requests: reqs,
             warnings: warnings.to_vec(),
+            transport_warnings: transport_warnings.to_vec(),
         });
     }
     for r in reqs {
@@ -615,11 +634,13 @@ pub fn emit_run_outputs(
     outputs: &BTreeMap<String, Value>,
     json: bool,
     warnings: &[String],
+    transport_warnings: &[TransportWarning],
 ) -> Result<(), String> {
     if json {
         return output_json(&RunOutput::Success {
             outputs: outputs.clone(),
             warnings: warnings.to_vec(),
+            transport_warnings: transport_warnings.to_vec(),
         });
     }
 

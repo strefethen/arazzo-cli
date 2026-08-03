@@ -129,6 +129,7 @@ fn evaluate_criterion_xpath_uses_context_and_condition() {
                 .to_vec(),
             body_json: None,
             content_type: ContentType::Xml,
+            redirects: Vec::new(),
         };
     let eval = ExpressionEvaluator::new(EvalContext::default());
 

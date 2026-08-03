@@ -1,6 +1,68 @@
 use super::*;
 
 impl Engine {
+    /// Configured `--insecure-host` entries no live request targeted.
+    /// Empty for replay engines, under a blanket exception, or when
+    /// every entry was consumed. Callers surface this as the
+    /// end-of-run unused-exception note.
+    pub fn unused_insecure_hosts(&self) -> Vec<String> {
+        self.inner.client.unused_insecure_entries()
+    }
+
+    /// Emits the once-per-host cleartext-credential warning when a
+    /// prepared live request would send Authorization/Cookie over
+    /// non-loopback http. The structured event is emitted regardless;
+    /// `transport_warnings: false` squelches only the stderr line.
+    async fn warn_cleartext_credentials(
+        &self,
+        exec_ctx: &ExecutionContext,
+        prep: &PreparedRequest,
+    ) {
+        let client = &self.inner.client;
+        if !client.is_live() {
+            return;
+        }
+        let Ok(url) = url_crate::Url::parse(&prep.url_result.url) else {
+            return;
+        };
+        if url.scheme() != "http" {
+            return;
+        }
+        let Some(host) = url.host_str() else {
+            return;
+        };
+        if is_loopback_host(host) {
+            return;
+        }
+        let has_credentials = prep
+            .headers
+            .keys()
+            .chain(client.default_headers().keys())
+            .any(|name| {
+                name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
+            });
+        if !has_credentials {
+            return;
+        }
+        if !client.note_cleartext_warned(host) {
+            return;
+        }
+        let warning = TransportWarning {
+            kind: TransportWarningKind::CleartextCredentials,
+            hosts: vec![host.to_string()],
+            message: format!(
+                "credentials (Authorization/Cookie header) sent over cleartext http to non-loopback host \"{host}\""
+            ),
+        };
+        if client.transport_warnings_enabled() {
+            eprintln!("warning: {}", warning.message);
+        }
+        let _ = exec_ctx
+            .event_tx
+            .send(EngineEvent::TransportWarning(warning))
+            .await;
+    }
+
     pub fn resolve_operation_id(
         &self,
         operation_id: &str,
@@ -166,6 +228,7 @@ impl Engine {
             url: url_result.url.clone(),
             headers: headers.clone(),
             body: body_json.clone(),
+            redirects: Vec::new(),
         };
 
         Ok(PreparedRequest {
@@ -235,6 +298,8 @@ impl Engine {
         )
         .await;
 
+        self.warn_cleartext_credentials(exec_ctx, &prep).await;
+
         self.emit_observer_event(
             exec_ctx,
             ObserverEvent::RequestSent {
@@ -280,6 +345,7 @@ impl Engine {
             body: b"{}".to_vec(),
             body_json: Some(json!({})),
             content_type: ContentType::Json,
+            redirects: Vec::new(),
         };
         let dry_ctx = self.make_post_request_eval_context(vars, Some(&fake), &prep);
         let dry_eval = ExpressionEvaluator::new(dry_ctx);
@@ -343,6 +409,9 @@ impl Engine {
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
         let mut step_warnings = prep.warnings.clone();
+        // Surface the followed redirect chain in the step's trace request.
+        let mut trace_request = prep.trace_request.clone();
+        trace_request.redirects = response.redirects.clone();
         for (index, criterion) in step.success_criteria.iter().enumerate() {
             let evaluation = evaluate_criterion_detailed(
                 criterion,
@@ -396,7 +465,7 @@ impl Engine {
                     outputs: BTreeMap::new(),
                     dry_run_request: None,
                     trace: StepTraceData {
-                        request: Some(prep.trace_request.clone()),
+                        request: Some(trace_request),
                         response: Some(trace_response),
                         criteria,
                         warnings: step_warnings,
@@ -437,7 +506,7 @@ impl Engine {
             outputs,
             dry_run_request: None,
             trace: StepTraceData {
-                request: Some(prep.trace_request.clone()),
+                request: Some(trace_request),
                 response: Some(trace_response),
                 criteria,
                 warnings: step_warnings,

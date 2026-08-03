@@ -12,6 +12,7 @@ mod output;
 mod run_context;
 mod test_runner;
 mod trace;
+mod transport;
 
 use std::ffi::OsString;
 use std::fs;
@@ -111,6 +112,11 @@ async fn run(cli: Cli) -> Result<(), String> {
             trace,
             trace_max_body_bytes,
             max_response_size,
+            insecure_host,
+            insecure,
+            allow_downgrade_redirects,
+            max_redirects,
+            no_transport_warnings,
         } => {
             let context = RunContext::new(
                 global,
@@ -132,6 +138,13 @@ async fn run(cli: Cli) -> Result<(), String> {
                     trace,
                     trace_max_body_bytes,
                     max_response_size,
+                    transport: transport::TransportFlags {
+                        insecure_hosts: insecure_host,
+                        insecure_all: insecure,
+                        allow_downgrade_redirects,
+                        max_redirects,
+                        no_transport_warnings,
+                    },
                 },
             );
             handlers::run_workflow(context).await
@@ -179,6 +192,11 @@ async fn run(cli: Cli) -> Result<(), String> {
             max_response_size,
             fail_fast,
             filter,
+            insecure_host,
+            insecure,
+            allow_downgrade_redirects,
+            max_redirects,
+            no_transport_warnings,
         } => {
             handlers::run_tests(
                 paths,
@@ -195,6 +213,13 @@ async fn run(cli: Cli) -> Result<(), String> {
                 max_response_size,
                 fail_fast,
                 filter,
+                transport::TransportFlags {
+                    insecure_hosts: insecure_host,
+                    insecure_all: insecure,
+                    allow_downgrade_redirects,
+                    max_redirects,
+                    no_transport_warnings,
+                },
                 global,
             )
             .await
