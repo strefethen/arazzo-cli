@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-02
+
+### Added
+
+#### CLI
+- `test` command — CI-native API contract testing. Recursively discovers
+  `.arazzo.yaml`/`.arazzo.yml` specs, executes every workflow, and reports in
+  TAP (default), JUnit XML (`--format junit`), or JSON (`--json`). Full flag
+  parity with `run` (`--input`, `--input-json`, `--header`, `--openapi`,
+  `--http-timeout`, `--execution-timeout`, `--expr-diagnostics`, `--parallel`,
+  `--strict-inputs`, `--max-response-size`), plus `--fail-fast` and
+  `--filter <regex>`. Exits non-zero on any failure or error; parse-error
+  suites are tracked separately.
+- Agent-facing help text: root and subcommand `--help` now carry "For agents"
+  sections covering `--json` envelopes, `schema <command>` discovery, dry-run
+  previews, and trace/replay evidence.
+- `warnings` array in `run --json` output; new `steps --json` schema; `show
+  --json` now includes async step metadata (`action`, `channelPath`,
+  `correlationId`, `dependsOn`, `timeout`).
+
+#### Expression Language
+- `$self` expression (resolves the current workflow document; no sub-path).
+- `$sourceDescriptions.<name>.<reference>` extended beyond `.url` to `.type`
+  and named operation references.
+- Arazzo 1.1 `$message` expressions: `$message.header.<name>`,
+  `$message.payload`, and `$message.payload#/json/pointer`, evaluated without
+  assuming a transport.
+
+#### Workflow Engine
+- `requestBody.replacements` — JSON Pointer overlays applied to a resolved
+  payload before serialization.
+- Arazzo 1.1 source/step model: typed AsyncAPI source descriptions, selector
+  objects, and async step metadata are parsed, validated, and preserved.
+- Preserve Arazzo vendor extensions (`x-*`) through parse and serialize.
+
+### Changed
+
+#### Workflow Engine
+- Arazzo 1.1 async steps fail closed: channel/send/receive execution returns
+  `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` before any HTTP request preparation.
+  1.1 async source and step metadata is typed and preserved, but async
+  transport execution is not yet supported.
+
+#### CLI
+- `--json` mode no longer writes the human-readable summary to stderr (only
+  TAP/JUnit do), keeping structured output clean for programmatic consumers.
+- Pre-execution errors (no specs discovered, invalid `--filter`) now exit
+  non-zero instead of exiting 0.
+
+#### Quality
+- Split the DAP adapter (`dap.rs`, 2,593 → 119-line root coordinator) and the
+  runtime core into focused modules; public surfaces and behavior unchanged.
+
+### Fixed
+
+#### Expression Language
+- Unsupported JSONPath constructs (recursive descent `..`, wildcards `*`/`[*]`,
+  array slices `[a:b]`) now raise an "unsupported JSONPath" diagnostic on the
+  criterion instead of silently evaluating to false. Quoted literals are masked
+  so filter predicates are not misflagged.
+- Fixed JSONPath count-predicate tokenization.
+
+#### Workflow Engine
+- Filtered single-step (`--step`) execution: a `goto` whose target is outside
+  the filtered set now seeks the first in-scope step at or after the target
+  instead of running an earlier step; a `goto` past the filtered tail ends the
+  run.
+- Preserve an explicit action `type` override (e.g. `type: end`) when merging
+  component action references.
+
+#### Generator
+- Added reference-cycle guards to the request-body and response resolvers; a
+  cyclic `requestBodies`/`responses` `$ref` now returns cleanly instead of
+  overflowing the stack.
+
+### Security
+- Upgraded `rustls-webpki` 0.103.10 → 0.103.13 (RUSTSEC-2026-0104,
+  RUSTSEC-2026-0098, RUSTSEC-2026-0099). This dependency is in the shipped
+  binary via `reqwest`/`rustls`.
+- Centralized dry-run redaction so all dry-run and trace output share one
+  redaction path.
+- Cleared dev/optional-dependency advisories not present in the shipped
+  binary: `quinn-proto` 0.11.14 → 0.11.16 (RUSTSEC-2026-0185),
+  `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204), `anyhow`
+  1.0.102 → 1.0.104 (RUSTSEC-2026-0190).
+
 ## [0.2.2] - 2026-04-06
 
 ### Fixed
