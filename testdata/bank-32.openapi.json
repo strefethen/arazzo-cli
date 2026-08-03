@@ -1,0 +1,98 @@
+{
+  "openapi": "3.2.0",
+  "$self": "https://example.com/specs/bank-32.openapi.json",
+  "info": {
+    "title": "Bank Fixture",
+    "version": "1.0.0",
+    "summary": "Clean-room OpenAPI 3.2 fixture covering the structural shapes that tripped issue #3: JSON Schema 2020-12 type arrays, numeric exclusiveMinimum, examples arrays, description-less responses, and a root $self."
+  },
+  "servers": [
+    {
+      "url": "https://localhost:5201/v1",
+      "x-internal": false
+    }
+  ],
+  "paths": {
+    "/banks": {
+      "get": {
+        "operationId": "GetAllBanks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Bank" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateBank",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Bank" }
+            }
+          }
+        },
+        "responses": {
+          "201": {}
+        }
+      }
+    },
+    "/banks/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "examples": ["b-1001"]
+          }
+        }
+      ],
+      "get": {
+        "operationId": "GetBank",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Bank" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "UpdateBank",
+        "responses": { "200": {} }
+      },
+      "delete": {
+        "operationId": "DeleteBank",
+        "responses": { "204": {} }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Bank": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": ["null", "string"] },
+          "rating": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "examples": [4.5]
+          }
+        }
+      }
+    }
+  }
+}

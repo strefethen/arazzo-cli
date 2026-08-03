@@ -3042,3 +3042,46 @@ async fn legacy_absolute_source_url_stays_literal_in_expressions() {
         Some(&json!("https://api.example.com"))
     );
 }
+
+#[tokio::test]
+async fn relative_source_openapi_32_json_document_indexes_and_derives_base() {
+    // Regression for GitHub issue #3's run scenario: a relative OpenAPI 3.2
+    // JSON source (root $self, 2020-12 type arrays, numeric exclusiveMinimum,
+    // examples arrays, description-less responses) indexes through the untyped
+    // walker and derives its request base from servers[0].url.
+    let mut spec = relative_source_spec(
+        "./bank-32.openapi.json",
+        vec![Workflow {
+            workflow_id: "get-all-banks".to_string(),
+            steps: vec![Step {
+                step_id: "getAllBanks".to_string(),
+                target: Some(StepTarget::OperationId("GetAllBanks".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    spec.source_descriptions[0].name = "bank".to_string();
+
+    let engine = match EngineBuilder::new(spec)
+        .dry_run(true)
+        .source_base_dir(testdata_dir())
+        .build()
+    {
+        Ok(e) => e,
+        Err(err) => panic!("building engine: {err}"),
+    };
+
+    let exec_result = engine
+        .execute_collect("get-all-banks", BTreeMap::new())
+        .await;
+    if let Err(err) = &exec_result.outputs {
+        panic!("expected success, got: {err}");
+    }
+
+    let reqs = exec_result.dry_run_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].method, "GET");
+    assert_eq!(reqs[0].url, "https://localhost:5201/v1/banks");
+}

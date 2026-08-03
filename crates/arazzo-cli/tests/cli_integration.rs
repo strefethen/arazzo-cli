@@ -3051,3 +3051,33 @@ fn run_dry_run_openapi_flag_overrides_source_with_warning() {
         "stderr should name the explicit spec origin, got: {stderr}"
     );
 }
+
+#[test]
+fn run_dry_run_openapi_32_relative_source_resolves_operation() {
+    // Regression for GitHub issue #3's failing command shape:
+    // `arazzo run <arazzo.yaml> <workflow>` where the operationId lives in a
+    // relative OpenAPI 3.2 source document and no --openapi flag is passed.
+    let spec = repo_root().join("testdata/bank-32.arazzo.yaml");
+    let spec_str = spec.to_string_lossy().to_string();
+    let output = run(
+        ["--json", "run", &spec_str, "get-all-banks", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "expected success, got: {}",
+        combined_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "expected one dry-run request: {body}");
+    assert_eq!(
+        requests[0].get("method").and_then(Value::as_str),
+        Some("GET")
+    );
+    assert_eq!(
+        requests[0].get("url").and_then(Value::as_str),
+        Some("https://localhost:5201/v1/banks")
+    );
+}
