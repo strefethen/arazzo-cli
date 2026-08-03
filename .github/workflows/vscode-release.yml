@@ -131,6 +131,11 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         shell: bash
         run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT secret not set — skipping Marketplace publish. VSIXs are still attached to the GitHub release; publish manually or set the secret and re-run."
+            echo "## :warning: Marketplace publish skipped — VSCE_PAT not set" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           for vsix in arazzo-debug-*.vsix; do
             echo "Publishing $vsix"
             vsce publish --packagePath "$vsix"
