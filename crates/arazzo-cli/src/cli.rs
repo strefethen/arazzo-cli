@@ -7,6 +7,7 @@ use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES}
 #[derive(Parser, Debug)]
 #[command(name = "arazzo")]
 #[command(
+    version,
     about = "Execute Arazzo 1.0 workflows",
     long_about = "Execute, validate, inspect, generate, and test Arazzo 1.0 workflows.\n\nFor agents: use --json for machine-readable output, use schema <command> to discover the JSON contract, and use run --dry-run --json before a live run.",
     after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n  7. Expose workflows to agents: arazzo-cli serve --dir <dir> --allowed-dir <dir>\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."

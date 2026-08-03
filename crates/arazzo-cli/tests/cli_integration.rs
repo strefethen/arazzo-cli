@@ -1786,6 +1786,17 @@ fn run_sequential_trace_records_parallel_false() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn version_flag_prints_crate_version() {
+    let output = run(["--version"].as_slice(), None);
+    assert!(output.status.success());
+    let text = stdout_text(&output);
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "--version output should contain the crate version: {text}"
+    );
+}
+
+#[test]
 fn root_help_surfaces_agent_workflow() {
     let output = run(["--help"].as_slice(), None);
     assert!(output.status.success());

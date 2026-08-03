@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `warnings` array in `run --json` output; new `steps --json` schema; `show
   --json` now includes async step metadata (`action`, `channelPath`,
   `correlationId`, `dependsOn`, `timeout`).
+- `--version` flag on the CLI, reporting the crate version.
 
 #### Expression Language
 - `$self` expression (resolves the current workflow document; no sub-path).
@@ -57,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Quality
 - Split the DAP adapter (`dap.rs`, 2,593 → 119-line root coordinator) and the
   runtime core into focused modules; public surfaces and behavior unchanged.
+
+#### Generator
+- `generate` now detects OpenAPI 3.1/3.2 input specs and reports an actionable
+  message ("generate supports OpenAPI 3.0.x, but this spec declares …") instead
+  of a cryptic `invalid type: sequence, expected a string` deserialization
+  error. Full 3.1/3.2 ingestion remains future work.
 
 ### Fixed
 

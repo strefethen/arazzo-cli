@@ -354,6 +354,8 @@ pub fn generate_workflow(
     let bytes = fs::read(spec_path)
         .map_err(|err| format!("reading OpenAPI spec \"{spec_path}\": {err}"))?;
 
+    crate::generate::ensure_supported_openapi_version(&bytes)?;
+
     let openapi: openapiv3::OpenAPI =
         serde_yaml_ng::from_slice(&bytes).map_err(|err| format!("parsing OpenAPI spec: {err}"))?;
 
