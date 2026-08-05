@@ -29,39 +29,14 @@ pub(crate) struct UrlBuildResult {
     pub warnings: Vec<String>,
 }
 
-/// Parse `{sourceName}./path` prefix from an operationPath.
-/// Returns None if no `{name}.` prefix is found — the dot after `}` is required
-/// to distinguish source references from path parameter placeholders like `/{id}/resource`.
-pub(super) fn parse_source_prefix(op_path: &str) -> Option<(&str, &str)> {
-    if !op_path.starts_with('{') {
-        return None;
-    }
-    let close = op_path.find('}')?;
-    let name = &op_path[1..close];
-    if name.is_empty() {
-        return None;
-    }
-    let remaining = &op_path[close + 1..];
-    let path = remaining.strip_prefix('.')?;
-    Some((name, path))
-}
-
+/// Splits the optional leading `"<METHOD> "` token off an operationPath.
+///
+/// Thin wrapper over the shared classifier in `arazzo-spec`: the runtime and
+/// `arazzo-validate` must never drift on what counts as a method token, which
+/// is exactly the drift that used to disable the validator's unknown-source
+/// check for `"<METHOD> {source}./path"` steps.
 pub(crate) fn parse_method(operation_path: &str) -> (&str, &str) {
-    let Some(idx) = operation_path.find(' ') else {
-        return ("", operation_path);
-    };
-    if idx == 0 || idx > 7 {
-        return ("", operation_path);
-    }
-    let candidate = &operation_path[..idx];
-    let valid = matches!(
-        candidate,
-        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" | "TRACE"
-    );
-    if valid {
-        return (candidate, &operation_path[idx + 1..]);
-    }
-    ("", operation_path)
+    arazzo_spec::split_operation_method(operation_path)
 }
 
 pub(super) fn replace_path_params(path: &str, params: &BTreeMap<String, String>) -> String {

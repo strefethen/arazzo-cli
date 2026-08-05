@@ -6,6 +6,13 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod operation_path;
+
+pub use operation_path::{
+    classify_operation_path, split_operation_method, ClassifiedOperationPath, OperationPathForm,
+    UnsupportedOperationPath, SUPPORTED_OPERATION_PATH_FORMS,
+};
+
 /// Raw `x-*` Specification Extension fields preserved on Arazzo objects.
 pub type VendorExtensions = BTreeMap<String, serde_yaml_ng::Value>;
 

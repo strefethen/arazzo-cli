@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use crate::{DebugController, DebugScopes, StepCheckpoint};
 use arazzo_expr::{is_truthy, EvalContext, ExpressionEvaluator};
 use arazzo_spec::{
-    ActionType, ArazzoSpec, OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, Step,
-    StepTarget, SuccessCriterion, ValueSource, Workflow,
+    classify_operation_path, ActionType, ArazzoSpec, OnAction, OperationPathForm, OutputValue,
+    ParamLocation, Parameter, SelectorObject, Step, StepTarget, SuccessCriterion, ValueSource,
+    Workflow, SUPPORTED_OPERATION_PATH_FORMS,
 };
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
@@ -92,7 +93,7 @@ use state::{
     WorkflowIndex,
 };
 pub(crate) use url::parse_method;
-use url::{encode_cookie_value, parse_source_prefix, replace_path_params, UrlBuildResult};
+use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
 pub(crate) use xpath::{extract_xpath, select_xpath};
 
 pub use redaction::{

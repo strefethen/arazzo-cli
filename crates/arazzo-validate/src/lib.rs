@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, OnAction, OutputValue,
-    Parameter, SelectorObject, SelectorType, StepAction, StepTarget, SuccessCriterion, ValueSource,
-    Workflow,
+    classify_operation_path, parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType,
+    OnAction, OutputValue, Parameter, SelectorObject, SelectorType, StepAction, StepTarget,
+    SuccessCriterion, ValueSource, Workflow, SUPPORTED_OPERATION_PATH_FORMS,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -147,6 +147,9 @@ pub enum ValidationErrorKind {
     InvalidRetryField,
     InvalidCriterionType,
     InvalidSelectorType,
+    /// A specification-valid `operationPath` that this runtime cannot resolve.
+    /// Warning severity: the document is conformant, the executor is not.
+    UnsupportedOperationPath,
 }
 
 /// Parses and validates an Arazzo spec file from disk, discarding warnings.
@@ -379,7 +382,8 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             }
             match &step.target {
                 Some(StepTarget::OperationPath(operation_path)) => {
-                    if let Some(source_name) = parse_operation_source_name(operation_path) {
+                    let classified = classify_operation_path(operation_path);
+                    if let Some(source_name) = classified.source_name() {
                         if !source_names.contains(source_name) {
                             diagnostics.push(Diagnostic {
                                 severity: Severity::Error,
@@ -390,6 +394,23 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                                 ),
                             });
                         }
+                    }
+                    // A warning, not an error: the specification form is valid
+                    // Arazzo, this executor simply does not resolve it. Saying
+                    // "invalid" would blame the document for our gap — but
+                    // reporting nothing at all is how a conformant step used to
+                    // reach the runtime and turn into a nonsense request URL.
+                    if let Some(reason) = classified.unsupported() {
+                        diagnostics.push(Diagnostic::warning(
+                            ValidationErrorKind::UnsupportedOperationPath,
+                            format!("{step_path}.operationPath"),
+                            format!(
+                                "{step_path}.operationPath \"{operation_path}\" carries {reason}; \
+                                 this runtime does not resolve the specification form (source \
+                                 reference plus JSON Pointer), so running this step will fail. \
+                                 Supported forms are {SUPPORTED_OPERATION_PATH_FORMS}."
+                            ),
+                        ));
                     }
                     if step.action.is_some() {
                         diagnostics.push(Diagnostic {
@@ -626,22 +647,6 @@ fn local_depends_on_has_cycle(workflow: &Workflow) -> bool {
     }
 
     (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
-}
-
-fn parse_operation_source_name(operation_path: &str) -> Option<&str> {
-    if !operation_path.starts_with('{') {
-        return None;
-    }
-    let close = operation_path.find('}')?;
-    let name = &operation_path[1..close];
-    if name.is_empty() {
-        return None;
-    }
-    let remaining = &operation_path[close + 1..];
-    if !remaining.starts_with('.') {
-        return None;
-    }
-    Some(name)
 }
 
 fn validate_parameters(path_prefix: &str, params: &[Parameter], diagnostics: &mut Vec<Diagnostic>) {
@@ -2202,6 +2207,29 @@ workflows:
             .contains("references unknown sourceDescription \"missing\""));
     }
 
+    /// A leading `"<METHOD> "` token must not hide the source reference from
+    /// this check. It did: the validator's own prefix parser tested
+    /// `starts_with('{')` against the whole value, so the check was silently
+    /// skipped for every `"<METHOD> {source}./path"` step shipped in
+    /// `examples/`, while the runtime resolved those same paths fine.
+    #[test]
+    fn validate_step_operation_path_unknown_source_reference_behind_method_prefix() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].target =
+            Some(StepTarget::OperationPath("POST {missing}./pet".to_string()));
+
+        let errs = expect_validation_errors(validate(&spec));
+        let err = errs
+            .iter()
+            .find(|item| item.path.contains("operationPath"))
+            .unwrap_or_else(|| panic!("expected operationPath validation error, got: {errs:?}"));
+
+        assert_eq!(err.kind, ValidationErrorKind::InvalidReference);
+        assert!(err
+            .message
+            .contains("references unknown sourceDescription \"missing\""));
+    }
+
     #[test]
     fn validate_step_operation_path_known_source_reference() {
         let mut spec = valid_spec();
@@ -2210,6 +2238,85 @@ workflows:
 
         if let Err(err) = validate(&spec) {
             panic!("expected sourceDescription reference to validate, got: {err}");
+        }
+    }
+
+    fn operation_path_warnings(operation_path: &str) -> Vec<Diagnostic> {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].target =
+            Some(StepTarget::OperationPath(operation_path.to_string()));
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => warnings
+                .into_iter()
+                .filter(|item| item.kind == ValidationErrorKind::UnsupportedOperationPath)
+                .collect(),
+            Err(err) => panic!("expected {operation_path:?} to validate, got: {err}"),
+        }
+    }
+
+    /// The conformant specification form is valid Arazzo that this executor
+    /// cannot run — a warning, so `validate` neither blames the document nor
+    /// calls it clean.
+    #[test]
+    fn validate_warns_on_unsupported_operation_path_without_failing() {
+        let operation_path = "{$sourceDescriptions.api.url}#/paths/~1status/get";
+        let warnings = operation_path_warnings(operation_path);
+
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        let warning = &warnings[0];
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(!warning.is_error());
+        assert!(
+            warning.path.ends_with(".operationPath"),
+            "path was: {}",
+            warning.path
+        );
+        assert!(
+            warning.message.contains(operation_path),
+            "message was: {}",
+            warning.message
+        );
+        assert!(
+            warning
+                .message
+                .contains("a runtime expression and a JSON Pointer fragment"),
+            "message was: {}",
+            warning.message
+        );
+    }
+
+    #[test]
+    fn validate_warns_on_each_unsupported_operation_path_shape() {
+        for operation_path in [
+            "{$sourceDescriptions.api.url}#/paths/~1status/get",
+            "GET {$sourceDescriptions.api.url}#/paths/~1status/get",
+            "{$sourceDescriptions.api.url}",
+            "#/paths/~1status/get",
+        ] {
+            assert_eq!(
+                operation_path_warnings(operation_path).len(),
+                1,
+                "expected one warning for {operation_path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_does_not_warn_on_supported_operation_path_forms() {
+        for operation_path in [
+            "/items",
+            "GET /items",
+            "/pets/{petId}",
+            "{api}./items",
+            "POST {api}./items",
+            "https://api.example.com/items",
+            "DELETE https://api.example.com/items/7",
+        ] {
+            assert!(
+                operation_path_warnings(operation_path).is_empty(),
+                "unexpected warning for supported form {operation_path:?}"
+            );
         }
     }
 

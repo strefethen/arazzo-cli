@@ -19,6 +19,6 @@ pub(super) use super::payload::{
     value_to_string,
 };
 pub(super) use super::url::{
-    encode_cookie_value, parse_method, parse_source_prefix, replace_path_params, UrlBuildResult,
+    encode_cookie_value, parse_method, replace_path_params, UrlBuildResult,
 };
 pub(super) use super::xpath::extract_xpath;

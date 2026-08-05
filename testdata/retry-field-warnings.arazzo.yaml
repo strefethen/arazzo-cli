@@ -11,7 +11,10 @@ workflows:
     summary: Structurally valid spec whose only findings are warnings.
     steps:
       - stepId: fetch
-        operationPath: '{$sourceDescriptions.api.url}#/paths/~1status/get'
+        # Deliberately a supported form: this fixture pins retry-field warnings
+        # only. The unresolvable specification form lives in
+        # testdata/unsupported-operation-path.arazzo.yaml.
+        operationPath: '{api}./status'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:

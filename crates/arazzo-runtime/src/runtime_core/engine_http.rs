@@ -524,21 +524,39 @@ impl Engine {
         // (derived from `servers` for document sources, the literal url for
         // legacy sources). `$sourceDescriptions.{name}.url` expressions keep
         // evaluating to the literal url via `source_descriptions_map`.
-        let (resolved_base, resolved_path) = if let Some((name, path)) =
-            parse_source_prefix(op_path)
-        {
-            if let Some(base) = self.inner.index.source_bases.get(name) {
-                (base.as_str(), path)
-            } else {
+        //
+        // Classification happens here, before any string is joined, so no
+        // caller can construct a URL out of a value this runtime cannot resolve.
+        let (resolved_base, resolved_path) = match classify_operation_path(op_path).form {
+            OperationPathForm::Unsupported(reason) => {
                 return Err(RuntimeError::new(
-                        RuntimeErrorKind::SourceDescriptionNotFound,
-                        format!(
-                            "sourceDescription \"{name}\" referenced by operationPath \"{op_path}\" was not found"
-                        ),
-                    ));
+                    RuntimeErrorKind::UnsupportedOperationPathForm,
+                    format!(
+                        "step \"{}\": operationPath \"{op_path}\" carries {reason}; \
+                         resolving the specification form (source reference plus JSON \
+                         Pointer) is not implemented. Supported forms are \
+                         {SUPPORTED_OPERATION_PATH_FORMS}.",
+                        step.step_id
+                    ),
+                ));
             }
-        } else {
-            (self.inner.index.base_url.as_str(), op_path)
+            OperationPathForm::SourceRouted { source_name, path } => {
+                match self.inner.index.source_bases.get(source_name) {
+                    Some(base) => (base.as_str(), path),
+                    None => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::SourceDescriptionNotFound,
+                            format!(
+                                "sourceDescription \"{source_name}\" referenced by operationPath \"{op_path}\" was not found"
+                            ),
+                        ));
+                    }
+                }
+            }
+            // An absolute URL keeps the base only to satisfy the tuple; the
+            // `starts_with("http")` test below discards it, as it always has.
+            OperationPathForm::AbsoluteUrl(url) => (self.inner.index.base_url.as_str(), url),
+            OperationPathForm::BasePath(path) => (self.inner.index.base_url.as_str(), path),
         };
 
         let mut target =
