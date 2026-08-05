@@ -16,7 +16,10 @@ function getBundledBinaryPath(extensionPath: string): string | undefined {
 export class ArazzoAdapterDescriptorFactory
   implements vscode.DebugAdapterDescriptorFactory, vscode.Disposable
 {
-  constructor(private readonly extensionPath: string) {}
+  constructor(
+    private readonly extensionPath: string,
+    private readonly channel: vscode.OutputChannel
+  ) {}
 
   createDebugAdapterDescriptor(
     session: vscode.DebugSession
@@ -30,18 +33,24 @@ export class ArazzoAdapterDescriptorFactory
       const args = asStringArray(session.configuration.runtimeArgs) ?? [];
       const cwd = asString(session.configuration.runtimeCwd);
       const options: vscode.DebugAdapterExecutableOptions = { cwd };
+      this.channel.appendLine(
+        `launching adapter (runtimeExecutable override): ${runtimeExecutable}`
+      );
       return new vscode.DebugAdapterExecutable(runtimeExecutable, args, options);
     }
 
     // Default mode: resolve bundled binary
     const binPath = getBundledBinaryPath(this.extensionPath);
     if (!binPath) {
-      void vscode.window.showErrorMessage(
+      const message =
         "Arazzo Debug: bundled debug adapter binary not found. " +
-          "If running from source, set 'runtimeExecutable' in your launch config."
-      );
+        "If running from source, set 'runtimeExecutable' in your launch config.";
+      this.channel.appendLine(message);
+      this.channel.show(true);
+      void vscode.window.showErrorMessage(message);
       return undefined;
     }
+    this.channel.appendLine(`launching bundled adapter: ${binPath}`);
 
     const cwd =
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
