@@ -31,6 +31,17 @@ pub fn terminated_event(seq: u64) -> Value {
     })
 }
 
+pub fn exited_event(seq: u64, exit_code: i64) -> Value {
+    json!({
+        "type": "event",
+        "seq": seq,
+        "event": "exited",
+        "body": {
+            "exitCode": exit_code
+        }
+    })
+}
+
 pub fn output_event(seq: u64, category: &str, output: &str) -> Value {
     json!({
         "type": "event",

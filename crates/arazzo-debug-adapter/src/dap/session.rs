@@ -11,7 +11,7 @@ use arazzo_runtime::{
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::events::{stopped_event, terminated_event};
+use super::events::{exited_event, output_event, stopped_event, terminated_event};
 use super::requests::DapBreakpoint;
 use super::source_index::{checkpoint_sort_key, resolve_source_breakpoints, SourceIndex};
 use super::transport::{write_dap_message, OutboundSequence};
@@ -24,7 +24,11 @@ const ENGINE_MONITOR_POLL: Duration = Duration::from_millis(25);
 pub(super) enum EngineEvent {
     Stopped(DebugStopEvent),
     Terminated,
-    Panicked,
+    /// Engine finished because the workflow failed; carries the runtime error
+    /// so the DAP client can display it before the session ends.
+    Failed(RuntimeError),
+    /// Engine thread panicked; carries the panic payload text when extractable.
+    Panicked(Option<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -245,13 +249,19 @@ fn engine_event_monitor(
             // join() may block briefly while the tokio runtime shuts down
             // (bounded by shutdown_timeout(50ms) in the engine thread).
             match h.join() {
-                Ok(_) => {
+                Ok(Ok(_)) => {
                     if event_tx.send(EngineEvent::Terminated).is_err() {
                         // Coordinator already exited.
                     }
                 }
-                Err(_) => {
-                    if event_tx.send(EngineEvent::Panicked).is_err() {
+                Ok(Err(err)) => {
+                    if event_tx.send(EngineEvent::Failed(err)).is_err() {
+                        // Coordinator already exited.
+                    }
+                }
+                Err(payload) => {
+                    let message = panic_payload_message(payload.as_ref());
+                    if event_tx.send(EngineEvent::Panicked(message)).is_err() {
                         // Coordinator already exited.
                     }
                 }
@@ -294,14 +304,52 @@ where
                 &stopped_event(outbound.alloc(), MAIN_THREAD_ID, reason),
             )?;
         }
-        EngineEvent::Terminated | EngineEvent::Panicked => {
+        EngineEvent::Terminated => {
             if let Some(runtime) = state.runtime.as_mut() {
                 runtime.terminated = true;
             }
             write_dap_message(writer, &terminated_event(outbound.alloc()))?;
         }
+        EngineEvent::Failed(err) => {
+            if let Some(runtime) = state.runtime.as_mut() {
+                runtime.terminated = true;
+            }
+            // Surface the failure before `terminated`: events sent after the
+            // session ends may be dropped by the client.
+            write_dap_message(
+                writer,
+                &output_event(
+                    outbound.alloc(),
+                    "stderr",
+                    &format!("workflow failed: {err}\n"),
+                ),
+            )?;
+            write_dap_message(writer, &exited_event(outbound.alloc(), 1))?;
+            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+        }
+        EngineEvent::Panicked(message) => {
+            if let Some(runtime) = state.runtime.as_mut() {
+                runtime.terminated = true;
+            }
+            let text = match message {
+                Some(msg) => format!("engine thread panicked: {msg}\n"),
+                None => "engine thread panicked\n".to_string(),
+            };
+            write_dap_message(writer, &output_event(outbound.alloc(), "stderr", &text))?;
+            write_dap_message(writer, &exited_event(outbound.alloc(), 101))?;
+            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+        }
     }
     Ok(())
+}
+
+/// Extracts the human-readable message from a panic payload when it is a
+/// `&str` or `String` (the shapes produced by `panic!` with a message).
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Option<String> {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        return Some((*msg).to_string());
+    }
+    payload.downcast_ref::<String>().cloned()
 }
 
 pub(super) fn inline_event_check<W>(
