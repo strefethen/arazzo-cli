@@ -353,24 +353,45 @@ pub fn validate_spec(state: &ServerState, args: &Value) -> Result<Value, String>
         return tool_err(&err);
     }
 
-    match arazzo_validate::parse(file_path) {
-        Ok(spec) => tool_ok(&json!({
+    match arazzo_validate::parse_with_diagnostics(file_path) {
+        Ok((spec, warnings)) => tool_ok(&json!({
             "valid": true,
             "file": file_path,
             "version": spec.arazzo,
             "title": spec.info.title,
             "workflows": spec.workflows.len(),
             "sources": spec.source_descriptions.len(),
+            "warnings": build_validate_warnings(&warnings),
         })),
         Err(err) => {
             let errors = build_validate_errors(&err);
+            let warnings = match &err {
+                arazzo_validate::Error::Validation(report) => report.warnings.clone(),
+                _ => Vec::new(),
+            };
             tool_ok(&json!({
                 "valid": false,
                 "file": file_path,
                 "errors": errors,
+                "warnings": build_validate_warnings(&warnings),
             }))
         }
     }
+}
+
+/// Renders non-fatal diagnostics in the same shape `validate_spec` uses for
+/// errors, so agents parse one entry format.
+fn build_validate_warnings(warnings: &[arazzo_validate::Diagnostic]) -> Vec<Value> {
+    warnings
+        .iter()
+        .map(|item| {
+            json!({
+                "source": "validation",
+                "path": if item.path.is_empty() { Value::Null } else { Value::String(item.path.clone()) },
+                "message": item.message,
+            })
+        })
+        .collect()
 }
 
 fn build_validate_errors(err: &arazzo_validate::Error) -> Vec<Value> {

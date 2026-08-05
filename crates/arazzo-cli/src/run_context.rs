@@ -8,6 +8,9 @@ use crate::transport::TransportFlags;
 pub struct GlobalOptions {
     pub json: bool,
     pub verbose: bool,
+    /// Promote spec validation warnings to errors. Distinct from
+    /// [`RunOptions::strict_inputs`], which governs runtime input checks.
+    pub strict: bool,
 }
 
 /// Run-command options parsed from CLI flags.

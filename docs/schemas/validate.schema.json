@@ -35,6 +35,13 @@
         "null"
       ]
     },
+    "warnings": {
+      "description": "Non-fatal findings. Present alongside `valid: true`; `--strict`\npromotes them into `errors` instead.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ValidateIssue"
+      }
+    },
     "workflows": {
       "type": [
         "integer",

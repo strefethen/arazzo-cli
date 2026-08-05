@@ -21,6 +21,11 @@ pub struct Cli {
     #[arg(short = 'v', long, global = true)]
     pub verbose: bool,
 
+    /// Promote every spec validation warning to an error. Independent of the
+    /// run/test --strict-inputs flag, which governs runtime input checks.
+    #[arg(long, global = true)]
+    pub strict: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }

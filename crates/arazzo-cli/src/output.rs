@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord, TransportWarning};
 use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
-use arazzo_validate::{Error as ValidateError, ValidationErrorKind};
+use arazzo_validate::{Diagnostic, Error as ValidateError, ValidationErrorKind};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -205,6 +205,10 @@ pub struct ValidateResult {
     pub sources: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<ValidateIssue>,
+    /// Non-fatal findings. Present alongside `valid: true`; `--strict`
+    /// promotes them into `errors` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidateIssue>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -323,7 +327,12 @@ pub fn output_json<T: Serialize + ?Sized>(value: &T) -> Result<(), String> {
     Ok(())
 }
 
-pub fn emit_validate_result(path: &str, spec: &ArazzoSpec, json: bool) -> Result<(), String> {
+pub fn emit_validate_result(
+    path: &str,
+    spec: &ArazzoSpec,
+    warnings: &[Diagnostic],
+    json: bool,
+) -> Result<(), String> {
     if json {
         return output_json(&ValidateResult {
             valid: true,
@@ -333,9 +342,15 @@ pub fn emit_validate_result(path: &str, spec: &ArazzoSpec, json: bool) -> Result
             workflows: Some(spec.workflows.len()),
             sources: Some(spec.source_descriptions.len()),
             errors: Vec::new(),
+            warnings: warnings.iter().map(build_validation_issue).collect(),
         });
     }
 
+    // Human mode keeps stdout the report and sends findings to stderr, matching
+    // the CLI-wide "diagnostics go to stderr" contract.
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
     println!("Valid Arazzo {} spec: {}", spec.arazzo, spec.info.title);
     println!("  Version: {}", spec.info.version);
     println!("  Workflows: {}", spec.workflows.len());
@@ -353,28 +368,42 @@ pub fn emit_validate_error(path: &str, err: &ValidateError, json: bool) -> Resul
             workflows: None,
             sources: None,
             errors: build_validate_issues(err),
+            warnings: build_validate_warnings(err),
         })?;
         return Err(String::new());
     }
     Err(format!("validation failed: {err}"))
 }
 
+/// Warnings collected before validation failed, so the error envelope carries
+/// them too. Only a validation report can hold them.
+fn build_validate_warnings(err: &ValidateError) -> Vec<ValidateIssue> {
+    match err {
+        ValidateError::Validation(report) => {
+            report.warnings.iter().map(build_validation_issue).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn build_validation_issue(diagnostic: &Diagnostic) -> ValidateIssue {
+    ValidateIssue {
+        source: "validation".to_string(),
+        kind: Some(validation_error_kind_name(&diagnostic.kind).to_string()),
+        path: if diagnostic.path.is_empty() {
+            None
+        } else {
+            Some(diagnostic.path.clone())
+        },
+        message: diagnostic.message.clone(),
+    }
+}
+
 fn build_validate_issues(err: &ValidateError) -> Vec<ValidateIssue> {
     match err {
-        ValidateError::Validation(report) => report
-            .errors
-            .iter()
-            .map(|item| ValidateIssue {
-                source: "validation".to_string(),
-                kind: Some(validation_error_kind_name(&item.kind).to_string()),
-                path: if item.path.is_empty() {
-                    None
-                } else {
-                    Some(item.path.clone())
-                },
-                message: item.message.clone(),
-            })
-            .collect(),
+        ValidateError::Validation(report) => {
+            report.errors.iter().map(build_validation_issue).collect()
+        }
         ValidateError::ReadFile(inner) => vec![ValidateIssue {
             source: "readFile".to_string(),
             kind: None,

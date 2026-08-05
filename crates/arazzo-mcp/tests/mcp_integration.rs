@@ -360,6 +360,106 @@ workflows:
     let _ = std::fs::remove_file(&spec_path);
 }
 
+fn call_validate_spec(file_path: &str) -> Value {
+    let state = ServerState::empty();
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"validate_spec","arguments":{"file_path": file_path}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(responses.len() >= 2);
+    match extract_tool_text(&responses[1]) {
+        Some(value) => value,
+        None => panic!("validate_spec returned no tool text"),
+    }
+}
+
+fn warning_messages(result: &Value) -> Vec<String> {
+    let Some(items) = result["warnings"].as_array() else {
+        panic!("expected warnings array in validate_spec result: {result}");
+    };
+    items
+        .iter()
+        .filter_map(|item| item["message"].as_str())
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn test_validate_spec_reports_warnings_on_success_envelope() {
+    let result = call_validate_spec(&testdata_path("retry-field-warnings.arazzo.yaml"));
+
+    assert_eq!(result["valid"], true, "result={result}");
+    let messages = warning_messages(&result);
+    assert_eq!(
+        messages,
+        vec![
+            "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action".to_string(),
+            "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action".to_string(),
+        ],
+        "result={result}"
+    );
+    assert_eq!(result["warnings"][0]["source"], "validation");
+    assert_eq!(
+        result["warnings"][0]["path"],
+        "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit"
+    );
+}
+
+#[test]
+fn test_validate_spec_reports_warnings_on_error_envelope() {
+    let spec_path =
+        std::env::temp_dir().join("arazzo_mcp_test_validate_warn_and_error.arazzo.yaml");
+    let spec_yaml = r#"arazzo: "1.0.0"
+info:
+  version: "1.0.0"
+sourceDescriptions:
+  - name: test
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: mixed
+    steps:
+      - stepId: placeholder
+        operationPath: /noop
+        onSuccess:
+          - name: finish
+            type: end
+            retryLimit: 2
+"#;
+    std::fs::write(&spec_path, spec_yaml).unwrap_or_else(|e| panic!("write temp: {e}"));
+
+    let result = call_validate_spec(&spec_path.to_string_lossy());
+
+    assert_eq!(result["valid"], false, "result={result}");
+    let errors = match result["errors"].as_array() {
+        Some(v) => v.clone(),
+        None => panic!("expected errors array: {result}"),
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|item| item["message"].as_str().unwrap_or_default() == "info.title is required"),
+        "result={result}"
+    );
+    assert_eq!(
+        warning_messages(&result),
+        vec![
+            "workflow \"mixed\" > step \"placeholder\".onSuccess[0].retryLimit has no effect on end action"
+                .to_string(),
+        ],
+        "result={result}"
+    );
+
+    let _ = std::fs::remove_file(&spec_path);
+}
+
 #[test]
 fn test_run_workflow_error() {
     let server = start_server(|_method, _url| (500, r#"{"error":"internal"}"#.to_string()));

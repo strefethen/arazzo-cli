@@ -1,0 +1,21 @@
+arazzo: 1.0.1
+info:
+  title: Retry Field Warnings
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com/openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: warn-only
+    summary: Structurally valid spec whose only findings are warnings.
+    steps:
+      - stepId: fetch
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1status/get'
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - name: finish
+            type: end
+            retryAfter: 2
+            retryLimit: 3

@@ -1,0 +1,22 @@
+{
+  "valid": true,
+  "file": "<SPEC_PATH>",
+  "version": "1.0.1",
+  "title": "Retry Field Warnings",
+  "workflows": 1,
+  "sources": 1,
+  "warnings": [
+    {
+      "source": "validation",
+      "kind": "invalidRetryField",
+      "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit",
+      "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action"
+    },
+    {
+      "source": "validation",
+      "kind": "invalidRetryField",
+      "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter",
+      "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action"
+    }
+  ]
+}

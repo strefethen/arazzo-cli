@@ -46,10 +46,14 @@ impl std::error::Error for Error {
     }
 }
 
-/// A collection of structural validation errors found in an Arazzo spec.
+/// A collection of structural validation findings for an Arazzo spec.
+///
+/// `errors` are fatal; `warnings` never fail validation on their own and are
+/// carried alongside so callers on the failure path can still surface them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationReport {
-    pub errors: Vec<ValidationError>,
+    pub errors: Vec<Diagnostic>,
+    pub warnings: Vec<Diagnostic>,
 }
 
 impl fmt::Display for ValidationReport {
@@ -64,15 +68,56 @@ impl fmt::Display for ValidationReport {
 
 impl std::error::Error for ValidationReport {}
 
-/// A single structural validation error with kind, spec path, and message.
+/// Whether a diagnostic fails validation or is merely advisory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+/// A single validation finding with severity, kind, spec path, and message.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValidationError {
+pub struct Diagnostic {
+    pub severity: Severity,
     pub kind: ValidationErrorKind,
     pub path: String,
     pub message: String,
 }
 
-impl fmt::Display for ValidationError {
+impl Diagnostic {
+    /// Builds a warning-severity diagnostic.
+    pub fn warning(
+        kind: ValidationErrorKind,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity: Severity::Warning,
+            kind,
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Returns true when this diagnostic fails validation.
+    pub fn is_error(&self) -> bool {
+        self.severity == Severity::Error
+    }
+
+    /// Reclassifies this diagnostic as an error, for strict callers that
+    /// promote every warning.
+    pub fn into_error(self) -> Self {
+        Self {
+            severity: Severity::Error,
+            ..self
+        }
+    }
+}
+
+/// Retained name for the error-severity view of a [`Diagnostic`].
+pub type ValidationError = Diagnostic;
+
+impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.path.is_empty() {
             write!(f, "{}", self.message)
@@ -82,7 +127,7 @@ impl fmt::Display for ValidationError {
     }
 }
 
-impl std::error::Error for ValidationError {}
+impl std::error::Error for Diagnostic {}
 
 /// Classification of validation errors for programmatic matching.
 #[derive(Debug, Clone, PartialEq)]
@@ -104,32 +149,69 @@ pub enum ValidationErrorKind {
     InvalidSelectorType,
 }
 
-/// Parses and validates an Arazzo spec file from disk.
+/// Parses and validates an Arazzo spec file from disk, discarding warnings.
 pub fn parse(path: impl AsRef<Path>) -> Result<ArazzoSpec, Error> {
-    let bytes = fs::read(path).map_err(Error::ReadFile)?;
-    parse_bytes(&bytes)
+    parse_with_diagnostics(path).map(|(spec, _)| spec)
 }
 
-/// Parses and validates an Arazzo spec from raw YAML bytes.
+/// Parses and validates an Arazzo spec from raw YAML bytes, discarding warnings.
 pub fn parse_bytes(data: &[u8]) -> Result<ArazzoSpec, Error> {
+    parse_bytes_with_diagnostics(data).map(|(spec, _)| spec)
+}
+
+/// Parses and validates an Arazzo spec file from disk, returning any
+/// non-fatal diagnostics alongside the spec.
+///
+/// Errors still fail; warnings never do.
+pub fn parse_with_diagnostics(
+    path: impl AsRef<Path>,
+) -> Result<(ArazzoSpec, Vec<Diagnostic>), Error> {
+    let bytes = fs::read(path).map_err(Error::ReadFile)?;
+    parse_bytes_with_diagnostics(&bytes)
+}
+
+/// Parses and validates an Arazzo spec from raw YAML bytes, returning any
+/// non-fatal diagnostics alongside the spec.
+pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diagnostic>), Error> {
     let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
     resolve_components(&mut spec).map_err(Error::ComponentResolution)?;
-    validate(&spec)?;
-    Ok(spec)
+    let warnings = validate_diagnostics(&spec)?;
+    Ok((spec, warnings))
 }
 
 /// Applies structural validation rules to an Arazzo spec.
+///
+/// Warnings are dropped; use [`validate_diagnostics`] to receive them.
 pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
-    let mut errs = Vec::<ValidationError>::new();
+    validate_diagnostics(spec).map(|_| ())
+}
+
+/// Applies structural validation rules, returning warnings on success and
+/// failing with a report that also carries them on error.
+pub fn validate_diagnostics(spec: &ArazzoSpec) -> Result<Vec<Diagnostic>, Error> {
+    let (errors, warnings) = collect_diagnostics(spec)
+        .into_iter()
+        .partition::<Vec<Diagnostic>, _>(Diagnostic::is_error);
+
+    if errors.is_empty() {
+        return Ok(warnings);
+    }
+    Err(Error::Validation(ValidationReport { errors, warnings }))
+}
+
+fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::<Diagnostic>::new();
 
     if spec.arazzo.is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: "arazzo".to_string(),
             message: "arazzo version is required".to_string(),
         });
     } else if !spec.arazzo.starts_with("1.") {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::UnsupportedVersion,
             path: "arazzo".to_string(),
             message: format!("unsupported arazzo version: {} (expected 1.x)", spec.arazzo),
@@ -138,13 +220,15 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
 
     if let Some(self_uri) = &spec.self_uri {
         match UriReferenceStr::new(self_uri) {
-            Ok(uri) if uri.fragment().is_some() => errs.push(ValidationError {
+            Ok(uri) if uri.fragment().is_some() => diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::InvalidReference,
                 path: "$self".to_string(),
                 message: "$self must not contain a fragment identifier".to_string(),
             }),
             Ok(_) => {}
-            Err(err) => errs.push(ValidationError {
+            Err(err) => diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::InvalidReference,
                 path: "$self".to_string(),
                 message: format!("$self must be a valid RFC 3986 URI-reference: {err}"),
@@ -153,14 +237,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
     }
 
     if spec.info.title.is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: "info.title".to_string(),
             message: "info.title is required".to_string(),
         });
     }
     if spec.info.version.is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: "info.version".to_string(),
             message: "info.version is required".to_string(),
@@ -171,20 +257,23 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
         let path = format!("sourceDescriptions[{idx}]");
         if src.name.is_empty() {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: format!("{path}.name"),
                 message: format!("{path}.name is required"),
             });
         } else if !source_names.insert(&src.name) {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::DuplicateIdentifier,
                 path: format!("{path}.name"),
                 message: format!("{path}.name '{}' is duplicate", src.name),
             });
         }
         if src.url.is_empty() {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: format!("{path}.url"),
                 message: format!("{path}.url is required"),
@@ -210,20 +299,26 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
         };
 
         if wf.workflow_id.is_empty() {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId is required"),
             });
         } else if !seen_workflow_ids.insert(wf.workflow_id.as_str()) {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::DuplicateIdentifier,
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
             });
         }
 
-        validate_parameters(&format!("{path}.parameters"), &wf.parameters, &mut errs);
+        validate_parameters(
+            &format!("{path}.parameters"),
+            &wf.parameters,
+            &mut diagnostics,
+        );
 
         // Collect step IDs for this workflow before validating actions.
         let step_ids: HashSet<&str> = wf
@@ -238,14 +333,14 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             &wf.success_actions,
             &step_ids,
             &workflow_ids,
-            &mut errs,
+            &mut diagnostics,
         );
         validate_actions(
             &format!("{path}.failureActions"),
             &wf.failure_actions,
             &step_ids,
             &workflow_ids,
-            &mut errs,
+            &mut diagnostics,
         );
 
         let mut seen_step_ids = HashSet::<&str>::new();
@@ -257,13 +352,15 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             };
 
             if step.step_id.is_empty() {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::MissingRequiredField,
                     path: format!("{step_path}.stepId"),
                     message: format!("{step_path}.stepId is required"),
                 });
             } else if !seen_step_ids.insert(step.step_id.as_str()) {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::DuplicateIdentifier,
                     path: format!("{step_path}.stepId"),
                     message: format!("{step_path}.stepId '{}' is duplicate", step.step_id),
@@ -271,7 +368,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             }
 
             if step.target.is_none() {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidStepTarget,
                     path: step_path.clone(),
                     message: format!(
@@ -283,7 +381,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 Some(StepTarget::OperationPath(operation_path)) => {
                     if let Some(source_name) = parse_operation_source_name(operation_path) {
                         if !source_names.contains(source_name) {
-                            errs.push(ValidationError {
+                            diagnostics.push(Diagnostic {
+                                severity: Severity::Error,
                                 kind: ValidationErrorKind::InvalidReference,
                                 path: format!("{step_path}.operationPath"),
                                 message: format!(
@@ -293,7 +392,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                         }
                     }
                     if step.action.is_some() {
-                        errs.push(ValidationError {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
                             kind: ValidationErrorKind::InvalidAsyncStep,
                             path: format!("{step_path}.action"),
                             message: format!(
@@ -303,14 +403,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                     }
                 }
                 Some(StepTarget::ChannelPath(_)) if step.action.is_none() => {
-                    errs.push(ValidationError {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
                         kind: ValidationErrorKind::InvalidAsyncStep,
                         path: format!("{step_path}.action"),
                         message: format!("{step_path}.channelPath requires action send or receive"),
                     });
                 }
                 Some(StepTarget::WorkflowId(_)) if step.action.is_some() => {
-                    errs.push(ValidationError {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
                         kind: ValidationErrorKind::InvalidAsyncStep,
                         path: format!("{step_path}.action"),
                         message: format!(
@@ -328,7 +430,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             if step.correlation_id.is_some()
                 && (step.action != Some(StepAction::Receive) || !supports_async_fields)
             {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidAsyncStep,
                     path: format!("{step_path}.correlationId"),
                     message: format!(
@@ -341,7 +444,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 let dependency_path = format!("{step_path}.dependsOn[{dependency_idx}]");
                 match classify_step_dependency(dependency) {
                     StepDependency::Local(step_id) if !step_ids.contains(step_id) => {
-                        errs.push(ValidationError {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
                             kind: ValidationErrorKind::InvalidReference,
                             path: dependency_path,
                             message: format!(
@@ -350,7 +454,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                         });
                     }
                     StepDependency::CrossWorkflow => {
-                        errs.push(ValidationError {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
                             kind: ValidationErrorKind::UnsupportedDependencyScope,
                             path: dependency_path,
                             message: format!(
@@ -359,7 +464,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                         });
                     }
                     StepDependency::ExternalSource => {
-                        errs.push(ValidationError {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
                             kind: ValidationErrorKind::UnsupportedDependencyScope,
                             path: dependency_path,
                             message: format!(
@@ -368,7 +474,8 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                         });
                     }
                     StepDependency::Invalid => {
-                        errs.push(ValidationError {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
                             kind: ValidationErrorKind::InvalidReference,
                             path: dependency_path,
                             message: format!(
@@ -383,24 +490,24 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
             validate_parameters(
                 &format!("{step_path}.parameters"),
                 &step.parameters,
-                &mut errs,
+                &mut diagnostics,
             );
             for (name, output) in &step.outputs {
                 let output_path = format!("{step_path}.outputs.{name}");
-                validate_output_value(&output_path, output, &mut errs);
+                validate_output_value(&output_path, output, &mut diagnostics);
             }
             if let Some(request_body) = &step.request_body {
                 if let Some(payload) = &request_body.payload {
                     validate_value_source(
                         &format!("{step_path}.requestBody.payload"),
                         payload,
-                        &mut errs,
+                        &mut diagnostics,
                     );
                 }
                 validate_replacements(
                     &format!("{step_path}.requestBody.replacements"),
                     &request_body.replacements,
-                    &mut errs,
+                    &mut diagnostics,
                 );
             }
 
@@ -408,7 +515,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 validate_criterion(
                     &format!("{step_path}.successCriteria[{criterion_idx}]"),
                     criterion,
-                    &mut errs,
+                    &mut diagnostics,
                 );
             }
 
@@ -417,19 +524,20 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
                 &step.on_failure,
                 &step_ids,
                 &workflow_ids,
-                &mut errs,
+                &mut diagnostics,
             );
             validate_actions(
                 &format!("{step_path}.onSuccess"),
                 &step.on_success,
                 &step_ids,
                 &workflow_ids,
-                &mut errs,
+                &mut diagnostics,
             );
         }
 
         if local_depends_on_has_cycle(wf) {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::DependencyCycle,
                 path: format!("{path}.steps"),
                 message: format!(
@@ -440,15 +548,12 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
 
         for (name, output) in &wf.outputs {
             let output_path = format!("{path}.outputs.{name}");
-            validate_output_value(&output_path, output, &mut errs);
-            validate_output_step_reference(&output_path, output, &step_ids, &mut errs);
+            validate_output_value(&output_path, output, &mut diagnostics);
+            validate_output_step_reference(&output_path, output, &step_ids, &mut diagnostics);
         }
     }
 
-    if errs.is_empty() {
-        return Ok(());
-    }
-    Err(Error::Validation(ValidationReport { errors: errs }))
+    diagnostics
 }
 
 enum StepDependency<'a> {
@@ -539,30 +644,32 @@ fn parse_operation_source_name(operation_path: &str) -> Option<&str> {
     Some(name)
 }
 
-fn validate_parameters(path_prefix: &str, params: &[Parameter], errs: &mut Vec<ValidationError>) {
+fn validate_parameters(path_prefix: &str, params: &[Parameter], diagnostics: &mut Vec<Diagnostic>) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
         if param.name.is_empty() && param.reference.is_empty() {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: format!("{param_path}.name"),
                 message: format!("{param_path}.name is required (unless using reference)"),
             });
         }
         if param.is_value_empty() && param.reference.is_empty() {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingParameterValue,
                 path: param_path.clone(),
                 message: format!("{path_prefix}[{param_idx}] must have value or reference"),
             });
         }
-        validate_value_source(&format!("{param_path}.value"), &param.value, errs);
+        validate_value_source(&format!("{param_path}.value"), &param.value, diagnostics);
     }
 }
 
-fn validate_output_value(path: &str, output: &OutputValue, errs: &mut Vec<ValidationError>) {
+fn validate_output_value(path: &str, output: &OutputValue, diagnostics: &mut Vec<Diagnostic>) {
     if let OutputValue::Selector(selector) = output {
-        validate_selector(path, selector, errs);
+        validate_selector(path, selector, diagnostics);
     }
 }
 
@@ -570,7 +677,7 @@ fn validate_output_step_reference(
     path: &str,
     output: &OutputValue,
     step_ids: &HashSet<&str>,
-    errs: &mut Vec<ValidationError>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let expression = match output {
         OutputValue::RuntimeExpression(expression) => expression,
@@ -579,7 +686,8 @@ fn validate_output_step_reference(
     if let Some(after) = expression.strip_prefix("$steps.") {
         let step_name = after.split('.').next().unwrap_or_default();
         if !step_ids.contains(step_name) {
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::InvalidReference,
                 path: path.to_string(),
                 message: format!("{path} references unknown step '{step_name}'"),
@@ -588,27 +696,32 @@ fn validate_output_step_reference(
     }
 }
 
-fn validate_value_source(path: &str, value: &ValueSource, errs: &mut Vec<ValidationError>) {
+fn validate_value_source(path: &str, value: &ValueSource, diagnostics: &mut Vec<Diagnostic>) {
     match value {
-        ValueSource::Selector(selector) => validate_selector(path, selector, errs),
+        ValueSource::Selector(selector) => validate_selector(path, selector, diagnostics),
         ValueSource::Literal(serde_yaml_ng::Value::Sequence(values)) => {
             for (index, value) in values.iter().enumerate() {
-                validate_value_source(&format!("{path}[{index}]"), &value.clone().into(), errs);
+                validate_value_source(
+                    &format!("{path}[{index}]"),
+                    &value.clone().into(),
+                    diagnostics,
+                );
             }
         }
         ValueSource::Literal(serde_yaml_ng::Value::Mapping(values)) => {
             for (key, value) in values {
                 let key = key.as_str().unwrap_or("<non-string-key>");
-                validate_value_source(&format!("{path}.{key}"), &value.clone().into(), errs);
+                validate_value_source(&format!("{path}.{key}"), &value.clone().into(), diagnostics);
             }
         }
         ValueSource::Literal(_) => {}
     }
 }
 
-fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<ValidationError>) {
+fn validate_selector(path: &str, selector: &SelectorObject, diagnostics: &mut Vec<Diagnostic>) {
     if selector.context.trim().is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: format!("{path}.context"),
             message: format!("{path}.context is required"),
@@ -617,7 +730,8 @@ fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<Valid
 
     let type_name = selector.type_.resolved_name();
     if selector.selector.trim().is_empty() && type_name != "jsonpointer" {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: format!("{path}.selector"),
             message: format!("{path}.selector is required"),
@@ -625,7 +739,8 @@ fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<Valid
     }
 
     if !matches!(type_name.as_str(), "jsonpath" | "xpath" | "jsonpointer") {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::InvalidSelectorType,
             path: format!("{path}.type"),
             message: format!("{path}.type must be one of jsonpath, xpath, or jsonpointer"),
@@ -638,7 +753,8 @@ fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<Valid
     };
     let version = expression_type.version.trim();
     if version.is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: format!("{path}.type.version"),
             message: format!("{path}.type.version is required"),
@@ -653,7 +769,8 @@ fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<Valid
         _ => false,
     };
     if !supported {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::InvalidSelectorType,
             path: format!("{path}.type.version"),
             message: format!("{path}.type.version {version:?} is not supported for {type_name}"),
@@ -664,12 +781,13 @@ fn validate_selector(path: &str, selector: &SelectorObject, errs: &mut Vec<Valid
 fn validate_replacements(
     path_prefix: &str,
     replacements: &[arazzo_spec::Replacement],
-    errs: &mut Vec<ValidationError>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (replacement_idx, replacement) in replacements.iter().enumerate() {
         if replacement.target.trim().is_empty() {
             let path = format!("{path_prefix}[{replacement_idx}].target");
-            errs.push(ValidationError {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: path.clone(),
                 message: format!("{path} is required"),
@@ -678,7 +796,7 @@ fn validate_replacements(
         validate_value_source(
             &format!("{path_prefix}[{replacement_idx}].value"),
             &replacement.value,
-            errs,
+            diagnostics,
         );
     }
 }
@@ -688,7 +806,7 @@ fn validate_actions(
     actions: &[OnAction],
     step_ids: &HashSet<&str>,
     workflow_ids: &HashSet<&str>,
-    errs: &mut Vec<ValidationError>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
@@ -696,14 +814,16 @@ fn validate_actions(
             let has_step = !action.step_id.is_empty();
             let has_workflow = !action.workflow_id.is_empty();
             if !has_step && !has_workflow {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::MissingRequiredField,
                     path: action_path.clone(),
                     message: format!("{action_path} goto action must specify stepId or workflowId"),
                 });
             }
             if has_step && has_workflow {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidReference,
                     path: action_path.clone(),
                     message: format!(
@@ -715,7 +835,8 @@ fn validate_actions(
                 && !action.step_id.starts_with('$')
                 && !step_ids.contains(action.step_id.as_str())
             {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidReference,
                     path: format!("{action_path}.stepId"),
                     message: format!(
@@ -728,7 +849,8 @@ fn validate_actions(
                 && !action.workflow_id.starts_with('$')
                 && !workflow_ids.contains(action.workflow_id.as_str())
             {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidReference,
                     path: format!("{action_path}.workflowId"),
                     message: format!(
@@ -740,31 +862,40 @@ fn validate_actions(
         }
         if action.action_type() != ActionType::Retry {
             if action.retry_limit.is_some() {
-                eprintln!(
-                    "warning: {action_path}.retryLimit has no effect on {} action",
-                    action.action_type()
-                );
+                diagnostics.push(Diagnostic::warning(
+                    ValidationErrorKind::InvalidRetryField,
+                    format!("{action_path}.retryLimit"),
+                    format!(
+                        "{action_path}.retryLimit has no effect on {} action",
+                        action.action_type()
+                    ),
+                ));
             }
             if action.retry_after > 0 {
-                eprintln!(
-                    "warning: {action_path}.retryAfter has no effect on {} action",
-                    action.action_type()
-                );
+                diagnostics.push(Diagnostic::warning(
+                    ValidationErrorKind::InvalidRetryField,
+                    format!("{action_path}.retryAfter"),
+                    format!(
+                        "{action_path}.retryAfter has no effect on {} action",
+                        action.action_type()
+                    ),
+                ));
             }
         }
         for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
             validate_criterion(
                 &format!("{action_path}.criteria[{criterion_idx}]"),
                 criterion,
-                errs,
+                diagnostics,
             );
         }
     }
 }
 
-fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<ValidationError>) {
+fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mut Vec<Diagnostic>) {
     if criterion.condition.trim().is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: format!("{path}.condition"),
             message: format!("{path}.condition is required"),
@@ -772,7 +903,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
     }
 
     if criterion.has_declared_type() && criterion.context.trim().is_empty() {
-        errs.push(ValidationError {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
             path: format!("{path}.context"),
             message: format!("{path}.context is required when type is specified"),
@@ -790,7 +922,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
                 normalized.as_str(),
                 "simple" | "regex" | "jsonpath" | "xpath"
             ) {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidCriterionType,
                     path: format!("{path}.type"),
                     message: format!("{path}.type must be one of simple, regex, jsonpath, xpath"),
@@ -800,7 +933,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
         CriterionType::ExpressionType(expr) => {
             let normalized = expr.type_.trim().to_lowercase();
             if !matches!(normalized.as_str(), "jsonpath" | "xpath") {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidCriterionType,
                     path: format!("{path}.type.type"),
                     message: format!("{path}.type.type must be one of jsonpath or xpath"),
@@ -810,7 +944,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
 
             let version = expr.version.trim().to_lowercase();
             if version.is_empty() {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::MissingRequiredField,
                     path: format!("{path}.type.version"),
                     message: format!("{path}.type.version is required"),
@@ -819,7 +954,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
             }
 
             if normalized == "jsonpath" && version != "draft-goessner-dispatch-jsonpath-00" {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidCriterionType,
                     path: format!("{path}.type.version"),
                     message: format!(
@@ -831,7 +967,8 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, errs: &mut Vec<V
             if normalized == "xpath"
                 && !matches!(version.as_str(), "xpath-10" | "xpath-20" | "xpath-30")
             {
-                errs.push(ValidationError {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidCriterionType,
                     path: format!("{path}.type.version"),
                     message: format!(
@@ -1017,7 +1154,7 @@ fn resolve_action_ref(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use arazzo_spec::{
@@ -1026,7 +1163,10 @@ mod tests {
         SourceType, Step, StepAction, StepTarget, SuccessCriterion, Workflow,
     };
 
-    use super::{parse, parse_bytes, validate, ArazzoSpec, Error, ValidationErrorKind};
+    use super::{
+        parse, parse_bytes, parse_bytes_with_diagnostics, validate, validate_diagnostics,
+        ArazzoSpec, Diagnostic, Error, Severity, ValidationErrorKind,
+    };
 
     /// Unwrap a validation Error into its report errors, panicking on other variants.
     fn expect_validation_errors(result: Result<(), Error>) -> Vec<super::ValidationError> {
@@ -1102,6 +1242,138 @@ workflows:
             Err(_) => 0,
         };
         std::env::temp_dir().join(format!("{prefix}-{nanos}.yaml"))
+    }
+
+    /// Structurally valid: its only findings are the two retry-field warnings.
+    const WARNING_ONLY_YAML: &str = r#"arazzo: "1.0.0"
+info:
+  title: Warning Only
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: finish
+            type: end
+            retryAfter: 2
+            retryLimit: 3
+"#;
+
+    /// Missing `info.title` (error) plus one retry-field warning.
+    const MIXED_YAML: &str = r#"arazzo: "1.0.0"
+info:
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: finish
+            type: end
+            retryLimit: 3
+"#;
+
+    #[test]
+    fn warning_only_document_parses_ok_and_returns_diagnostics() {
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(WARNING_ONLY_YAML.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("warnings must not fail validation, got: {err}"),
+        };
+        assert_eq!(spec.info.title, "Warning Only");
+        assert_eq!(diagnostics.len(), 2, "diagnostics={diagnostics:?}");
+        assert!(diagnostics.iter().all(|d| d.severity == Severity::Warning));
+        assert!(diagnostics
+            .iter()
+            .all(|d| d.kind == ValidationErrorKind::InvalidRetryField));
+        assert_eq!(
+            diagnostics[0].path,
+            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit"
+        );
+        assert_eq!(
+            diagnostics[0].message,
+            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action"
+        );
+        assert_eq!(
+            diagnostics[1].path,
+            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryAfter"
+        );
+
+        // The signature-preserving entry point still succeeds on the same bytes.
+        assert!(parse_bytes(WARNING_ONLY_YAML.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn error_only_document_reports_no_warnings() {
+        let spec = match arazzo_spec::parse_unvalidated_bytes(
+            r#"arazzo: "1.0.0"
+info:
+  version: "1.0.0"
+workflows: []
+"#
+            .as_bytes(),
+        ) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(_) => panic!("expected validation error"),
+            Err(Error::Validation(report)) => {
+                assert!(!report.errors.is_empty());
+                assert!(report.errors.iter().all(Diagnostic::is_error));
+                assert!(report.warnings.is_empty(), "warnings={:?}", report.warnings);
+            }
+            Err(other) => panic!("expected Validation error, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn mixed_document_fails_and_still_carries_warnings() {
+        match parse_bytes_with_diagnostics(MIXED_YAML.as_bytes()) {
+            Ok(_) => panic!("expected validation error"),
+            Err(Error::Validation(report)) => {
+                assert!(report
+                    .errors
+                    .iter()
+                    .any(|item| item.message == "info.title is required"));
+                assert_eq!(report.warnings.len(), 1, "warnings={:?}", report.warnings);
+                assert_eq!(report.warnings[0].severity, Severity::Warning);
+                assert_eq!(
+                    report.warnings[0].message,
+                    "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action"
+                );
+            }
+            Err(other) => panic!("expected Validation error, got: {other}"),
+        }
+    }
+
+    /// The public entry points keep the shapes every existing call site relies
+    /// on: `parse(path)`, `parse_bytes(&[u8])`, and `validate(&spec)`.
+    #[test]
+    fn public_entry_points_keep_their_signatures() {
+        // `parse` is generic over `impl AsRef<Path>`, so pin it through a
+        // non-capturing closure that coerces to the fn pointer.
+        let parse_fn: fn(&Path) -> Result<ArazzoSpec, Error> = |path| parse(path);
+        let parse_bytes_fn: fn(&[u8]) -> Result<ArazzoSpec, Error> = parse_bytes;
+        let validate_fn: fn(&ArazzoSpec) -> Result<(), Error> = validate;
+
+        assert!(parse_fn(Path::new("/nonexistent/path.yaml")).is_err());
+        let spec = match parse_bytes_fn(VALID_YAML.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+        assert!(validate_fn(&spec).is_ok());
     }
 
     #[test]

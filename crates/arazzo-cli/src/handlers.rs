@@ -438,10 +438,40 @@ pub fn generate_workflow(
 }
 
 pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), String> {
-    match arazzo_validate::parse(path) {
-        Ok(spec) => output::emit_validate_result(path, &spec, global.json),
+    match arazzo_validate::parse_with_diagnostics(path) {
+        Ok((_, warnings)) if global.strict && !warnings.is_empty() => {
+            output::emit_validate_error(path, &promote_warnings(Vec::new(), warnings), global.json)
+        }
+        Ok((spec, warnings)) => output::emit_validate_result(path, &spec, &warnings, global.json),
+        Err(arazzo_validate::Error::Validation(report))
+            if global.strict && !report.warnings.is_empty() =>
+        {
+            output::emit_validate_error(
+                path,
+                &promote_warnings(report.errors, report.warnings),
+                global.json,
+            )
+        }
         Err(err) => output::emit_validate_error(path, &err, global.json),
     }
+}
+
+/// `--strict` makes every warning fatal, so promoted findings travel the
+/// existing error path and render exactly like validation errors. No finding is
+/// left reported as non-fatal.
+fn promote_warnings(
+    mut errors: Vec<arazzo_validate::Diagnostic>,
+    warnings: Vec<arazzo_validate::Diagnostic>,
+) -> arazzo_validate::Error {
+    errors.extend(
+        warnings
+            .into_iter()
+            .map(arazzo_validate::Diagnostic::into_error),
+    );
+    arazzo_validate::Error::Validation(arazzo_validate::ValidationReport {
+        errors,
+        warnings: Vec::new(),
+    })
 }
 
 pub fn list_workflows(path: &str, global: GlobalOptions) -> Result<(), String> {

@@ -148,6 +148,26 @@ fn snapshot_validate_json_contract() {
 }
 
 #[test]
+fn snapshot_validate_warnings_json_contract() {
+    let output = run([
+        "--json",
+        "validate",
+        "testdata/retry-field-warnings.arazzo.yaml",
+    ]
+    .as_slice());
+    assert!(
+        output.status.success(),
+        "warning-only spec must exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut body = stdout_json(&output);
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("file".to_string(), Value::String("<SPEC_PATH>".to_string()));
+    }
+    assert_snapshot("validate-warnings.json", &body);
+}
+
+#[test]
 fn snapshot_list_json_contract() {
     let output = run(["--json", "list", "examples/httpbin-get.arazzo.yaml"].as_slice());
     assert!(output.status.success());

@@ -347,6 +347,239 @@ fn validate_json_reports_valid_metadata() {
     assert_eq!(body.get("workflows"), Some(&Value::Number(3.into())));
 }
 
+fn warning_fixture_spec() -> PathBuf {
+    let mut path = repo_root();
+    path.push("testdata/retry-field-warnings.arazzo.yaml");
+    path
+}
+
+const RETRY_LIMIT_PATH: &str = "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit";
+const RETRY_AFTER_PATH: &str = "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter";
+const RETRY_LIMIT_WARNING: &str =
+    "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action";
+const RETRY_AFTER_WARNING: &str =
+    "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action";
+
+fn validate_issue_messages(body: &Value, field: &str) -> Vec<String> {
+    let Some(items) = body.get(field).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| item.get("message").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn validate_warning_only_spec_stays_valid_and_exits_zero() {
+    let spec = warning_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["validate", &spec_str].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "warning-only spec must exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = stdout_text(&output);
+    assert!(
+        stdout.contains("Valid Arazzo 1.0.1 spec"),
+        "warning-only spec should still report valid; stdout={stdout}"
+    );
+
+    // Human mode renders `warning: <path>: <message>`, matching how validation
+    // errors already render.
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains(&format!(
+            "warning: {RETRY_LIMIT_PATH}: {RETRY_LIMIT_WARNING}"
+        )),
+        "missing retryLimit warning; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: {RETRY_AFTER_PATH}: {RETRY_AFTER_WARNING}"
+        )),
+        "missing retryAfter warning; stderr={stderr}"
+    );
+}
+
+#[test]
+fn validate_json_reports_warnings_without_failing() {
+    let spec = warning_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert!(
+        body.get("errors").is_none(),
+        "warning-only spec must not report errors; body={body}"
+    );
+
+    let warnings = match body.get("warnings").and_then(Value::as_array) {
+        Some(v) => v.clone(),
+        None => panic!("expected warnings array in validate JSON; body={body}"),
+    };
+    assert_eq!(warnings.len(), 2, "body={body}");
+    assert_eq!(
+        validate_issue_messages(&body, "warnings"),
+        vec![
+            RETRY_LIMIT_WARNING.to_string(),
+            RETRY_AFTER_WARNING.to_string()
+        ]
+    );
+
+    let first = match warnings[0].as_object() {
+        Some(v) => v,
+        None => panic!("expected structured warning object, got: {}", warnings[0]),
+    };
+    assert_eq!(
+        first.get("source"),
+        Some(&Value::String("validation".to_string()))
+    );
+    assert_eq!(
+        first.get("kind"),
+        Some(&Value::String("invalidRetryField".to_string()))
+    );
+    assert_eq!(
+        first.get("path"),
+        Some(&Value::String(RETRY_LIMIT_PATH.to_string()))
+    );
+}
+
+#[test]
+fn validate_strict_promotes_warnings_to_errors() {
+    let spec = warning_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "--strict", "validate", &spec_str].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "--strict must fail on a warning-only spec; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    assert_eq!(
+        validate_issue_messages(&body, "errors"),
+        vec![
+            RETRY_LIMIT_WARNING.to_string(),
+            RETRY_AFTER_WARNING.to_string()
+        ],
+        "--strict must report the same findings as errors; body={body}"
+    );
+    assert!(
+        body.get("warnings").is_none(),
+        "promoted findings must not remain in warnings; body={body}"
+    );
+}
+
+#[test]
+fn validate_reports_errors_and_warnings_together() {
+    let temp = TempDir::new("arazzo-validate-mixed");
+    let spec_path = temp.path().join("mixed.arazzo.yaml");
+    // Missing info.title (error) plus one retry-field warning.
+    write_file(
+        &spec_path,
+        r#"
+arazzo: 1.0.0
+info:
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: mixed
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: finish
+            type: end
+            retryLimit: 3
+"#,
+    );
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let mixed_warning =
+        "workflow \"mixed\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action";
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    assert!(
+        validate_issue_messages(&body, "errors").contains(&"info.title is required".to_string()),
+        "body={body}"
+    );
+    assert_eq!(
+        validate_issue_messages(&body, "warnings"),
+        vec![mixed_warning.to_string()],
+        "a failing document must still carry its warnings; body={body}"
+    );
+
+    // --strict leaves nothing classified as a warning.
+    let strict = run(
+        ["--json", "--strict", "validate", &spec_str].as_slice(),
+        None,
+    );
+    assert!(!strict.status.success());
+    let strict_body = stdout_json(&strict);
+    let strict_errors = validate_issue_messages(&strict_body, "errors");
+    assert!(
+        strict_errors.contains(&"info.title is required".to_string())
+            && strict_errors.contains(&mixed_warning.to_string()),
+        "strict must fold warnings into errors; body={strict_body}"
+    );
+    assert!(strict_body.get("warnings").is_none(), "body={strict_body}");
+}
+
+#[test]
+fn validate_strict_human_output_fails_with_findings() {
+    let spec = warning_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--strict", "validate", &spec_str].as_slice(), None);
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("validation failed:"),
+        "strict human output should fail loudly; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains(RETRY_LIMIT_WARNING) && stderr.contains(RETRY_AFTER_WARNING),
+        "strict human output should list both findings; stderr={stderr}"
+    );
+}
+
+#[test]
+fn validate_strict_stays_silent_on_clean_spec() {
+    let spec = fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "--strict", "validate", &spec_str].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "--strict must not fail a spec with no findings; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+}
+
 #[test]
 fn validate_json_accepts_arazzo_1_1_asyncapi_source() {
     let temp = TempDir::new("arazzo-asyncapi-validate");

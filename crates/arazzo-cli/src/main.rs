@@ -91,6 +91,7 @@ async fn run(cli: Cli) -> Result<(), String> {
     let global = GlobalOptions {
         json: cli.json,
         verbose: cli.verbose,
+        strict: cli.strict,
     };
 
     match cli.command {
