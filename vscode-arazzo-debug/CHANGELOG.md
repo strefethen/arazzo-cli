@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.0.6] - 2026-08-03
+
+### Fixed
+- A workflow that fails during a debug session now reports the error instead of
+  ending the session silently. Previously the session just closed when you hit
+  Continue — for example when a step's `operationId` was not found — with no
+  message anywhere in the UI. Failures now appear in the Debug Console and the
+  session reports a non-zero exit code. (#2)
+
+### Added
+- **Arazzo Debug output channel.** The extension previously created no output
+  channel at all, so problems starting the debug adapter left no visible trace.
+  The channel records session start/end, workflow exit codes, adapter errors,
+  and which adapter binary each session launched; it reveals itself
+  automatically when the adapter fails or exits abnormally. (#2)
+- **OpenAPI documents referenced by `sourceDescriptions` load automatically.**
+  When a `sourceDescriptions[].url` is a relative path, the document is resolved
+  against the Arazzo file's directory and loaded, so steps that target an
+  `operationId` resolve without extra configuration. Absolute `http(s)` URLs
+  keep their existing meaning as the request base URL.
+
+### Changed
+- Redirects that downgrade from `https` to `http` are now refused during debug
+  sessions rather than followed silently.
+
 ## [0.0.5] - 2026-08-03
 
 ### Fixed
