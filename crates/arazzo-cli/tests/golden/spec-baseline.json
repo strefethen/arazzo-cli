@@ -1,0 +1,1092 @@
+{
+  "about": [
+    "Golden baseline for every Arazzo document in examples/ and testdata/.",
+    "Records the validate outcome and diagnostics per file, and the resolved",
+    "dry-run HTTP method and request URL per workflow step.",
+    "Inputs shown here come from tests/golden/spec-baseline-inputs.json.",
+    "Regenerate deliberately: UPDATE_SPEC_BASELINE=1 cargo test -p arazzo-cli --test golden_spec_baseline"
+  ],
+  "files": {
+    "examples/auth-flow.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "auth-then-fetch": {
+          "inputs": {
+            "session": "golden-session",
+            "token": "golden-token"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "bearer-check",
+              "url": "https://httpbin.org/bearer"
+            },
+            {
+              "method": "GET",
+              "stepId": "fetch-profile",
+              "url": "https://httpbin.org/headers"
+            }
+          ]
+        }
+      }
+    },
+    "examples/error-handling-retry.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "retry-then-recover": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "unstable-call",
+              "url": "https://httpbin.org/status/503"
+            },
+            {
+              "method": "GET",
+              "stepId": "recover",
+              "url": "https://httpbin.org/get?recovered=true"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-auth.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "basic-auth-failure": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "bad-auth",
+              "url": "https://httpbin.org/basic-auth/testuser/testpass"
+            },
+            {
+              "method": "GET",
+              "stepId": "handle-auth-error",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "basic-auth-success": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "authenticate",
+              "url": "https://httpbin.org/basic-auth/testuser/testpass"
+            }
+          ]
+        },
+        "bearer-auth": {
+          "inputs": {
+            "bearerToken": "golden-bearer-token"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "auth-with-token",
+              "url": "https://httpbin.org/bearer"
+            }
+          ]
+        },
+        "bearer-no-token": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "no-token",
+              "url": "https://httpbin.org/bearer"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-chained-posts.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "create-and-update": {
+          "inputs": {
+            "name": "golden-name"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-resource",
+              "url": "https://httpbin.org/post"
+            },
+            {
+              "method": "PUT",
+              "stepId": "update-resource",
+              "url": "https://httpbin.org/put"
+            }
+          ]
+        },
+        "post-chain": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "post-initial",
+              "url": "https://httpbin.org/post"
+            },
+            {
+              "method": "POST",
+              "stepId": "post-enriched",
+              "url": "https://httpbin.org/post"
+            },
+            {
+              "method": "POST",
+              "stepId": "post-final",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        },
+        "success-goto": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-status",
+              "url": "https://httpbin.org/status/200"
+            },
+            {
+              "method": "GET",
+              "stepId": "final-report",
+              "url": "https://httpbin.org/get?status=completed"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-components.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "reuse-actions": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "might-fail",
+              "url": "https://httpbin.org/status/500"
+            },
+            {
+              "method": "GET",
+              "stepId": "will-succeed",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "reuse-params": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "step-with-shared-key",
+              "url": "https://httpbin.org/headers"
+            },
+            {
+              "method": "GET",
+              "stepId": "step-with-override",
+              "url": "https://httpbin.org/get?label=overridden-value"
+            }
+          ]
+        },
+        "workflow-level-reuse": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "api-call",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-conditions.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "body-string-equality": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-data",
+              "url": "https://httpbin.org/get?fruit=apple"
+            },
+            {
+              "method": "GET",
+              "stepId": "verify-value",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "compound-conditions": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "success-range",
+              "url": "https://httpbin.org/status/200"
+            },
+            {
+              "method": "GET",
+              "stepId": "fetch-with-or",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "contains-operator": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-url",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "status-code-comparisons": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-200",
+              "url": "https://httpbin.org/status/200"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-data-flow.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "chained-outputs": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "get-origin",
+              "url": "https://httpbin.org/get"
+            },
+            {
+              "method": "GET",
+              "stepId": "echo-origin",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "child-workflow": {
+          "inputs": {
+            "item_name": "golden-item"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-item",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        },
+        "custom-headers-and-cookies": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "send-headers",
+              "url": "https://httpbin.org/headers"
+            },
+            {
+              "method": "GET",
+              "stepId": "send-cookies",
+              "url": "https://httpbin.org/cookies"
+            }
+          ]
+        },
+        "interpolation": {
+          "inputs": {
+            "greeting": "hello"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "greet",
+              "url": "https://httpbin.org/get?message=hello+from+arazzo-cli"
+            }
+          ]
+        },
+        "parent-workflow": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-item",
+              "url": "https://httpbin.org/post"
+            },
+            {
+              "method": "GET",
+              "stepId": "verify-child",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-error-handling.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "goto-error-recovery": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "might-fail",
+              "url": "https://httpbin.org/status/503"
+            },
+            {
+              "method": "GET",
+              "stepId": "success-path",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "retry-exhaustion": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "always-fails",
+              "url": "https://httpbin.org/status/500"
+            }
+          ]
+        },
+        "route-client-error": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "trigger-404",
+              "url": "https://httpbin.org/status/404"
+            },
+            {
+              "method": "GET",
+              "stepId": "handle-not-found",
+              "url": "https://httpbin.org/get?handler=not-found"
+            }
+          ]
+        },
+        "route-server-error": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "trigger-500",
+              "url": "https://httpbin.org/status/500"
+            },
+            {
+              "method": "GET",
+              "stepId": "handle-not-found",
+              "url": "https://httpbin.org/get?handler=not-found"
+            }
+          ]
+        },
+        "workflow-default-failure": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "will-fail",
+              "url": "https://httpbin.org/status/500"
+            },
+            {
+              "method": "GET",
+              "stepId": "should-not-run",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-get.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "echo-headers": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-headers",
+              "url": "https://httpbin.org/headers"
+            }
+          ]
+        },
+        "get-origin": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-ip",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "status-check": {
+          "inputs": {
+            "code": 429
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-status",
+              "url": "https://httpbin.org/status/429"
+            },
+            {
+              "method": "GET",
+              "stepId": "handle-error",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-methods.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "patch-and-delete": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "PATCH",
+              "stepId": "patch-item",
+              "url": "https://httpbin.org/anything"
+            },
+            {
+              "method": "DELETE",
+              "stepId": "delete-item",
+              "url": "https://httpbin.org/anything"
+            }
+          ]
+        },
+        "post-json": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "post-data",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        },
+        "put-json": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "PUT",
+              "stepId": "put-data",
+              "url": "https://httpbin.org/put"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-parallel.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "dependent-chain": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "step-1",
+              "url": "https://httpbin.org/get?seed=hello"
+            },
+            {
+              "method": "GET",
+              "stepId": "step-2",
+              "url": "https://httpbin.org/get"
+            },
+            {
+              "method": "GET",
+              "stepId": "step-3",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "diamond-dependency": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "root",
+              "url": "https://httpbin.org/get?label=root"
+            },
+            {
+              "method": "GET",
+              "stepId": "left",
+              "url": "https://httpbin.org/get?branch=left"
+            },
+            {
+              "method": "GET",
+              "stepId": "right",
+              "url": "https://httpbin.org/get?branch=right"
+            },
+            {
+              "method": "GET",
+              "stepId": "join",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "independent-steps": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-a",
+              "url": "https://httpbin.org/get?label=alpha"
+            },
+            {
+              "method": "GET",
+              "stepId": "fetch-b",
+              "url": "https://httpbin.org/get?label=bravo"
+            },
+            {
+              "method": "GET",
+              "stepId": "fetch-c",
+              "url": "https://httpbin.org/get?label=charlie"
+            },
+            {
+              "method": "GET",
+              "stepId": "fetch-d",
+              "url": "https://httpbin.org/get?label=delta"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-replacements.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "replacements-demo": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "post-replaced-body",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-response-headers.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "header-to-header-chain": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "get-trace-id",
+              "url": "https://httpbin.org/response-headers?X-Trace-Id=trace-7890-xyz"
+            },
+            {
+              "method": "GET",
+              "stepId": "forward-trace-id",
+              "url": "https://httpbin.org/headers"
+            }
+          ]
+        },
+        "inspect-standard-headers": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "simple-get",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "read-custom-headers": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "get-custom-headers",
+              "url": "https://httpbin.org/response-headers?X-Request-Id=req-abc-12345&X-Rate-Limit=100"
+            }
+          ]
+        }
+      }
+    },
+    "examples/httpbin-reusable-inputs.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "echo-name": {
+          "inputs": {
+            "name": "golden-name"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "echo",
+              "url": "https://httpbin.org/get?name=golden-name"
+            }
+          ]
+        },
+        "echo-name-post": {
+          "inputs": {
+            "name": "golden-name"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "post-echo",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        }
+      }
+    },
+    "examples/multi-api-orchestration.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "cross-source-check": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "call-primary",
+              "url": "https://httpbin.org/get?source=primary"
+            },
+            {
+              "method": "GET",
+              "stepId": "call-secondary",
+              "url": "https://httpbin.org/response-headers?X-Trace-Id=trace-"
+            }
+          ]
+        }
+      }
+    },
+    "examples/soap-customer-crud.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "soap-crud": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "list-customers",
+              "url": "http://localhost:4010/api/soap-mock/service"
+            },
+            {
+              "method": "POST",
+              "stepId": "get-customer",
+              "url": "http://localhost:4010/api/soap-mock/service"
+            },
+            {
+              "method": "POST",
+              "stepId": "create-customer",
+              "url": "http://localhost:4010/api/soap-mock/service"
+            },
+            {
+              "method": "POST",
+              "stepId": "update-customer",
+              "url": "http://localhost:4010/api/soap-mock/service"
+            },
+            {
+              "method": "POST",
+              "stepId": "delete-customer",
+              "url": "http://localhost:4010/api/soap-mock/service"
+            }
+          ]
+        }
+      }
+    },
+    "examples/sub-workflow.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "child-create": {
+          "inputs": {
+            "item_name": "golden-item"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-item",
+              "url": "https://httpbin.org/post"
+            }
+          ]
+        },
+        "parent-flow": {
+          "inputs": {
+            "item_name": "golden-item"
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-item",
+              "url": "https://httpbin.org/post"
+            },
+            {
+              "method": "GET",
+              "stepId": "verify-child-output",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "examples/swagger-petstore-crud.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-pet\" > step \"create-pet\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-pet\" > step \"create-pet\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-pet\" > step \"read-pet\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-pet\" > step \"read-pet\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-pet\" > step \"delete-pet\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-pet\" > step \"delete-pet\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-order\" > step \"create-order\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-order\" > step \"create-order\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-order\" > step \"read-order\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-order\" > step \"read-order\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-order\" > step \"delete-order\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-order\" > step \"delete-order\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-user\" > step \"create-user\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-user\" > step \"create-user\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-user\" > step \"read-user\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-user\" > step \"read-user\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-user\" > step \"update-user\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-user\" > step \"update-user\".onFailure[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"crud-user\" > step \"delete-user\".onFailure[0].retryLimit has no effect on end action",
+            "path": "workflow \"crud-user\" > step \"delete-user\".onFailure[0].retryLimit",
+            "severity": "warning"
+          }
+        ],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "crud-order": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-order",
+              "url": "https://petstore3.swagger.io/api/v3/store/order"
+            },
+            {
+              "method": "GET",
+              "stepId": "read-order",
+              "url": "https://petstore3.swagger.io/api/v3/store/order/"
+            },
+            {
+              "method": "DELETE",
+              "stepId": "delete-order",
+              "url": "https://petstore3.swagger.io/api/v3/store/order/"
+            }
+          ]
+        },
+        "crud-pet": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-pet",
+              "url": "https://petstore3.swagger.io/api/v3/pet"
+            },
+            {
+              "method": "GET",
+              "stepId": "read-pet",
+              "url": "https://petstore3.swagger.io/api/v3/pet/"
+            },
+            {
+              "method": "DELETE",
+              "stepId": "delete-pet",
+              "url": "https://petstore3.swagger.io/api/v3/pet/"
+            }
+          ]
+        },
+        "crud-user": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "create-user",
+              "url": "https://petstore3.swagger.io/api/v3/user"
+            },
+            {
+              "method": "GET",
+              "stepId": "read-user",
+              "url": "https://petstore3.swagger.io/api/v3/user/"
+            },
+            {
+              "method": "PUT",
+              "stepId": "update-user",
+              "url": "https://petstore3.swagger.io/api/v3/user/"
+            },
+            {
+              "method": "DELETE",
+              "stepId": "delete-user",
+              "url": "https://petstore3.swagger.io/api/v3/user/"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/bank-32.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "get-all-banks": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "getAllBanks",
+              "url": "https://localhost:5201/v1/banks"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/error-handling.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "test-criteria-matching": {
+          "inputs": {
+            "code": 429
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-with-criteria",
+              "url": "https://httpbin.org/status/429"
+            },
+            {
+              "method": "GET",
+              "stepId": "rate-limited",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
+        "test-end-on-failure": {
+          "inputs": {
+            "code": 500
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-status",
+              "url": "https://httpbin.org/status/500"
+            }
+          ]
+        },
+        "test-end-on-success": {
+          "inputs": {
+            "code": 200
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-and-end",
+              "url": "https://httpbin.org/status/200"
+            }
+          ]
+        },
+        "test-goto-on-failure": {
+          "inputs": {
+            "code": 503
+          },
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "might-fail",
+              "url": "https://httpbin.org/status/503"
+            },
+            {
+              "method": "GET",
+              "stepId": "success-path",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/mcp-denied/spec.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "list-pets-denied": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "list",
+              "url": "https://petstore.example.com/v1/pets"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/petstore-relative.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "list-pets": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "list",
+              "url": "https://petstore.example.com/v1/pets"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/retry-field-warnings.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action",
+            "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit",
+            "severity": "warning"
+          },
+          {
+            "kind": "invalidRetryField",
+            "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action",
+            "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter",
+            "severity": "warning"
+          }
+        ],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "warn-only": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch",
+              "url": "https://example.com/openapi.yaml{$sourceDescriptions.api.url}#/paths/~1status/get"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "//": [
+    "Fixed $inputs for workflows whose resolved URLs depend on them.",
+    "Keyed by spec path (relative to the workspace root) then workflow id.",
+    "String values are passed with --input; every other JSON type with --input-json,",
+    "so declared integer inputs stay integers.",
+    "Workflows absent from this file take no inputs, or take inputs that do not",
+    "affect any request URL. Changing a value here changes the golden: that is a",
+    "deliberate fixture edit, not a behavior change."
+  ],
+  "examples/auth-flow.arazzo.yaml": {
+    "auth-then-fetch": {
+      "session": "golden-session",
+      "token": "golden-token"
+    }
+  },
+  "examples/httpbin-auth.arazzo.yaml": {
+    "bearer-auth": {
+      "bearerToken": "golden-bearer-token"
+    }
+  },
+  "examples/httpbin-chained-posts.arazzo.yaml": {
+    "create-and-update": {
+      "name": "golden-name"
+    }
+  },
+  "examples/httpbin-data-flow.arazzo.yaml": {
+    "child-workflow": {
+      "item_name": "golden-item"
+    },
+    "interpolation": {
+      "greeting": "hello"
+    }
+  },
+  "examples/httpbin-get.arazzo.yaml": {
+    "status-check": {
+      "code": 429
+    }
+  },
+  "examples/httpbin-reusable-inputs.arazzo.yaml": {
+    "echo-name": {
+      "name": "golden-name"
+    },
+    "echo-name-post": {
+      "name": "golden-name"
+    }
+  },
+  "examples/sub-workflow.arazzo.yaml": {
+    "child-create": {
+      "item_name": "golden-item"
+    },
+    "parent-flow": {
+      "item_name": "golden-item"
+    }
+  },
+  "testdata/error-handling.arazzo.yaml": {
+    "test-criteria-matching": {
+      "code": 429
+    },
+    "test-end-on-failure": {
+      "code": 500
+    },
+    "test-end-on-success": {
+      "code": 200
+    },
+    "test-goto-on-failure": {
+      "code": 503
+    }
+  }
+}
