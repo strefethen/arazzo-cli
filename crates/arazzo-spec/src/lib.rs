@@ -454,11 +454,16 @@ impl<'de> Deserialize<'de> for Step {
 }
 
 /// Parameter location discriminator.
+///
+/// `Querystring` is an Arazzo 1.1.0 addition: the parameter carries the entire
+/// query component as a single already-encoded value, and per the Parameter
+/// Object it cannot coexist with `query` parameters in the same operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ParamLocation {
     Path,
     Query,
+    Querystring,
     Header,
     Cookie,
 }
@@ -857,7 +862,7 @@ pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng:
 
 #[cfg(test)]
 mod tests {
-    use super::{Replacement, RequestBody};
+    use super::{ParamLocation, Parameter, Replacement, RequestBody};
 
     fn serialize<T: serde::Serialize>(value: &T) -> String {
         match serde_yaml_ng::to_string(value) {
@@ -899,6 +904,26 @@ mod tests {
     #[test]
     fn requestbody_default_has_empty_replacements() {
         assert!(RequestBody::default().replacements.is_empty());
+    }
+
+    /// `in: querystring` is an Arazzo 1.1.0 parameter location. Before it was
+    /// modeled, this wire value was an unknown serde variant and took the whole
+    /// document down with it.
+    #[test]
+    fn querystring_param_location_roundtrips() {
+        let param = match serde_yaml_ng::from_str::<Parameter>(
+            "name: filter\nin: querystring\nvalue: a=1&b=2\n",
+        ) {
+            Ok(param) => param,
+            Err(err) => panic!("deserializing querystring parameter: {err}"),
+        };
+
+        assert_eq!(param.in_, Some(ParamLocation::Querystring));
+        assert!(
+            serialize(&param).contains("in: querystring"),
+            "expected the wire form to round-trip as `querystring`, got:\n{}",
+            serialize(&param)
+        );
     }
 
     #[test]

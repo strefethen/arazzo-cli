@@ -569,6 +569,10 @@ impl Engine {
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut path_params = BTreeMap::<String, String>::new();
         let mut query_params_vec = Vec::<(String, String)>::new();
+        // The whole query component, supplied by an `in: querystring` parameter.
+        // Last one wins: `merge_workflow_params` prepends inherited parameters,
+        // so a step-level declaration overrides a workflow-level one.
+        let mut querystring: Option<(String, String)> = None;
         let mut warnings = Vec::<String>::new();
 
         for param in &step.parameters {
@@ -578,29 +582,61 @@ impl Engine {
                     .into_iter()
                     .map(|warning| format!("parameter {:?}: {warning}", param.name)),
             );
+            // No catch-all, and no guarded arm: a new `ParamLocation` variant
+            // must be a compile error here, not a parameter this runtime
+            // silently drops out of the request it sends.
             match param.in_ {
                 Some(ParamLocation::Path) => {
                     path_params.insert(param.name.clone(), value_to_string(&value));
                 }
-                Some(ParamLocation::Query) if !value.is_null() => match &value {
-                    Value::Array(arr) => {
-                        // Exploded form: emit one key-value pair per element.
-                        for elem in arr {
-                            query_params_vec.push((param.name.clone(), value_to_string(elem)));
+                Some(ParamLocation::Query) => {
+                    if !value.is_null() {
+                        match &value {
+                            Value::Array(arr) => {
+                                // Exploded form: emit one key-value pair per element.
+                                for elem in arr {
+                                    query_params_vec
+                                        .push((param.name.clone(), value_to_string(elem)));
+                                }
+                            }
+                            Value::Object(_) => {
+                                // Serialize objects as JSON strings.
+                                query_params_vec.push((
+                                    param.name.clone(),
+                                    serde_json::to_string(&value).unwrap_or_default(),
+                                ));
+                            }
+                            _ => {
+                                query_params_vec
+                                    .push((param.name.clone(), value_to_string(&value)));
+                            }
                         }
                     }
-                    Value::Object(_) => {
-                        // Serialize objects as JSON strings.
-                        query_params_vec.push((
-                            param.name.clone(),
-                            serde_json::to_string(&value).unwrap_or_default(),
+                }
+                Some(ParamLocation::Querystring) => match &value {
+                    // Null is skipped in silence, exactly as an unset `query`
+                    // parameter is.
+                    Value::Null => {}
+                    Value::String(text) => {
+                        querystring = Some((param.name.clone(), text.clone()));
+                    }
+                    other => {
+                        // A structure cannot be a query component. Stringifying
+                        // it would send `{"a":1}` as the query and call it
+                        // resolved, so the parameter is dropped and said so.
+                        warnings.push(format!(
+                            "parameter {:?}: in: querystring requires a string value \
+                             (the entire already-encoded query component); got {}, \
+                             so the parameter was dropped",
+                            param.name,
+                            json_type_name(other)
                         ));
                     }
-                    _ => {
-                        query_params_vec.push((param.name.clone(), value_to_string(&value)));
-                    }
                 },
-                _ => {}
+                // Header and cookie parameters are resolved where the request
+                // headers are built, not in URL assembly.
+                Some(ParamLocation::Header) | Some(ParamLocation::Cookie) => {}
+                None => {}
             }
         }
 
@@ -620,7 +656,67 @@ impl Engine {
         if !path_params.is_empty() && target.contains('{') {
             target = replace_path_params(&target, &path_params);
         }
-        if !query_params_vec.is_empty() {
+        if let Some((name, raw)) = querystring {
+            // `querystring` *is* the query component, so it replaces whatever
+            // the target carried rather than being appended to it, and it is
+            // written verbatim: the value is already encoded, and running it
+            // through `form_urlencoded` would turn `a=1&b=2` into
+            // `a%3D1%26b%3D2`.
+            let query = raw.strip_prefix('?').unwrap_or(&raw);
+            if query.contains('#') {
+                // Appended as-is this would end the query and start a fragment,
+                // truncating the request silently. `%23` is the encoding for a
+                // literal `#`, and only the author can say which was meant.
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidParameterValue,
+                    format!(
+                        "step \"{}\": parameter {name:?} (in: querystring) resolved to \
+                         {query:?}, which contains \"#\"; a query component cannot contain \
+                         a raw \"#\" — it would start a URL fragment and truncate the \
+                         query. Percent-encode it as \"%23\".",
+                        step.step_id
+                    ),
+                ));
+            }
+            if !query_params_vec.is_empty() {
+                // The specification forbids this combination and `arazzo-validate`
+                // rejects it; an unvalidated spec reaching here still gets a
+                // defined URL rather than a merged one.
+                let dropped = query_params_vec
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                warnings.push(format!(
+                    "parameter {name:?}: in: querystring supplies the entire query \
+                     component, so the in: query parameter(s) [{dropped}] were dropped"
+                ));
+                query_params.clear();
+            }
+            // `$request.query.<name>` must describe the query actually sent, so
+            // the verbatim component is parsed back into decoded pairs.
+            for (key, value) in url_crate::form_urlencoded::parse(query.as_bytes()) {
+                query_params
+                    .entry(key.into_owned())
+                    .and_modify(|existing| {
+                        existing.push(',');
+                        existing.push_str(&value);
+                    })
+                    .or_insert_with(|| value.into_owned());
+            }
+            if let Some(position) = target.find('?') {
+                warnings.push(format!(
+                    "parameter {name:?}: in: querystring supplies the entire query \
+                     component, so the query the target already carried ({:?}) was replaced",
+                    &target[position + 1..]
+                ));
+                target.truncate(position);
+            }
+            if !query.is_empty() {
+                target.push('?');
+                target.push_str(query);
+            }
+        } else if !query_params_vec.is_empty() {
             let mut serializer = url_crate::form_urlencoded::Serializer::new(String::new());
             for (k, v) in query_params_vec {
                 serializer.append_pair(&k, &v);

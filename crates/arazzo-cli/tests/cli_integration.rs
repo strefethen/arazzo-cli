@@ -483,6 +483,67 @@ fn validate_strict_promotes_warnings_to_errors() {
     );
 }
 
+fn querystring_fixture_spec() -> PathBuf {
+    let mut path = repo_root();
+    path.push("testdata/querystring-parameter.arazzo.yaml");
+    path
+}
+
+/// Before `querystring` was modeled this exact file failed to parse at all:
+/// `unknown variant \`querystring\`, expected one of \`path\`, \`query\`,
+/// \`header\`, \`cookie\``, with the whole document rejected over one parameter.
+#[test]
+fn validate_accepts_the_querystring_parameter_location() {
+    let spec = querystring_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "a 1.1.0 document using in: querystring must validate; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert!(
+        body.get("errors").is_none() && body.get("warnings").is_none(),
+        "expected a clean validation; body={body}"
+    );
+}
+
+/// The value is the whole query component and is written verbatim: `=` and `&`
+/// stay as the author encoded them rather than being escaped a second time.
+#[test]
+fn dry_run_inserts_the_querystring_value_verbatim() {
+    let spec = querystring_fixture_spec();
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "run", &spec_str, "search-verbatim", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "dry run failed; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = stdout_json(&output);
+    let requests = match body.get("requests").and_then(Value::as_array) {
+        Some(requests) => requests,
+        None => panic!("expected a requests array; body={body}"),
+    };
+    assert_eq!(requests.len(), 1, "body={body}");
+    assert_eq!(
+        requests[0].get("url"),
+        Some(&Value::String(
+            "https://search.example.com/v1/index?q=red+shoes&limit=10".to_string()
+        )),
+        "body={body}"
+    );
+}
+
 #[test]
 fn validate_reports_errors_and_warnings_together() {
     let temp = TempDir::new("arazzo-validate-mixed");

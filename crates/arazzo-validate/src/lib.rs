@@ -9,8 +9,9 @@ use std::path::Path;
 
 use arazzo_spec::{
     classify_operation_path, parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType,
-    OnAction, OutputValue, Parameter, SelectorObject, SelectorType, StepAction, StepTarget,
-    SuccessCriterion, ValueSource, Workflow, SUPPORTED_OPERATION_PATH_FORMS,
+    OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step,
+    StepAction, StepTarget, SuccessCriterion, ValueSource, Workflow,
+    SUPPORTED_OPERATION_PATH_FORMS,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -320,6 +321,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
         validate_parameters(
             &format!("{path}.parameters"),
             &wf.parameters,
+            &spec.arazzo,
             &mut diagnostics,
         );
 
@@ -511,8 +513,10 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             validate_parameters(
                 &format!("{step_path}.parameters"),
                 &step.parameters,
+                &spec.arazzo,
                 &mut diagnostics,
             );
+            validate_querystring_exclusivity(&step_path, wf, step, &mut diagnostics);
             for (name, output) in &step.outputs {
                 let output_path = format!("{step_path}.outputs.{name}");
                 validate_output_value(&output_path, output, &mut diagnostics);
@@ -649,9 +653,95 @@ fn local_depends_on_has_cycle(workflow: &Workflow) -> bool {
     (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
 }
 
-fn validate_parameters(path_prefix: &str, params: &[Parameter], diagnostics: &mut Vec<Diagnostic>) {
+/// True for a document declaring an Arazzo version older than 1.1.0, which is
+/// where `in: querystring` was introduced.
+fn declares_pre_1_1(version: &str) -> bool {
+    let mut parts = version.trim().split('.');
+    matches!((parts.next(), parts.next()), (Some("1"), Some("0")))
+}
+
+/// The parameters an operation actually sends, mirroring
+/// `merge_workflow_params` in `arazzo-runtime`: workflow-level parameters are
+/// inherited by every step except one that targets another workflow.
+///
+/// The runtime dedups on `(name, in)` when merging, which cannot turn a `query`
+/// parameter into a `querystring` one or the reverse, so the two locations
+/// present here are the two locations the request will carry.
+fn effective_parameters<'a>(workflow: &'a Workflow, step: &'a Step) -> Vec<&'a Parameter> {
+    let mut params = Vec::<&Parameter>::new();
+    if !matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
+        params.extend(workflow.parameters.iter());
+    }
+    params.extend(step.parameters.iter());
+    params
+}
+
+/// Parameter Object: *"The `querystring` location cannot coexist with `query`
+/// parameters in the same operation per OpenAPI constraints."*
+///
+/// Checked on the effective set rather than the step-declared one: a
+/// workflow-level `query` and a step-level `querystring` have different merge
+/// keys, so both reach the same request.
+fn validate_querystring_exclusivity(
+    step_path: &str,
+    workflow: &Workflow,
+    step: &Step,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let params = effective_parameters(workflow, step);
+    let named = |location: ParamLocation| {
+        params
+            .iter()
+            .filter(|param| param.in_ == Some(location))
+            .map(|param| format!("{:?}", param.name))
+            .collect::<Vec<_>>()
+    };
+    let querystring = named(ParamLocation::Querystring);
+    if querystring.is_empty() {
+        return;
+    }
+    let query = named(ParamLocation::Query);
+    if query.is_empty() {
+        return;
+    }
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        kind: ValidationErrorKind::InvalidParameterLocation,
+        path: format!("{step_path}.parameters"),
+        message: format!(
+            "{step_path} carries in: querystring parameter(s) [{}] alongside in: query \
+             parameter(s) [{}]; the querystring location supplies the entire query \
+             component and cannot coexist with query parameters in the same operation. \
+             Workflow-level parameters are inherited by this step and count here.",
+            querystring.join(", "),
+            query.join(", ")
+        ),
+    });
+}
+
+fn validate_parameters(
+    path_prefix: &str,
+    params: &[Parameter],
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
+        if param.in_ == Some(ParamLocation::Querystring) && declares_pre_1_1(arazzo_version) {
+            // Accepted and executed, not rejected: the author's intent is
+            // unambiguous and the document is more likely mis-declared than
+            // wrong. `--strict` promotes this to an error for callers that want
+            // conformance to the declared version enforced.
+            diagnostics.push(Diagnostic::warning(
+                ValidationErrorKind::UnsupportedVersion,
+                format!("{param_path}.in"),
+                format!(
+                    "{param_path}.in \"querystring\" was introduced in Arazzo 1.1.0, but this \
+                     document declares arazzo: {arazzo_version}; it is accepted and executed \
+                     here, and a strict 1.0.x consumer may reject the document"
+                ),
+            ));
+        }
         if param.name.is_empty() && param.reference.is_empty() {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -3093,5 +3183,178 @@ workflows:
             ActionType::End,
             "explicit type: end must override the component's retry"
         );
+    }
+
+    /// Builds a one-step document with the given Arazzo version, workflow-level
+    /// parameters, and step-level parameters, rendered as YAML so the whole
+    /// parse-then-validate path is exercised.
+    fn querystring_doc(version: &str, workflow_params: &str, step_params: &str) -> String {
+        format!(
+            r#"arazzo: "{version}"
+info:
+  title: Querystring
+  version: "1.0.0"
+sourceDescriptions:
+  - name: search
+    url: https://search.example.com/v1
+    type: openapi
+workflows:
+  - workflowId: wf1
+    parameters:{workflow_params}
+    steps:
+      - stepId: s1
+        operationPath: /index
+        parameters:{step_params}
+"#
+        )
+    }
+
+    const NO_PARAMS: &str = " []";
+    const STEP_QUERYSTRING: &str =
+        "\n          - name: filter\n            in: querystring\n            value: q=red\n";
+    const WORKFLOW_QUERY: &str = "\n      - name: q\n        in: query\n        value: inherited\n";
+
+    /// Parameter Object: the `querystring` location cannot coexist with `query`
+    /// parameters in the same operation. The two arrive from different levels
+    /// here, which `merge_workflow_params` would otherwise combine into one
+    /// request without complaint.
+    #[test]
+    fn inherited_query_conflicts_with_step_querystring() {
+        let yaml = querystring_doc("1.1.0", WORKFLOW_QUERY, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("expected a querystring/query conflict to fail validation");
+        };
+        let conflicts = report
+            .errors
+            .iter()
+            .filter(|item| item.kind == ValidationErrorKind::InvalidParameterLocation)
+            .collect::<Vec<_>>();
+        assert_eq!(conflicts.len(), 1, "errors={:?}", report.errors);
+        assert!(
+            conflicts[0].message.contains("\"filter\"") && conflicts[0].message.contains("\"q\""),
+            "both parameters must be named: {}",
+            conflicts[0].message
+        );
+        assert_eq!(
+            conflicts[0].path,
+            "workflow \"wf1\" > step \"s1\".parameters"
+        );
+    }
+
+    /// The same conflict declared entirely at the step level.
+    #[test]
+    fn step_level_query_conflicts_with_step_querystring() {
+        let step_params = format!(
+            "{STEP_QUERYSTRING}          - name: q\n            in: query\n            value: red\n"
+        );
+        let yaml = querystring_doc("1.1.0", NO_PARAMS, &step_params);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("expected a querystring/query conflict to fail validation");
+        };
+        assert!(report
+            .errors
+            .iter()
+            .any(|item| item.kind == ValidationErrorKind::InvalidParameterLocation));
+    }
+
+    /// A step targeting another workflow does not inherit workflow parameters,
+    /// so there is no operation for the two locations to collide in.
+    #[test]
+    fn workflow_target_step_does_not_inherit_the_conflict() {
+        let yaml = format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: Querystring
+  version: "1.0.0"
+workflows:
+  - workflowId: wf1
+    parameters:{WORKFLOW_QUERY}
+    steps:
+      - stepId: s1
+        workflowId: wf2
+        parameters:{STEP_QUERYSTRING}
+  - workflowId: wf2
+    steps:
+      - stepId: s2
+        operationPath: /index
+"#
+        );
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected no conflict, got: {err}"),
+        }
+    }
+
+    /// `querystring` alone is valid in a 1.1.0 document, with no diagnostics.
+    #[test]
+    fn querystring_alone_validates_clean_at_1_1_0() {
+        let yaml = querystring_doc("1.1.0", NO_PARAMS, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected a clean 1.1.0 document, got: {err}"),
+        }
+    }
+
+    /// `querystring` was introduced in Arazzo 1.1.0. A 1.0.x document using it
+    /// is accepted and executed — the intent is unambiguous — but warned about,
+    /// so `--strict` callers can still refuse it.
+    #[test]
+    fn querystring_in_a_1_0_document_warns_but_validates() {
+        let yaml = querystring_doc("1.0.1", NO_PARAMS, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let warnings = match validate_diagnostics(&spec) {
+            Ok(warnings) => warnings,
+            Err(err) => panic!("a 1.0.x document using querystring must not fail: {err}"),
+        };
+        assert_eq!(warnings.len(), 1, "warnings={warnings:?}");
+        assert_eq!(warnings[0].kind, ValidationErrorKind::UnsupportedVersion);
+        assert_eq!(warnings[0].severity, Severity::Warning);
+        assert_eq!(
+            warnings[0].path,
+            "workflow \"wf1\" > step \"s1\".parameters[0].in"
+        );
+        assert!(
+            warnings[0].message.contains("1.1.0") && warnings[0].message.contains("1.0.1"),
+            "the warning must name both versions: {}",
+            warnings[0].message
+        );
+    }
+
+    /// The version gate reads the declared major.minor, not a string prefix:
+    /// a hypothetical 1.10.0 is not 1.0.x.
+    #[test]
+    fn version_gate_reads_major_minor_not_a_prefix() {
+        use super::declares_pre_1_1;
+
+        assert!(declares_pre_1_1("1.0.0"));
+        assert!(declares_pre_1_1("1.0.1"));
+        assert!(declares_pre_1_1("1.0"));
+        assert!(!declares_pre_1_1("1.1.0"));
+        assert!(!declares_pre_1_1("1.10.0"));
+        assert!(!declares_pre_1_1("2.0.0"));
     }
 }

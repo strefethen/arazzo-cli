@@ -1,0 +1,25 @@
+arazzo: 1.1.0
+info:
+  title: Querystring parameter location
+  version: 1.0.0
+# The `querystring` parameter location, added in Arazzo 1.1.0: the parameter
+# carries the entire query component, already encoded, and is inserted verbatim
+# rather than through form-urlencoding. Before ac-dd828 this document did not
+# parse at all — `in: querystring` was an unknown serde variant, so the whole
+# file was rejected with "unknown variant `querystring`".
+sourceDescriptions:
+  - name: search
+    url: https://search.example.com/v1
+    type: openapi
+workflows:
+  - workflowId: search-verbatim
+    summary: A querystring parameter supplies the whole query component.
+    steps:
+      - stepId: query-index
+        operationPath: '{search}./index'
+        parameters:
+          - name: filter
+            in: querystring
+            value: q=red+shoes&limit=10
+        successCriteria:
+          - condition: $statusCode == 200

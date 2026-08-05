@@ -373,7 +373,7 @@ fn apply_xpath_replacement(xml: &str, target: &str, replacement: Value) -> Resul
     Ok(doc.to_xml())
 }
 
-fn json_type_name(value: &Value) -> &'static str {
+pub(super) fn json_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",

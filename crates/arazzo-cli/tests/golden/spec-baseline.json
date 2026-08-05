@@ -1057,6 +1057,24 @@
         }
       }
     },
+    "testdata/querystring-parameter.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "search-verbatim": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "query-index",
+              "url": "https://search.example.com/v1/index?q=red+shoes&limit=10"
+            }
+          ]
+        }
+      }
+    },
     "testdata/retry-field-warnings.arazzo.yaml": {
       "validate": {
         "diagnostics": [
