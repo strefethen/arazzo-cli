@@ -759,19 +759,24 @@ fn validate_parameters(
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
         if param.in_ == Some(ParamLocation::Querystring) && declares_pre_1_1(arazzo_version) {
-            // Accepted and executed, not rejected: the author's intent is
-            // unambiguous and the document is more likely mis-declared than
-            // wrong. `--strict` promotes this to an error for callers that want
-            // conformance to the declared version enforced.
-            diagnostics.push(Diagnostic::warning(
-                ValidationErrorKind::UnsupportedVersion,
-                format!("{param_path}.in"),
-                format!(
+            // Rejected, not accepted-with-a-warning: Arazzo Specification
+            // Object, `arazzo` — *"This string MUST be the version number of
+            // the Arazzo Specification that the Arazzo Description uses. The
+            // `arazzo` field MUST be used by tooling to interpret the Arazzo
+            // Description."* Reading a 1.0.x
+            // document with 1.1.0 vocabulary is not using the field to
+            // interpret it. An error is affordable here only because the remedy
+            // is one line, so the message must name it.
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::UnsupportedVersion,
+                path: format!("{param_path}.in"),
+                message: format!(
                     "{param_path}.in \"querystring\" was introduced in Arazzo 1.1.0, but this \
-                     document declares arazzo: {arazzo_version}; it is accepted and executed \
-                     here, and a strict 1.0.x consumer may reject the document"
+                     document declares arazzo: {arazzo_version}, whose vocabulary has no such \
+                     parameter location; declare arazzo: 1.1.0 to use it"
                 ),
-            ));
+            });
         }
         if param.name.is_empty() && param.reference.is_empty() {
             diagnostics.push(Diagnostic {
@@ -3478,33 +3483,86 @@ workflows:
         }
     }
 
-    /// `querystring` was introduced in Arazzo 1.1.0. A 1.0.x document using it
-    /// is accepted and executed — the intent is unambiguous — but warned about,
-    /// so `--strict` callers can still refuse it.
+    /// `querystring` was introduced in Arazzo 1.1.0, so a 1.0.x document using
+    /// it is refused rather than executed: the `arazzo` field is what tooling
+    /// interprets the document with, and a warning never reached `run`, which
+    /// loads through the diagnostic-discarding `parse`.
     #[test]
-    fn querystring_in_a_1_0_document_warns_but_validates() {
+    fn querystring_in_a_1_0_document_fails_validation() {
         let yaml = querystring_doc("1.0.1", NO_PARAMS, STEP_QUERYSTRING);
         let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
             Ok(spec) => spec,
             Err(err) => panic!("parsing test spec: {err}"),
         };
 
-        let warnings = match validate_diagnostics(&spec) {
-            Ok(warnings) => warnings,
-            Err(err) => panic!("a 1.0.x document using querystring must not fail: {err}"),
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("a 1.0.x document using querystring must fail validation");
         };
-        assert_eq!(warnings.len(), 1, "warnings={warnings:?}");
-        assert_eq!(warnings[0].kind, ValidationErrorKind::UnsupportedVersion);
-        assert_eq!(warnings[0].severity, Severity::Warning);
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
         assert_eq!(
-            warnings[0].path,
+            report.errors[0].kind,
+            ValidationErrorKind::UnsupportedVersion
+        );
+        assert_eq!(report.errors[0].severity, Severity::Error);
+        assert_eq!(
+            report.errors[0].path,
             "workflow \"wf1\" > step \"s1\".parameters[0].in"
         );
         assert!(
-            warnings[0].message.contains("1.1.0") && warnings[0].message.contains("1.0.1"),
-            "the warning must name both versions: {}",
-            warnings[0].message
+            report.errors[0].message.contains("1.1.0")
+                && report.errors[0].message.contains("1.0.1"),
+            "the error must name both versions: {}",
+            report.errors[0].message
         );
+        // Rejecting is only defensible because the fix is one line, so the
+        // message has to carry it rather than leave the author to infer it.
+        assert!(
+            report.errors[0].message.contains("declare arazzo: 1.1.0"),
+            "the error must state the remedy, not only the violation: {}",
+            report.errors[0].message
+        );
+    }
+
+    /// `1.0.0` gates identically to `1.0.1` — the rule reads major.minor, and
+    /// the message names whichever version the document actually declared.
+    #[test]
+    fn querystring_in_a_1_0_0_document_fails_validation() {
+        let yaml = querystring_doc("1.0.0", NO_PARAMS, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("a 1.0.0 document using querystring must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::UnsupportedVersion
+        );
+        assert!(
+            report.errors[0].message.contains("arazzo: 1.0.0"),
+            "the error must name the declared version: {}",
+            report.errors[0].message
+        );
+    }
+
+    /// The gate keys on `querystring`, not on the declared version: a 1.0.x
+    /// document that stays inside the 1.0 vocabulary is untouched.
+    #[test]
+    fn a_1_0_document_without_querystring_is_unaffected() {
+        let step_query = "\n          - name: q\n            in: query\n            value: red\n";
+        let yaml = querystring_doc("1.0.1", NO_PARAMS, step_query);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected a clean 1.0.1 document, got: {err}"),
+        }
     }
 
     /// The version gate reads the declared major.minor, not a string prefix:

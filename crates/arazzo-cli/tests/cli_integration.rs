@@ -544,6 +544,95 @@ fn dry_run_inserts_the_querystring_value_verbatim() {
     );
 }
 
+/// The same document one minor version behind. `querystring` does not exist in
+/// Arazzo 1.0.x, so both commands refuse it — `run` included, which is the half
+/// that matters: `run` loads through `arazzo_validate::parse`, which discards
+/// warnings, so nothing short of an error can stop it executing.
+///
+/// The fixture lives in a temp dir rather than `testdata/`: the golden spec
+/// baseline sweeps that directory, and a permanently-invalid document there
+/// would move it.
+#[test]
+fn a_1_0_document_using_querystring_is_refused_by_validate_and_run() {
+    let temp = TempDir::new("arazzo-querystring-1-0");
+    let spec_path = temp.path().join("v101.arazzo.yaml");
+    write_file(
+        &spec_path,
+        r#"
+arazzo: 1.0.1
+info:
+  title: Querystring parameter location
+  version: 1.0.0
+sourceDescriptions:
+  - name: search
+    url: https://search.example.com/v1
+    type: openapi
+workflows:
+  - workflowId: search-verbatim
+    steps:
+      - stepId: query-index
+        operationPath: '{search}./index'
+        parameters:
+          - name: filter
+            in: querystring
+            value: q=red+shoes&limit=10
+"#,
+    );
+    let spec_str = spec_path.to_string_lossy().to_string();
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(
+        !output.status.success(),
+        "a 1.0.x document using in: querystring must fail validation; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    assert!(
+        body.get("warnings").is_none(),
+        "the finding is an error, not a warning; body={body}"
+    );
+    let errors = validate_issue_messages(&body, "errors");
+    assert_eq!(errors.len(), 1, "body={body}");
+    assert!(
+        errors[0].contains("1.1.0") && errors[0].contains("arazzo: 1.0.1"),
+        "the error must name both versions: {}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("declare arazzo: 1.1.0"),
+        "the error must state the remedy: {}",
+        errors[0]
+    );
+
+    // The point of the ticket: this dry run used to succeed and print
+    // `GET https://search.example.com/v1/index?q=red+shoes&limit=10`.
+    let output = run(
+        ["--json", "run", &spec_str, "search-verbatim", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "run must refuse the document rather than execute it; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let error = match body.get("error").and_then(Value::as_str) {
+        Some(error) => error,
+        None => panic!("expected an error string; body={body}"),
+    };
+    assert!(
+        error.contains("1.1.0") && error.contains("arazzo: 1.0.1"),
+        "run must report the same finding as validate: {error}"
+    );
+    assert!(
+        body.get("requests").is_none(),
+        "no request may be resolved from a refused document; body={body}"
+    );
+}
+
 #[test]
 fn validate_reports_errors_and_warnings_together() {
     let temp = TempDir::new("arazzo-validate-mixed");
