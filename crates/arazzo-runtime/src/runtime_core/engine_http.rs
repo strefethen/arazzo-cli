@@ -618,6 +618,21 @@ impl Engine {
                     // parameter is.
                     Value::Null => {}
                     Value::String(text) => {
+                        if let Some((discarded, _)) = &querystring {
+                            // The specification forbids a second `querystring`
+                            // parameter and `arazzo-validate` rejects it;
+                            // `merge_workflow_params` only lets distinct names
+                            // get this far. An unvalidated spec reaching here
+                            // still gets a defined URL — last one wins, which
+                            // is what makes the same-name workflow/step
+                            // override work — and the loser is named.
+                            warnings.push(format!(
+                                "parameter {:?}: in: querystring supplies the entire query \
+                                 component and cannot appear more than once, so the earlier \
+                                 in: querystring parameter {discarded:?} was dropped",
+                                param.name
+                            ));
+                        }
                         querystring = Some((param.name.clone(), text.clone()));
                     }
                     other => {

@@ -321,6 +321,34 @@ fn step_level_querystring_overrides_the_inherited_one() {
     assert_eq!(planned.url, format!("{BASE}/index?q=step"));
 }
 
+/// Two `querystring` parameters with different names have different
+/// `merge_workflow_params` keys, so both reach this step. `arazzo-validate`
+/// rejects that document; an unvalidated spec reaching the engine still gets a
+/// defined URL — last one wins — with the discarded parameter named.
+#[test]
+fn two_querystring_parameters_keep_the_last_and_name_the_discarded_one() {
+    let planned = match plan(spec_with(
+        "{search}./index",
+        vec![param("inherited", ParamLocation::Querystring, text("a=1"))],
+        vec![param("filter", ParamLocation::Querystring, text("b=2"))],
+    )) {
+        Ok(planned) => planned,
+        Err((kind, message)) => {
+            panic!("expected a planned request, got {}: {message}", kind.code())
+        }
+    };
+
+    assert_eq!(planned.url, format!("{BASE}/index?b=2"));
+    assert!(
+        planned
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("dropped") && warning.contains("\"inherited\"") }),
+        "expected the discarded querystring parameter to be named: {:?}",
+        planned.warnings
+    );
+}
+
 /// The regression guard for every other location: adding `Querystring` to the
 /// model must not have moved `path`, `query`, `header`, or `cookie`.
 #[test]

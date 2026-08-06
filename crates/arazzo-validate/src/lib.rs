@@ -677,7 +677,10 @@ fn effective_parameters<'a>(workflow: &'a Workflow, step: &'a Step) -> Vec<&'a P
 }
 
 /// Parameter Object: *"The `querystring` location cannot coexist with `query`
-/// parameters in the same operation per OpenAPI constraints."*
+/// parameters in the same operation per OpenAPI constraints."* The OpenAPI
+/// 3.2.0 Parameter Object those constraints point at says of `querystring`, in
+/// the same sentence, that it *"MUST NOT appear more than once"*. Both halves
+/// are enforced here.
 ///
 /// Checked on the effective set rather than the step-declared one: a
 /// workflow-level `query` and a step-level `querystring` have different merge
@@ -699,6 +702,34 @@ fn validate_querystring_exclusivity(
     let querystring = named(ParamLocation::Querystring);
     if querystring.is_empty() {
         return;
+    }
+    // `merge_workflow_params` dedups on `(name, in)`, so a workflow-level and a
+    // step-level `querystring` sharing a name collapse into one parameter —
+    // the documented override path, not a duplicate. Distinct names do not
+    // collapse, and every one of them reaches the same operation.
+    let mut distinct = Vec::<&String>::new();
+    for name in &querystring {
+        if !distinct.contains(&name) {
+            distinct.push(name);
+        }
+    }
+    if distinct.len() > 1 {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidParameterLocation,
+            path: format!("{step_path}.parameters"),
+            message: format!(
+                "{step_path} carries more than one in: querystring parameter [{}]; the \
+                 querystring location supplies the entire query component and must not \
+                 appear more than once in the same operation. Workflow-level parameters \
+                 are inherited by this step and count here.",
+                distinct
+                    .iter()
+                    .map(|name| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
     }
     let query = named(ParamLocation::Query);
     if query.is_empty() {
@@ -3213,6 +3244,8 @@ workflows:
     const STEP_QUERYSTRING: &str =
         "\n          - name: filter\n            in: querystring\n            value: q=red\n";
     const WORKFLOW_QUERY: &str = "\n      - name: q\n        in: query\n        value: inherited\n";
+    const WORKFLOW_QUERYSTRING: &str =
+        "\n      - name: inherited\n        in: querystring\n        value: a=1\n";
 
     /// Parameter Object: the `querystring` location cannot coexist with `query`
     /// parameters in the same operation. The two arrive from different levels
@@ -3297,6 +3330,136 @@ workflows:
         match validate_diagnostics(&spec) {
             Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
             Err(err) => panic!("expected no conflict, got: {err}"),
+        }
+    }
+
+    /// Every `InvalidParameterLocation` diagnostic the document produced.
+    fn location_conflicts(spec: &ArazzoSpec) -> Vec<Diagnostic> {
+        let Err(Error::Validation(report)) = validate_diagnostics(spec) else {
+            panic!("expected the document to fail validation");
+        };
+        report
+            .errors
+            .into_iter()
+            .filter(|item| item.kind == ValidationErrorKind::InvalidParameterLocation)
+            .collect()
+    }
+
+    /// OpenAPI 3.2.0 Parameter Object: `querystring` "MUST NOT appear more than
+    /// once". `merge_workflow_params` keys on `(name, in)`, so a workflow-level
+    /// and a step-level `querystring` with *different* names do not collapse —
+    /// both reach the same operation, and the last one silently wins.
+    #[test]
+    fn inherited_querystring_conflicts_with_step_querystring() {
+        let yaml = querystring_doc("1.1.0", WORKFLOW_QUERYSTRING, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let conflicts = location_conflicts(&spec);
+        assert_eq!(conflicts.len(), 1, "conflicts={conflicts:?}");
+        assert_eq!(conflicts[0].severity, Severity::Error);
+        assert!(
+            conflicts[0].message.contains("\"inherited\"")
+                && conflicts[0].message.contains("\"filter\""),
+            "both parameters must be named: {}",
+            conflicts[0].message
+        );
+        assert_eq!(
+            conflicts[0].path,
+            "workflow \"wf1\" > step \"s1\".parameters"
+        );
+    }
+
+    /// The same duplication declared entirely at the step level.
+    #[test]
+    fn two_step_level_querystrings_conflict() {
+        let step_params = format!(
+            "{STEP_QUERYSTRING}          - name: extra\n            in: querystring\n            \
+             value: b=2\n"
+        );
+        let yaml = querystring_doc("1.1.0", NO_PARAMS, &step_params);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        let conflicts = location_conflicts(&spec);
+        assert_eq!(conflicts.len(), 1, "conflicts={conflicts:?}");
+        assert!(
+            conflicts[0].message.contains("\"filter\"")
+                && conflicts[0].message.contains("\"extra\""),
+            "both parameters must be named: {}",
+            conflicts[0].message
+        );
+    }
+
+    /// The step-overrides-workflow path: same `(name, in)` key, so
+    /// `merge_workflow_params` collapses the two into the step-level one and a
+    /// single `querystring` parameter reaches the operation.
+    #[test]
+    fn same_name_querystring_override_validates_clean() {
+        let workflow_params =
+            "\n      - name: filter\n        in: querystring\n        value: q=inherited\n";
+        let yaml = querystring_doc("1.1.0", workflow_params, STEP_QUERYSTRING);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("the override path must stay clean, got: {err}"),
+        }
+    }
+
+    /// A step targeting another workflow does not inherit workflow parameters,
+    /// so the workflow-level `querystring` never joins the step-level one.
+    #[test]
+    fn workflow_target_step_does_not_inherit_the_duplicate() {
+        let yaml = format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: Querystring
+  version: "1.0.0"
+workflows:
+  - workflowId: wf1
+    parameters:{WORKFLOW_QUERYSTRING}
+    steps:
+      - stepId: s1
+        workflowId: wf2
+        parameters:{STEP_QUERYSTRING}
+  - workflowId: wf2
+    steps:
+      - stepId: s2
+        operationPath: /index
+"#
+        );
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected no duplicate, got: {err}"),
+        }
+    }
+
+    /// A single `querystring` parameter arriving by inheritance is still one
+    /// parameter: the count is over the effective set, not the step's list.
+    #[test]
+    fn inherited_querystring_alone_validates_clean() {
+        let yaml = querystring_doc("1.1.0", WORKFLOW_QUERYSTRING, NO_PARAMS);
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        };
+
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected a clean 1.1.0 document, got: {err}"),
         }
     }
 
