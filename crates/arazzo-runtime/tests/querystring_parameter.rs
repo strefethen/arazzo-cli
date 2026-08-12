@@ -231,30 +231,36 @@ fn empty_querystring_value_removes_the_query_entirely() {
     assert_eq!(planned.url, "https://elsewhere.example.com/index");
 }
 
-/// A structure is not a query component. Stringifying it would send
-/// `{"a":1}` and call the parameter resolved.
+/// A non-string is not a query component. Stringifying it would send
+/// `{"a":1}` and call the parameter resolved; dropping it would send the
+/// request with no query at all. Either way the wrong request goes out, so
+/// every non-string, non-null type fails the step instead.
 #[test]
-fn non_string_value_warns_and_is_dropped() {
+fn non_string_value_fails_the_step() {
     let mapping = serde_yaml_ng::Value::Mapping({
         let mut mapping = serde_yaml_ng::Mapping::new();
         mapping.insert(text("q"), text("red"));
         mapping
     });
-    let planned = expect_plan(mapping);
+    let cases: [(serde_yaml_ng::Value, &str); 4] = [
+        (mapping, "object"),
+        (serde_yaml_ng::Value::Sequence(vec![text("q=red")]), "array"),
+        (serde_yaml_ng::Value::Number(10.into()), "number"),
+        (serde_yaml_ng::Value::Bool(true), "boolean"),
+    ];
 
-    assert_eq!(planned.url, format!("{BASE}/index"));
-    assert!(
-        planned.warnings.iter().any(|warning| {
-            warning.contains("filter") && warning.contains("object") && warning.contains("dropped")
-        }),
-        "expected a typed warning naming the parameter: {:?}",
-        planned.warnings
-    );
-    assert!(
-        !planned.url.contains("q"),
-        "the structure was stringified into the URL: {}",
-        planned.url
-    );
+    for (value, type_name) in cases {
+        let Err((kind, message)) = plan_querystring(value) else {
+            panic!("expected a {type_name} querystring value to fail the step");
+        };
+
+        assert_eq!(kind, RuntimeErrorKind::InvalidParameterValue);
+        assert_eq!(kind.code(), "RUNTIME_INVALID_PARAMETER_VALUE");
+        assert!(
+            message.contains("filter") && message.contains("probe") && message.contains(type_name),
+            "message should name the parameter, the step, and the type: {message}"
+        );
+    }
 }
 
 /// Null is skipped in silence, exactly as an unset `in: query` parameter is.

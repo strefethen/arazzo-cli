@@ -638,13 +638,19 @@ impl Engine {
                     other => {
                         // A structure cannot be a query component. Stringifying
                         // it would send `{"a":1}` as the query and call it
-                        // resolved, so the parameter is dropped and said so.
-                        warnings.push(format!(
-                            "parameter {:?}: in: querystring requires a string value \
-                             (the entire already-encoded query component); got {}, \
-                             so the parameter was dropped",
-                            param.name,
-                            json_type_name(other)
+                        // resolved; dropping it would send the request with no
+                        // query at all. Both send the wrong request, so the
+                        // step fails instead.
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidParameterValue,
+                            format!(
+                                "step \"{}\": parameter {:?} (in: querystring) requires a \
+                                 string value (the entire already-encoded query component); \
+                                 got {}",
+                                step.step_id,
+                                param.name,
+                                json_type_name(other)
+                            ),
                         ));
                     }
                 },

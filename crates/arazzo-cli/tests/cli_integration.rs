@@ -633,6 +633,65 @@ workflows:
     );
 }
 
+/// A non-string `querystring` value cannot become a query component. This dry
+/// run used to succeed with the query silently dropped — a query-less
+/// `GET https://search.example.com/v1/index`, exit 0 — which is exactly the
+/// request-goes-wrong-unnoticed shape; now the step fails.
+#[test]
+fn run_fails_on_a_non_string_querystring_value() {
+    let temp = TempDir::new("arazzo-querystring-non-string");
+    let spec_path = temp.path().join("nonstring.arazzo.yaml");
+    write_file(
+        &spec_path,
+        r#"
+arazzo: 1.1.0
+info:
+  title: Non-string querystring value
+  version: 1.0.0
+sourceDescriptions:
+  - name: search
+    url: https://search.example.com/v1
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: probe
+        operationPath: '{search}./index'
+        parameters:
+          - name: filter
+            in: querystring
+            value:
+              q: red
+"#,
+    );
+    let spec_str = spec_path.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "run", &spec_str, "wf1", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "a non-string querystring value must fail the step, not drop the query; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUNTIME_INVALID_PARAMETER_VALUE"),
+        "body={body}"
+    );
+    let error = match body.get("error").and_then(Value::as_str) {
+        Some(error) => error,
+        None => panic!("expected an error string; body={body}"),
+    };
+    assert!(
+        error.contains("filter") && error.contains("probe") && error.contains("object"),
+        "the error must name the parameter, the step, and the type: {error}"
+    );
+}
+
 #[test]
 fn validate_reports_errors_and_warnings_together() {
     let temp = TempDir::new("arazzo-validate-mixed");
