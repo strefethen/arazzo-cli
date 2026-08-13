@@ -24,35 +24,37 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Experimental targets (win32-arm64) may fail without blocking the release
     continue-on-error: ${{ matrix.experimental == true }}
+    env:
+      # copy-binary.js reads this to pick target/<triple>/release/ and to
+      # re-verify the recorded SHA-256 when vsce's prepublish hook reruns it.
+      ARAZZO_DAP_TARGET: ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
+        # macOS ships as two single-arch VSIXs (darwin-x64 and darwin-arm64)
+        # rather than one universal binary: vsce platform targets map 1:1 to a
+        # VSIX and the Marketplace serves the matching one per machine, so a
+        # universal binary would only double the download size.
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             vsce_target: linux-x64
-            exe_suffix: ""
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             vsce_target: linux-arm64
-            exe_suffix: ""
             cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             vsce_target: darwin-arm64
-            exe_suffix: ""
           - os: macos-latest
             target: x86_64-apple-darwin
             vsce_target: darwin-x64
-            exe_suffix: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             vsce_target: win32-x64
-            exe_suffix: ".exe"
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             vsce_target: win32-arm64
-            exe_suffix: ".exe"
             experimental: true
     steps:
       - uses: actions/checkout@v7
@@ -86,12 +88,9 @@ jobs:
         working-directory: vscode-arazzo-debug
         run: npm ci
 
-      - name: Copy binary into extension
-        shell: bash
-        run: |
-          mkdir -p vscode-arazzo-debug/bin
-          cp "target/${{ matrix.target }}/release/arazzo-debug-adapter${{ matrix.exe_suffix }}" \
-             "vscode-arazzo-debug/bin/arazzo-debug-adapter${{ matrix.exe_suffix }}"
+      - name: Copy binary into extension (records SHA-256)
+        working-directory: vscode-arazzo-debug
+        run: node scripts/copy-binary.js --target ${{ matrix.target }}
 
       - name: Build extension TypeScript
         working-directory: vscode-arazzo-debug

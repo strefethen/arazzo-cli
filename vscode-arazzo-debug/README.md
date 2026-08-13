@@ -85,6 +85,34 @@ Add any Arazzo expression to the Watch panel:
 - VS Code 1.90 or later
 - Target APIs must be accessible from your machine
 
+## Development
+
+The extension normally launches the debug adapter binary bundled in the
+platform-specific VSIX. When running the extension from source (no bundled
+binary), point the launch configuration at a locally built adapter with
+`runtimeExecutable`:
+
+```json
+{
+  "type": "arazzo",
+  "request": "launch",
+  "name": "Debug My Workflow (source adapter)",
+  "spec": "${file}",
+  "workflowId": "my-workflow-id",
+  "runtimeExecutable": "${workspaceFolder}/target/release/arazzo-debug-adapter",
+  "runtimeArgs": [],
+  "runtimeCwd": "${workspaceFolder}"
+}
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `runtimeExecutable` | string | Command used to launch the debug adapter instead of the bundled binary. |
+| `runtimeArgs` | string[] | Arguments passed to `runtimeExecutable`. |
+| `runtimeCwd` | string | Working directory for `runtimeExecutable`. |
+
+Build the adapter first with `cargo build --release -p arazzo-debug-adapter`.
+
 ## Known Limitations
 
 This is a **preview release**. Some features are still in development:
