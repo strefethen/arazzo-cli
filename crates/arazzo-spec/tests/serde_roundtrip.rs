@@ -862,3 +862,112 @@ workflows:
     );
     assert_eq!(reparsed.workflows[0].steps[0].on_success[0].type_, None);
 }
+
+/// Success/Failure Action Object (Arazzo 1.1.0): `parameters` — a list of
+/// Parameter Object | Reusable Object — round-trips on actions. A literal, a
+/// runtime-expression string, a full three-field Selector Object value, and a
+/// Reusable Object reference must all survive parse → serialize → parse.
+#[test]
+fn action_parameters_roundtrip_including_selector_and_reference() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Action Parameters Roundtrip
+  version: "1.0.0"
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        onFailure:
+          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - name: fixed
+                value: literal-value
+              - name: uid
+                value: $inputs.uid
+              - name: reason
+                value:
+                  context: $response.body
+                  selector: /reason
+                  type: jsonpointer
+              - reference: $components.parameters.shared
+  - workflowId: fallback
+    steps:
+      - stepId: noop
+        operationPath: /noop
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "action parameters spec");
+    let action = &spec.workflows[0].steps[0].on_failure[0];
+    assert_eq!(action.parameters.len(), 4);
+    assert_eq!(action.parameters[0].name, "fixed");
+    assert!(
+        action.parameters[0].in_.is_none(),
+        "action parameters carry no in field"
+    );
+    assert!(
+        action.parameters[2].value.as_selector().is_some(),
+        "three-field mapping must parse as a Selector Object"
+    );
+    assert_eq!(
+        action.parameters[3].reference,
+        "$components.parameters.shared"
+    );
+
+    let serialized = serialize_spec(&spec, "action parameters spec");
+    assert!(
+        serialized.contains("parameters"),
+        "parameters must serialize on the action, got: {serialized}"
+    );
+    let reparsed = parse_spec(serialized.as_bytes(), "reserialized action parameters spec");
+    assert_eq!(spec, reparsed, "action parameters round-trip mismatch");
+}
+
+/// A selector-shaped action parameter value missing one of the three required
+/// Selector Object fields stays a literal mapping, exactly as it does for
+/// step parameters.
+#[test]
+fn action_parameter_selector_missing_type_stays_literal() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Action Parameter Literal Fallback
+  version: "1.0.0"
+sourceDescriptions:
+  - name: testApi
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        onSuccess:
+          - name: handoff
+            type: goto
+            workflowId: next
+            parameters:
+              - name: partial
+                value:
+                  context: $response.body
+                  selector: /reason
+  - workflowId: next
+    steps:
+      - stepId: noop
+        operationPath: /noop
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "literal fallback spec");
+    let param = &spec.workflows[0].steps[0].on_success[0].parameters[0];
+    assert!(
+        param.value.as_literal().is_some(),
+        "a mapping without the full context/selector/type contract stays a literal"
+    );
+}

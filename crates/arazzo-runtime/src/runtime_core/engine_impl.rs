@@ -315,10 +315,12 @@ impl Engine {
                             ));
                         }
                     }
-                    FlowDecision::GotoWorkflow(next_wf) => {
-                        return self
-                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), 1)
-                            .await;
+                    FlowDecision::GotoWorkflow {
+                        workflow_id,
+                        inputs,
+                    } => {
+                        let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
+                        return self.execute_inner(exec_ctx, &workflow_id, inputs, 1).await;
                     }
                     FlowDecision::Error(err) => {
                         return Err(err);
@@ -520,9 +522,13 @@ impl Engine {
                         .await;
                         step_index = idx;
                     }
-                    FlowDecision::GotoWorkflow(next_wf) => {
+                    FlowDecision::GotoWorkflow {
+                        workflow_id,
+                        inputs,
+                    } => {
+                        let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
                         return self
-                            .execute_inner(exec_ctx, &next_wf, vars.inputs.clone(), depth + 1)
+                            .execute_inner(exec_ctx, &workflow_id, inputs, depth + 1)
                             .await;
                     }
                     FlowDecision::Error(err) => {

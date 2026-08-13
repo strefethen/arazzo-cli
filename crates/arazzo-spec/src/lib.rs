@@ -833,6 +833,12 @@ pub struct OnAction {
     pub retry_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub criteria: Vec<SuccessCriterion>,
+    /// Parameters passed to the workflow referenced by `workflowId`
+    /// (Arazzo 1.1.0). Per the Success/Failure Action Objects they map to
+    /// callee workflow inputs, must not declare `in`, and must not contain
+    /// duplicate names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<Parameter>,
     #[serde(
         flatten,
         default,

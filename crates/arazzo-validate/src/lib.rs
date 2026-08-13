@@ -338,6 +338,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &wf.success_actions,
             &step_ids,
             &workflow_ids,
+            &spec.arazzo,
             &mut diagnostics,
         );
         validate_actions(
@@ -345,6 +346,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &wf.failure_actions,
             &step_ids,
             &workflow_ids,
+            &spec.arazzo,
             &mut diagnostics,
         );
 
@@ -549,6 +551,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &step.on_failure,
                 &step_ids,
                 &workflow_ids,
+                &spec.arazzo,
                 &mut diagnostics,
             );
             validate_actions(
@@ -556,6 +559,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &step.on_success,
                 &step_ids,
                 &workflow_ids,
+                &spec.arazzo,
                 &mut diagnostics,
             );
         }
@@ -937,10 +941,12 @@ fn validate_actions(
     actions: &[OnAction],
     step_ids: &HashSet<&str>,
     workflow_ids: &HashSet<&str>,
+    arazzo_version: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
+        validate_action_parameters(&action_path, action, arazzo_version, diagnostics);
         if action.action_type() == ActionType::Goto {
             let has_step = !action.step_id.is_empty();
             let has_workflow = !action.workflow_id.is_empty();
@@ -1021,6 +1027,83 @@ fn validate_actions(
             );
         }
     }
+}
+
+/// Validates the `parameters` list of a success or failure action.
+///
+/// Success/Failure Action Object (Arazzo 1.1.0): *"A list of parameters that
+/// MUST be passed to a workflow as referenced by `workflowId`. ... The list
+/// MUST NOT include duplicate parameters. The `in` field MUST NOT be used."*
+fn validate_action_parameters(
+    action_path: &str,
+    action: &OnAction,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if action.parameters.is_empty() {
+        return;
+    }
+    let params_path = format!("{action_path}.parameters");
+    if declares_pre_1_1(arazzo_version) {
+        // Same stance as `in: querystring`: 1.1.0 vocabulary in a document
+        // declaring 1.0.x is an error, and the remedy is one line.
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::UnsupportedVersion,
+            path: params_path.clone(),
+            message: format!(
+                "{params_path} — success/failure action parameters were introduced in \
+                 Arazzo 1.1.0, but this document declares arazzo: {arazzo_version}, whose \
+                 vocabulary has no such field; declare arazzo: 1.1.0 to use them"
+            ),
+        });
+    }
+    if action.workflow_id.is_empty() {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidParameterLocation,
+            path: params_path.clone(),
+            message: format!(
+                "{params_path} is only valid when the action targets a workflow: the \
+                 parameters \"MUST be passed to a workflow as referenced by workflowId\", \
+                 but this action declares no workflowId"
+            ),
+        });
+    }
+    let mut seen_names = HashSet::<&str>::new();
+    for (param_idx, param) in action.parameters.iter().enumerate() {
+        let param_path = format!("{params_path}[{param_idx}]");
+        if param.in_.is_some() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::InvalidParameterLocation,
+                path: format!("{param_path}.in"),
+                message: format!(
+                    "{param_path}.in must not be set: action parameters map to workflow \
+                     inputs and \"The in field MUST NOT be used\""
+                ),
+            });
+        }
+        if !param.name.is_empty() && !seen_names.insert(param.name.as_str()) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::DuplicateIdentifier,
+                path: format!("{param_path}.name"),
+                message: format!(
+                    "{param_path}.name \"{}\" is a duplicate: the parameter list \
+                     \"MUST NOT include duplicate parameters\"",
+                    param.name
+                ),
+            });
+        }
+    }
+    // Shared per-parameter rules: required name/value and Selector Object shape.
+    validate_parameters(
+        &params_path,
+        &action.parameters,
+        arazzo_version,
+        diagnostics,
+    );
 }
 
 fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mut Vec<Diagnostic>) {
@@ -1168,6 +1251,7 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
         resolve_param_refs(&mut workflow.parameters, &components, &wf_label)?;
         resolve_action_ref(
             &mut workflow.success_actions,
+            &components,
             &components.success_actions,
             "$components.successActions.",
             "successAction",
@@ -1175,6 +1259,7 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
         )?;
         resolve_action_ref(
             &mut workflow.failure_actions,
+            &components,
             &components.failure_actions,
             "$components.failureActions.",
             "failureAction",
@@ -1186,6 +1271,7 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
             resolve_param_refs(&mut step.parameters, &components, &step_label)?;
             resolve_action_ref(
                 &mut step.on_success,
+                &components,
                 &components.success_actions,
                 "$components.successActions.",
                 "successAction",
@@ -1193,6 +1279,7 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
             )?;
             resolve_action_ref(
                 &mut step.on_failure,
+                &components,
                 &components.failure_actions,
                 "$components.failureActions.",
                 "failureAction",
@@ -1243,41 +1330,63 @@ fn resolve_param_refs(
 
 fn resolve_action_ref(
     actions: &mut [OnAction],
+    components: &arazzo_spec::Components,
     component_map: &std::collections::BTreeMap<String, OnAction>,
     prefix: &str,
     kind: &str,
     entity: &str,
 ) -> Result<(), String> {
-    for action in actions.iter_mut() {
-        if action.name.is_empty() {
-            continue;
+    for (action_idx, action) in actions.iter_mut().enumerate() {
+        if !action.name.is_empty() {
+            resolve_one_action_ref(action, component_map, prefix, kind, entity)?;
         }
-        if let Some(name) = action.name.strip_prefix(prefix) {
-            let Some(resolved) = component_map.get(name) else {
-                return Err(format!("{entity}: component {kind} \"{name}\" not found"));
-            };
-            // Merge: start with resolved component, overlay locally declared fields
-            let mut merged = resolved.clone();
-            if action.type_.is_some() {
-                merged.type_ = action.type_;
-            }
-            if !action.workflow_id.is_empty() {
-                merged.workflow_id = action.workflow_id.clone();
-            }
-            if !action.step_id.is_empty() {
-                merged.step_id = action.step_id.clone();
-            }
-            if action.retry_after != 0 {
-                merged.retry_after = action.retry_after;
-            }
-            if action.retry_limit.is_some() {
-                merged.retry_limit = action.retry_limit;
-            }
-            if !action.criteria.is_empty() {
-                merged.criteria = action.criteria.clone();
-            }
-            *action = merged;
+        // Action parameters may themselves be Reusable Objects pointing at
+        // `$components.parameters.<name>`. Resolve them after the action-level
+        // merge so parameters inherited from a component action resolve too.
+        resolve_param_refs(
+            &mut action.parameters,
+            components,
+            &format!("{entity} {kind}[{action_idx}]"),
+        )?;
+    }
+    Ok(())
+}
+
+fn resolve_one_action_ref(
+    action: &mut OnAction,
+    component_map: &std::collections::BTreeMap<String, OnAction>,
+    prefix: &str,
+    kind: &str,
+    entity: &str,
+) -> Result<(), String> {
+    if let Some(name) = action.name.strip_prefix(prefix) {
+        let Some(resolved) = component_map.get(name) else {
+            return Err(format!("{entity}: component {kind} \"{name}\" not found"));
+        };
+        // Merge: start with resolved component, overlay locally declared fields
+        let mut merged = resolved.clone();
+        if action.type_.is_some() {
+            merged.type_ = action.type_;
         }
+        if !action.workflow_id.is_empty() {
+            merged.workflow_id = action.workflow_id.clone();
+        }
+        if !action.step_id.is_empty() {
+            merged.step_id = action.step_id.clone();
+        }
+        if action.retry_after != 0 {
+            merged.retry_after = action.retry_after;
+        }
+        if action.retry_limit.is_some() {
+            merged.retry_limit = action.retry_limit;
+        }
+        if !action.criteria.is_empty() {
+            merged.criteria = action.criteria.clone();
+        }
+        if !action.parameters.is_empty() {
+            merged.parameters = action.parameters.clone();
+        }
+        *action = merged;
     }
     Ok(())
 }
@@ -3577,5 +3686,337 @@ workflows:
         assert!(!declares_pre_1_1("1.1.0"));
         assert!(!declares_pre_1_1("1.10.0"));
         assert!(!declares_pre_1_1("2.0.0"));
+    }
+
+    // ── success/failure action `parameters` (Arazzo 1.1.0) ─────────────
+
+    /// One workflow with two steps and a second workflow to target, with
+    /// `action_yaml` spliced in as the first step's `onFailure` list.
+    fn action_params_doc(version: &str, action_yaml: &str) -> String {
+        format!(
+            r#"arazzo: "{version}"
+info:
+  title: Action Parameters
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /index
+        onFailure:
+{action_yaml}
+  - workflowId: fallback
+    steps:
+      - stepId: fb
+        operationPath: /fallback
+"#
+        )
+    }
+
+    fn parse_unvalidated(yaml: &str) -> ArazzoSpec {
+        match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("parsing test spec: {err}"),
+        }
+    }
+
+    /// Success/Failure Action Object: parameters on a workflow-targeting
+    /// action are the conformant shape — literal, runtime-expression, and
+    /// Selector Object values all validate clean.
+    #[test]
+    fn action_parameters_on_a_workflow_target_validate_clean() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - name: fixed
+                value: literal
+              - name: uid
+                value: $inputs.uid
+              - name: reason
+                value:
+                  context: $response.body
+                  selector: /reason
+                  type: jsonpointer
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected clean validation, got: {err}"),
+        }
+    }
+
+    /// Failure Action Object: `retry` with a `workflowId` may also carry
+    /// parameters — the referenced workflow is a workflow target too.
+    #[test]
+    fn retry_action_with_a_workflow_target_accepts_parameters() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: recover
+            type: retry
+            workflowId: fallback
+            retryLimit: 2
+            parameters:
+              - name: cause
+                value: $inputs.cause
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        match validate_diagnostics(&spec) {
+            Ok(warnings) => assert!(warnings.is_empty(), "warnings={warnings:?}"),
+            Err(err) => panic!("expected clean validation, got: {err}"),
+        }
+    }
+
+    /// Success/Failure Action Object: *"The `in` field MUST NOT be used."*
+    #[test]
+    fn action_parameter_with_in_is_rejected() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - name: uid
+                in: header
+                value: v
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("an action parameter declaring `in` must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::InvalidParameterLocation
+        );
+        assert!(
+            report.errors[0].path.ends_with(".parameters[0].in"),
+            "path={}",
+            report.errors[0].path
+        );
+    }
+
+    /// Success/Failure Action Object: parameters *"MUST be passed to a
+    /// workflow as referenced by workflowId"* — a step-targeting goto has no
+    /// workflow to pass them to.
+    #[test]
+    fn action_parameters_on_a_step_target_are_rejected() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: bounce
+            type: goto
+            stepId: s1
+            parameters:
+              - name: uid
+                value: v
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("action parameters on a step target must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::InvalidParameterLocation
+        );
+        assert!(
+            report.errors[0].message.contains("workflowId"),
+            "the error must say what parameters need: {}",
+            report.errors[0].message
+        );
+    }
+
+    /// An `end` action has no target at all, so parameters have nowhere to go.
+    #[test]
+    fn action_parameters_on_an_end_action_are_rejected() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: stop
+            type: end
+            parameters:
+              - name: uid
+                value: v
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("action parameters on an end action must fail validation");
+        };
+        assert!(report
+            .errors
+            .iter()
+            .any(|item| item.kind == ValidationErrorKind::InvalidParameterLocation));
+    }
+
+    /// Success/Failure Action Object: *"The list MUST NOT include duplicate
+    /// parameters."*
+    #[test]
+    fn duplicate_action_parameter_names_are_rejected() {
+        let yaml = action_params_doc(
+            "1.1.0",
+            r#"          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - name: uid
+                value: a
+              - name: uid
+                value: b
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("duplicate action parameter names must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::DuplicateIdentifier
+        );
+        assert!(
+            report.errors[0].message.contains("\"uid\""),
+            "the duplicate must be named: {}",
+            report.errors[0].message
+        );
+    }
+
+    /// Action parameters are 1.1.0 vocabulary: a 1.0.x document using them is
+    /// rejected the same way `in: querystring` is.
+    #[test]
+    fn a_1_0_document_using_action_parameters_is_rejected() {
+        let yaml = action_params_doc(
+            "1.0.1",
+            r#"          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - name: uid
+                value: v
+"#,
+        );
+        let spec = parse_unvalidated(&yaml);
+        let Err(Error::Validation(report)) = validate_diagnostics(&spec) else {
+            panic!("a 1.0.x document using action parameters must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::UnsupportedVersion
+        );
+        assert!(
+            report.errors[0].message.contains("arazzo: 1.0.1"),
+            "the error must name the declared version: {}",
+            report.errors[0].message
+        );
+    }
+
+    /// A component success action carrying parameters resolves onto the
+    /// referencing action, and a Reusable Object inside the parameter list
+    /// resolves against `components.parameters`.
+    #[test]
+    fn component_action_parameters_resolve_through_references() {
+        let spec_yaml = r#"
+arazzo: "1.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  parameters:
+    shared:
+      name: uid
+      value: $inputs.uid
+  successActions:
+    handoff:
+      name: handoff
+      type: goto
+      workflowId: fallback
+      parameters:
+        - reference: $components.parameters.shared
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: "$components.successActions.handoff"
+  - workflowId: fallback
+    steps:
+      - stepId: fb
+        operationPath: /fallback
+"#;
+
+        let spec = match parse_bytes(spec_yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected no error, got: {err}"),
+        };
+
+        let action = &spec.workflows[0].steps[0].on_success[0];
+        assert_eq!(action.parameters.len(), 1);
+        assert_eq!(action.parameters[0].name, "uid");
+        assert!(action.parameters[0].reference.is_empty());
+    }
+
+    /// The `in` prohibition applies to the resolved parameter: a component
+    /// parameter that carries `in` is still rejected when an action list
+    /// pulls it in by reference.
+    #[test]
+    fn component_parameter_with_in_is_rejected_on_an_action() {
+        let spec_yaml = r#"
+arazzo: "1.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  parameters:
+    shared:
+      name: uid
+      in: header
+      value: v
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - name: handoff
+            type: goto
+            workflowId: fallback
+            parameters:
+              - reference: $components.parameters.shared
+  - workflowId: fallback
+    steps:
+      - stepId: fb
+        operationPath: /fallback
+"#;
+
+        let result = parse_bytes(spec_yaml.as_bytes());
+        let Err(Error::Validation(report)) = result else {
+            panic!("a referenced parameter carrying `in` must fail on an action");
+        };
+        assert!(
+            report.errors.iter().any(|item| item.kind
+                == ValidationErrorKind::InvalidParameterLocation
+                && item.path.ends_with(".parameters[0].in")),
+            "errors={:?}",
+            report.errors
+        );
     }
 }

@@ -726,11 +726,24 @@ impl Engine {
                     .or_insert_with(|| value.into_owned());
             }
             if let Some(position) = target.find('?') {
-                warnings.push(format!(
-                    "parameter {name:?}: in: querystring supplies the entire query \
-                     component, so the query the target already carried ({:?}) was replaced",
-                    &target[position + 1..]
-                ));
+                let existing = &target[position + 1..];
+                if !existing.is_empty() {
+                    // Two declarations of the same query component. Silently
+                    // replacing or merging would send a URL the author never
+                    // wrote, so the step fails and names both sides.
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidParameterValue,
+                        format!(
+                            "step \"{}\": parameter {name:?} (in: querystring) supplies the \
+                             entire query component, but the resolved operation URL already \
+                             carries a query ({existing:?}); remove the parameter or the \
+                             URL's query",
+                            step.step_id
+                        ),
+                    ));
+                }
+                // A bare trailing "?" is an empty query component — nothing
+                // was declared twice, so the querystring simply takes over.
                 target.truncate(position);
             }
             if !query.is_empty() {

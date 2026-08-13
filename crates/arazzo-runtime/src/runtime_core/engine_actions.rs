@@ -263,8 +263,29 @@ impl Engine {
                 }
                 if !action.workflow_id.is_empty() {
                     let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
+                    // Success/Failure Action Object (1.1.0): parameters "MUST
+                    // be passed to a workflow as referenced by workflowId" —
+                    // resolved through the shared value/Selector resolver,
+                    // they become the callee's input map. An action without
+                    // parameters keeps forwarding the caller's inputs.
+                    let inputs = if action.parameters.is_empty() {
+                        None
+                    } else {
+                        let mut mapped = BTreeMap::new();
+                        for param in &action.parameters {
+                            let (value, param_warnings) = resolve_value_source(&param.value, &eval);
+                            for warning in param_warnings {
+                                eprintln!("warning: action parameter {:?}: {warning}", param.name);
+                            }
+                            mapped.insert(param.name.clone(), value);
+                        }
+                        Some(mapped)
+                    };
                     return RoutedDecision {
-                        flow: FlowDecision::GotoWorkflow(resolved_workflow_id.clone()),
+                        flow: FlowDecision::GotoWorkflow {
+                            workflow_id: resolved_workflow_id.clone(),
+                            inputs,
+                        },
                         trace: TraceDecision {
                             action_type: action.action_type().to_string(),
                             target_workflow_id: resolved_workflow_id,
@@ -376,7 +397,13 @@ pub(super) enum FlowDecision {
     Next(usize),
     Retry(usize),
     Done,
-    GotoWorkflow(String),
+    GotoWorkflow {
+        workflow_id: String,
+        /// Callee inputs mapped from the action's `parameters`. `None` means
+        /// the action declared no parameters, in which case the caller's own
+        /// inputs transfer unchanged (the pre-1.1 behavior).
+        inputs: Option<BTreeMap<String, Value>>,
+    },
     Error(RuntimeError),
 }
 

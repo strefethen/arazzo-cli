@@ -4,8 +4,8 @@
 //!
 //! A `querystring` parameter supplies the *entire* query component as a single
 //! already-encoded value. Every rule that follows from that — verbatim
-//! insertion, a tolerated leading `?`, replacement of a query the target
-//! already carried, and refusal of a raw `#` — is pinned here, hermetically,
+//! insertion, a tolerated leading `?`, refusal of a target URL that already
+//! carries a query, and refusal of a raw `#` — is pinned here, hermetically,
 //! off the dry-run request plan.
 
 use std::collections::BTreeMap;
@@ -72,6 +72,13 @@ struct Planned {
 }
 
 fn plan(spec: ArazzoSpec) -> Result<Planned, (RuntimeErrorKind, String)> {
+    plan_with_inputs(spec, BTreeMap::new())
+}
+
+fn plan_with_inputs(
+    spec: ArazzoSpec,
+    inputs: BTreeMap<String, serde_json::Value>,
+) -> Result<Planned, (RuntimeErrorKind, String)> {
     let engine = match EngineBuilder::new(spec).dry_run(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
@@ -83,7 +90,7 @@ fn plan(spec: ArazzoSpec) -> Result<Planned, (RuntimeErrorKind, String)> {
         Ok(runtime) => runtime,
         Err(err) => panic!("building tokio runtime: {err}"),
     };
-    let result = runtime.block_on(engine.execute_collect("wf", BTreeMap::new()));
+    let result = runtime.block_on(engine.execute_collect("wf", inputs));
     if let Err(err) = &result.outputs {
         return Err((err.kind, err.message.clone()));
     }
@@ -134,6 +141,36 @@ fn querystring_value_becomes_the_query_component_verbatim() {
     assert!(planned.warnings.is_empty(), "{:?}", planned.warnings);
 }
 
+/// Parameter Object: *"Runtime expressions can be embedded within the string
+/// value using {} notation."* They resolve before the value becomes the query
+/// component, and the resolved whole is still inserted verbatim.
+#[test]
+fn embedded_expressions_resolve_inside_the_querystring_value() {
+    let planned = match plan_with_inputs(
+        spec_with(
+            "{search}./index",
+            Vec::new(),
+            vec![param(
+                "filter",
+                ParamLocation::Querystring,
+                text("q={$inputs.q}&limit={$inputs.limit}"),
+            )],
+        ),
+        BTreeMap::from([
+            ("q".to_string(), serde_json::json!("red+shoes")),
+            ("limit".to_string(), serde_json::json!(10)),
+        ]),
+    ) {
+        Ok(planned) => planned,
+        Err((kind, message)) => {
+            panic!("expected a planned request, got {}: {message}", kind.code())
+        }
+    };
+
+    assert_eq!(planned.url, format!("{BASE}/index?q=red+shoes&limit=10"));
+    assert!(planned.warnings.is_empty(), "{:?}", planned.warnings);
+}
+
 /// The author may write the value with or without the delimiter; both mean the
 /// same query, and neither doubles the `?`.
 #[test]
@@ -180,12 +217,12 @@ fn encoded_fragment_delimiter_is_accepted() {
     assert_eq!(planned.url, format!("{BASE}/index?q=red%23shoes"));
 }
 
-/// `querystring` *is* the query component, so it replaces one the target
-/// already carried rather than being appended to it — and says so, because
-/// dropping the author's query in silence is how a request goes wrong unnoticed.
+/// `querystring` *is* the query component, so a target URL that already
+/// carries one declares the query twice. Replacing or merging would send a
+/// URL the author never wrote — the step fails and names both sides.
 #[test]
-fn querystring_replaces_a_query_the_target_already_carried() {
-    let planned = match plan(spec_with(
+fn querystring_with_a_pre_queried_target_fails_the_step() {
+    let (kind, message) = match plan(spec_with(
         "https://elsewhere.example.com/index?page=2&sort=asc",
         Vec::new(),
         vec![param(
@@ -194,31 +231,45 @@ fn querystring_replaces_a_query_the_target_already_carried() {
             text("q=red&limit=10"),
         )],
     )) {
-        Ok(planned) => planned,
-        Err((kind, message)) => {
-            panic!("expected a planned request, got {}: {message}", kind.code())
-        }
+        Ok(planned) => panic!("expected the step to fail, got a plan for {}", planned.url),
+        Err(err) => err,
     };
 
-    assert_eq!(
-        planned.url,
-        "https://elsewhere.example.com/index?q=red&limit=10"
-    );
+    assert_eq!(kind, RuntimeErrorKind::InvalidParameterValue);
+    assert_eq!(kind.code(), "RUNTIME_INVALID_PARAMETER_VALUE");
     assert!(
-        planned
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("page=2&sort=asc")),
-        "expected the replaced query to be named: {:?}",
-        planned.warnings
+        message.contains("filter") && message.contains("page=2&sort=asc"),
+        "expected the parameter and the target's query to be named: {message}"
     );
 }
 
-/// An empty value means no query at all, and must not leave a bare `?` behind.
+/// An empty value is still a second declaration of the query component when
+/// the target already carries one, so it fails the same way — silently
+/// removing the author's query is exactly the surprise the error prevents.
 #[test]
-fn empty_querystring_value_removes_the_query_entirely() {
-    let planned = match plan(spec_with(
+fn empty_querystring_value_with_a_pre_queried_target_fails_the_step() {
+    let (kind, message) = match plan(spec_with(
         "https://elsewhere.example.com/index?page=2",
+        Vec::new(),
+        vec![param("filter", ParamLocation::Querystring, text(""))],
+    )) {
+        Ok(planned) => panic!("expected the step to fail, got a plan for {}", planned.url),
+        Err(err) => err,
+    };
+
+    assert_eq!(kind, RuntimeErrorKind::InvalidParameterValue);
+    assert!(
+        message.contains("page=2"),
+        "expected the target's query to be named: {message}"
+    );
+}
+
+/// An empty value against a clean target means no query at all, and must not
+/// leave a bare `?` behind.
+#[test]
+fn empty_querystring_value_yields_no_query_component() {
+    let planned = match plan(spec_with(
+        "https://elsewhere.example.com/index",
         Vec::new(),
         vec![param("filter", ParamLocation::Querystring, text(""))],
     )) {

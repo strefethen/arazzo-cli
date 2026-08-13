@@ -1163,6 +1163,146 @@ async fn execute_goto_workflow() {
     assert_eq!(outputs.get("ok"), Some(&json!(true)));
 }
 
+/// Success/Failure Action Object (Arazzo 1.1.0): action `parameters` "MUST be
+/// passed to a workflow as referenced by workflowId". A literal, a bare
+/// runtime expression, an embedded `{$...}` interpolation, and a Selector
+/// Object all resolve through the shared value resolver and arrive as the
+/// callee workflow's `$inputs` — the bare expression with its type intact,
+/// the selector against the failed step's response.
+#[tokio::test]
+async fn goto_workflow_action_parameters_become_callee_inputs() {
+    let server = start_server(|_method, url, _headers, _body| match url.as_str() {
+        "/main" => MockHttpResponse::json(500, r#"{"reason":"overload"}"#),
+        "/fallback" => MockHttpResponse::json(200, "{}"),
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "main-wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/main".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Goto),
+                    workflow_id: "fallback-wf".to_string(),
+                    parameters: vec![
+                        Parameter {
+                            name: "fixed".to_string(),
+                            value: serde_yaml_ng::Value::String("literal-value".to_string()).into(),
+                            ..Parameter::default()
+                        },
+                        Parameter {
+                            name: "uid".to_string(),
+                            value: serde_yaml_ng::Value::String("$inputs.uid".to_string()).into(),
+                            ..Parameter::default()
+                        },
+                        Parameter {
+                            name: "greeting".to_string(),
+                            value: serde_yaml_ng::Value::String("uid {$inputs.uid}".to_string())
+                                .into(),
+                            ..Parameter::default()
+                        },
+                        Parameter {
+                            name: "reason".to_string(),
+                            value: ValueSource::Selector(selector(
+                                "$response.body",
+                                "/reason",
+                                SelectorType::Name("jsonpointer".to_string()),
+                            )),
+                            ..Parameter::default()
+                        },
+                    ],
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "fallback-wf".to_string(),
+            steps: vec![Step {
+                step_id: "fb".to_string(),
+                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([
+                ("fixed".to_string(), "$inputs.fixed".to_string().into()),
+                ("uid".to_string(), "$inputs.uid".to_string().into()),
+                (
+                    "greeting".to_string(),
+                    "$inputs.greeting".to_string().into(),
+                ),
+                ("reason".to_string(), "$inputs.reason".to_string().into()),
+            ]),
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let inputs = BTreeMap::from([("uid".to_string(), json!(42))]);
+    let outputs = match engine.execute_collect("main-wf", inputs).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    assert_eq!(outputs.get("fixed"), Some(&json!("literal-value")));
+    assert_eq!(outputs.get("uid"), Some(&json!(42)));
+    assert_eq!(outputs.get("greeting"), Some(&json!("uid 42")));
+    assert_eq!(outputs.get("reason"), Some(&json!("overload")));
+}
+
+/// A goto-workflow action without `parameters` keeps the pre-1.1 behavior:
+/// the caller's own inputs transfer to the callee unchanged.
+#[tokio::test]
+async fn goto_workflow_without_parameters_forwards_caller_inputs() {
+    let server = start_server(|_method, url, _headers, _body| match url.as_str() {
+        "/main" => MockHttpResponse::json(500, "{}"),
+        "/fallback" => MockHttpResponse::json(200, "{}"),
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "main-wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/main".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Goto),
+                    workflow_id: "fallback-wf".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "fallback-wf".to_string(),
+            steps: vec![Step {
+                step_id: "fb".to_string(),
+                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([("echoed".to_string(), "$inputs.uid".to_string().into())]),
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let inputs = BTreeMap::from([("uid".to_string(), json!(7))]);
+    let outputs = match engine.execute_collect("main-wf", inputs).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    assert_eq!(outputs.get("echoed"), Some(&json!(7)));
+}
+
 #[tokio::test]
 async fn execute_recursion_guard() {
     let spec = make_spec(vec![
