@@ -552,20 +552,37 @@ pub struct RequestBody {
     pub extensions: VendorExtensions,
 }
 
-/// A single payload replacement targeting a JSON Pointer (RFC 6901) or XPath
-/// 1.0 location inside the request body. Per Arazzo 1.0.1 §4.6.14.
+/// A single payload replacement targeting a JSON Pointer (RFC 6901), JSONPath,
+/// or XPath location inside the request body. Payload Replacement Object per
+/// Arazzo 1.1.0 §5.8.15.1.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Replacement {
-    /// RFC 6901 JSON Pointer (for JSON bodies) or XPath 1.0 expression (for
-    /// XML/text bodies). Required.
+    /// JSON Pointer, JSONPath, or XPath expression resolved against the
+    /// request body. Required. Interpreted per `target_selector_type`; when
+    /// that field is omitted, §5.8.15.1 keys the interpretation on the
+    /// declared media type (JSON → JSON Pointer, XML-based → XPath).
     #[serde(default)]
     pub target: String,
+
+    /// Selector expression type for `target`: plain `jsonpath` / `xpath` /
+    /// `jsonpointer`, or the Expression Type Object form carrying a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_selector_type: Option<SelectorType>,
 
     /// Value to inject. May be a literal scalar, mapping, sequence, or an
     /// Arazzo runtime expression string resolved at send time.
     #[serde(default)]
     pub value: ValueSource,
+
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "vendor_extensions_is_empty",
+        serialize_with = "serialize_vendor_extensions",
+        deserialize_with = "deserialize_vendor_extensions"
+    )]
+    pub extensions: VendorExtensions,
 }
 
 /// Step success criterion.
@@ -868,7 +885,7 @@ pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng:
 
 #[cfg(test)]
 mod tests {
-    use super::{ParamLocation, Parameter, Replacement, RequestBody};
+    use super::{ExpressionType, ParamLocation, Parameter, Replacement, RequestBody, SelectorType};
 
     fn serialize<T: serde::Serialize>(value: &T) -> String {
         match serde_yaml_ng::to_string(value) {
@@ -892,10 +909,12 @@ mod tests {
                 Replacement {
                     target: "/foo".to_string(),
                     value: serde_yaml_ng::Value::String("bar".to_string()).into(),
+                    ..Replacement::default()
                 },
                 Replacement {
                     target: "/count".to_string(),
                     value: serde_yaml_ng::Value::Number(2.into()).into(),
+                    ..Replacement::default()
                 },
             ],
             ..RequestBody::default()
@@ -905,6 +924,66 @@ mod tests {
         let reparsed = deserialize_request_body(&serialized);
 
         assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn replacement_target_selector_type_name_form_roundtrips() {
+        let body = deserialize_request_body(
+            "contentType: application/json\nreplacements:\n  - target: $.a.b\n    targetSelectorType: jsonpath\n    value: 1\n",
+        );
+        assert_eq!(
+            body.replacements[0].target_selector_type,
+            Some(SelectorType::Name("jsonpath".to_string()))
+        );
+
+        let reparsed = deserialize_request_body(&serialize(&body));
+        assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn replacement_target_selector_type_object_form_roundtrips() {
+        // §5.8.15.2's Expression Type Object example shape.
+        let body = deserialize_request_body(
+            "contentType: application/xml\nreplacements:\n  - target: //x\n    targetSelectorType:\n      type: xpath\n      version: xpath-30\n    value: new\n",
+        );
+        assert_eq!(
+            body.replacements[0].target_selector_type,
+            Some(SelectorType::ExpressionType(ExpressionType {
+                type_: "xpath".to_string(),
+                version: "xpath-30".to_string(),
+                ..ExpressionType::default()
+            }))
+        );
+
+        let reparsed = deserialize_request_body(&serialize(&body));
+        assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn replacement_omitted_target_selector_type_roundtrips_without_field() {
+        let body = deserialize_request_body(
+            "contentType: application/json\nreplacements:\n  - target: /a\n    value: 1\n",
+        );
+        assert_eq!(body.replacements[0].target_selector_type, None);
+
+        let serialized = serialize(&body);
+        assert!(!serialized.contains("targetSelectorType"), "{serialized}");
+        assert_eq!(deserialize_request_body(&serialized), body);
+    }
+
+    #[test]
+    fn replacement_vendor_extension_survives_roundtrip() {
+        let body = deserialize_request_body(
+            "contentType: application/json\nreplacements:\n  - target: /a\n    value: 1\n    x-note: keep\n",
+        );
+        assert_eq!(
+            body.replacements[0].extensions.get("x-note"),
+            Some(&serde_yaml_ng::Value::String("keep".to_string()))
+        );
+
+        let serialized = serialize(&body);
+        assert!(serialized.contains("x-note"), "{serialized}");
+        assert_eq!(deserialize_request_body(&serialized), body);
     }
 
     #[test]

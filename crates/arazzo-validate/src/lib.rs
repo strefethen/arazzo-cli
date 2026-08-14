@@ -8,10 +8,9 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_operation_path, parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType,
-    OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step,
-    StepAction, StepTarget, SuccessCriterion, ValueSource, Workflow,
-    SUPPORTED_OPERATION_PATH_FORMS,
+    classify_operation_path, parse_unvalidated_bytes, ActionType, ArazzoSpec, OnAction,
+    OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step, StepAction,
+    StepTarget, SuccessCriterion, ValueSource, Workflow, SUPPORTED_OPERATION_PATH_FORMS,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -873,43 +872,119 @@ fn validate_selector(path: &str, selector: &SelectorObject, diagnostics: &mut Ve
         });
     }
 
-    if !matches!(type_name.as_str(), "jsonpath" | "xpath" | "jsonpointer") {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::InvalidSelectorType,
-            path: format!("{path}.type"),
-            message: format!("{path}.type must be one of jsonpath, xpath, or jsonpointer"),
-        });
-        return;
-    }
+    validate_expression_type(
+        &format!("{path}.type"),
+        &selector.type_,
+        &SELECTOR_TYPE_RULES,
+        diagnostics,
+    );
+}
 
-    let SelectorType::ExpressionType(expression_type) = &selector.type_ else {
-        return;
-    };
-    let version = expression_type.version.trim();
-    if version.is_empty() {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::MissingRequiredField,
-            path: format!("{path}.type.version"),
-            message: format!("{path}.type.version is required"),
-        });
-        return;
-    }
+/// Per-site policy for [`validate_expression_type`]: which type names each
+/// declaration form accepts and which diagnostic kind the site reports.
+/// The version table itself is shared and never varies by site.
+struct ExpressionTypeRules {
+    /// Type names accepted in the plain-name form, plus the label used in
+    /// the diagnostic message.
+    allowed_names: &'static [&'static str],
+    names_label: &'static str,
+    /// Type names accepted in the Expression Type Object form, plus label.
+    allowed_object_types: &'static [&'static str],
+    object_types_label: &'static str,
+    kind: ValidationErrorKind,
+}
 
-    let supported = match type_name.as_str() {
+const SELECTOR_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
+    allowed_names: &["jsonpath", "xpath", "jsonpointer"],
+    names_label: "jsonpath, xpath, or jsonpointer",
+    allowed_object_types: &["jsonpath", "xpath", "jsonpointer"],
+    object_types_label: "jsonpath, xpath, or jsonpointer",
+    kind: ValidationErrorKind::InvalidSelectorType,
+};
+
+const CRITERION_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
+    allowed_names: &["simple", "regex", "jsonpath", "xpath"],
+    names_label: "simple, regex, jsonpath, xpath",
+    allowed_object_types: &["jsonpath", "xpath"],
+    object_types_label: "jsonpath or xpath",
+    kind: ValidationErrorKind::InvalidCriterionType,
+};
+
+/// Arazzo v1.1.0 §5.8.12.1 version table, one accepted set for every site
+/// (Selector Object `type`, Criterion `type`, `targetSelectorType`):
+/// `jsonpath` → `rfc9535` | `draft-goessner-dispatch-jsonpath-00`; `xpath` →
+/// `xpath-31` | `xpath-30` | `xpath-20` | `xpath-10`; `jsonpointer` →
+/// `rfc6901`. The field description under §5.8.12.1 omits `xpath-31`, but the
+/// table allows it and makes it the default, and the object's own Effective
+/// Boolean Value list names "XPath 3.1 (default)"; the table is implemented.
+fn expression_type_version_supported(type_name: &str, version: &str) -> bool {
+    match type_name {
         "jsonpath" => matches!(version, "rfc9535" | "draft-goessner-dispatch-jsonpath-00"),
-        "xpath" => matches!(version, "10" | "20" | "30" | "31"),
+        "xpath" => matches!(version, "xpath-31" | "xpath-30" | "xpath-20" | "xpath-10"),
         "jsonpointer" => version == "rfc6901",
         _ => false,
-    };
-    if !supported {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::InvalidSelectorType,
-            path: format!("{path}.type.version"),
-            message: format!("{path}.type.version {version:?} is not supported for {type_name}"),
-        });
+    }
+}
+
+/// Validates a selector/criterion expression type declaration rooted at
+/// `base_path` (the path of the `type`/`targetSelectorType` field itself).
+/// Name-form errors report at `base_path`, object-form type errors at
+/// `{base_path}.type`, and version errors at `{base_path}.version`.
+fn validate_expression_type(
+    base_path: &str,
+    selector_type: &SelectorType,
+    rules: &ExpressionTypeRules,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match selector_type {
+        SelectorType::Name(name) => {
+            let normalized = name.trim().to_lowercase();
+            if !rules.allowed_names.contains(&normalized.as_str()) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: rules.kind.clone(),
+                    path: base_path.to_string(),
+                    message: format!("{base_path} must be one of {}", rules.names_label),
+                });
+            }
+        }
+        SelectorType::ExpressionType(expression_type) => {
+            let normalized = expression_type.type_.trim().to_lowercase();
+            if !rules.allowed_object_types.contains(&normalized.as_str()) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: rules.kind.clone(),
+                    path: format!("{base_path}.type"),
+                    message: format!(
+                        "{base_path}.type must be one of {}",
+                        rules.object_types_label
+                    ),
+                });
+                return;
+            }
+
+            let version = expression_type.version.trim();
+            if version.is_empty() {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: format!("{base_path}.version"),
+                    message: format!("{base_path}.version is required"),
+                });
+                return;
+            }
+
+            if !expression_type_version_supported(&normalized, version) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: rules.kind.clone(),
+                    path: format!("{base_path}.version"),
+                    message: format!(
+                        "{base_path}.version {version:?} is not supported for {normalized}"
+                    ),
+                });
+            }
+        }
     }
 }
 
@@ -927,6 +1002,14 @@ fn validate_replacements(
                 path: path.clone(),
                 message: format!("{path} is required"),
             });
+        }
+        if let Some(selector_type) = &replacement.target_selector_type {
+            validate_expression_type(
+                &format!("{path_prefix}[{replacement_idx}].targetSelectorType"),
+                selector_type,
+                &SELECTOR_TYPE_RULES,
+                diagnostics,
+            );
         }
         validate_value_source(
             &format!("{path_prefix}[{replacement_idx}].value"),
@@ -1135,69 +1218,12 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mu
         return;
     };
 
-    match type_ {
-        CriterionType::Name(name) => {
-            let normalized = name.trim().to_lowercase();
-            if !matches!(
-                normalized.as_str(),
-                "simple" | "regex" | "jsonpath" | "xpath"
-            ) {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidCriterionType,
-                    path: format!("{path}.type"),
-                    message: format!("{path}.type must be one of simple, regex, jsonpath, xpath"),
-                });
-            }
-        }
-        CriterionType::ExpressionType(expr) => {
-            let normalized = expr.type_.trim().to_lowercase();
-            if !matches!(normalized.as_str(), "jsonpath" | "xpath") {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidCriterionType,
-                    path: format!("{path}.type.type"),
-                    message: format!("{path}.type.type must be one of jsonpath or xpath"),
-                });
-                return;
-            }
-
-            let version = expr.version.trim().to_lowercase();
-            if version.is_empty() {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::MissingRequiredField,
-                    path: format!("{path}.type.version"),
-                    message: format!("{path}.type.version is required"),
-                });
-                return;
-            }
-
-            if normalized == "jsonpath" && version != "draft-goessner-dispatch-jsonpath-00" {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidCriterionType,
-                    path: format!("{path}.type.version"),
-                    message: format!(
-                        "{path}.type.version must be draft-goessner-dispatch-jsonpath-00 for jsonpath"
-                    ),
-                });
-            }
-
-            if normalized == "xpath"
-                && !matches!(version.as_str(), "xpath-10" | "xpath-20" | "xpath-30")
-            {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidCriterionType,
-                    path: format!("{path}.type.version"),
-                    message: format!(
-                        "{path}.type.version must be one of xpath-10, xpath-20, xpath-30 for xpath"
-                    ),
-                });
-            }
-        }
-    }
+    validate_expression_type(
+        &format!("{path}.type"),
+        type_,
+        &CRITERION_TYPE_RULES,
+        diagnostics,
+    );
 }
 
 /// Resolves `$ref` in workflow inputs against `components.inputs`.
@@ -2354,6 +2380,7 @@ workflows:
             replacements: vec![Replacement {
                 target: "  ".to_string(),
                 value: serde_yaml_ng::Value::String("bar".to_string()).into(),
+                ..Replacement::default()
             }],
             ..RequestBody::default()
         });
@@ -2374,6 +2401,7 @@ workflows:
             replacements: vec![Replacement {
                 target: "/foo".to_string(),
                 value: serde_yaml_ng::Value::Null.into(),
+                ..Replacement::default()
             }],
             ..RequestBody::default()
         });
@@ -2390,6 +2418,7 @@ workflows:
             replacements: vec![Replacement {
                 target: "/foo".to_string(),
                 value: serde_yaml_ng::Value::String("bar".to_string()).into(),
+                ..Replacement::default()
             }],
             ..RequestBody::default()
         });
@@ -2607,17 +2636,21 @@ workflows:
             .contains("references unknown step 'nonexistent'"));
     }
 
+    /// Decision 1 (ac-bd441): the accepted `type`/`version` pairs from the
+    /// Arazzo v1.1.0 §5.8.12.1 table, shared by every validation site.
+    const SCHEMA_TYPE_VERSIONS: [(&str, &str); 7] = [
+        ("jsonpath", "rfc9535"),
+        ("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+        ("xpath", "xpath-10"),
+        ("xpath", "xpath-20"),
+        ("xpath", "xpath-30"),
+        ("xpath", "xpath-31"),
+        ("jsonpointer", "rfc6901"),
+    ];
+
     #[test]
     fn validate_selector_accepts_schema_type_version_combinations() {
-        for (type_name, version) in [
-            ("jsonpath", "rfc9535"),
-            ("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
-            ("xpath", "10"),
-            ("xpath", "20"),
-            ("xpath", "30"),
-            ("xpath", "31"),
-            ("jsonpointer", "rfc6901"),
-        ] {
+        for (type_name, version) in SCHEMA_TYPE_VERSIONS {
             let mut spec = valid_spec();
             spec.workflows[0].outputs = BTreeMap::from([(
                 "selected".to_string(),
@@ -2719,7 +2752,161 @@ workflows:
         assert_eq!(errs[0].kind, ValidationErrorKind::InvalidCriterionType);
         assert!(errs[0]
             .message
-            .contains("type.version must be draft-goessner-dispatch-jsonpath-00"));
+            .contains("type.version \"invalid-version\" is not supported for jsonpath"));
+    }
+
+    #[test]
+    fn validate_criterion_accepts_schema_type_version_combinations() {
+        // Decision 1: the criterion site shares the §5.8.12.1 table —
+        // notably `rfc9535` and `xpath-31`, which it used to reject.
+        for (type_name, version) in SCHEMA_TYPE_VERSIONS {
+            if type_name == "jsonpointer" {
+                // Criterion object types are jsonpath | xpath only.
+                continue;
+            }
+            let mut spec = valid_spec();
+            spec.workflows[0].steps[0].success_criteria = vec![SuccessCriterion {
+                context: "$response.body".to_string(),
+                condition: if type_name == "xpath" {
+                    "//pets".to_string()
+                } else {
+                    "$.pets[0]".to_string()
+                },
+                type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
+                    type_: type_name.to_string(),
+                    version: version.to_string(),
+                    ..CriterionExpressionType::default()
+                })),
+                ..SuccessCriterion::default()
+            }];
+
+            if let Err(error) = validate(&spec) {
+                panic!("expected criterion {type_name} {version} to validate: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_selector_rejects_bare_number_xpath_versions() {
+        // Decision 1 negative: the pre-ticket bare-number tokens are not in
+        // the §5.8.12.1 table and no longer validate.
+        for version in ["10", "30"] {
+            let mut spec = valid_spec();
+            spec.workflows[0].outputs = BTreeMap::from([(
+                "selected".to_string(),
+                OutputValue::Selector(SelectorObject {
+                    context: "$inputs.document".to_string(),
+                    selector: "//items".to_string(),
+                    type_: SelectorType::ExpressionType(CriterionExpressionType {
+                        type_: "xpath".to_string(),
+                        version: version.to_string(),
+                        ..CriterionExpressionType::default()
+                    }),
+                    extensions: BTreeMap::new(),
+                }),
+            )]);
+
+            let errors = expect_validation_errors(validate(&spec));
+            assert_eq!(errors[0].kind, ValidationErrorKind::InvalidSelectorType);
+            assert!(
+                errors[0].message.contains("not supported for xpath"),
+                "{version}: {}",
+                errors[0].message
+            );
+        }
+    }
+
+    fn replacement_with_type(type_: SelectorType, target: &str) -> Replacement {
+        Replacement {
+            target: target.to_string(),
+            target_selector_type: Some(type_),
+            value: serde_yaml_ng::Value::String("v".to_string()).into(),
+            ..Replacement::default()
+        }
+    }
+
+    fn spec_with_replacement(replacement: Replacement) -> ArazzoSpec {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].request_body = Some(RequestBody {
+            replacements: vec![replacement],
+            ..RequestBody::default()
+        });
+        spec
+    }
+
+    #[test]
+    fn validate_target_selector_type_accepts_schema_type_version_combinations() {
+        for (type_name, version) in SCHEMA_TYPE_VERSIONS {
+            let spec = spec_with_replacement(replacement_with_type(
+                SelectorType::ExpressionType(CriterionExpressionType {
+                    type_: type_name.to_string(),
+                    version: version.to_string(),
+                    ..CriterionExpressionType::default()
+                }),
+                "/foo",
+            ));
+
+            if let Err(error) = validate(&spec) {
+                panic!("expected targetSelectorType {type_name} {version} to validate: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_target_selector_type_accepts_plain_names() {
+        // Decision 3: plain `xpath` (meaning XPath 3.1) is conformant Arazzo
+        // and must validate even though the runtime engine is XPath 1.0.
+        for name in ["jsonpath", "xpath", "jsonpointer"] {
+            let spec = spec_with_replacement(replacement_with_type(
+                SelectorType::Name(name.to_string()),
+                "/foo",
+            ));
+
+            if let Err(error) = validate(&spec) {
+                panic!("expected targetSelectorType {name} to validate: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn validate_target_selector_type_rejects_unknown_name() {
+        let spec = spec_with_replacement(replacement_with_type(
+            SelectorType::Name("regex".to_string()),
+            "/foo",
+        ));
+
+        let errors = expect_validation_errors(validate(&spec));
+        assert_eq!(errors[0].kind, ValidationErrorKind::InvalidSelectorType);
+        assert!(
+            errors[0].path.contains("targetSelectorType"),
+            "{}",
+            errors[0].path
+        );
+        assert!(errors[0]
+            .message
+            .contains("must be one of jsonpath, xpath, or jsonpointer"));
+    }
+
+    #[test]
+    fn validate_target_selector_type_rejects_bare_number_and_unknown_versions() {
+        for version in ["10", "30", "rfc9536"] {
+            let spec = spec_with_replacement(replacement_with_type(
+                SelectorType::ExpressionType(CriterionExpressionType {
+                    type_: "xpath".to_string(),
+                    version: version.to_string(),
+                    ..CriterionExpressionType::default()
+                }),
+                "//foo",
+            ));
+
+            let errors = expect_validation_errors(validate(&spec));
+            assert_eq!(errors[0].kind, ValidationErrorKind::InvalidSelectorType);
+            assert!(
+                errors[0].message.contains("not supported for xpath"),
+                "{version}: {}",
+                errors[0].message
+            );
+        }
     }
 
     #[test]

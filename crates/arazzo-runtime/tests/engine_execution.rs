@@ -1948,6 +1948,7 @@ fn replacement(target: &str, value: serde_yaml_ng::Value) -> Replacement {
     Replacement {
         target: target.to_string(),
         value: value.into(),
+        ..Replacement::default()
     }
 }
 
@@ -2031,6 +2032,7 @@ async fn structured_selectors_share_one_runtime_across_callers() {
                             "/items/0/id",
                             jsonpointer.clone(),
                         )),
+                        ..Replacement::default()
                     }],
                     ..RequestBody::default()
                 }),
@@ -2188,10 +2190,12 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
         .warnings
         .iter()
         .any(|warning| warning.contains("array slices are not supported")));
+    // Decision 1 (ac-bd441): bare-number XPath version tokens are not in the
+    // §5.8.12.1 table and are invalid metadata, not a capability gap.
     assert!(trace
         .warnings
         .iter()
-        .any(|warning| warning.contains("unsupported by this XPath 1.0 runtime")));
+        .any(|warning| warning.contains("unsupported XPath version \"20\"")));
 }
 
 fn captured_string(captured: &Arc<Mutex<String>>) -> String {

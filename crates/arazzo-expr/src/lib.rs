@@ -1061,6 +1061,128 @@ pub fn select_json_path(root: &Value, selector: &str) -> Result<JsonPathSelectio
     Ok(JsonPathSelection { value, match_count })
 }
 
+/// Resolve a JSONPath from the runtime's supported subset to the RFC 6901
+/// pointer of every matched location, in traversal order.
+///
+/// Companion to [`select_json_path`]: same subset validation and traversal,
+/// but returns addressable locations instead of cloned values, so callers can
+/// mutate through a JSON Pointer applier (the workspace's single mutating
+/// code path). The root selector `$` resolves to the empty pointer.
+pub fn resolve_json_path_pointers(root: &Value, selector: &str) -> Result<Vec<String>, PathError> {
+    let trimmed = selector.trim();
+    validate_json_path_subset(trimmed)?;
+    let normalized = normalize_json_path(trimmed);
+    if normalized.is_empty() {
+        return Ok(vec![String::new()]);
+    }
+    let tokens = tokenize_path(normalized)?;
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut current: Vec<(String, &Value)> = vec![(String::new(), root)];
+    for (idx, token) in tokens.iter().copied().enumerate() {
+        let is_last = idx + 1 == tokens.len();
+        if matches!(token, PathToken::Hash) && is_last {
+            return Err(PathError::InvalidSyntax {
+                path: trimmed.to_string(),
+                detail: "'#' selects a length, not an addressable location".to_string(),
+            });
+        }
+        current = apply_path_token_traced(&current, token);
+        if current.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
+
+    Ok(current.into_iter().map(|(pointer, _)| pointer).collect())
+}
+
+/// Mirror of [`apply_path_token`] that carries each node's RFC 6901 pointer
+/// through the traversal. Kept separate so the value-selection hot path does
+/// not pay for pointer strings it never uses; the match arms must stay in
+/// lockstep with [`apply_path_token`].
+fn apply_path_token_traced<'a>(
+    nodes: &[(String, &'a Value)],
+    token: PathToken<'_>,
+) -> Vec<(String, &'a Value)> {
+    let mut out = Vec::new();
+
+    match token {
+        PathToken::Field(name) => {
+            for (pointer, node) in nodes {
+                if let Some(obj) = node.as_object() {
+                    if let Some(value) = obj.get(name) {
+                        out.push((join_json_pointer(pointer, name), value));
+                        continue;
+                    }
+                }
+
+                if let Ok(idx) = name.parse::<usize>() {
+                    if let Some(arr) = node.as_array() {
+                        if arr.get(idx).is_some() {
+                            out.push((join_json_pointer(pointer, name), &arr[idx]));
+                        }
+                    }
+                }
+            }
+        }
+        PathToken::Index(idx) => {
+            for (pointer, node) in nodes {
+                if let Some(arr) = node.as_array() {
+                    if arr.get(idx).is_some() {
+                        out.push((join_json_pointer(pointer, &idx.to_string()), &arr[idx]));
+                    }
+                }
+            }
+        }
+        PathToken::Wildcard => {
+            for (pointer, node) in nodes {
+                if let Some(arr) = node.as_array() {
+                    for (idx, value) in arr.iter().enumerate() {
+                        out.push((join_json_pointer(pointer, &idx.to_string()), value));
+                    }
+                } else if let Some(obj) = node.as_object() {
+                    for (key, value) in obj {
+                        out.push((join_json_pointer(pointer, key), value));
+                    }
+                }
+            }
+        }
+        PathToken::Hash => {
+            for (pointer, node) in nodes {
+                if let Some(arr) = node.as_array() {
+                    for (idx, value) in arr.iter().enumerate() {
+                        out.push((join_json_pointer(pointer, &idx.to_string()), value));
+                    }
+                }
+            }
+        }
+        PathToken::Filter { expr, all_matches } => {
+            for (pointer, node) in nodes {
+                if let Some(arr) = node.as_array() {
+                    for (idx, item) in arr.iter().enumerate() {
+                        if filter_matches(item, expr) {
+                            out.push((join_json_pointer(pointer, &idx.to_string()), item));
+                            if !all_matches {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// Append one reference token to an RFC 6901 pointer, escaping `~` and `/`.
+fn join_json_pointer(base: &str, token: &str) -> String {
+    let escaped = token.replace('~', "~0").replace('/', "~1");
+    format!("{base}/{escaped}")
+}
+
 fn normalize_json_path(path: &str) -> &str {
     if path == "$" || path == "@" {
         return "";
@@ -2173,6 +2295,70 @@ mod tests {
         let zero = selected(&root, "$.missing");
         assert_eq!(zero.value, Value::Null);
         assert_eq!(zero.match_count, 0);
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_tracks_locations_and_cardinality() {
+        let root = json!({
+            "items": [
+                {"sku": "ABC123", "quantity": 1},
+                {"sku": "XYZ999", "quantity": 5}
+            ]
+        });
+
+        let one = super::resolve_json_path_pointers(&root, "$.items[0].quantity");
+        assert_eq!(one, Ok(vec!["/items/0/quantity".to_string()]));
+
+        let filtered =
+            super::resolve_json_path_pointers(&root, "$.items[?(@.sku=='ABC123')].quantity");
+        assert_eq!(filtered, Ok(vec!["/items/0/quantity".to_string()]));
+
+        let many = super::resolve_json_path_pointers(&root, "$.items[*].sku");
+        assert_eq!(
+            many,
+            Ok(vec!["/items/0/sku".to_string(), "/items/1/sku".to_string()])
+        );
+
+        let zero = super::resolve_json_path_pointers(&root, "$.missing");
+        assert_eq!(zero, Ok(Vec::new()));
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_root_is_empty_pointer() {
+        let root = json!({"a": 1});
+        assert_eq!(
+            super::resolve_json_path_pointers(&root, "$"),
+            Ok(vec![String::new()])
+        );
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_escapes_rfc6901_tokens() {
+        let root = json!({"a/b": {"c~d": 1}});
+        assert_eq!(
+            super::resolve_json_path_pointers(&root, "$['a/b']['c~d']"),
+            Ok(vec!["/a~1b/c~0d".to_string()])
+        );
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_rejects_terminal_hash() {
+        let root = json!({"items": [1, 2]});
+        let err = match super::resolve_json_path_pointers(&root, "$.items.#") {
+            Err(err) => err,
+            Ok(pointers) => panic!("expected error, got {pointers:?}"),
+        };
+        assert!(err.to_string().contains("addressable location"), "{err}");
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_rejects_unsupported_syntax() {
+        let root = json!({"items": [1, 2, 3]});
+        let err = match super::resolve_json_path_pointers(&root, "$..items") {
+            Err(err) => err,
+            Ok(pointers) => panic!("expected error, got {pointers:?}"),
+        };
+        assert!(err.to_string().contains("recursive descent"), "{err}");
     }
 
     #[test]

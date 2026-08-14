@@ -22,6 +22,7 @@ fn replacement(target: &str, value: &str) -> Replacement {
     Replacement {
         target: target.to_string(),
         value: serde_yaml_ng::Value::String(value.to_string()).into(),
+        ..Replacement::default()
     }
 }
 
