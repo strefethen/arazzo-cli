@@ -1,10 +1,11 @@
 //! OpenAPI → Arazzo CRUD workflow generator.
 //!
-//! Given an OpenAPI 3.0 spec, produces a runnable Arazzo 1.0 document with
+//! Given an OpenAPI 3.0 spec, produces a runnable Arazzo 1.1 document with
 //! CRUD workflows, chained steps, authentication setup, and realistic request
 //! bodies derived from schema examples.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 use arazzo_spec::{
     ActionType, ArazzoSpec, Info, JsonSchemaType, OnAction, ParamLocation, Parameter, PropertyDef,
@@ -27,11 +28,30 @@ pub struct GenerateOutput {
 }
 
 /// Generate CRUD workflows from an OpenAPI spec.
-pub fn generate_crud(openapi: &OpenAPI, spec_filename: &str) -> Result<GenerateOutput, String> {
+///
+/// `document_url` is the value written into `sourceDescriptions[].url`: a
+/// relative path — per the Arazzo Specification's Source Description Object,
+/// a URI-reference per RFC 3986 §4.2 — that resolves to the OpenAPI document
+/// `openapi` was parsed from, relative to the directory the generated Arazzo
+/// document will itself live in. Callers compute it (see
+/// [`relative_document_url`] for the CLI's file-writing case); this function
+/// only writes it through, since it has no notion of where its own output
+/// will land.
+pub fn generate_crud(
+    openapi: &OpenAPI,
+    spec_filename: &str,
+    document_url: &str,
+) -> Result<GenerateOutput, String> {
     let mut warnings = Vec::new();
 
     check_openapi_version(&openapi.openapi, &mut warnings)?;
-    let server_url = extract_server_url(openapi, &mut warnings)?;
+    // The server URL is no longer written into the generated document (that
+    // baked the API's base URL into `sourceDescriptions[].url`, which the
+    // Arazzo Specification reserves for a URL to the source description
+    // itself). It is still extracted so the existing diagnostics — no
+    // `servers` entry, an empty server URL, a relative server URL, and
+    // server-variable substitution — keep firing at generation time.
+    extract_server_url(openapi, &mut warnings)?;
     let groups = group_resources(openapi, &mut warnings);
     if groups.is_empty() {
         return Err("no CRUD resource groups found in the OpenAPI spec".to_string());
@@ -48,7 +68,7 @@ pub fn generate_crud(openapi: &OpenAPI, spec_filename: &str) -> Result<GenerateO
     }
 
     let spec = ArazzoSpec {
-        arazzo: "1.0.0".to_string(),
+        arazzo: "1.1.0".to_string(),
         info: Info {
             title: format!("{} Workflows", openapi.info.title),
             version: "1.0.0".to_string(),
@@ -58,7 +78,7 @@ pub fn generate_crud(openapi: &OpenAPI, spec_filename: &str) -> Result<GenerateO
         },
         source_descriptions: vec![SourceDescription {
             name: source_name,
-            url: server_url,
+            url: document_url.to_string(),
             type_: SourceType::OpenApi,
             ..SourceDescription::default()
         }],
@@ -127,6 +147,150 @@ fn extract_server_url(openapi: &OpenAPI, warnings: &mut Vec<String>) -> Result<S
 
     let url = url.trim_end_matches('/').to_string();
     Ok(url)
+}
+
+// ─── Source Document URL ─────────────────────────────────────────────────────
+
+/// Computes the `sourceDescriptions[].url` that points at the OpenAPI document
+/// `spec_path` was read from, relative to `output_dir` — the directory the
+/// generated Arazzo document will itself live in (an `--output` file's parent,
+/// or the current working directory when writing to stdout).
+///
+/// `spec_path` and `output_dir` may each be relative or absolute; `cwd`
+/// resolves any relative input to an absolute path before diffing. It is a
+/// parameter rather than read from the process so this stays hermetic and
+/// testable — callers pass `std::env::current_dir()`.
+///
+/// Each resolved path is canonicalized when it exists on disk, and only
+/// falls back to a lexical (non-symlink-aware) normalization otherwise —
+/// e.g. in tests that use paths which do not exist. A relative `..`-count
+/// computed from un-resolved symlinked components (such as macOS's
+/// `/tmp` → `/private/tmp`) can undercount how many directories up the *real*
+/// common ancestor sits, which then resolves to the wrong file once the
+/// runtime later walks that same relative path from the (possibly still
+/// symlinked) document directory — canonicalizing first keeps the `..` count
+/// correct regardless of which spelling either side was given in.
+///
+/// The Arazzo Specification's Source Description Object requires a relative
+/// `url` to be a URI-reference (RFC 3986 §4.2); the runtime resolves it as a
+/// raw filesystem path with no percent-decoding
+/// (`runtime_core/builder.rs::load_document_source`), so this function never
+/// percent-encodes its output — a spec filename that needs escaping to be a
+/// strict URI-reference is a known, accepted deviation.
+pub fn relative_document_url(
+    spec_path: &str,
+    output_dir: &Path,
+    cwd: &Path,
+) -> Result<String, String> {
+    // Invariant that keeps a mixed canonicalize/lexical-fallback pairing
+    // unreachable through shipped code: the CLI is this function's only
+    // caller, and by the time it calls this, `spec_path` has already been
+    // read successfully (so it canonicalizes) and `output_dir` must already
+    // exist, because the later `fs::write` of the generated file has no
+    // directory-creation step and fails before anything is persisted if it
+    // does not. Both sides canonicalize, or neither does. A mix is only
+    // reachable by calling this function directly, as the unit tests below
+    // do with paths chosen not to exist on either side.
+    let resolve = |path: &Path| -> PathBuf {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(&absolute).unwrap_or_else(|_| normalize_lexically(&absolute))
+    };
+
+    let abs_spec = resolve(Path::new(spec_path));
+    let abs_output_dir = resolve(output_dir);
+
+    let spec_components: Vec<Component> = abs_spec.components().collect();
+    let output_components: Vec<Component> = abs_output_dir.components().collect();
+
+    let common = spec_components
+        .iter()
+        .zip(output_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    if common == 0 {
+        return Err(format!(
+            "cannot express OpenAPI document \"{spec_path}\" as a path relative to \"{}\"; \
+             they share no common root",
+            output_dir.display()
+        ));
+    }
+
+    let mut rel = PathBuf::new();
+    for _ in &output_components[common..] {
+        rel.push("..");
+    }
+    for comp in &spec_components[common..] {
+        rel.push(comp.as_os_str());
+    }
+
+    if rel.as_os_str().is_empty() {
+        return Err(format!(
+            "OpenAPI document \"{spec_path}\" resolves to the generated document's own \
+             directory, not a file within it"
+        ));
+    }
+
+    // The value is a URI-reference (RFC 3986 §4.2), not a platform filesystem
+    // path — always join with `/` so generated files stay portable across
+    // machines regardless of the host OS.
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    Ok(guard_uri_scheme_ambiguity(&parts.join("/")))
+}
+
+/// Prefixes `./` when `url`'s first path segment contains a `:`.
+///
+/// A relative-path reference whose first segment contains a colon is not a
+/// valid RFC 3986 §4.2 relative reference — per §4.2, it is indistinguishable
+/// from an absolute URI's `scheme:`, so a spec named e.g. `api:v2.yaml` would
+/// emit `url: api:v2.yaml`. The runtime's own classifier,
+/// `is_relative_document_source` (`runtime_core/builder.rs`), tests
+/// `Url::parse(&sd.url) == Err(RelativeUrlWithoutBase)` to decide "is this a
+/// document to load"; `Url::parse("api:v2.yaml")` succeeds (scheme `api`,
+/// opaque path `v2.yaml`), so that document would silently be treated as an
+/// absolute base URL instead of loaded, and request URLs would resolve to
+/// `api:v2.yaml/...` instead of the document's real `servers[0]`.
+///
+/// `./` sidesteps this without a runtime change: `Url::parse("./api:v2.yaml")`
+/// fails with `RelativeUrlWithoutBase` (document semantics restored), and
+/// `base_dir.join("./x")` resolves identically to `base_dir.join("x")` — `./`
+/// is a no-op path component to any filesystem join.
+pub fn guard_uri_scheme_ambiguity(url: &str) -> String {
+    let first_segment = url.split('/').next().unwrap_or(url);
+    if first_segment.contains(':') {
+        format!("./{url}")
+    } else {
+        url.to_string()
+    }
+}
+
+/// Resolves `.` and `..` components without touching the filesystem — neither
+/// path need exist. `..` cancels a preceding normal component; it is kept
+/// (and accumulates) when there is nothing to cancel, e.g. leading `../..`
+/// segments in an already-relative absolute-joined path.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out: Vec<Component> = Vec::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.last(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push(comp);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out.into_iter().collect()
 }
 
 // ─── Resource Grouping ───────────────────────────────────────────────────────
@@ -785,6 +949,7 @@ fn build_step(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn parse_openapi(yaml: &str) -> OpenAPI {
         serde_yaml_ng::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"))
@@ -990,6 +1155,240 @@ paths: {}
     }
 
     #[test]
+    fn test_server_url_extraction_missing_servers() {
+        let yaml = r#"
+openapi: "3.0.3"
+info:
+  title: Test
+  version: "1.0"
+paths: {}
+"#;
+        let openapi = parse_openapi(yaml);
+        let mut warnings = Vec::new();
+        let err = extract_server_url(&openapi, &mut warnings).unwrap_err();
+        assert!(
+            err.contains("no servers defined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_server_url_extraction_empty() {
+        let yaml = r#"
+openapi: "3.0.3"
+info:
+  title: Test
+  version: "1.0"
+servers:
+  - url: ""
+paths: {}
+"#;
+        let openapi = parse_openapi(yaml);
+        let mut warnings = Vec::new();
+        let err = extract_server_url(&openapi, &mut warnings).unwrap_err();
+        assert!(
+            err.contains("server URL is empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_server_url_extraction_relative() {
+        let yaml = r#"
+openapi: "3.0.3"
+info:
+  title: Test
+  version: "1.0"
+servers:
+  - url: "/v1"
+paths: {}
+"#;
+        let openapi = parse_openapi(yaml);
+        let mut warnings = Vec::new();
+        let err = extract_server_url(&openapi, &mut warnings).unwrap_err();
+        assert!(err.contains("is relative"), "unexpected error: {err}");
+    }
+
+    // These use a path root guaranteed not to exist on the test host, which
+    // exercises the lexical-normalization fallback (as opposed to the
+    // canonicalizing fast path — see `test_relative_document_url_resolves_
+    // through_symlinked_directories` below for that one).
+    const FAKE_ROOT: &str = "/nonexistent-ac91284-root";
+
+    #[test]
+    fn test_relative_document_url_same_directory() {
+        let url = relative_document_url(
+            "openapi.yaml",
+            &PathBuf::from(FAKE_ROOT).join("work"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "openapi.yaml");
+    }
+
+    #[test]
+    fn test_relative_document_url_output_in_subdirectory() {
+        // `--output out/generated.yaml` from cwd `<root>/work`, spec relative
+        // in cwd.
+        let url = relative_document_url(
+            "openapi.yaml",
+            &PathBuf::from(FAKE_ROOT).join("work/out"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "../openapi.yaml");
+    }
+
+    #[test]
+    fn test_relative_document_url_output_in_unrelated_absolute_directory() {
+        // `--output <root>/elsewhere/out/generated.yaml` from cwd
+        // `<root>/work`, spec relative to a `specs/` subdirectory of cwd.
+        let url = relative_document_url(
+            "specs/petstore.yaml",
+            &PathBuf::from(FAKE_ROOT).join("elsewhere/out"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "../../work/specs/petstore.yaml");
+    }
+
+    #[test]
+    fn test_relative_document_url_absolute_spec_is_relativized() {
+        let url = relative_document_url(
+            &format!("{FAKE_ROOT}/specs/openapi.yaml"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "../specs/openapi.yaml");
+        assert!(
+            !Path::new(&url).is_absolute(),
+            "emitted url must never be an absolute filesystem path: {url}"
+        );
+    }
+
+    #[test]
+    fn test_relative_document_url_dot_segments_normalized() {
+        let url = relative_document_url(
+            "./specs/../openapi.yaml",
+            &PathBuf::from(FAKE_ROOT).join("work"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "openapi.yaml");
+    }
+
+    #[test]
+    fn test_guard_uri_scheme_ambiguity_prefixes_dot_slash_when_first_segment_has_colon() {
+        // "api:v2.yaml" alone parses as a URI with scheme "api" — not a
+        // relative-path reference (RFC 3986 §4.2) — so is_relative_document_
+        // source (runtime_core/builder.rs) would treat it as an absolute base
+        // url instead of a document to load.
+        assert_eq!(guard_uri_scheme_ambiguity("api:v2.yaml"), "./api:v2.yaml");
+        // A colon-bearing first segment after `..` segments is still the
+        // first segment of the *string* — RFC 3986 §3.1 scheme ambiguity
+        // reads left to right, so this is ambiguous too.
+        assert_eq!(
+            guard_uri_scheme_ambiguity("api:v2.yaml/pets"),
+            "./api:v2.yaml/pets"
+        );
+    }
+
+    #[test]
+    fn test_guard_uri_scheme_ambiguity_leaves_unambiguous_urls_untouched() {
+        assert_eq!(guard_uri_scheme_ambiguity("openapi.yaml"), "openapi.yaml");
+        assert_eq!(
+            guard_uri_scheme_ambiguity("../openapi.yaml"),
+            "../openapi.yaml"
+        );
+        // A colon past the first segment is not ambiguous with a scheme.
+        assert_eq!(
+            guard_uri_scheme_ambiguity("specs/api:v2.yaml"),
+            "specs/api:v2.yaml"
+        );
+    }
+
+    #[test]
+    fn test_relative_document_url_guards_colon_bearing_spec_filename() {
+        // A spec named with a colon in its first path segment (e.g. an
+        // OpenAPI-style versioned file name) must come back `./`-prefixed.
+        // This only checks the string transformation; the proof that it
+        // keeps the document loadable by the real runtime classifier
+        // (`is_relative_document_source`, which parses the url with the
+        // `url` crate) is the CLI's end-to-end
+        // `generate_dry_run_round_trip_with_colon_bearing_spec_filename`,
+        // which exercises the actual compiled runtime.
+        let url = relative_document_url(
+            "api:v2.yaml",
+            &PathBuf::from(FAKE_ROOT).join("work"),
+            &PathBuf::from(FAKE_ROOT).join("work"),
+        )
+        .unwrap();
+        assert_eq!(url, "./api:v2.yaml");
+    }
+
+    #[test]
+    fn test_relative_document_url_resolves_through_symlinked_directories() {
+        // Regression: a purely lexical `..`-count is wrong when a path
+        // component is a symlink (e.g. macOS's `/tmp` -> `/private/tmp`) —
+        // `..` always walks the *real* directory graph. Reproduce that shape
+        // with a private symlink so the test does not depend on the host's
+        // `/tmp` layout, then prove the emitted url actually resolves back
+        // to the spec file the way `EngineBuilder`'s document loader would
+        // join it (`base_dir.join(&sd.url)`).
+        let base = std::env::temp_dir().join(format!(
+            "ac91284-relative-document-url-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        let real_root = base.join("real-root");
+        let spec_dir = real_root.join("specs");
+        fs::create_dir_all(&spec_dir).unwrap_or_else(|e| panic!("creating spec dir: {e}"));
+        let spec_path = spec_dir.join("openapi.yaml");
+        fs::write(&spec_path, b"openapi: 3.0.3\n").unwrap_or_else(|e| panic!("writing spec: {e}"));
+
+        let link_root = base.join("link-root");
+        symlink_dir(&real_root, &link_root);
+
+        let output_dir = link_root.join("out");
+        fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("creating output dir: {e}"));
+
+        let cwd = std::env::current_dir().unwrap_or_else(|e| panic!("reading cwd: {e}"));
+        let url = relative_document_url(&spec_path.to_string_lossy(), &output_dir, &cwd)
+            .unwrap_or_else(|e| panic!("relative_document_url: {e}"));
+
+        // Resolve the emitted url exactly as the runtime does — join it onto
+        // the (possibly still-symlinked) generated document's directory —
+        // and confirm it lands on the real spec file.
+        let resolved = output_dir.join(&url);
+        let resolved_real = fs::canonicalize(&resolved)
+            .unwrap_or_else(|e| panic!("canonicalizing {resolved:?}: {e} (url was {url:?})"));
+        let spec_real =
+            fs::canonicalize(&spec_path).unwrap_or_else(|e| panic!("canonicalizing spec: {e}"));
+        assert_eq!(
+            resolved_real, spec_real,
+            "relative url {url:?} from {output_dir:?} did not resolve back to {spec_path:?}"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    fn symlink_dir(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link)
+            .unwrap_or_else(|e| panic!("symlinking {link:?} -> {target:?}: {e}"));
+    }
+
+    #[cfg(not(unix))]
+    fn symlink_dir(target: &Path, link: &Path) {
+        std::os::windows::fs::symlink_dir(target, link)
+            .unwrap_or_else(|e| panic!("symlinking {link:?} -> {target:?}: {e}"));
+    }
+
+    #[test]
     fn test_derive_source_name() {
         assert_eq!(derive_source_name("Petstore", "spec.yaml"), "petstore");
         assert_eq!(
@@ -1004,13 +1403,23 @@ paths: {}
         let yaml = include_str!("../../../testdata/petstore.openapi.yaml");
         let openapi: OpenAPI =
             serde_yaml_ng::from_str(yaml).unwrap_or_else(|e| panic!("parse error: {e}"));
-        let result = generate_crud(&openapi, "petstore.openapi.yaml")
+        let result = generate_crud(&openapi, "petstore.openapi.yaml", "petstore.openapi.yaml")
             .unwrap_or_else(|e| panic!("generate error: {e}"));
 
-        assert_eq!(result.spec.arazzo, "1.0.0");
+        assert_eq!(result.spec.arazzo, "1.1.0");
         assert!(!result.spec.workflows.is_empty());
         assert!(!result.resources.is_empty());
         assert!(result.auth_type.is_some());
+
+        // The source description points at the OpenAPI document, not the
+        // API's base URL (petstore.openapi.yaml declares
+        // `servers[0].url: https://petstore.example.com/v1`, which must not
+        // appear here).
+        assert_eq!(result.spec.source_descriptions.len(), 1);
+        assert_eq!(
+            result.spec.source_descriptions[0].url,
+            "petstore.openapi.yaml"
+        );
 
         for wf in &result.spec.workflows {
             for step in &wf.steps {
@@ -1026,6 +1435,11 @@ paths: {}
             .unwrap_or_else(|e| panic!("serialize error: {e}"));
         assert!(yaml_out.contains("arazzo:"));
         assert!(yaml_out.contains("crud-pets"));
+        assert!(yaml_out.contains("url: petstore.openapi.yaml"));
+        assert!(
+            !yaml_out.contains("https://petstore.example.com"),
+            "the API base URL must not be baked into the generated document: {yaml_out}"
+        );
 
         assert!(
             yaml_out.contains("{petstore}."),
@@ -1035,5 +1449,56 @@ paths: {}
             !yaml_out.contains("extensions:"),
             "generated specs should not emit empty extension maps"
         );
+    }
+
+    #[test]
+    fn test_full_generation_server_url_with_path_prefix_and_variables_unaffected() {
+        // servers[0].url carries both a path prefix and a variable default;
+        // extract_server_url's substitution/diagnostics still run even
+        // though its result is no longer written into the document — this
+        // is the "generation-time diagnostics are preserved" guarantee.
+        let yaml = r#"
+openapi: "3.0.3"
+info:
+  title: Variable API
+  version: "1.0"
+servers:
+  - url: "https://{host}/v2"
+    variables:
+      host:
+        default: api.example.com
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: createItem
+      responses:
+        "201":
+          description: Created
+  /items/{itemId}:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: OK
+"#;
+        let openapi = parse_openapi(yaml);
+        let result = generate_crud(&openapi, "variable-api.yaml", "variable-api.yaml")
+            .unwrap_or_else(|e| panic!("generate error: {e}"));
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("host") && w.contains("api.example.com")),
+            "expected server-variable substitution warning, got: {:?}",
+            result.warnings
+        );
+        assert_eq!(result.spec.source_descriptions[0].url, "variable-api.yaml");
+        assert!(!result.spec.source_descriptions[0].url.contains("http"));
     }
 }

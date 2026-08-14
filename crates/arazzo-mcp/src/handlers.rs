@@ -438,7 +438,24 @@ pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
         Err(err) => return tool_err(&err),
     };
 
-    let result = match arazzo_generate::crud::generate_crud(&openapi, file_path) {
+    // This tool returns YAML as a string with no output path — there is no
+    // "directory the generated file will live in" to rebase against, so the
+    // document url is just the spec's own file name, which resolves
+    // correctly wherever the caller ultimately saves the returned YAML
+    // alongside the OpenAPI document. Guarded the same way as the CLI's
+    // `relative_document_url`: a file name containing a `:` (e.g.
+    // `api:v2.yaml`) is not a valid RFC 3986 §4.2 relative reference on its
+    // own — it parses as a URI scheme — so it needs the same `./` prefix.
+    let document_name = match Path::new(file_path).file_name().and_then(|n| n.to_str()) {
+        Some(name) => arazzo_generate::crud::guard_uri_scheme_ambiguity(name),
+        None => {
+            return tool_err(&format!(
+                "cannot derive a document file name from \"{file_path}\""
+            ))
+        }
+    };
+
+    let result = match arazzo_generate::crud::generate_crud(&openapi, file_path, &document_name) {
         Ok(r) => r,
         Err(err) => return tool_err(&err),
     };

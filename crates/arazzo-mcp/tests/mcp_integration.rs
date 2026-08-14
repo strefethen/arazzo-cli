@@ -3,7 +3,9 @@
 //! Uses `tiny_http` mock servers so tests run without external API calls.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Cursor;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -743,4 +745,169 @@ fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
         text.contains("outside"),
         "expected the source name in the denial, got: {text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// generate_workflow: document-pointing sourceDescriptions url (ac-91284)
+// ---------------------------------------------------------------------------
+//
+// generate_workflow returns YAML as a string with no output path, and its
+// `file_path` argument is commonly absolute (an MCP client passes whatever
+// path it has). There is no "directory the generated file will live in" to
+// rebase against here, so the emitted url is just the OpenAPI document's own
+// file name — correct wherever the caller ultimately saves the returned YAML
+// alongside that document, and never the absolute directory `file_path` came
+// from.
+
+#[test]
+fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
+    let state = ServerState::empty();
+    let file_path = testdata_path("petstore.openapi.yaml");
+    assert!(
+        Path::new(&file_path).is_absolute(),
+        "fixture path must be absolute to exercise the MCP scenario"
+    );
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"generate_workflow","arguments":{"file_path": file_path}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(
+        responses.len() >= 2,
+        "expected 2 responses, got {responses:?}"
+    );
+    assert!(
+        !is_tool_error(&responses[1]),
+        "generate_workflow should succeed, got: {}",
+        responses[1]
+    );
+
+    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    let yaml = result["yaml"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
+
+    assert!(
+        yaml.contains("url: petstore.openapi.yaml"),
+        "expected the document's own file name as url, got:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("https://petstore.example.com"),
+        "the API base URL must not be baked into sourceDescriptions[].url:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains(&file_path),
+        "the absolute directory file_path came from must not leak into the \
+         generated document:\n{yaml}"
+    );
+}
+
+#[test]
+fn test_generate_workflow_guards_colon_bearing_file_name() {
+    // P1 regression (ac-91284 review): a file name with a `:` in it (e.g. an
+    // OpenAPI-style versioned name) is not on its own a valid RFC 3986 §4.2
+    // relative-path reference — it parses as an absolute URI with that text
+    // as its scheme. Without a `./` guard the emitted
+    // `url: api:v2.openapi.yaml` would make the runtime's classifier
+    // (`is_relative_document_source`, `runtime_core/builder.rs`, which
+    // parses the url with the `url` crate) treat the source as an absolute
+    // base url instead of a document to load.
+    let openapi_yaml = fs::read_to_string(testdata_path("petstore.openapi.yaml"))
+        .unwrap_or_else(|err| panic!("reading petstore.openapi.yaml fixture: {err}"));
+    let dir = std::env::temp_dir().join(format!(
+        "arazzo-mcp-colon-filename-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("creating temp dir: {err}"));
+    let spec_path = dir.join("api:v2.openapi.yaml");
+    fs::write(&spec_path, &openapi_yaml).unwrap_or_else(|err| panic!("writing fixture: {err}"));
+    let file_path = spec_path.to_string_lossy().to_string();
+
+    let state = ServerState::empty();
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"generate_workflow","arguments":{"file_path": file_path}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(
+        responses.len() >= 2,
+        "expected 2 responses, got {responses:?}"
+    );
+    assert!(
+        !is_tool_error(&responses[1]),
+        "generate_workflow should succeed, got: {}",
+        responses[1]
+    );
+
+    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    let yaml = result["yaml"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
+
+    assert!(
+        yaml.contains("url: ./api:v2.openapi.yaml"),
+        "expected the ./-guarded document file name as url, got:\n{yaml}"
+    );
+
+    // Prove the document still resolves under document semantics: load the
+    // generated spec (from where it sits next to the colon-named OpenAPI
+    // document) and dry-run it over the MCP `run_workflow` tool, exactly as
+    // `test_run_workflow_relative_source_dry_run` does for the non-colon
+    // case. If the `./` guard were missing, the runtime's classifier would
+    // treat `api:v2.openapi.yaml` as a literal base url and this would fail
+    // outright rather than resolve to the wrong host.
+    let generated_path = dir.join("generated.arazzo.yaml");
+    fs::write(&generated_path, yaml).unwrap_or_else(|err| panic!("writing generated spec: {err}"));
+    let run_state = match ServerState::load(
+        &[generated_path.to_string_lossy().to_string()],
+        Some(vec![dir.to_string_lossy().to_string()]),
+    ) {
+        Ok(state) => state,
+        Err(err) => panic!("loading server state: {err}"),
+    };
+    let run_messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"crud-pets","dry_run":true,"inputs":{"ApiKeyAuth":"secret"}}}}),
+    ]);
+    let run_reader = Cursor::new(run_messages);
+    let mut run_output = Vec::new();
+    protocol::serve(run_reader, &mut run_output, &run_state).ok();
+    let run_responses = parse_responses(&run_output);
+    assert!(
+        run_responses.len() >= 2,
+        "expected 2 responses, got {run_responses:?}"
+    );
+    assert!(
+        !is_tool_error(&run_responses[1]),
+        "run_workflow should succeed, got: {}",
+        run_responses[1]
+    );
+    let run_result = extract_tool_text(&run_responses[1]).unwrap_or(Value::Null);
+    let first_request_url = run_result["requests"][0]["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected requests[0].url in result: {run_result}"));
+    assert!(
+        first_request_url.starts_with("https://petstore.example.com"),
+        "expected the document's real servers[0] base, got: {first_request_url}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }

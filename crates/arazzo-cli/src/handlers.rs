@@ -419,7 +419,22 @@ pub fn generate_workflow(
         return Err(format!("unknown scenario \"{scenario}\"; available: crud"));
     }
 
-    let result = crate::generate::generate_crud(&openapi, spec_path)?;
+    // `sourceDescriptions[].url` must resolve, via the runtime's document-
+    // semantics loader, from the generated Arazzo document's own directory —
+    // an `--output` file's parent, or the current working directory when
+    // writing to stdout — never an absolute filesystem path.
+    let cwd = std::env::current_dir()
+        .map_err(|err| format!("determining current working directory: {err}"))?;
+    let output_dir: PathBuf = match output_path {
+        Some(path) => Path::new(path)
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".")),
+        None => PathBuf::from("."),
+    };
+    let document_url = crate::generate::relative_document_url(spec_path, &output_dir, &cwd)?;
+
+    let result = crate::generate::generate_crud(&openapi, spec_path, &document_url)?;
 
     let yaml = serde_yaml_ng::to_string(&result.spec)
         .map_err(|err| format!("serializing Arazzo spec: {err}"))?;

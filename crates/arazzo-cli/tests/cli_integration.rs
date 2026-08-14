@@ -4495,3 +4495,397 @@ fn transport_test_command_warnings_and_json_entries() {
         "test --json carries structured entries: {body}"
     );
 }
+
+// ── generate: document-pointing sourceDescriptions url (ac-91284) ────
+//
+// `arazzo generate` used to bake the OpenAPI `servers[0]` URL straight into
+// `sourceDescriptions[].url` (an http(s) origin, which the Arazzo
+// Specification does not sanction for that field). It now emits a relative
+// path to the OpenAPI document itself, and the runtime's document-semantics
+// loader derives the request base from that document's `servers[0]` at run
+// time instead. These tests are the behavior-preservation guard: the request
+// URLs a generated workflow resolves to under `--dry-run` must be byte-
+// identical to what the pre-change, base-URL-baking generator produced —
+// `https://petstore.example.com/v1/<path>`, captured by hand against this
+// change's engine_http.rs (untouched by this ticket) before writing these
+// assertions.
+
+const PETSTORE_DRY_RUN_URLS: &[(&str, &str)] = &[
+    ("create-pets", "https://petstore.example.com/v1/pets"),
+    ("list-pets", "https://petstore.example.com/v1/pets"),
+    ("read-pets", "https://petstore.example.com/v1/pets/"),
+    ("update-pets", "https://petstore.example.com/v1/pets/"),
+    ("delete-pets", "https://petstore.example.com/v1/pets/"),
+];
+
+fn assert_petstore_dry_run_urls(body: &Value) {
+    let requests = run_json_requests(body);
+    assert_eq!(
+        requests.len(),
+        PETSTORE_DRY_RUN_URLS.len(),
+        "expected one dry-run request per CRUD step: {body}"
+    );
+    for (step_id, expected_url) in PETSTORE_DRY_RUN_URLS {
+        let request = requests
+            .iter()
+            .find(|r| r.get("stepId").and_then(Value::as_str) == Some(*step_id))
+            .unwrap_or_else(|| panic!("missing dry-run request for step {step_id}: {body}"));
+        assert_eq!(
+            request.get("url").and_then(Value::as_str),
+            Some(*expected_url),
+            "step {step_id} resolved to an unexpected URL: {body}"
+        );
+    }
+}
+
+fn petstore_openapi_yaml() -> String {
+    let path = repo_root().join("testdata/petstore.openapi.yaml");
+    fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()))
+}
+
+#[test]
+fn generate_emits_document_pointing_url_not_base_url() {
+    let temp = TempDir::new("arazzo-generate-doc-url");
+    write_file(
+        &temp.path().join("petstore.openapi.yaml"),
+        &petstore_openapi_yaml(),
+    );
+
+    let output = run(
+        ["generate", "--spec", "petstore.openapi.yaml"].as_slice(),
+        Some(temp.path()),
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+
+    let yaml = stdout_text(&output);
+    assert!(
+        yaml.contains("url: petstore.openapi.yaml"),
+        "expected a document-pointing url, got:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("https://petstore.example.com"),
+        "the API base URL must not be baked into sourceDescriptions[].url:\n{yaml}"
+    );
+}
+
+#[test]
+fn generate_stdout_dry_run_round_trip_preserves_request_urls() {
+    // Same-directory case: `--spec` relative to the working directory, no
+    // `--output`, so the document url defaults to the `--spec` argument as
+    // typed and resolves against that same working directory.
+    let temp = TempDir::new("arazzo-generate-stdout-roundtrip");
+    write_file(
+        &temp.path().join("petstore.openapi.yaml"),
+        &petstore_openapi_yaml(),
+    );
+
+    let generate_output = run(
+        ["generate", "--spec", "petstore.openapi.yaml"].as_slice(),
+        Some(temp.path()),
+    );
+    assert!(
+        generate_output.status.success(),
+        "{}",
+        combined_text(&generate_output)
+    );
+    let generated_yaml = stdout_text(&generate_output);
+    let generated_path = temp.path().join("generated.arazzo.yaml");
+    write_file(&generated_path, &generated_yaml);
+
+    // Run from an unrelated working directory — resolution must depend only
+    // on the generated file's own directory, never on the process cwd.
+    let run_output = run(
+        [
+            "--json",
+            "run",
+            &generated_path.to_string_lossy(),
+            "crud-pets",
+            "--dry-run",
+            "--input",
+            "ApiKeyAuth=secret",
+        ]
+        .as_slice(),
+        Some(&repo_root()),
+    );
+    assert!(
+        run_output.status.success(),
+        "{}",
+        combined_text(&run_output)
+    );
+    assert_petstore_dry_run_urls(&stdout_json(&run_output));
+}
+
+#[test]
+fn generate_dry_run_round_trip_with_colon_bearing_spec_filename() {
+    // P1 regression (ac-91284 review): a spec file named with a `:` in its
+    // first path segment (e.g. an OpenAPI-style versioned file name) would,
+    // without the `./` guard, emit `url: api:v2.yaml` — which the runtime's
+    // classifier (`is_relative_document_source`, `runtime_core/builder.rs`)
+    // parses with the `url` crate as an *absolute* URI with scheme `api`,
+    // not a relative-path reference (RFC 3986 §4.2). That silently flips the
+    // source from "load this OpenAPI document" to "use this as a literal
+    // base URL", and every request in the workflow would resolve to
+    // `api:v2.yaml/...` instead of the document's own `servers[0]`. This
+    // proves the fix through the real, compiled runtime rather than by
+    // reimplementing its `Url::parse` check.
+    let temp = TempDir::new("arazzo-generate-colon-filename");
+    write_file(&temp.path().join("api:v2.yaml"), &petstore_openapi_yaml());
+
+    let generate_output = run(
+        ["generate", "--spec", "api:v2.yaml"].as_slice(),
+        Some(temp.path()),
+    );
+    assert!(
+        generate_output.status.success(),
+        "{}",
+        combined_text(&generate_output)
+    );
+    let generated_yaml = stdout_text(&generate_output);
+    assert!(
+        generated_yaml.contains("url: ./api:v2.yaml"),
+        "expected the ./-guarded url, got:\n{generated_yaml}"
+    );
+    let generated_path = temp.path().join("generated.arazzo.yaml");
+    write_file(&generated_path, &generated_yaml);
+
+    let run_output = run(
+        [
+            "--json",
+            "run",
+            &generated_path.to_string_lossy(),
+            "crud-pets",
+            "--dry-run",
+            "--input",
+            "ApiKeyAuth=secret",
+        ]
+        .as_slice(),
+        Some(&repo_root()),
+    );
+    assert!(
+        run_output.status.success(),
+        "{}",
+        combined_text(&run_output)
+    );
+    // Round-trip parity AC: still the document's real https base, never
+    // `api:v2.yaml/pets`.
+    assert_petstore_dry_run_urls(&stdout_json(&run_output));
+}
+
+#[test]
+fn generate_output_into_different_directory_dry_run_round_trip() {
+    // AC: "With --output <dir>/<file>.yaml pointing outside the working
+    // directory, the emitted url resolves correctly relative to the
+    // generated file's own location, verified by running that generated
+    // file with --dry-run from a different working directory." `TempDir`
+    // uses the system temp directory, which on macOS is itself a symlink
+    // (`/tmp` -> `/private/tmp`) — this exercises that path for real rather
+    // than only under a lexical, symlink-naive relative-path computation.
+    let cwd_dir = TempDir::new("arazzo-generate-cwd");
+    let out_dir = TempDir::new("arazzo-generate-out");
+    write_file(
+        &cwd_dir.path().join("petstore.openapi.yaml"),
+        &petstore_openapi_yaml(),
+    );
+
+    let out_path = out_dir.path().join("generated.arazzo.yaml");
+    let generate_output = run(
+        [
+            "--json",
+            "generate",
+            "--spec",
+            "petstore.openapi.yaml",
+            "--output",
+            &out_path.to_string_lossy(),
+        ]
+        .as_slice(),
+        Some(cwd_dir.path()),
+    );
+    assert!(
+        generate_output.status.success(),
+        "{}",
+        combined_text(&generate_output)
+    );
+    let generate_body = stdout_json(&generate_output);
+    assert_eq!(
+        generate_body.get("file").and_then(Value::as_str),
+        Some(out_path.to_string_lossy().as_ref())
+    );
+
+    let generated_yaml = fs::read_to_string(&out_path)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", out_path.display()));
+    let url_line = generated_yaml
+        .lines()
+        .find(|line| line.trim_start().starts_with("url:"))
+        .unwrap_or_else(|| panic!("no url: line in generated document:\n{generated_yaml}"));
+    let emitted_url = url_line.trim_start().trim_start_matches("url:").trim();
+    assert!(
+        !Path::new(emitted_url).is_absolute(),
+        "emitted url must never be an absolute filesystem path, got: {emitted_url}"
+    );
+    assert!(
+        emitted_url.contains(".."),
+        "expected a url rebased out of the output directory, got: {emitted_url}"
+    );
+
+    // Run from a third, unrelated working directory.
+    let run_output = run(
+        [
+            "--json",
+            "run",
+            &out_path.to_string_lossy(),
+            "crud-pets",
+            "--dry-run",
+            "--input",
+            "ApiKeyAuth=secret",
+        ]
+        .as_slice(),
+        Some(&repo_root()),
+    );
+    assert!(
+        run_output.status.success(),
+        "{}",
+        combined_text(&run_output)
+    );
+    assert_petstore_dry_run_urls(&stdout_json(&run_output));
+}
+
+fn variable_server_openapi_yaml() -> &'static str {
+    // servers[0].url carries a variable with a default, no path prefix
+    // besides the substituted host. Round-trip parity must hold here too:
+    // the runtime derives the request base from the *document's* servers[0]
+    // (document-semantics loading, ac-40602) using the same variable
+    // substitution `extract_server_url` performs at generation time
+    // (`runtime_core/builder.rs::derive_servers_base`, "mirrors the typed
+    // logic used by generate") — unchanged by this ticket and out of its
+    // writes scope, so this proves the pairing end to end through the CLI
+    // rather than re-asserting runtime internals directly.
+    r#"
+openapi: "3.0.3"
+info:
+  title: Variable Host API
+  version: "1.0"
+servers:
+  - url: "https://{host}/v2"
+    variables:
+      host:
+        default: api.example.com
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: createItem
+      responses:
+        "201":
+          description: Created
+  /items/{itemId}:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: OK
+"#
+}
+
+#[test]
+fn generate_dry_run_round_trip_with_server_variable_default() {
+    let temp = TempDir::new("arazzo-generate-server-variable-roundtrip");
+    write_file(
+        &temp.path().join("variable-api.yaml"),
+        variable_server_openapi_yaml(),
+    );
+
+    let generate_output = run(
+        ["generate", "--spec", "variable-api.yaml"].as_slice(),
+        Some(temp.path()),
+    );
+    assert!(
+        generate_output.status.success(),
+        "{}",
+        combined_text(&generate_output)
+    );
+    let generated_yaml = stdout_text(&generate_output);
+    assert!(
+        generated_yaml.contains("url: variable-api.yaml"),
+        "expected a document-pointing url, got:\n{generated_yaml}"
+    );
+    assert!(
+        !generated_yaml.contains("api.example.com"),
+        "the substituted server host must not be baked into sourceDescriptions[].url:\n{generated_yaml}"
+    );
+    let generated_path = temp.path().join("generated.arazzo.yaml");
+    write_file(&generated_path, &generated_yaml);
+
+    let run_output = run(
+        [
+            "--json",
+            "run",
+            &generated_path.to_string_lossy(),
+            "crud-items",
+            "--dry-run",
+        ]
+        .as_slice(),
+        Some(&repo_root()),
+    );
+    assert!(
+        run_output.status.success(),
+        "{}",
+        combined_text(&run_output)
+    );
+    let body = stdout_json(&run_output);
+    let requests = run_json_requests(&body);
+    let create = requests
+        .iter()
+        .find(|r| r.get("stepId").and_then(Value::as_str) == Some("create-items"))
+        .unwrap_or_else(|| panic!("missing create-items dry-run request: {body}"));
+    // The default is substituted the same way at run time as it was at
+    // generation time — https://api.example.com/v2/items, never the
+    // unsubstituted https://{host}/v2/items template.
+    assert_eq!(
+        create.get("url").and_then(Value::as_str),
+        Some("https://api.example.com/v2/items")
+    );
+}
+
+#[test]
+fn generate_json_envelope_shape_unchanged() {
+    // AC: "The generate --json envelope keeps its existing shape and
+    // fields." — the envelope never carried the source url, so it is
+    // unaffected by this change; this pins the field set so a regression
+    // shows up here rather than only in the schema-drift golden.
+    let temp = TempDir::new("arazzo-generate-json-envelope");
+    write_file(
+        &temp.path().join("petstore.openapi.yaml"),
+        &petstore_openapi_yaml(),
+    );
+    let out_path = temp.path().join("generated.arazzo.yaml");
+
+    let output = run(
+        [
+            "--json",
+            "generate",
+            "--spec",
+            "petstore.openapi.yaml",
+            "--output",
+            &out_path.to_string_lossy(),
+        ]
+        .as_slice(),
+        Some(temp.path()),
+    );
+    assert!(output.status.success(), "{}", combined_text(&output));
+
+    let body = stdout_json(&output);
+    let obj = body
+        .as_object()
+        .unwrap_or_else(|| panic!("expected a JSON object: {body}"));
+    let mut fields: Vec<&str> = obj.keys().map(String::as_str).collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        vec!["authDetected", "file", "resources", "steps", "workflows"],
+        "generate --json envelope field set changed: {body}"
+    );
+}
