@@ -194,7 +194,7 @@ impl Engine {
                     FlowDecision::Next(_) => {
                         // Expected path — continue to next step in level.
                     }
-                    FlowDecision::Retry(_) | FlowDecision::GotoWorkflow { .. } => {
+                    FlowDecision::Retry { .. } | FlowDecision::GotoWorkflow { .. } => {
                         // Unreachable: can_execute_parallel blocks workflows with
                         // retry/goto actions. Defensive error if guard is relaxed.
                         return Err(RuntimeError::new(

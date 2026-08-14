@@ -947,10 +947,16 @@ fn validate_actions(
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         validate_action_parameters(&action_path, action, arazzo_version, diagnostics);
-        if action.action_type() == ActionType::Goto {
+        let action_type = action.action_type();
+        // Reference checks apply to goto and retry alike: both action types
+        // carry an optional stepId/workflowId reference pair. The reference is
+        // required for goto (a transfer needs a destination) but optional for
+        // retry (Failure Action Object: "If a stepId or workflowId are
+        // specified, then the reference is executed ...").
+        if matches!(action_type, ActionType::Goto | ActionType::Retry) {
             let has_step = !action.step_id.is_empty();
             let has_workflow = !action.workflow_id.is_empty();
-            if !has_step && !has_workflow {
+            if action_type == ActionType::Goto && !has_step && !has_workflow {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     kind: ValidationErrorKind::MissingRequiredField,
@@ -964,7 +970,7 @@ fn validate_actions(
                     kind: ValidationErrorKind::InvalidReference,
                     path: action_path.clone(),
                     message: format!(
-                        "{action_path} goto action specifies both stepId and workflowId; use one or the other"
+                        "{action_path} {action_type} action specifies both stepId and workflowId; use one or the other"
                     ),
                 });
             }
@@ -2997,6 +3003,91 @@ workflows:
             .any(|e| e.kind == ValidationErrorKind::MissingRequiredField
                 && e.message
                     .contains("goto action must specify stepId or workflowId")));
+    }
+
+    #[test]
+    fn validate_retry_both_step_and_workflow_rejected() {
+        let mut spec = valid_spec();
+        spec.workflows.push(Workflow {
+            workflow_id: "wf2".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/test2".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        });
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: Some(ActionType::Retry),
+            step_id: "s1".to_string(),
+            workflow_id: "wf2".to_string(),
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::InvalidReference
+                && e.message
+                    .contains("retry action specifies both stepId and workflowId")));
+    }
+
+    #[test]
+    fn validate_retry_unknown_step_id_rejected() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: Some(ActionType::Retry),
+            step_id: "nonexistent".to_string(),
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::InvalidReference
+                && e.message.contains("unknown step \"nonexistent\"")));
+    }
+
+    #[test]
+    fn validate_retry_unknown_workflow_id_rejected() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: Some(ActionType::Retry),
+            workflow_id: "missing_wf".to_string(),
+            ..OnAction::default()
+        }];
+        let errs = expect_validation_errors(validate(&spec));
+        assert!(errs
+            .iter()
+            .any(|e| e.kind == ValidationErrorKind::InvalidReference
+                && e.message.contains("unknown workflow \"missing_wf\"")));
+    }
+
+    #[test]
+    fn validate_retry_runtime_expression_reference_accepted() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: Some(ActionType::Retry),
+            step_id: "$steps.decide.outputs.recoveryStep".to_string(),
+            ..OnAction::default()
+        }];
+        assert!(
+            validate(&spec).is_ok(),
+            "runtime expression retry stepId should not be rejected"
+        );
+    }
+
+    /// Unlike goto, the reference is optional for retry: "If a stepId or
+    /// workflowId are specified, then the reference is executed ..."
+    #[test]
+    fn validate_retry_without_reference_stays_valid() {
+        let mut spec = valid_spec();
+        spec.workflows[0].steps[0].on_failure = vec![OnAction {
+            type_: Some(ActionType::Retry),
+            ..OnAction::default()
+        }];
+        assert!(
+            validate(&spec).is_ok(),
+            "retry without stepId/workflowId must stay valid"
+        );
     }
 
     #[test]

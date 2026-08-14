@@ -68,7 +68,9 @@ use deps::can_execute_parallel;
 #[cfg(test)]
 use deps::has_control_flow;
 pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs};
-use engine_actions::{ActionBranch, FlowDecision, SelectedActionDebugContext, StepDecisionContext};
+use engine_actions::{
+    ActionBranch, FlowDecision, RetryReference, SelectedActionDebugContext, StepDecisionContext,
+};
 use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
 pub use error::{RuntimeError, RuntimeErrorKind};

@@ -263,24 +263,7 @@ impl Engine {
                 }
                 if !action.workflow_id.is_empty() {
                     let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
-                    // Success/Failure Action Object (1.1.0): parameters "MUST
-                    // be passed to a workflow as referenced by workflowId" —
-                    // resolved through the shared value/Selector resolver,
-                    // they become the callee's input map. An action without
-                    // parameters keeps forwarding the caller's inputs.
-                    let inputs = if action.parameters.is_empty() {
-                        None
-                    } else {
-                        let mut mapped = BTreeMap::new();
-                        for param in &action.parameters {
-                            let (value, param_warnings) = resolve_value_source(&param.value, &eval);
-                            for warning in param_warnings {
-                                eprintln!("warning: action parameter {:?}: {warning}", param.name);
-                            }
-                            mapped.insert(param.name.clone(), value);
-                        }
-                        Some(mapped)
-                    };
+                    let inputs = map_action_parameters(action, &eval);
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow {
                             workflow_id: resolved_workflow_id.clone(),
@@ -305,6 +288,33 @@ impl Engine {
                 }
             }
             ActionType::Retry => {
+                // Failure Action Object: "If a stepId or workflowId are
+                // specified, then the reference is executed and the context is
+                // returned, after which the current step is retried." The ids
+                // resolve here (mirroring the Goto arm); the call itself runs
+                // at the FlowDecision::Retry consumption sites, where `vars`
+                // is mutable, after the retry delay and immediately before the
+                // retried attempt.
+                let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
+                let reference = if !action.step_id.is_empty() {
+                    Some(RetryReference::Step {
+                        step_id: eval.interpolate_string(&action.step_id),
+                    })
+                } else if !action.workflow_id.is_empty() {
+                    Some(RetryReference::Workflow {
+                        workflow_id: eval.interpolate_string(&action.workflow_id),
+                        inputs: map_action_parameters(action, &eval),
+                    })
+                } else {
+                    None
+                };
+                let (trace_target_step, trace_target_workflow) = match &reference {
+                    Some(RetryReference::Step { step_id }) => (step_id.clone(), String::new()),
+                    Some(RetryReference::Workflow { workflow_id, .. }) => {
+                        (String::new(), workflow_id.clone())
+                    }
+                    None => (String::new(), String::new()),
+                };
                 let limit = action
                     .retry_limit
                     .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
@@ -371,9 +381,14 @@ impl Engine {
                     }
                 }
                 RoutedDecision {
-                    flow: FlowDecision::Retry(ctx.current_idx),
+                    flow: FlowDecision::Retry {
+                        step_idx: ctx.current_idx,
+                        reference,
+                    },
                     trace: TraceDecision {
                         action_type: action.action_type().to_string(),
+                        target_step_id: trace_target_step,
+                        target_workflow_id: trace_target_workflow,
                         retry_after_seconds: Some(action.retry_after),
                         retry_limit: action.retry_limit,
                         ..TraceDecision::with_path(TraceDecisionPath::Retry)
@@ -395,7 +410,13 @@ impl Engine {
 #[derive(Debug)]
 pub(super) enum FlowDecision {
     Next(usize),
-    Retry(usize),
+    Retry {
+        step_idx: usize,
+        /// Recovery reference from the retry action's `stepId`/`workflowId`.
+        /// Executed call-and-return at the consumption site before the step
+        /// at `step_idx` is retried; `None` for a plain retry.
+        reference: Option<RetryReference>,
+    },
     Done,
     GotoWorkflow {
         workflow_id: String,
@@ -405,6 +426,49 @@ pub(super) enum FlowDecision {
         inputs: Option<BTreeMap<String, Value>>,
     },
     Error(RuntimeError),
+}
+
+/// Resolved `stepId`/`workflowId` recovery reference carried by a retry
+/// decision. Failure Action Object: "If a stepId or workflowId are specified,
+/// then the reference is executed and the context is returned, after which
+/// the current step is retried."
+#[derive(Debug)]
+pub(super) enum RetryReference {
+    Step {
+        step_id: String,
+    },
+    Workflow {
+        workflow_id: String,
+        /// Callee inputs mapped from the action's `parameters`; `None` means
+        /// no parameters were declared and the caller's inputs forward
+        /// unchanged (same contract as `FlowDecision::GotoWorkflow`).
+        inputs: Option<BTreeMap<String, Value>>,
+    },
+}
+
+/// Maps a success/failure action's `parameters` to callee workflow inputs.
+///
+/// Success/Failure Action Object (1.1.0): parameters "MUST be passed to a
+/// workflow as referenced by workflowId" — resolved through the shared
+/// value/Selector resolver, they become the callee's input map. An action
+/// without parameters returns `None`, which keeps forwarding the caller's
+/// inputs.
+fn map_action_parameters(
+    action: &OnAction,
+    eval: &ExpressionEvaluator,
+) -> Option<BTreeMap<String, Value>> {
+    if action.parameters.is_empty() {
+        return None;
+    }
+    let mut mapped = BTreeMap::new();
+    for param in &action.parameters {
+        let (value, param_warnings) = resolve_value_source(&param.value, eval);
+        for warning in param_warnings {
+            eprintln!("warning: action parameter {:?}: {warning}", param.name);
+        }
+        mapped.insert(param.name.clone(), value);
+    }
+    Some(mapped)
 }
 
 #[derive(Debug)]

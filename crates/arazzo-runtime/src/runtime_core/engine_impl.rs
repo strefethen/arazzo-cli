@@ -300,11 +300,28 @@ impl Engine {
                             break;
                         }
                     }
-                    FlowDecision::Retry(retry_idx) => {
+                    FlowDecision::Retry {
+                        step_idx: retry_idx,
+                        reference,
+                    } => {
                         let value = retry_count.entry(retry_idx).or_insert(0);
                         *value += 1;
                         // Retry targets the current step; find it in our filtered set.
                         if let Some(pos) = steps_to_run.iter().position(|&i| i == retry_idx) {
+                            if let Some(reference) = reference {
+                                self.execute_retry_reference(
+                                    exec_ctx,
+                                    RetryReferenceContext {
+                                        workflow_id,
+                                        workflow: &workflow,
+                                        retried_step_id: &workflow.steps[retry_idx].step_id,
+                                        depth: 0,
+                                    },
+                                    reference,
+                                    &mut vars,
+                                )
+                                .await?;
+                            }
                             run_cursor = pos;
                         } else {
                             return Err(RuntimeError::new(
@@ -500,7 +517,10 @@ impl Engine {
                     FlowDecision::Next(idx) => {
                         step_index = idx;
                     }
-                    FlowDecision::Retry(idx) => {
+                    FlowDecision::Retry {
+                        step_idx: idx,
+                        reference,
+                    } => {
                         let value = retry_count.entry(idx).or_insert(0);
                         *value += 1;
                         // Emit retry event for observers
@@ -520,6 +540,34 @@ impl Engine {
                             },
                         )
                         .await;
+                        if let Some(reference) = reference {
+                            if let Err(err) = self
+                                .execute_retry_reference(
+                                    exec_ctx,
+                                    RetryReferenceContext {
+                                        workflow_id,
+                                        workflow: &workflow,
+                                        retried_step_id: &workflow.steps[idx].step_id,
+                                        depth,
+                                    },
+                                    reference,
+                                    &mut vars,
+                                )
+                                .await
+                            {
+                                self.emit_observer_event(
+                                    exec_ctx,
+                                    ObserverEvent::WorkflowCompleted {
+                                        workflow_id: workflow_id.to_string(),
+                                        outputs: BTreeMap::new(),
+                                        duration: workflow_start.elapsed(),
+                                        error: Some(err.message.clone()),
+                                    },
+                                )
+                                .await;
+                                return Err(err);
+                            }
+                        }
                         step_index = idx;
                     }
                     FlowDecision::GotoWorkflow {
@@ -626,6 +674,104 @@ impl Engine {
             vars.set_step_output(&step.step_id, name, value.clone());
         }
         Ok(execution)
+    }
+
+    /// Executes a retry action's `stepId`/`workflowId` recovery reference,
+    /// call-and-return, before the failed step is retried.
+    ///
+    /// Failure Action Object: "If a stepId or workflowId are specified, then
+    /// the reference is executed and the context is returned, after which the
+    /// current step is retried." A workflow reference runs like a sub-workflow
+    /// call (`$workflows.<id>.*` resolves afterward); a step reference runs
+    /// the referenced step of the current workflow once, persisting its
+    /// outputs, without following that step's own onSuccess/onFailure routing.
+    /// Any failure aborts the workflow — a broken recovery reference must not
+    /// degrade into a plain retry.
+    async fn execute_retry_reference(
+        &self,
+        exec_ctx: &ExecutionContext,
+        ctx: RetryReferenceContext<'_>,
+        reference: RetryReference,
+        vars: &mut VarStore,
+    ) -> Result<(), RuntimeError> {
+        let RetryReferenceContext {
+            workflow_id,
+            workflow,
+            retried_step_id,
+            depth,
+        } = ctx;
+        match reference {
+            RetryReference::Workflow {
+                workflow_id: target,
+                inputs,
+            } => {
+                let sub_inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
+                self.emit_observer_event(
+                    exec_ctx,
+                    ObserverEvent::SubWorkflowStarted {
+                        parent_workflow_id: workflow_id.to_string(),
+                        parent_step_id: retried_step_id.to_string(),
+                        child_workflow_id: target.clone(),
+                        depth: depth + 1,
+                    },
+                )
+                .await;
+                let outputs = self
+                    .execute_inner(exec_ctx, &target, sub_inputs.clone(), depth + 1)
+                    .await
+                    .map_err(|err| {
+                        let msg = format!(
+                            "step {retried_step_id}: retry reference workflow \"{target}\": {}",
+                            err.message
+                        );
+                        RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
+                    })?;
+                // Register completed reference state for $workflows.<id>.* —
+                // the "context is returned" half of the spec sentence. The
+                // retried step's own outputs are not touched.
+                vars.register_workflow_state(&target, sub_inputs, outputs);
+                Ok(())
+            }
+            RetryReference::Step { step_id } => {
+                let Some(idx) = self.find_step_index(workflow, &step_id) else {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RetryReferenceFailed,
+                        format!(
+                            "step {retried_step_id}: retry reference step \"{step_id}\" not found in workflow \"{workflow_id}\""
+                        ),
+                    ));
+                };
+                let step = {
+                    let mut s = workflow.steps[idx].clone();
+                    merge_workflow_params(&workflow.parameters, &mut s);
+                    s
+                };
+                let execution = self
+                    .execute_step_with_result(exec_ctx, workflow_id, &step, vars, depth)
+                    .await
+                    .map_err(|err| {
+                        let msg = format!(
+                            "step {retried_step_id}: retry reference step \"{step_id}\": {}",
+                            err.message
+                        );
+                        RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
+                    })?;
+                if !execution.result.success {
+                    let detail = execution
+                        .result
+                        .err
+                        .as_deref()
+                        .unwrap_or("step did not succeed");
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RetryReferenceFailed,
+                        format!(
+                            "step {retried_step_id}: retry reference step \"{step_id}\": {detail}"
+                        ),
+                    ));
+                }
+                Ok(())
+            }
+        }
     }
 
     async fn execute_subworkflow_step(
@@ -776,6 +922,16 @@ impl Engine {
         }
         ctx.outputs
     }
+}
+
+/// Call-site context for [`Engine::execute_retry_reference`].
+#[derive(Debug)]
+struct RetryReferenceContext<'a> {
+    workflow_id: &'a str,
+    workflow: &'a Workflow,
+    /// Step being retried — names the reference in errors and observer events.
+    retried_step_id: &'a str,
+    depth: usize,
 }
 
 pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut Step) {

@@ -1,6 +1,6 @@
 mod common;
 
-use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind};
+use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind, TraceDecisionPath};
 use arazzo_spec::{
     ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, OnAction, OutputValue,
     ParamLocation, Parameter, Replacement, RequestBody, SelectorObject, SelectorType,
@@ -653,6 +653,408 @@ async fn execute_retry_delay_honors_execution_timeout() {
     assert_eq!(err.kind, RuntimeErrorKind::ExecutionTimeout);
     assert!(started.elapsed() < Duration::from_millis(900));
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+/// Failure Action Object: "If a stepId or workflowId are specified, then the
+/// reference is executed and the context is returned, after which the current
+/// step is retried." A retry action with `workflowId` runs the referenced
+/// workflow before the retried attempt — the recovery call flips server state
+/// so the retried request succeeds — and the returned context registers for
+/// `$workflows.<id>.*`. The reference also lands in the trace decision.
+#[tokio::test]
+async fn execute_retry_workflow_reference_recovers_then_retries() {
+    let recovered = Arc::new(AtomicUsize::new(0));
+    let flaky_calls = Arc::new(AtomicUsize::new(0));
+    let recover_calls = Arc::new(AtomicUsize::new(0));
+    let recovered_ref = Arc::clone(&recovered);
+    let flaky_ref = Arc::clone(&flaky_calls);
+    let recover_ref = Arc::clone(&recover_calls);
+    let server = start_server(move |_method, url, _headers, _body| match url.as_str() {
+        "/flaky" => {
+            flaky_ref.fetch_add(1, Ordering::Relaxed);
+            if recovered_ref.load(Ordering::Relaxed) == 0 {
+                MockHttpResponse::empty(503)
+            } else {
+                MockHttpResponse::json(200, r#"{"ok":true}"#)
+            }
+        }
+        "/recover" => {
+            recover_ref.fetch_add(1, Ordering::Relaxed);
+            recovered_ref.store(1, Ordering::Relaxed);
+            MockHttpResponse::json(200, r#"{"token":"tok123"}"#)
+        }
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let mut spec = make_spec(vec![
+        Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Retry),
+                    workflow_id: "recovery".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([(
+                "recoveredToken".to_string(),
+                "$workflows.recovery.outputs.token".to_string().into(),
+            )]),
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "recovery".to_string(),
+            steps: vec![Step {
+                step_id: "r1".to_string(),
+                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                success_criteria: success_200(),
+                outputs: BTreeMap::from([(
+                    "token".to_string(),
+                    "$response.body.token".to_string().into(),
+                )]),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([(
+                "token".to_string(),
+                "$steps.r1.outputs.token".to_string().into(),
+            )]),
+            ..Workflow::default()
+        },
+    ]);
+    if let Some(source) = spec.source_descriptions.get_mut(0) {
+        source.url = server.base_url.clone();
+    }
+
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let exec_result = engine.execute_collect("wf", BTreeMap::new()).await;
+    let outputs = match &exec_result.outputs {
+        Ok(outputs) => outputs.clone(),
+        Err(err) => panic!("expected success after recovery, got: {err}"),
+    };
+
+    // Recovery ran exactly once, before the single retried attempt.
+    assert_eq!(recover_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(flaky_calls.load(Ordering::Relaxed), 2);
+    // "the context is returned": the reference's outputs resolve afterward.
+    assert_eq!(outputs.get("recoveredToken"), Some(&json!("tok123")));
+
+    // The reference appears in the retry trace decision.
+    let trace = exec_result.trace_steps();
+    let retry_record = trace
+        .iter()
+        .find(|record| record.decision.path == TraceDecisionPath::Retry)
+        .unwrap_or_else(|| panic!("no retry decision in trace"));
+    assert_eq!(retry_record.decision.target_workflow_id, "recovery");
+    assert_eq!(retry_record.decision.target_step_id, "");
+}
+
+/// Retry-action `parameters` map to the referenced workflow's inputs exactly
+/// as goto-workflow parameters do (Success/Failure Action Object: parameters
+/// "MUST be passed to a workflow as referenced by workflowId").
+#[tokio::test]
+async fn execute_retry_workflow_reference_parameters_become_callee_inputs() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, url, _headers, _body| match url.as_str() {
+        "/flaky" => {
+            let current = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
+            if current < 2 {
+                MockHttpResponse::json(500, r#"{"reason":"overload"}"#)
+            } else {
+                MockHttpResponse::json(200, r#"{"ok":true}"#)
+            }
+        }
+        "/recover" => MockHttpResponse::json(200, "{}"),
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Retry),
+                    workflow_id: "recovery".to_string(),
+                    parameters: vec![
+                        Parameter {
+                            name: "fixed".to_string(),
+                            value: serde_yaml_ng::Value::String("literal-value".to_string()).into(),
+                            ..Parameter::default()
+                        },
+                        Parameter {
+                            name: "uid".to_string(),
+                            value: serde_yaml_ng::Value::String("$inputs.uid".to_string()).into(),
+                            ..Parameter::default()
+                        },
+                        Parameter {
+                            name: "reason".to_string(),
+                            value: ValueSource::Selector(selector(
+                                "$response.body",
+                                "/reason",
+                                SelectorType::Name("jsonpointer".to_string()),
+                            )),
+                            ..Parameter::default()
+                        },
+                    ],
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([
+                (
+                    "fixed".to_string(),
+                    "$workflows.recovery.outputs.fixed".to_string().into(),
+                ),
+                (
+                    "uid".to_string(),
+                    "$workflows.recovery.outputs.uid".to_string().into(),
+                ),
+                (
+                    "reason".to_string(),
+                    "$workflows.recovery.outputs.reason".to_string().into(),
+                ),
+            ]),
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "recovery".to_string(),
+            steps: vec![Step {
+                step_id: "r1".to_string(),
+                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            outputs: BTreeMap::from([
+                ("fixed".to_string(), "$inputs.fixed".to_string().into()),
+                ("uid".to_string(), "$inputs.uid".to_string().into()),
+                ("reason".to_string(), "$inputs.reason".to_string().into()),
+            ]),
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let inputs = BTreeMap::from([("uid".to_string(), json!(42))]);
+    let outputs = match engine.execute_collect("wf", inputs).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected success, got: {err}"),
+    };
+
+    assert_eq!(outputs.get("fixed"), Some(&json!("literal-value")));
+    assert_eq!(outputs.get("uid"), Some(&json!(42)));
+    assert_eq!(outputs.get("reason"), Some(&json!("overload")));
+}
+
+/// A retry action with `stepId` executes the referenced step of the current
+/// workflow once, call-and-return: its outputs persist for later expressions,
+/// the referenced step's own routing does not run, and the current step is
+/// then retried.
+#[tokio::test]
+async fn execute_retry_step_reference_executes_with_outputs_visible() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let recover_calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let recover_ref = Arc::clone(&recover_calls);
+    let server = start_server(move |_method, url, _headers, _body| match url.as_str() {
+        "/flaky" => {
+            let current = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
+            if current < 2 {
+                MockHttpResponse::empty(503)
+            } else {
+                MockHttpResponse::json(200, r#"{"ok":true}"#)
+            }
+        }
+        "/recover" => {
+            recover_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::json(200, r#"{"token":"tok123"}"#)
+        }
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![
+            Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Retry),
+                    step_id: "recover".to_string(),
+                    ..OnAction::default()
+                }],
+                // End on success so the referenced step below only ever runs
+                // via the retry reference, never as the next sequential step.
+                on_success: vec![OnAction {
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            },
+            Step {
+                step_id: "recover".to_string(),
+                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                success_criteria: success_200(),
+                outputs: BTreeMap::from([(
+                    "token".to_string(),
+                    "$response.body.token".to_string().into(),
+                )]),
+                ..Step::default()
+            },
+        ],
+        outputs: BTreeMap::from([(
+            "token".to_string(),
+            "$steps.recover.outputs.token".to_string().into(),
+        )]),
+        ..Workflow::default()
+    }]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let outputs = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected success after step-reference recovery, got: {err}"),
+    };
+
+    assert_eq!(recover_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    // The referenced step's outputs are visible to later expressions.
+    assert_eq!(outputs.get("token"), Some(&json!("tok123")));
+}
+
+/// The recovery reference executes once per retried attempt the action is
+/// selected for — two failures mean two reference executions.
+#[tokio::test]
+async fn execute_retry_reference_runs_once_per_retried_attempt() {
+    let flaky_calls = Arc::new(AtomicUsize::new(0));
+    let recover_calls = Arc::new(AtomicUsize::new(0));
+    let flaky_ref = Arc::clone(&flaky_calls);
+    let recover_ref = Arc::clone(&recover_calls);
+    let server = start_server(move |_method, url, _headers, _body| match url.as_str() {
+        "/flaky" => {
+            let current = flaky_ref.fetch_add(1, Ordering::Relaxed) + 1;
+            if current < 3 {
+                MockHttpResponse::empty(503)
+            } else {
+                MockHttpResponse::json(200, r#"{"ok":true}"#)
+            }
+        }
+        "/recover" => {
+            recover_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::json(200, "{}")
+        }
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Retry),
+                    workflow_id: "recovery".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "recovery".to_string(),
+            steps: vec![Step {
+                step_id: "r1".to_string(),
+                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("wf", BTreeMap::new()).await.outputs;
+    if let Err(err) = result {
+        panic!("expected success, got: {err}");
+    }
+
+    assert_eq!(flaky_calls.load(Ordering::Relaxed), 3);
+    assert_eq!(recover_calls.load(Ordering::Relaxed), 2);
+}
+
+/// A failed recovery reference ends the workflow with the structured
+/// `RUNTIME_RETRY_REFERENCE_FAILED` error carrying the underlying cause —
+/// never a silent retry-anyway.
+#[tokio::test]
+async fn execute_retry_reference_failure_fails_workflow() {
+    let flaky_calls = Arc::new(AtomicUsize::new(0));
+    let flaky_ref = Arc::clone(&flaky_calls);
+    let server = start_server(move |_method, url, _headers, _body| match url.as_str() {
+        "/flaky" => {
+            flaky_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::empty(503)
+        }
+        "/recover" => MockHttpResponse::empty(500),
+        _ => MockHttpResponse::empty(404),
+    });
+
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "s1".to_string(),
+                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    type_: Some(ActionType::Retry),
+                    workflow_id: "recovery".to_string(),
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "recovery".to_string(),
+            steps: vec![Step {
+                step_id: "r1".to_string(),
+                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+    ]);
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
+        Ok(_) => panic!("expected retry reference failure"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, RuntimeErrorKind::RetryReferenceFailed);
+    assert_eq!(err.code(), "RUNTIME_RETRY_REFERENCE_FAILED");
+    assert!(
+        err.message
+            .contains("retry reference workflow \"recovery\""),
+        "message should name the reference: {}",
+        err.message
+    );
+    // The underlying cause survives as the error source.
+    assert!(std::error::Error::source(&err).is_some());
+    // The failed step ran once; the broken reference must not retry anyway.
+    assert_eq!(flaky_calls.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

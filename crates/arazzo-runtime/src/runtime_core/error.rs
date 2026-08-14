@@ -12,6 +12,10 @@ pub enum RuntimeErrorKind {
     UnsupportedOperationPathForm,
     MaxCallDepthExceeded,
     RetryLimitExceeded,
+    /// A retry action's `stepId`/`workflowId` recovery reference failed to
+    /// execute, so the step cannot be retried (Failure Action Object: the
+    /// reference is executed before the current step is retried).
+    RetryReferenceFailed,
     DependencyCycle,
     GotoTargetNotFound,
     GotoTargetMissing,
@@ -56,6 +60,7 @@ impl RuntimeErrorKind {
             Self::UnsupportedOperationPathForm => "RUNTIME_UNSUPPORTED_OPERATION_PATH_FORM",
             Self::MaxCallDepthExceeded => "RUNTIME_MAX_CALL_DEPTH_EXCEEDED",
             Self::RetryLimitExceeded => "RUNTIME_RETRY_LIMIT_EXCEEDED",
+            Self::RetryReferenceFailed => "RUNTIME_RETRY_REFERENCE_FAILED",
             Self::DependencyCycle => "RUNTIME_DEPENDENCY_CYCLE",
             Self::GotoTargetNotFound => "RUNTIME_GOTO_TARGET_NOT_FOUND",
             Self::GotoTargetMissing => "RUNTIME_GOTO_TARGET_MISSING",
