@@ -151,7 +151,11 @@ pub enum ValidationErrorKind {
     /// Warning severity: the document is conformant, the executor is not.
     UnsupportedOperationPath,
     /// A workflow/step `outputs` key or Components map key that violates the
-    /// specification's `^[a-zA-Z0-9\.\-_]+$` MUST-level regular expression.
+    /// specification's `^[a-zA-Z0-9\.\-_]+$` MUST-level regular expression
+    /// (error severity), or a `workflowId`/`stepId`/`sourceDescriptions[].name`
+    /// value that violates the SHOULD-level `^[A-Za-z0-9_\-]+$` recommendation
+    /// (warning severity, promoted to error only under `--strict`). Severity
+    /// distinguishes the two; the kind is shared.
     InvalidIdentifier,
 }
 
@@ -293,6 +297,12 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 path: format!("{path}.name"),
                 message: format!("{path}.name '{}' is duplicate", src.name),
             });
+        } else if let Some(diag) = check_identifier_warning(
+            &format!("{path}.name"),
+            &src.name,
+            IdentifierClass::Identifier,
+        ) {
+            diagnostics.push(diag);
         }
         if src.url.is_empty() {
             diagnostics.push(Diagnostic {
@@ -358,6 +368,12 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 path: format!("{path}.workflowId"),
                 message: format!("{path}.workflowId '{}' is duplicate", wf.workflow_id),
             });
+        } else if let Some(diag) = check_identifier_warning(
+            &format!("{path}.workflowId"),
+            &wf.workflow_id,
+            IdentifierClass::Identifier,
+        ) {
+            diagnostics.push(diag);
         }
 
         validate_parameters(
@@ -414,6 +430,12 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                     path: format!("{step_path}.stepId"),
                     message: format!("{step_path}.stepId '{}' is duplicate", step.step_id),
                 });
+            } else if let Some(diag) = check_identifier_warning(
+                &format!("{step_path}.stepId"),
+                &step.step_id,
+                IdentifierClass::Identifier,
+            ) {
+                diagnostics.push(diag);
             }
 
             if step.target.is_none() {
@@ -799,11 +821,9 @@ fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IdentifierClass {
     /// `^[A-Za-z0-9_\-]+$` — the SHOULD-level `workflowId`/`stepId`/
-    /// `sourceDescriptions[].name` positions, which is ac-0379b's scope, not
-    /// this ticket's. No MUST-level position uses it; the variant is kept
-    /// here (rather than added later) so ac-0379b reuses this helper instead
-    /// of writing a second one.
-    #[allow(dead_code)]
+    /// `sourceDescriptions[].name` definition-site positions. Checked via
+    /// [`check_identifier_warning`], never [`check_identifier`]: a SHOULD
+    /// violation is a warning, not an error.
     Identifier,
     /// `^[a-zA-Z0-9\.\-_]+$` — the MUST-level `outputs` keys and Components
     /// map keys this ticket enforces.
@@ -829,22 +849,48 @@ impl IdentifierClass {
     }
 }
 
-/// Validates `value` at `path` against `class`. Returns `None` when valid,
-/// otherwise an error-severity [`ValidationError`] naming the offending value
-/// and the regular expression it must match.
-fn check_identifier(path: &str, value: &str, class: IdentifierClass) -> Option<ValidationError> {
+/// Shared body for [`check_identifier`] and [`check_identifier_warning`].
+/// Returns `None` when `value` is valid under `class`, otherwise a
+/// diagnostic at `severity` naming the offending value and the regular
+/// expression it should or must match.
+fn identifier_diagnostic(
+    path: &str,
+    value: &str,
+    class: IdentifierClass,
+    severity: Severity,
+) -> Option<Diagnostic> {
     if class.is_valid(value) {
         return None;
     }
+    let verb = match severity {
+        Severity::Error => "must",
+        Severity::Warning => "should",
+    };
     Some(Diagnostic {
-        severity: Severity::Error,
+        severity,
         kind: ValidationErrorKind::InvalidIdentifier,
         path: path.to_string(),
         message: format!(
-            "{path} value {value:?} must match the regular expression {}",
+            "{path} value {value:?} {verb} match the regular expression {}",
             class.regex_label()
         ),
     })
+}
+
+/// Validates `value` at `path` against `class`. Returns `None` when valid,
+/// otherwise an error-severity [`ValidationError`] naming the offending value
+/// and the regular expression it must match. MUST-level positions only.
+fn check_identifier(path: &str, value: &str, class: IdentifierClass) -> Option<ValidationError> {
+    identifier_diagnostic(path, value, class, Severity::Error)
+}
+
+/// Validates `value` at `path` against `class`. Returns `None` when valid,
+/// otherwise a warning-severity [`Diagnostic`] naming the offending value and
+/// the regular expression it should match. SHOULD-level positions only —
+/// never fails validation on its own; promoted to an error by the shared
+/// `--strict` mechanism.
+fn check_identifier_warning(path: &str, value: &str, class: IdentifierClass) -> Option<Diagnostic> {
+    identifier_diagnostic(path, value, class, Severity::Warning)
 }
 
 /// Components Object: *"All the fixed fields declared above are objects that
@@ -4647,6 +4693,66 @@ workflows:
         )
     }
 
+    /// Spec builders for ac-0379b's three SHOULD-level `IdentifierClass::Identifier`
+    /// definition sites: Workflow Object `workflowId`, Step Object `stepId`, and
+    /// `sourceDescriptions[].name`.
+    fn workflow_id_spec(id: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: "{id}"
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
+    fn step_id_spec(id: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: "{id}"
+        operationPath: /test
+"#
+        )
+    }
+
+    fn source_description_name_spec(name: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: "{name}"
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
     /// Table-driven MUST-level identifier check (Acceptance Criteria: every
     /// DottedKey position produces an error when violated, and stays valid
     /// when the key is legal). Covers all six positions in one pass: workflow
@@ -4846,9 +4952,9 @@ workflows:
 
     /// A document whose only violations are SHOULD-level identifier
     /// positions (`workflowId`, `stepId`, `sourceDescriptions[].name`) must
-    /// still validate: those are ac-0379b's scope, not this ticket's, and
-    /// rejecting them here would collapse the MUST/SHOULD split and make
-    /// `validate` refuse specification-conformant documents.
+    /// still validate: this is ac-0379b's scope, and rejecting them would
+    /// collapse the MUST/SHOULD split and make `validate` refuse
+    /// specification-conformant documents.
     #[test]
     fn should_level_identifier_violations_alone_still_validate() {
         let yaml = r#"arazzo: "1.1.0"
@@ -4868,6 +4974,172 @@ workflows:
         if let Err(err) = parse_bytes(yaml.as_bytes()) {
             panic!("SHOULD-level-only violations must not fail validation, got: {err}");
         }
+    }
+
+    /// Table-driven SHOULD-level identifier check (ac-0379b Acceptance
+    /// Criteria): each of the three `IdentifierClass::Identifier` definition
+    /// sites produces a warning — never an error — when the value violates
+    /// `^[A-Za-z0-9_\-]+$`, and stays silent when the value is legal
+    /// (including `-` and `_`).
+    #[test]
+    fn should_level_identifier_positions_warn_on_invalid_and_stay_silent_on_valid() {
+        const VALID_ID: &str = "Az9-_";
+        const INVALID_ID: &str = "not identifier shaped";
+
+        type PositionBuilder = fn(&str) -> String;
+        let positions: &[(&str, PositionBuilder)] = &[
+            ("workflowId", workflow_id_spec),
+            ("stepId", step_id_spec),
+            ("sourceDescriptions[].name", source_description_name_spec),
+        ];
+
+        for (label, build) in positions {
+            let valid_yaml = build(VALID_ID);
+            let (_, warnings) = match parse_bytes_with_diagnostics(valid_yaml.as_bytes()) {
+                Ok(result) => result,
+                Err(err) => {
+                    panic!("{label}: expected {VALID_ID:?} to validate cleanly, got: {err}")
+                }
+            };
+            assert!(
+                !warnings
+                    .iter()
+                    .any(|w| w.kind == ValidationErrorKind::InvalidIdentifier),
+                "{label}: expected no identifier warning for {VALID_ID:?}, got: {warnings:?}"
+            );
+
+            let invalid_yaml = build(INVALID_ID);
+            let (_, warnings) = match parse_bytes_with_diagnostics(invalid_yaml.as_bytes()) {
+                Ok(result) => result,
+                Err(err) => {
+                    panic!("{label}: a SHOULD violation must warn, not fail validation: {err}")
+                }
+            };
+            assert!(
+                warnings.iter().any(|w| w.kind
+                    == ValidationErrorKind::InvalidIdentifier
+                    && w.severity == Severity::Warning),
+                "{label}: expected an invalidIdentifier warning for {INVALID_ID:?}, got: {warnings:?}"
+            );
+        }
+    }
+
+    /// Anchoring regression: `IdentifierClass::is_valid` walks every
+    /// character with `chars().all(..)`, so it has no unanchored form to
+    /// regress to — this proves the SHOULD-level check actually fires.
+    #[test]
+    fn should_level_bad_name_with_spaces_warns() {
+        let yaml = workflow_id_spec("bad name with spaces!");
+        let (_, warnings) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(result) => result,
+            Err(err) => panic!("\"bad name with spaces!\" must warn, not fail validation: {err}"),
+        };
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.kind == ValidationErrorKind::InvalidIdentifier
+                    && w.path.contains("workflowId")),
+            "warnings={warnings:?}"
+        );
+    }
+
+    /// Pins the class difference against ac-4a71f's `DottedKey`: a `.` is
+    /// illegal in the `Identifier` class (SHOULD-level `workflowId`) but
+    /// legal in `DottedKey` (MUST-level `outputs` keys). The same literal
+    /// value warns at one position and validates cleanly at the other.
+    #[test]
+    fn dot_in_identifier_warns_but_is_legal_in_dotted_key() {
+        const VALUE_WITH_DOT: &str = "wf.1";
+
+        let identifier_yaml = workflow_id_spec(VALUE_WITH_DOT);
+        let (_, warnings) = match parse_bytes_with_diagnostics(identifier_yaml.as_bytes()) {
+            Ok(result) => result,
+            Err(err) => panic!("dotted workflowId must warn, not fail validation: {err}"),
+        };
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.kind == ValidationErrorKind::InvalidIdentifier),
+            "warnings={warnings:?}"
+        );
+
+        let dotted_key_yaml = step_outputs_spec(VALUE_WITH_DOT);
+        if let Err(err) = parse_bytes(dotted_key_yaml.as_bytes()) {
+            panic!("the same value as a DottedKey key must validate cleanly, got: {err}");
+        }
+    }
+
+    /// Double-report guard: an empty `workflowId` produces only the existing
+    /// "is required" error, never an additional character-class warning —
+    /// `IdentifierClass::is_valid` rejects the empty string, but the empty
+    /// branch must short-circuit before that check runs.
+    #[test]
+    fn empty_identifier_produces_only_the_required_error_no_identifier_warning() {
+        let yaml = workflow_id_spec("");
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected empty workflowId to fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::MissingRequiredField
+        );
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|w| w.kind == ValidationErrorKind::InvalidIdentifier),
+            "warnings={:?}",
+            report.warnings
+        );
+    }
+
+    /// Double-report guard: a duplicate, invalid-shaped `workflowId` produces
+    /// exactly one `DuplicateIdentifier` error (for the repeat) and exactly
+    /// one `InvalidIdentifier` warning (for the first occurrence) — the
+    /// duplicate branch takes precedence over the character-class check for
+    /// the repeat, so the repeat is never reported twice.
+    #[test]
+    fn duplicate_invalid_shaped_identifier_is_not_double_reported() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: "bad id!"
+    steps:
+      - stepId: s1
+        operationPath: /test
+  - workflowId: "bad id!"
+    steps:
+      - stepId: s2
+        operationPath: /test2
+"#;
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected duplicate workflowId to fail validation");
+        };
+        let dup_errors = report
+            .errors
+            .iter()
+            .filter(|e| e.kind == ValidationErrorKind::DuplicateIdentifier)
+            .count();
+        assert_eq!(dup_errors, 1, "errors={:?}", report.errors);
+
+        let identifier_warnings = report
+            .warnings
+            .iter()
+            .filter(|w| w.kind == ValidationErrorKind::InvalidIdentifier)
+            .count();
+        assert_eq!(
+            identifier_warnings, 1,
+            "expected exactly one identifier warning, from the first occurrence only; \
+             warnings={:?}",
+            report.warnings
+        );
     }
 
     /// Pins the `components.<field>."<key>"` diagnostic path form: Components

@@ -483,6 +483,101 @@ fn validate_strict_promotes_warnings_to_errors() {
     );
 }
 
+/// SHOULD-level identifier document (ac-0379b): a `workflowId`, `stepId`,
+/// and `sourceDescriptions[].name` that each violate `^[A-Za-z0-9_\-]+$`.
+/// Written to a temp file rather than `testdata/` — the golden spec
+/// baseline sweeps that directory, and this ticket's writes scope does not
+/// include it.
+fn identifier_warning_spec(temp: &TempDir) -> PathBuf {
+    let path = temp.path().join("identifier-warnings.arazzo.yaml");
+    write_file(
+        &path,
+        r#"arazzo: "1.1.0"
+info:
+  title: Identifier warnings
+  version: "1.0.0"
+sourceDescriptions:
+  - name: "bad source!"
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: "bad workflow!"
+    steps:
+      - stepId: "bad step!"
+        operationPath: /test
+"#,
+    );
+    path
+}
+
+#[test]
+fn validate_json_reports_should_level_identifier_warnings_without_failing() {
+    let temp = TempDir::new("arazzo-identifier-warnings");
+    let spec = identifier_warning_spec(&temp);
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "SHOULD-level-only violations must exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert!(
+        body.get("errors").is_none(),
+        "warning-only spec must not report errors; body={body}"
+    );
+
+    let warnings = match body.get("warnings").and_then(Value::as_array) {
+        Some(v) => v.clone(),
+        None => panic!("expected warnings array in validate JSON; body={body}"),
+    };
+    assert_eq!(warnings.len(), 3, "body={body}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.get("kind") == Some(&Value::String("invalidIdentifier".to_string()))),
+        "expected every finding to carry kind invalidIdentifier; warnings={warnings:?}"
+    );
+}
+
+#[test]
+fn validate_strict_promotes_should_level_identifier_warnings_to_errors() {
+    let temp = TempDir::new("arazzo-identifier-warnings-strict");
+    let spec = identifier_warning_spec(&temp);
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "--strict", "validate", &spec_str].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "--strict must fail a SHOULD-level-only warning spec; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = match body.get("errors").and_then(Value::as_array) {
+        Some(v) => v.clone(),
+        None => panic!("expected errors array under --strict; body={body}"),
+    };
+    assert_eq!(errors.len(), 3, "body={body}");
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.get("kind") == Some(&Value::String("invalidIdentifier".to_string()))),
+        "errors={errors:?}"
+    );
+    assert!(
+        body.get("warnings").is_none(),
+        "promoted findings must not remain in warnings; body={body}"
+    );
+}
+
 fn querystring_fixture_spec() -> PathBuf {
     let mut path = repo_root();
     path.push("testdata/querystring-parameter.arazzo.yaml");
