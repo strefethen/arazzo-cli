@@ -539,3 +539,56 @@ One surface is not yet covered by the capability diagnostic: the criterion
 XPath path (`crates/arazzo-runtime/src/runtime_core/criteria.rs`) executes any
 declared version silently, with no version gate at all — pre-existing, and now
 the only XPath surface without the Decision 3 diagnostic.
+
+## Addendum — 2026-08-13 (epic ac-37fe6 close)
+
+The conformance epic is closed. Findings resolved by its final four members,
+each behind an independent fresh-context review (verdicts recorded on the
+tickets):
+
+**F6 is closed, both halves.** `d6dd3ac` (ac-4a71f) enforces the MUST-level
+positions as errors — workflow/step `outputs` keys and all four Components map
+keys against `^[a-zA-Z0-9\.\-_]+$`, via an anchored byte-class predicate (no
+`regex` dependency). `4191cac` (ac-0379b) reports the SHOULD-level positions —
+`workflowId`, `stepId`, `sourceDescriptions[].name` against `[A-Za-z0-9_\-]+`
+— as warnings, promoted to errors only under the single `--strict` flag.
+
+**F7 is closed.** `d6dd3ac` rejects `successCriteria: []` at the `parse_bytes`
+raw-YAML site (an absent key stays valid; the typed model cannot see the
+distinction). Known escape: `successCriteria:` with a null value still passes
+— ticketed as ac-d0f42.
+
+**F8 is closed.** `8461693` (ac-85c4a) retains all leftover fields at every
+`x-` capture site and warns on unknown non-`x-` keys (kind `unknownField`,
+promoted only under `--strict`); serialization still emits `x-` keys only.
+Two model completions landed with it so conformant documents do not warn:
+workflow-level `dependsOn` (parse/serialize only; semantics ticketed as
+ac-51755) and `reference`/`value` allowed at the four reusable-capable action
+positions (full Reusable Object modeling ticketed as ac-6131b).
+
+**F4 is closed.** `2f10fe8` (ac-91284) makes `generate` emit a
+document-pointing relative `sourceDescriptions[].url` (URI-reference rebased
+against the output directory, `./`-guarded when the first segment carries a
+colon); the MCP generate tool uses the document file name. Generated documents
+now declare `arazzo: 1.1.0`. The runtime's url-as-base-URL reading of absolute
+urls is unchanged — that compatibility rule remains part of the F1/F5 decision
+and GitHub issue #4.
+
+**F9, F10, and F13 are accepted-as-extension and labeled.** `bc2ae04`
+(ac-fb9dc) adds README's "Specification Conformance: Extensions and Gaps"
+section: `$env.*`, bare XPath outputs, the `operationPath` extension forms,
+url-as-base-URL, name-based `$components` action resolution, and the GJSON
+dot-path traversal all carry explicit **arazzo-cli extension** labels, with
+the Selector Object documented as the conformant preferred form.
+
+**F11 stays open, now documented.** `$response.query.<name>` /
+`$response.path.<name>` remain unimplemented (evaluate to `null`) and are
+listed as such in README's not-implemented section, alongside `$message.*`
+(evaluator-only context, never populated by the runtime) and the silently
+ignored Reusable Object `reference` form on actions (ac-6131b).
+
+The probe document at F8 above now behaves per the epic's acceptance criteria:
+its MUST-level violations fail validation, its SHOULD-level violations warn
+(errors under `--strict`), and the unknown field warns. Still open after this
+epic: F1/F5 (the operationPath / sourceDescriptions idiom product decision),
+F12, F14, F15, F16, F18, F19, and F11's implementation.
