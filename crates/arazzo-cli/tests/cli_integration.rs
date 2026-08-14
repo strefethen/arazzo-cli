@@ -1334,6 +1334,58 @@ workflows:
         .contains("unknown sourceDescription"));
 }
 
+/// ac-4a71f: a step `outputs` key that violates the specification's MUST-level
+/// `^[a-zA-Z0-9\.\-_]+$` regular expression reports kind `invalidIdentifier`
+/// over `--json`. This fails if only the `ValidationErrorKind` variant is
+/// added and `crates/arazzo-cli/src/output.rs`'s `validation_error_kind_name`
+/// match is not updated — that function falls through unmapped kinds to
+/// `"unknown"`.
+#[test]
+fn validate_json_reports_invalid_identifier_kind_for_bad_outputs_key() {
+    let temp = TempDir::new("arazzo-validate-invalid-identifier");
+    let mut invalid = temp.path().to_path_buf();
+    invalid.push("bad-outputs-key.yaml");
+    let content = r#"
+arazzo: 1.1.0
+info:
+  title: Invalid Identifier
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        outputs:
+          "bad key!": $response.body
+"#;
+    write_file(&invalid, content);
+
+    let invalid_str = invalid.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &invalid_str].as_slice(), None);
+    assert!(!output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or(&Vec::new())
+        .clone();
+    let issue = errors
+        .iter()
+        .find(|item| item.get("kind").and_then(Value::as_str) == Some("invalidIdentifier"))
+        .unwrap_or_else(|| panic!("expected an invalidIdentifier error, got: {errors:?}"));
+    assert!(issue
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .contains("outputs"));
+}
+
 #[test]
 fn show_not_found_returns_non_zero_exit() {
     let temp = TempDir::new("arazzo-show-not-found");

@@ -441,6 +441,7 @@ fn validation_error_kind_name(kind: &ValidationErrorKind) -> &'static str {
         ValidationErrorKind::InvalidRetryField => "invalidRetryField",
         ValidationErrorKind::InvalidCriterionType => "invalidCriterionType",
         ValidationErrorKind::UnsupportedOperationPath => "unsupportedOperationPath",
+        ValidationErrorKind::InvalidIdentifier => "invalidIdentifier",
         _ => "unknown",
     }
 }

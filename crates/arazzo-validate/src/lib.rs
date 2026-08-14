@@ -150,6 +150,9 @@ pub enum ValidationErrorKind {
     /// A specification-valid `operationPath` that this runtime cannot resolve.
     /// Warning severity: the document is conformant, the executor is not.
     UnsupportedOperationPath,
+    /// A workflow/step `outputs` key or Components map key that violates the
+    /// specification's `^[a-zA-Z0-9\.\-_]+$` MUST-level regular expression.
+    InvalidIdentifier,
 }
 
 /// Parses and validates an Arazzo spec file from disk, discarding warnings.
@@ -178,7 +181,15 @@ pub fn parse_with_diagnostics(
 pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diagnostic>), Error> {
     let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
     resolve_components(&mut spec).map_err(Error::ComponentResolution)?;
-    let warnings = validate_diagnostics(&spec)?;
+
+    // `successCriteria` emptiness cannot be seen in the typed model — see the
+    // comment on `check_raw_success_criteria` — so it is checked against the
+    // raw bytes here, the one place both the document text and the rest of
+    // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
+    // take only `&ArazzoSpec` and therefore cannot enforce this rule.
+    let mut diagnostics = collect_diagnostics(&spec);
+    diagnostics.extend(check_raw_success_criteria(data));
+    let warnings = partition_diagnostics(diagnostics)?;
     Ok((spec, warnings))
 }
 
@@ -192,7 +203,16 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
 /// Applies structural validation rules, returning warnings on success and
 /// failing with a report that also carries them on error.
 pub fn validate_diagnostics(spec: &ArazzoSpec) -> Result<Vec<Diagnostic>, Error> {
-    let (errors, warnings) = collect_diagnostics(spec)
+    partition_diagnostics(collect_diagnostics(spec))
+}
+
+/// Splits a diagnostics list into a success (warnings only) or failure
+/// (report carrying both errors and warnings) result. Shared by
+/// [`validate_diagnostics`] and [`parse_bytes_with_diagnostics`], which feeds
+/// it an extra diagnostic source ([`check_raw_success_criteria`]) that only
+/// it can see.
+fn partition_diagnostics(diagnostics: Vec<Diagnostic>) -> Result<Vec<Diagnostic>, Error> {
+    let (errors, warnings) = diagnostics
         .into_iter()
         .partition::<Vec<Diagnostic>, _>(Diagnostic::is_error);
 
@@ -282,6 +302,29 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 message: format!("{path}.url is required"),
             });
         }
+    }
+
+    if let Some(components) = &spec.components {
+        validate_component_keys(
+            "components.inputs",
+            components.inputs.keys(),
+            &mut diagnostics,
+        );
+        validate_component_keys(
+            "components.parameters",
+            components.parameters.keys(),
+            &mut diagnostics,
+        );
+        validate_component_keys(
+            "components.successActions",
+            components.success_actions.keys(),
+            &mut diagnostics,
+        );
+        validate_component_keys(
+            "components.failureActions",
+            components.failure_actions.keys(),
+            &mut diagnostics,
+        );
     }
 
     // Collect all workflow IDs upfront for cross-workflow goto validation.
@@ -521,6 +564,10 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             for (name, output) in &step.outputs {
                 let output_path = format!("{step_path}.outputs.{name}");
                 validate_output_value(&output_path, output, &mut diagnostics);
+                if let Some(diag) = check_identifier(&output_path, name, IdentifierClass::DottedKey)
+                {
+                    diagnostics.push(diag);
+                }
             }
             if let Some(request_body) = &step.request_body {
                 if let Some(payload) = &request_body.payload {
@@ -578,6 +625,9 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             let output_path = format!("{path}.outputs.{name}");
             validate_output_value(&output_path, output, &mut diagnostics);
             validate_output_step_reference(&output_path, output, &step_ids, &mut diagnostics);
+            if let Some(diag) = check_identifier(&output_path, name, IdentifierClass::DottedKey) {
+                diagnostics.push(diag);
+            }
         }
     }
 
@@ -654,6 +704,167 @@ fn local_depends_on_has_cycle(workflow: &Workflow) -> bool {
     }
 
     (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
+}
+
+/// `successCriteria` presence check: Step Object — *"If `successCriteria` is
+/// provided, it MUST contain at least one Criterion Object."*
+///
+/// `Step.success_criteria` is `Vec<SuccessCriterion>` with
+/// `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
+/// (`crates/arazzo-spec/src/lib.rs`), so an absent `successCriteria` key and
+/// an explicit `successCriteria: []` collapse to the same typed value by the
+/// time a `&ArazzoSpec` exists — `validate`/`validate_diagnostics` cannot
+/// enforce this rule. This walks the raw YAML document text instead, which is
+/// the only place the distinction survives, and is why the call lives in
+/// `parse_bytes_with_diagnostics` rather than `collect_diagnostics`.
+///
+/// Deliberately tolerant of shapes it does not recognize (non-mapping root,
+/// missing `workflows`/`steps`, non-sequence `successCriteria`): those are
+/// either not-yet-parseable YAML (already rejected earlier in the pipeline
+/// with a clearer error) or someone else's diagnostic to raise, not this
+/// check's.
+fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let Ok(serde_yaml_ng::Value::Mapping(root)) =
+        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data)
+    else {
+        return diagnostics;
+    };
+    let Some(workflows) = root
+        .get("workflows")
+        .and_then(serde_yaml_ng::Value::as_sequence)
+    else {
+        return diagnostics;
+    };
+
+    for (wf_idx, wf_value) in workflows.iter().enumerate() {
+        let Some(wf_mapping) = wf_value.as_mapping() else {
+            continue;
+        };
+        let workflow_id = wf_mapping
+            .get("workflowId")
+            .and_then(serde_yaml_ng::Value::as_str)
+            .unwrap_or_default();
+        let wf_path = if workflow_id.is_empty() {
+            format!("workflows[{wf_idx}]")
+        } else {
+            format!("workflow \"{workflow_id}\"")
+        };
+        let Some(steps) = wf_mapping
+            .get("steps")
+            .and_then(serde_yaml_ng::Value::as_sequence)
+        else {
+            continue;
+        };
+        for (step_idx, step_value) in steps.iter().enumerate() {
+            let Some(step_mapping) = step_value.as_mapping() else {
+                continue;
+            };
+            let step_id = step_mapping
+                .get("stepId")
+                .and_then(serde_yaml_ng::Value::as_str)
+                .unwrap_or_default();
+            let step_path = if step_id.is_empty() {
+                format!("{wf_path} > steps[{step_idx}]")
+            } else {
+                format!("{wf_path} > step \"{step_id}\"")
+            };
+            let is_empty_sequence = step_mapping
+                .get("successCriteria")
+                .and_then(serde_yaml_ng::Value::as_sequence)
+                .is_some_and(|criteria| criteria.is_empty());
+            if is_empty_sequence {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: format!("{step_path}.successCriteria"),
+                    message: format!(
+                        "{step_path}.successCriteria, if provided, MUST contain at least one \
+                         Criterion Object"
+                    ),
+                });
+            }
+        }
+    }
+
+    diagnostics
+}
+
+/// Character class for [`check_identifier`]. Implemented as a byte-class
+/// predicate rather than `regex`: `arazzo-validate`'s `Cargo.toml` does not
+/// depend on `regex`, and the workspace denies `unwrap_used`/`expect_used`,
+/// which rules out the usual `LazyLock::new(|| Regex::new(..).unwrap())`.
+/// Anchored by construction — `chars().all(..)` covers the entire string end
+/// to end, so there is no unanchored-regex failure mode to introduce later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentifierClass {
+    /// `^[A-Za-z0-9_\-]+$` — the SHOULD-level `workflowId`/`stepId`/
+    /// `sourceDescriptions[].name` positions, which is ac-0379b's scope, not
+    /// this ticket's. No MUST-level position uses it; the variant is kept
+    /// here (rather than added later) so ac-0379b reuses this helper instead
+    /// of writing a second one.
+    #[allow(dead_code)]
+    Identifier,
+    /// `^[a-zA-Z0-9\.\-_]+$` — the MUST-level `outputs` keys and Components
+    /// map keys this ticket enforces.
+    DottedKey,
+}
+
+impl IdentifierClass {
+    fn is_valid(self, value: &str) -> bool {
+        if value.is_empty() {
+            return false;
+        }
+        value.chars().all(|c| match self {
+            Self::Identifier => c.is_ascii_alphanumeric() || c == '-' || c == '_',
+            Self::DottedKey => c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_',
+        })
+    }
+
+    const fn regex_label(self) -> &'static str {
+        match self {
+            Self::Identifier => "^[A-Za-z0-9_\\-]+$",
+            Self::DottedKey => "^[a-zA-Z0-9\\.\\-_]+$",
+        }
+    }
+}
+
+/// Validates `value` at `path` against `class`. Returns `None` when valid,
+/// otherwise an error-severity [`ValidationError`] naming the offending value
+/// and the regular expression it must match.
+fn check_identifier(path: &str, value: &str, class: IdentifierClass) -> Option<ValidationError> {
+    if class.is_valid(value) {
+        return None;
+    }
+    Some(Diagnostic {
+        severity: Severity::Error,
+        kind: ValidationErrorKind::InvalidIdentifier,
+        path: path.to_string(),
+        message: format!(
+            "{path} value {value:?} must match the regular expression {}",
+            class.regex_label()
+        ),
+    })
+}
+
+/// Components Object: *"All the fixed fields declared above are objects that
+/// MUST use keys that match the regular expression: `^[a-zA-Z0-9\.\-_]+$`."*
+///
+/// Path form `components.<field>."<key>"`: Components map keys sit outside
+/// any workflow or step, so the crate's `workflow "<id>" > step "<id>"`
+/// convention does not apply, and `{key:?}` (`Debug` for `&String`) produces
+/// exactly the quoted-key form the design calls for.
+fn validate_component_keys<'a>(
+    field_path: &str,
+    keys: impl Iterator<Item = &'a String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for key in keys {
+        let path = format!("{field_path}.{key:?}");
+        if let Some(diag) = check_identifier(&path, key, IdentifierClass::DottedKey) {
+            diagnostics.push(diag);
+        }
+    }
 }
 
 /// True for a document declaring an Arazzo version older than 1.1.0, which is
@@ -4296,5 +4507,389 @@ workflows:
             "errors={:?}",
             report.errors
         );
+    }
+
+    // --- ac-4a71f: MUST-level identifier and successCriteria rules ---
+
+    fn workflow_outputs_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+    outputs:
+      "{key}": $response.body
+"#
+        )
+    }
+
+    fn step_outputs_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        outputs:
+          "{key}": $response.body
+"#
+        )
+    }
+
+    fn components_inputs_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  inputs:
+    "{key}":
+      type: object
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
+    fn components_parameters_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  parameters:
+    "{key}":
+      name: q
+      in: query
+      value: v
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
+    fn components_success_actions_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  successActions:
+    "{key}":
+      type: end
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
+    fn components_failure_actions_spec(key: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  failureActions:
+    "{key}":
+      type: end
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#
+        )
+    }
+
+    /// Table-driven MUST-level identifier check (Acceptance Criteria: every
+    /// DottedKey position produces an error when violated, and stays valid
+    /// when the key is legal). Covers all six positions in one pass: workflow
+    /// outputs, step outputs, and the four Components maps.
+    #[test]
+    fn dotted_key_positions_accept_valid_and_reject_invalid_keys() {
+        const VALID_KEY: &str = "Az9.-_";
+        const INVALID_KEY: &str = "not identifier shaped";
+
+        type PositionBuilder = fn(&str) -> String;
+        let positions: &[(&str, PositionBuilder)] = &[
+            ("workflow outputs", workflow_outputs_spec),
+            ("step outputs", step_outputs_spec),
+            ("components.inputs", components_inputs_spec),
+            ("components.parameters", components_parameters_spec),
+            ("components.successActions", components_success_actions_spec),
+            ("components.failureActions", components_failure_actions_spec),
+        ];
+
+        for (label, build) in positions {
+            let valid_yaml = build(VALID_KEY);
+            if let Err(err) = parse_bytes(valid_yaml.as_bytes()) {
+                panic!("{label}: expected {VALID_KEY:?} to validate cleanly, got: {err}");
+            }
+
+            let invalid_yaml = build(INVALID_KEY);
+            let Err(Error::Validation(report)) = parse_bytes(invalid_yaml.as_bytes()) else {
+                panic!("{label}: expected {INVALID_KEY:?} to fail validation");
+            };
+            assert!(
+                report
+                    .errors
+                    .iter()
+                    .any(|item| item.kind == ValidationErrorKind::InvalidIdentifier),
+                "{label}: expected an invalidIdentifier error, got: {:?}",
+                report.errors
+            );
+        }
+    }
+
+    /// Anchoring regression: the literal `bad key!` from the specification's
+    /// MUST clause (and the ticket's Goal probe document) must be rejected.
+    /// `IdentifierClass::is_valid` walks every character with
+    /// `chars().all(..)`, so it has no unanchored form to regress to — this
+    /// test is what proves the check actually fires, not merely compiles.
+    #[test]
+    fn bad_key_exclamation_is_rejected() {
+        let yaml = step_outputs_spec("bad key!");
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected \"bad key!\" to be rejected");
+        };
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|item| item.kind == ValidationErrorKind::InvalidIdentifier
+                    && item.path.contains("bad key!")),
+            "errors={:?}",
+            report.errors
+        );
+    }
+
+    /// `successCriteria` absent, populated, and empty, exercised through
+    /// `parse_bytes` — the only entry point that can see the distinction
+    /// between an absent key and an explicit `[]`. `Step.success_criteria` is
+    /// `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so both
+    /// collapse to the same typed `Vec::new()`; `validate(&ArazzoSpec)` /
+    /// `validate_diagnostics(&ArazzoSpec)` cannot enforce this rule for the
+    /// same reason (see the comment on `check_raw_success_criteria`).
+    #[test]
+    fn success_criteria_absent_and_populated_are_valid_empty_is_rejected() {
+        fn spec_with(success_criteria: &str) -> String {
+            format!(
+                r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+{success_criteria}
+"#
+            )
+        }
+
+        // Absent: no `successCriteria` key at all.
+        if let Err(err) = parse_bytes(spec_with("").as_bytes()) {
+            panic!("absent successCriteria must validate, got: {err}");
+        }
+
+        // Populated: at least one Criterion Object.
+        let populated =
+            spec_with("        successCriteria:\n          - condition: $statusCode == 200");
+        if let Err(err) = parse_bytes(populated.as_bytes()) {
+            panic!("populated successCriteria must validate, got: {err}");
+        }
+
+        // Empty: Step Object — "If successCriteria is provided, it MUST
+        // contain at least one Criterion Object."
+        let empty = spec_with("        successCriteria: []");
+        let Err(Error::Validation(report)) = parse_bytes(empty.as_bytes()) else {
+            panic!("expected successCriteria: [] to fail validation");
+        };
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|item| item.path.ends_with(".successCriteria")),
+            "errors={:?}",
+            report.errors
+        );
+    }
+
+    /// Pins the "do not over-apply the regex" boundary from the design:
+    /// `OnAction.name` carries `$components.*` reference values in real
+    /// documents (e.g. `examples/httpbin-components.arazzo.yaml`) and must
+    /// not be constrained by the DottedKey check — only the Components map
+    /// *key* is checked, never an `OnAction.name` value that references one.
+    #[test]
+    fn on_action_name_component_reference_is_accepted() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  failureActions:
+    standardRetry:
+      type: retry
+      retryAfter: 1
+      retryLimit: 3
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onFailure:
+          - name: "$components.failureActions.standardRetry"
+"#;
+        if let Err(err) = parse_bytes(yaml.as_bytes()) {
+            panic!("expected $components.* OnAction.name to validate cleanly, got: {err}");
+        }
+    }
+
+    /// The Goal probe document: after this ticket it fails, reporting both
+    /// violations together in the same run — Design's "report every
+    /// violation, not the first" bullet.
+    #[test]
+    fn goal_probe_document_reports_both_violations_together() {
+        let yaml = r#"arazzo: 1.1.0
+info:
+  title: Gap probe
+  version: 1.0.0
+sourceDescriptions:
+  - name: probe-api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: probe
+    steps:
+      - stepId: getThing
+        operationPath: /things
+        successCriteria: []
+        outputs:
+          "bad key!": $response.body
+"#;
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected the probe document to fail validation");
+        };
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|item| item.kind == ValidationErrorKind::InvalidIdentifier),
+            "missing InvalidIdentifier error; errors={:?}",
+            report.errors
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|item| item.path.ends_with(".successCriteria")),
+            "missing successCriteria error; errors={:?}",
+            report.errors
+        );
+        assert_eq!(report.errors.len(), 2, "errors={:?}", report.errors);
+    }
+
+    /// A document whose only violations are SHOULD-level identifier
+    /// positions (`workflowId`, `stepId`, `sourceDescriptions[].name`) must
+    /// still validate: those are ac-0379b's scope, not this ticket's, and
+    /// rejecting them here would collapse the MUST/SHOULD split and make
+    /// `validate` refuse specification-conformant documents.
+    #[test]
+    fn should_level_identifier_violations_alone_still_validate() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: T
+  version: "1.0.0"
+sourceDescriptions:
+  - name: "not an identifier!"
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: "not an identifier!"
+    steps:
+      - stepId: "not an identifier!"
+        operationPath: /test
+"#;
+        if let Err(err) = parse_bytes(yaml.as_bytes()) {
+            panic!("SHOULD-level-only violations must not fail validation, got: {err}");
+        }
+    }
+
+    /// Pins the `components.<field>."<key>"` diagnostic path form: Components
+    /// map keys sit outside any workflow or step, so the crate's
+    /// `workflow "<id>" > step "<id>"` convention does not apply to them.
+    #[test]
+    fn components_path_uses_field_and_quoted_key_form() {
+        let yaml = components_parameters_spec("bad key!");
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected components.parameters bad key to fail validation");
+        };
+        let issue = match report
+            .errors
+            .iter()
+            .find(|item| item.kind == ValidationErrorKind::InvalidIdentifier)
+        {
+            Some(issue) => issue,
+            None => panic!(
+                "expected an InvalidIdentifier error, got: {:?}",
+                report.errors
+            ),
+        };
+        assert_eq!(issue.path, "components.parameters.\"bad key!\"");
     }
 }
