@@ -62,6 +62,8 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
+Some of the above (`$env`, bare XPath outputs, and the `operationPath`/`sourceDescriptions[].url` routing idiom) are arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+
 ## Contents
 
 - [CLI Commands](#cli-commands)
@@ -70,6 +72,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 - [Deterministic Replay](#deterministic-replay)
 - [VS Code Debugger](#vs-code-debugger)
 - [Expression Language](#expression-language)
+  - [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps)
 - [How It Works](#how-it-works)
 - [Parallel Execution](#parallel-execution)
 - [Success Criteria](#success-criteria)
@@ -385,10 +388,12 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `$inputs.name` | Workflow input parameter |
 | `$steps.<id>.outputs.<name>` | Previous step output |
 | `$outputs.name` | Workflow outputs map (inside `workflow.outputs`) |
-| `$env.VAR_NAME` | Environment variable (`.env` auto-loaded) |
+| `$workflows.<id>.inputs.<name>` / `.outputs.<name>` | Another workflow's inputs/outputs |
+| `$env.VAR_NAME` (**arazzo-cli extension**) | Environment variable (`.env` auto-loaded) — see [security note](#env-file-support) |
 | `$statusCode` | HTTP response status code |
 | `$method` | HTTP method (GET, POST, etc.) |
 | `$url` | Fully constructed request URL |
+| `$self` | The current Arazzo Description's `$self` URI (`null`, with a warning, when the document declares no `$self`) |
 | `$response.header.Name` | Response header (case-insensitive) |
 | `$response.body.path` | JSON dot-path body extraction |
 | `$response.body#/pointer` | RFC 6901 JSON Pointer body access |
@@ -397,11 +402,19 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `$request.path.Name` | Request path parameter |
 | `$request.body` | Request body (dot-path or JSON Pointer) |
 | `$sourceDescriptions.<name>.url` | Source description URL |
-| `//xpath/expression` | XML/HTML extraction |
+| `reference: $components.parameters.<name>` on a Parameter | Named parameter component, via a Reusable Object's `reference` field |
+| `reference: $components.successActions\|failureActions.<name>` on an action | **Not implemented** — silently ignored. See below. |
+| `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; not the specification's field for this |
+| `//xpath/expression` (**arazzo-cli extension**, retained legacy form) | XML/HTML extraction — prefer the [Selector Object](#arazzo-11-selector-objects) form (`type: xpath`) for new workflows |
+
+**Not implemented:**
+- `$response.query.<name>` and `$response.path.<name>` are listed by the specification but not resolved by arazzo-cli — they evaluate to `null`. Only `$response.header.<name>` and `$response.body...` are supported on `$response`.
+- `$message.header.<name>` and `$message.payload...` are modeled in the expression evaluator but nothing in the runtime populates them for a real request — arazzo-cli does not execute asynchronous/message-style transports. Against an actual HTTP response, both evaluate to `null`, not the response's own header/body (use `$response.*` for that).
+- The Reusable Object's `reference` field (`reference: $components.successActions.<name>` / `reference: $components.failureActions.<name>`), used on a Success or Failure Action Object. Only the `name` field is checked for a `$components.` prefix (an **arazzo-cli extension**, since the specification does not define `name` as a reference mechanism); an action written with `reference` instead is not resolved, and — because it also isn't flagged as an unrecognized field — silently keeps its default fields, which read as a bare `end` action. Modeling the spec's `reference` form for actions is tracked in ac-6131b; until then, use `name` for a component action reference in this tool. Parameter references (`reference: $components.parameters.<name>`) are unaffected — that form is implemented and specification-conformant.
 
 **String interpolation:** `{$expr}` embeds any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
 
-**Multi-source routing:** `{sourceName}./path` selects a source description's base URL
+**Multi-source routing (arazzo-cli extension):** `{sourceName}./path` — e.g. `operationPath: "{petstore}./pets"`, or with a method prefix, `operationPath: "GET {petstore}./pets"` — selects a source description's base URL for a step. This, and the bare-path form used elsewhere in this README (e.g. `operationPath: /protected` in [Sub-Workflows](#sub-workflows)), are not the specification's `operationPath` syntax — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
 **Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
 
@@ -424,6 +437,32 @@ outputs:
 `type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `10` / `20` / `30` / `31`. Runtime XPath execution currently supports XPath 1.0 (`10`); later XPath versions are preserved and validated but resolve to `null` with a visible unsupported-version diagnostic.
 
 All selector callers use the same selection engine. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in traversal/document order. Invalid syntax, unsupported runtime versions, and zero matches produce trace or dry-run warnings. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
+
+For XPath outputs specifically, prefer the Selector Object form (`type: xpath`) shown above over the bare `//xpath/expression` value in the table above — the Selector Object is the specification-conformant 1.1 form; the bare form is a retained arazzo-cli extension kept for compatibility with older workflows.
+
+### Specification Conformance: Extensions and Gaps
+
+arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.org/arazzo/latest.html), plus a small set of constructs the specification does not define. **Policy:** extensions are permitted, must be labeled **arazzo-cli extension** everywhere they are documented, and must never silently change the meaning of an otherwise-conformant document. A workflow that uses a labeled construct runs correctly here but is not guaranteed to validate or run on another Arazzo tool.
+
+**Extensions beyond the specification:**
+
+| Construct | Specification-conformant alternative |
+|---|---|
+| `$env.VAR_NAME` | None — not a specification expression source. See the [security note](#env-file-support). |
+| Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: xpath` |
+| `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
+| `sourceDescriptions[].url` read as an absolute request base URL | None implemented yet — fetching the document at that URL (the specification's reading of the field) is listed under "Not implemented" below |
+| `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's field for this, but arazzo-cli does not implement it — see "Not implemented" below |
+
+The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows, but the runtime's extension reading of an absolute `url` as a base URL still applies to existing documents. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4) and the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
+
+**Specification features not implemented:**
+
+- `$response.query.<name>` and `$response.path.<name>` — listed by the specification's Runtime Expressions grammar; arazzo-cli resolves only `$response.header.<name>` and `$response.body...`, so both evaluate to `null` rather than the request-matched query/path value.
+- `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
+- The specification's `operationPath` form (source reference + JSON Pointer), described above.
+- Fetching a remote document from `sourceDescriptions[].url` — the specification's reading of that field — is not implemented; arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4).
+- The Reusable Object's `reference` field on a Success or Failure Action Object (`reference: $components.successActions.<name>` / `reference: $components.failureActions.<name>`) — the specification's mechanism for referencing a named action component. arazzo-cli checks only the `name` field for a `$components.` prefix instead (the extension form above). An action written with `reference` is not resolved and is not flagged as invalid either — it silently keeps its unresolved default fields, which evaluate as a bare `end` action. Parameter references (`reference: $components.parameters.<name>`) are unaffected by this gap; that form is implemented. Modeling the specification's `reference` form for actions is tracked in ac-6131b.
 
 ## How It Works
 
@@ -456,6 +495,8 @@ For each step, the engine:
 The engine streams events as it runs. CLI output, traces, verbose logging, and the VS Code debugger all consume the same event stream — there is no special path for any consumer.
 
 ### .env File Support
+
+`$env.VAR_NAME` is an **arazzo-cli extension** — the Arazzo specification does not define an environment-variable expression source, so a workflow that relies on it is not portable to another Arazzo tool. It also has a security consequence worth stating plainly: any environment variable the arazzo-cli process can see is readable from workflow text through this expression, not only the ones the workflow author intended to expose — treat `$env` as read access to the whole process environment, not a scoped secrets store.
 
 On startup, arazzo-cli automatically loads a `.env` file from the current directory (if one exists). Values become available as `$env.VAR_NAME` in expressions:
 
@@ -546,15 +587,15 @@ The engine automatically strips `xmlns` declarations and namespace prefixes from
 
 ### JSONPath
 
-Filter-based queries on JSON response bodies:
+Filter-based queries on JSON response bodies, via the same dot-path traversal `$response.body...` uses everywhere. Beyond the specification's plain `.` de-reference, this traversal accepts wildcards, array-length, and two filter-predicate syntaxes — all of that is an **arazzo-cli extension** (see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps)); it is distinct from the specification-conformant `type: jsonpath` criterion / Selector Object subset documented above and under [Arazzo 1.1 Selector Objects](#arazzo-11-selector-objects).
 
 ```yaml
 successCriteria:
-  - condition: $response.body.users[#(role=="admin")].name
+  - condition: $response.body.users[?(@.role=="admin")].name
     context: $response.body
 ```
 
-Supports array indexing (`[0]`), wildcards (`[*]`), array length (`[#]`), and filter predicates (`[#(field==value)]`).
+Supports array indexing (`[0]`), wildcards (`[*]`), array length (`.#`), a JSONPath-style bracket filter predicate (`[?(@.field=="value")]`), and a GJSON-style dot-form filter predicate (`.#(field==value)`, or `.#(field==value)#` to keep all matches instead of the first). The bracket-wrapped GJSON form `[#(field==value)]` is **not** supported — it is parsed as a literal (and normally nonexistent) field name, so it silently resolves to `null` instead of erroring or matching; use `[?(@.field=="value")]` or `.#(field==value)` instead. Verified by running each form through `arazzo-cli run --json` against a local test server and comparing outputs.
 
 ## Control Flow
 
