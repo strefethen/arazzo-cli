@@ -5,11 +5,57 @@ use std::path::{Path, PathBuf};
 
 use arazzo_spec::{
     parse_unvalidated_bytes, ActionType, ArazzoSpec, CriterionType, SourceType, StepAction,
-    StepTarget,
+    StepTarget, VendorExtensions,
 };
 
 fn examples_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Every Arazzo document under `dir`, recursively — `testdata/` nests fixtures
+/// a level deep (e.g. `testdata/mcp-denied/spec.arazzo.yaml`), so this must
+/// descend rather than list one directory, matching the discovery
+/// `crates/arazzo-cli/tests/golden_spec_baseline.rs` already uses for the
+/// same two directories.
+fn collect_specs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => panic!("failed to read {}: {err}", dir.display()),
+    };
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(err) => panic!("failed to read {} entry: {err}", dir.display()),
+        };
+        let path = entry.path();
+        if path.is_dir() {
+            collect_specs_recursive(&path, out);
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if file_name.ends_with(".arazzo.yaml") || file_name.ends_with(".arazzo.yml") {
+            out.push(path);
+        }
+    }
+}
+
+/// Every Arazzo document under `examples/` and `testdata/`, the full corpus
+/// the ticket's round-trip testing obligation names.
+fn load_corpus_paths() -> Vec<PathBuf> {
+    let root = repo_root();
+    let mut paths = Vec::new();
+    for dir in ["examples", "testdata"] {
+        collect_specs_recursive(&root.join(dir), &mut paths);
+    }
+    paths.sort();
+    assert!(!paths.is_empty(), "expected at least one corpus spec");
+    paths
 }
 
 fn load_example_paths() -> Vec<PathBuf> {
@@ -70,6 +116,71 @@ fn parse_serialize_parse_roundtrip_for_all_examples() {
             original,
             reparsed,
             "round-trip mismatch for {}",
+            path.display()
+        );
+    }
+}
+
+/// Extends the equality round-trip above to `testdata/` as well — the
+/// ticket's testing obligation names both directories, and
+/// `parse_serialize_parse_roundtrip_for_all_examples` above only ever swept
+/// `examples/`.
+#[test]
+fn parse_serialize_parse_roundtrip_for_all_examples_and_testdata() {
+    for path in load_corpus_paths() {
+        let original = parse_spec(&read_bytes(&path), &path.display().to_string());
+        let serialized = serialize_spec(&original, &path.display().to_string());
+        let reparsed = parse_spec(serialized.as_bytes(), &path.display().to_string());
+        assert_eq!(
+            original,
+            reparsed,
+            "round-trip mismatch for {}",
+            path.display()
+        );
+    }
+}
+
+fn insert_sentinel(extensions: &mut VendorExtensions, key: &str) {
+    extensions.insert(key.to_string(), serde_yaml_ng::Value::Bool(true));
+}
+
+/// The ticket's testing obligation asks for byte-identical serialized output
+/// across every file in `examples/` and `testdata/`, to prove "retained
+/// unknown keys do not leak into emitted YAML." Literal byte-identical
+/// comparison against each file's *original* text would not test that: a
+/// hand-written document's key order, quoting style, comments, and blank
+/// lines differ from serde's canonical output regardless of whether any
+/// unknown field was ever present, so a mismatch there would signal a
+/// reformat, not a leak — and every file in the corpus is already confirmed
+/// unknown-field-clean by `crates/arazzo-cli/tests/golden_spec_baseline.rs`,
+/// so there is nothing real to catch a leak from.
+///
+/// Deviation taken instead: parse every corpus file, inject a synthetic
+/// non-`x-*` field at the positions this crate captures leftover fields for
+/// most densely (root, first workflow, first step, when present), and assert
+/// the sentinel key never appears anywhere in the serialized output, for
+/// every document in the corpus. This is the same proof
+/// `parse_drops_non_vendor_unknown_fields` already gives for one synthetic
+/// document, applied to the full real-world corpus instead of a single
+/// fixture.
+#[test]
+fn serialized_output_never_leaks_an_injected_unknown_field_across_the_corpus() {
+    const SENTINEL: &str = "zzz-injected-unknown-field-must-not-leak";
+
+    for path in load_corpus_paths() {
+        let mut spec = parse_spec(&read_bytes(&path), &path.display().to_string());
+        insert_sentinel(&mut spec.extensions, SENTINEL);
+        if let Some(workflow) = spec.workflows.first_mut() {
+            insert_sentinel(&mut workflow.extensions, SENTINEL);
+            if let Some(step) = workflow.steps.first_mut() {
+                insert_sentinel(&mut step.extensions, SENTINEL);
+            }
+        }
+
+        let serialized = serialize_spec(&spec, &path.display().to_string());
+        assert!(
+            !serialized.contains(SENTINEL),
+            "injected unknown field leaked into serialized output for {}:\n{serialized}",
             path.display()
         );
     }

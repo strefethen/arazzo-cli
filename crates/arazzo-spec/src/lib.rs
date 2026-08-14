@@ -13,7 +13,18 @@ pub use operation_path::{
     UnsupportedOperationPath, SUPPORTED_OPERATION_PATH_FORMS,
 };
 
-/// Raw `x-*` Specification Extension fields preserved on Arazzo objects.
+/// Every field left over once an Arazzo object's known fields are matched,
+/// keyed by wire name. This is a superset of the `x-*` prefixed
+/// Specification Extension fields the name suggests: it also carries any
+/// other unrecognized field (a typo such as `sucessCriteria`, or a field this
+/// crate has not modeled) so `arazzo-validate` can warn on it instead of
+/// silently discarding it. Serialization filters back down to `x-*` entries
+/// only — see [`serialize_vendor_extensions`] — so a retained non-`x-` key
+/// never reaches emitted output. Use [`unrecognized_fields`] to read the
+/// non-`x-` subset. `SchemaObject` and `PropertyDef` also capture into this
+/// type, but their leftover keys are legitimate JSON Schema keywords (e.g.
+/// `items`, `enum`), not typos — callers must not treat their captured
+/// fields as unrecognized.
 pub type VendorExtensions = BTreeMap<String, serde_yaml_ng::Value>;
 
 fn is_vendor_extension_key(key: &str) -> bool {
@@ -22,6 +33,22 @@ fn is_vendor_extension_key(key: &str) -> bool {
 
 fn vendor_extensions_is_empty(extensions: &VendorExtensions) -> bool {
     extensions.keys().all(|key| !is_vendor_extension_key(key))
+}
+
+/// Returns the subset of a captured [`VendorExtensions`] map that is *not* a
+/// `x-*` Specification Extension — i.e. every field a validator should treat
+/// as unrecognized rather than as an accepted vendor extension.
+///
+/// Not meaningful for `SchemaObject` or `PropertyDef`: their captured
+/// leftovers are JSON Schema keywords this crate does not model as typed
+/// fields, not unrecognized ones.
+pub fn unrecognized_fields(
+    extensions: &VendorExtensions,
+) -> impl Iterator<Item = (&str, &serde_yaml_ng::Value)> {
+    extensions
+        .iter()
+        .filter(|(key, _)| !is_vendor_extension_key(key))
+        .map(|(key, value)| (key.as_str(), value))
 }
 
 fn serialize_vendor_extensions<S>(
@@ -38,15 +65,16 @@ where
         .serialize(serializer)
 }
 
+/// Captures every field left over after an object's known fields are
+/// matched — both `x-*` Specification Extensions (kept on output, see
+/// [`serialize_vendor_extensions`]) and any other unrecognized field (not
+/// serialized back out, but visible to `arazzo-validate` via
+/// [`unrecognized_fields`] so it can warn on a likely typo).
 fn deserialize_vendor_extensions<'de, D>(deserializer: D) -> Result<VendorExtensions, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let raw = BTreeMap::<String, serde_yaml_ng::Value>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .filter(|(key, _)| is_vendor_extension_key(key))
-        .collect())
+    BTreeMap::<String, serde_yaml_ng::Value>::deserialize(deserializer)
 }
 
 /// Root Arazzo specification document.
@@ -178,6 +206,12 @@ pub struct Workflow {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<SchemaObject>,
+    /// Workflow Object Fixed Fields, `dependsOn`: *"A list of workflows that
+    /// MUST be completed before this workflow can be processed."* Parse and
+    /// serialize only — no execution-ordering semantics are implemented here;
+    /// that is separate, out-of-scope follow-up work.
+    #[serde(rename = "dependsOn", default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
     #[serde(default)]
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -885,7 +919,10 @@ pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng:
 
 #[cfg(test)]
 mod tests {
-    use super::{ExpressionType, ParamLocation, Parameter, Replacement, RequestBody, SelectorType};
+    use super::{
+        unrecognized_fields, ExpressionType, ParamLocation, Parameter, Replacement, RequestBody,
+        SelectorType, VendorExtensions,
+    };
 
     fn serialize<T: serde::Serialize>(value: &T) -> String {
         match serde_yaml_ng::to_string(value) {
@@ -1019,5 +1056,42 @@ mod tests {
         });
 
         assert!(!serialized.contains("replacements:"));
+    }
+
+    /// `unrecognized_fields` is what `arazzo-validate` walks to warn on a
+    /// misspelled or unmodeled field (ac-85c4a): it must return exactly the
+    /// non-`x-*` entries, in either order of insertion.
+    #[test]
+    fn unrecognized_fields_excludes_vendor_extensions() {
+        let mut extensions = VendorExtensions::new();
+        extensions.insert(
+            "x-note".to_string(),
+            serde_yaml_ng::Value::String("keep".to_string()),
+        );
+        extensions.insert(
+            "typoField".to_string(),
+            serde_yaml_ng::Value::String("warn".to_string()),
+        );
+
+        let unrecognized: Vec<&str> = unrecognized_fields(&extensions)
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(unrecognized, vec!["typoField"]);
+    }
+
+    /// `Replacement` had no capture before ac-bd441 — retained non-`x-*`
+    /// fields must not leak into serialized output even though they are now
+    /// captured (for `arazzo-validate` to warn on), matching the contract
+    /// already held by every other captured type.
+    #[test]
+    fn replacement_captures_but_does_not_serialize_a_non_vendor_field() {
+        let body = deserialize_request_body(
+            "contentType: application/json\nreplacements:\n  - target: /a\n    value: 1\n    replacementTypo: warn\n",
+        );
+        assert!(unrecognized_fields(&body.replacements[0].extensions)
+            .any(|(key, _)| key == "replacementTypo"));
+
+        let serialized = serialize(&body);
+        assert!(!serialized.contains("replacementTypo"), "{serialized}");
     }
 }

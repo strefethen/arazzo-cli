@@ -8,9 +8,10 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_operation_path, parse_unvalidated_bytes, ActionType, ArazzoSpec, OnAction,
-    OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step, StepAction,
-    StepTarget, SuccessCriterion, ValueSource, Workflow, SUPPORTED_OPERATION_PATH_FORMS,
+    classify_operation_path, parse_unvalidated_bytes, unrecognized_fields, ActionType, ArazzoSpec,
+    OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step,
+    StepAction, StepTarget, SuccessCriterion, ValueSource, VendorExtensions, Workflow,
+    SUPPORTED_OPERATION_PATH_FORMS,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -157,6 +158,14 @@ pub enum ValidationErrorKind {
     /// (warning severity, promoted to error only under `--strict`). Severity
     /// distinguishes the two; the kind is shared.
     InvalidIdentifier,
+    /// A field that is neither a modeled field nor a `x-*` Specification
+    /// Extension. Warning severity, promoted to error only under `--strict`:
+    /// the specification reserves `x-` for extensions but states no
+    /// MUST-reject for an unrecognized field, so this is advisory rather than
+    /// fatal by default. Not raised inside a JSON Schema position (workflow
+    /// or `components.inputs`), where an unmodeled keyword is legitimate JSON
+    /// Schema, not a mistake.
+    UnknownField,
 }
 
 /// Parses and validates an Arazzo spec file from disk, discarding warnings.
@@ -229,6 +238,9 @@ fn partition_diagnostics(diagnostics: Vec<Diagnostic>) -> Result<Vec<Diagnostic>
 fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::<Diagnostic>::new();
 
+    check_unknown_fields("", &spec.extensions, &mut diagnostics);
+    check_unknown_fields("info", &spec.info.extensions, &mut diagnostics);
+
     if spec.arazzo.is_empty() {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -283,6 +295,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
     let mut source_names = HashSet::<&str>::new();
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
         let path = format!("sourceDescriptions[{idx}]");
+        check_unknown_fields(&path, &src.extensions, &mut diagnostics);
         if src.name.is_empty() {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -315,6 +328,10 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
     }
 
     if let Some(components) = &spec.components {
+        check_unknown_fields("components", &components.extensions, &mut diagnostics);
+        // components.inputs is excluded: each entry is a JSON Schema object
+        // (SchemaObject), and unmodeled JSON Schema keywords are legitimate,
+        // not unrecognized fields.
         validate_component_keys(
             "components.inputs",
             components.inputs.keys(),
@@ -335,6 +352,27 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             components.failure_actions.keys(),
             &mut diagnostics,
         );
+        for (name, param) in &components.parameters {
+            check_unknown_fields(
+                &format!("components.parameters.{name}"),
+                &param.extensions,
+                &mut diagnostics,
+            );
+        }
+        for (name, action) in &components.success_actions {
+            check_unknown_fields(
+                &format!("components.successActions.{name}"),
+                &action.extensions,
+                &mut diagnostics,
+            );
+        }
+        for (name, action) in &components.failure_actions {
+            check_unknown_fields(
+                &format!("components.failureActions.{name}"),
+                &action.extensions,
+                &mut diagnostics,
+            );
+        }
     }
 
     // Collect all workflow IDs upfront for cross-workflow goto validation.
@@ -353,6 +391,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
         } else {
             format!("workflow \"{}\"", wf.workflow_id)
         };
+        check_unknown_fields(&path, &wf.extensions, &mut diagnostics);
 
         if wf.workflow_id.is_empty() {
             diagnostics.push(Diagnostic {
@@ -415,6 +454,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             } else {
                 format!("{path} > step \"{}\"", step.step_id)
             };
+            check_unknown_fields(&step_path, &step.extensions, &mut diagnostics);
 
             if step.step_id.is_empty() {
                 diagnostics.push(Diagnostic {
@@ -592,6 +632,11 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 }
             }
             if let Some(request_body) = &step.request_body {
+                check_unknown_fields(
+                    &format!("{step_path}.requestBody"),
+                    &request_body.extensions,
+                    &mut diagnostics,
+                );
                 if let Some(payload) = &request_body.payload {
                     validate_value_source(
                         &format!("{step_path}.requestBody.payload"),
@@ -893,6 +938,48 @@ fn check_identifier_warning(path: &str, value: &str, class: IdentifierClass) -> 
     identifier_diagnostic(path, value, class, Severity::Warning)
 }
 
+/// Warns on every field captured at `path` that is neither a modeled field
+/// nor a `x-*` Specification Extension — most often a misspelling of a real
+/// field, such as `sucessCriteria`, that would otherwise silently disable the
+/// behavior the author intended. Warning severity, promoted to error only by
+/// the shared `--strict` mechanism: the specification reserves `x-` for
+/// extensions but states no MUST-reject for an unrecognized field.
+///
+/// Must not be called on a `SchemaObject` or `PropertyDef` capture: their
+/// leftover keys are legitimate JSON Schema 2020-12 keywords (`items`,
+/// `enum`, `minimum`, ...), not typos.
+fn check_unknown_fields(
+    path: &str,
+    extensions: &VendorExtensions,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    check_unknown_fields_except(path, extensions, &[], diagnostics);
+}
+
+/// As [`check_unknown_fields`], but treats every key in `allow` as if it
+/// were a modeled field — for a position whose spec type permits fields this
+/// crate's Rust struct does not (yet) declare.
+fn check_unknown_fields_except(
+    path: &str,
+    extensions: &VendorExtensions,
+    allow: &[&str],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (key, _) in unrecognized_fields(extensions) {
+        if allow.contains(&key) {
+            continue;
+        }
+        diagnostics.push(Diagnostic::warning(
+            ValidationErrorKind::UnknownField,
+            path.to_string(),
+            format!(
+                "unrecognized field \"{key}\"; only `x-` prefixed extension fields are \
+                 permitted here"
+            ),
+        ));
+    }
+}
+
 /// Components Object: *"All the fixed fields declared above are objects that
 /// MUST use keys that match the regular expression: `^[a-zA-Z0-9\.\-_]+$`."*
 ///
@@ -1018,6 +1105,7 @@ fn validate_parameters(
 ) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
+        check_unknown_fields(&param_path, &param.extensions, diagnostics);
         if param.in_ == Some(ParamLocation::Querystring) && declares_pre_1_1(arazzo_version) {
             // Rejected, not accepted-with-a-warning: Arazzo Specification
             // Object, `arazzo` — *"This string MUST be the version number of
@@ -1110,6 +1198,7 @@ fn validate_value_source(path: &str, value: &ValueSource, diagnostics: &mut Vec<
 }
 
 fn validate_selector(path: &str, selector: &SelectorObject, diagnostics: &mut Vec<Diagnostic>) {
+    check_unknown_fields(path, &selector.extensions, diagnostics);
     if selector.context.trim().is_empty() {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -1206,6 +1295,11 @@ fn validate_expression_type(
             }
         }
         SelectorType::ExpressionType(expression_type) => {
+            check_unknown_fields(
+                &format!("{base_path}.type"),
+                &expression_type.extensions,
+                diagnostics,
+            );
             let normalized = expression_type.type_.trim().to_lowercase();
             if !rules.allowed_object_types.contains(&normalized.as_str()) {
                 diagnostics.push(Diagnostic {
@@ -1251,6 +1345,11 @@ fn validate_replacements(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (replacement_idx, replacement) in replacements.iter().enumerate() {
+        check_unknown_fields(
+            &format!("{path_prefix}[{replacement_idx}]"),
+            &replacement.extensions,
+            diagnostics,
+        );
         if replacement.target.trim().is_empty() {
             let path = format!("{path_prefix}[{replacement_idx}].target");
             diagnostics.push(Diagnostic {
@@ -1286,6 +1385,24 @@ fn validate_actions(
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
+        // Every position `validate_actions` is called from types as
+        // `[Success Action Object | Reusable Object]` or `[Failure Action
+        // Object | Reusable Object]` (Workflow Object `successActions`/
+        // `failureActions`, Step Object `onSuccess`/`onFailure` — spec/
+        // arazzo/v1.1.0.html §5.8.4.1, §5.8.6.1). The Reusable Object Fixed
+        // Fields (§5.8.10.1) are `reference` (required) and `value`
+        // (optional); `OnAction` does not model either, so without this
+        // allowlist a conformant reference-form action would warn on both.
+        // This does not implement Reusable Object semantics (reference
+        // resolution, `value` only applying to parameter references) — that
+        // remains a separate, tracked follow-up; it only stops these two
+        // field names from being reported as unrecognized.
+        check_unknown_fields_except(
+            &action_path,
+            &action.extensions,
+            &["reference", "value"],
+            diagnostics,
+        );
         validate_action_parameters(&action_path, action, arazzo_version, diagnostics);
         let action_type = action.action_type();
         // Reference checks apply to goto and retry alike: both action types
@@ -1453,6 +1570,7 @@ fn validate_action_parameters(
 }
 
 fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mut Vec<Diagnostic>) {
+    check_unknown_fields(path, &criterion.extensions, diagnostics);
     if criterion.condition.trim().is_empty() {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -3280,6 +3398,129 @@ workflows:
         assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 5);
         assert_eq!(wf.steps[0].description, "First step");
+    }
+
+    /// Workflow Object Fixed Fields (spec/arazzo/v1.1.0.html): `dependsOn` is
+    /// `[string]` on the Workflow Object itself, not only on Step. Before
+    /// this, a conformant `dependsOn` on a workflow warned as an unrecognized
+    /// field and failed `--strict`.
+    #[test]
+    fn workflow_depends_on_parses_round_trips_and_produces_zero_unknown_field_warnings() {
+        let spec_yaml = r#"arazzo: "1.1.0"
+info:
+  title: Workflow dependsOn
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: first
+    steps:
+      - stepId: s1
+        operationPath: /test
+  - workflowId: second
+    dependsOn:
+      - first
+    steps:
+      - stepId: s2
+        operationPath: /test
+"#;
+
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected a clean document, got: {err}"),
+        };
+        assert_eq!(diagnostics, Vec::new(), "diagnostics={diagnostics:?}");
+        assert_eq!(
+            spec.workflows[1].depends_on,
+            vec!["first".to_string()],
+            "workflows={:?}",
+            spec.workflows
+        );
+
+        let serialized =
+            serde_yaml_ng::to_string(&spec).unwrap_or_else(|err| panic!("serialize: {err}"));
+        assert!(serialized.contains("dependsOn"), "{serialized}");
+        let reparsed = match arazzo_spec::parse_unvalidated_bytes(serialized.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("reparsing serialized spec: {err}"),
+        };
+        assert_eq!(
+            reparsed.workflows[1].depends_on,
+            spec.workflows[1].depends_on
+        );
+    }
+
+    /// Reusable Object Fixed Fields (spec/arazzo/v1.1.0.html §5.8.10.1):
+    /// `reference` (required) and `value` (optional). Every position
+    /// `validate_actions` covers types as `[... Action Object | Reusable
+    /// Object]` (Workflow `successActions`/`failureActions`, Step
+    /// `onSuccess`/`onFailure`), so a Reusable Object in `reference` form
+    /// must not warn on `reference`/`value` — but a field that is neither
+    /// modeled nor `reference`/`value` nor `x-*` must still warn, proving the
+    /// allowlist is narrowly scoped to those two names.
+    #[test]
+    fn reusable_object_reference_and_value_do_not_warn_at_any_action_position() {
+        let spec_yaml = r#"arazzo: "1.1.0"
+info:
+  title: Reusable Object Fields
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    successActions:
+      - reference: "$components.successActions.notify"
+        value: 1
+    failureActions:
+      - reference: "$components.failureActions.notify"
+        value: 1
+        actionTypo: warn
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onSuccess:
+          - reference: "$components.successActions.notify"
+            value: 1
+        onFailure:
+          - reference: "$components.failureActions.notify"
+            value: 1
+            actionTypo: warn
+"#;
+
+        let (_, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected a warning-only document, got: {err}"),
+        };
+
+        let unknown_field: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| d.kind == ValidationErrorKind::UnknownField)
+            .collect();
+        // Exactly the two `actionTypo` fields — never `reference` or `value`,
+        // at any of the four positions.
+        assert_eq!(unknown_field.len(), 2, "diagnostics={unknown_field:?}");
+        assert!(
+            unknown_field
+                .iter()
+                .all(|d| d.message.contains("\"actionTypo\"")),
+            "diagnostics={unknown_field:?}"
+        );
+        assert!(unknown_field
+            .iter()
+            .any(|d| d.path == "workflow \"wf1\".failureActions[0]"));
+        assert!(unknown_field
+            .iter()
+            .any(|d| d.path == "workflow \"wf1\" > step \"s1\".onFailure[0]"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("\"reference\"") && !d.message.contains("\"value\"")),
+            "reference/value must never be reported as unrecognized; diagnostics={diagnostics:?}"
+        );
     }
 
     #[test]
@@ -5163,5 +5404,299 @@ workflows:
             ),
         };
         assert_eq!(issue.path, "components.parameters.\"bad key!\"");
+    }
+
+    /// One `x-*` extension (must not warn) and one misspelled/unrecognized
+    /// field (must warn) at every position `arazzo-spec` captures leftover
+    /// fields for, except `SchemaObject`/`PropertyDef` (JSON Schema
+    /// carve-out, covered separately). Exercises: root, `info`,
+    /// `sourceDescriptions[]`, `components`, `components.parameters.<name>`,
+    /// `components.successActions.<name>`, workflow, workflow parameter,
+    /// step, step parameter, `requestBody`, `requestBody.replacements[]`,
+    /// `successCriteria[]`, and `onSuccess[]`.
+    const UNKNOWN_FIELD_COVERAGE_YAML: &str = r#"arazzo: "1.1.0"
+x-root-ext: keep
+rootUnknown: warn
+info:
+  title: Unknown Field Coverage
+  version: "1.0.0"
+  x-info-ext: keep
+  infoUnknown: warn
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+    x-source-ext: keep
+    sourceUnknown: warn
+components:
+  x-components-ext: keep
+  componentsUnknown: warn
+  parameters:
+    sharedParam:
+      name: q
+      in: query
+      value: "1"
+      x-param-ext: keep
+      paramUnknown: warn
+  successActions:
+    sharedSuccess:
+      name: terminate
+      type: end
+      x-action-ext: keep
+      actionUnknown: warn
+workflows:
+  - workflowId: wf1
+    x-workflow-ext: keep
+    workflowUnknown: warn
+    parameters:
+      - name: p1
+        in: query
+        value: "1"
+        x-param-ext: keep
+        paramUnknown: warn
+    steps:
+      - stepId: s1
+        operationPath: /test
+        x-step-ext: keep
+        stepUnknown: warn
+        parameters:
+          - name: p2
+            in: query
+            value: "2"
+            x-param-ext: keep
+            paramUnknown: warn
+        requestBody:
+          contentType: application/json
+          payload: "{}"
+          x-body-ext: keep
+          bodyUnknown: warn
+          replacements:
+            - target: /a
+              value: 1
+              x-replacement-ext: keep
+              replacementUnknown: warn
+        successCriteria:
+          - condition: "$statusCode == 200"
+            x-criterion-ext: keep
+            criterionUnknown: warn
+        onSuccess:
+          - name: finish
+            type: end
+            x-action-ext: keep
+            actionUnknown: warn
+"#;
+
+    #[test]
+    fn unknown_field_warns_at_every_captured_position_x_extension_does_not() {
+        let (_, diagnostics) =
+            match parse_bytes_with_diagnostics(UNKNOWN_FIELD_COVERAGE_YAML.as_bytes()) {
+                Ok(v) => v,
+                Err(err) => panic!("expected a warning-only document, got: {err}"),
+            };
+
+        let unknown_field: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| d.kind == ValidationErrorKind::UnknownField)
+            .collect();
+
+        let expected: &[(&str, &str)] = &[
+            ("", "rootUnknown"),
+            ("info", "infoUnknown"),
+            ("sourceDescriptions[0]", "sourceUnknown"),
+            ("components", "componentsUnknown"),
+            ("components.parameters.sharedParam", "paramUnknown"),
+            ("components.successActions.sharedSuccess", "actionUnknown"),
+            ("workflow \"wf1\"", "workflowUnknown"),
+            ("workflow \"wf1\".parameters[0]", "paramUnknown"),
+            ("workflow \"wf1\" > step \"s1\"", "stepUnknown"),
+            (
+                "workflow \"wf1\" > step \"s1\".parameters[0]",
+                "paramUnknown",
+            ),
+            ("workflow \"wf1\" > step \"s1\".requestBody", "bodyUnknown"),
+            (
+                "workflow \"wf1\" > step \"s1\".requestBody.replacements[0]",
+                "replacementUnknown",
+            ),
+            (
+                "workflow \"wf1\" > step \"s1\".successCriteria[0]",
+                "criterionUnknown",
+            ),
+            (
+                "workflow \"wf1\" > step \"s1\".onSuccess[0]",
+                "actionUnknown",
+            ),
+        ];
+
+        for (path, key) in expected {
+            assert!(
+                unknown_field.iter().any(|d| d.severity == Severity::Warning
+                    && d.path == *path
+                    && d.message.contains(&format!("\"{key}\""))),
+                "missing unknownField warning at path {path:?} for {key:?}; got={unknown_field:?}"
+            );
+        }
+        assert_eq!(
+            unknown_field.len(),
+            expected.len(),
+            "unexpected extra/missing unknownField warnings: {unknown_field:?}"
+        );
+
+        // Every `x-*` field in the document is a no-op: none of them appear
+        // in any diagnostic, at any severity.
+        for ext_key in [
+            "x-root-ext",
+            "x-info-ext",
+            "x-source-ext",
+            "x-components-ext",
+            "x-param-ext",
+            "x-action-ext",
+            "x-workflow-ext",
+            "x-step-ext",
+            "x-body-ext",
+            "x-replacement-ext",
+            "x-criterion-ext",
+        ] {
+            assert!(
+                diagnostics.iter().all(|d| !d.message.contains(ext_key)),
+                "vendor extension {ext_key} must never be reported; diagnostics={diagnostics:?}"
+            );
+        }
+    }
+
+    /// Payload Replacement Object (`Replacement`) had no capture before
+    /// ac-bd441 — the one genuine blind spot the design calls out. Confirms
+    /// it now warns on an unrecognized field and stays silent on `x-*`.
+    #[test]
+    fn replacement_unknown_field_warns_and_x_extension_does_not() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: Replacement Coverage
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        requestBody:
+          contentType: application/json
+          payload: "{}"
+          replacements:
+            - target: /a
+              value: 1
+              x-replacement-ext: keep
+            - target: /b
+              value: 2
+              replacementTypo: warn
+"#;
+
+        let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected a warning-only document, got: {err}"),
+        };
+
+        let unknown_field: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|d| d.kind == ValidationErrorKind::UnknownField)
+            .collect();
+        assert_eq!(unknown_field.len(), 1, "diagnostics={unknown_field:?}");
+        assert_eq!(
+            unknown_field[0].path,
+            "workflow \"wf1\" > step \"s1\".requestBody.replacements[1]"
+        );
+        assert!(unknown_field[0].message.contains("\"replacementTypo\""));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| !d.message.contains("x-replacement-ext")),
+            "diagnostics={diagnostics:?}"
+        );
+    }
+
+    /// Arazzo 1.1.0 workflow `inputs` (and `components.inputs`) are JSON
+    /// Schema 2020-12 objects. `items`, `enum`, `minimum`,
+    /// `additionalProperties`, and `oneOf` are legitimate keywords `arazzo-spec`
+    /// does not model as typed fields — not unrecognized fields — so this
+    /// must produce zero warnings. Written before the detection landed, per
+    /// the ticket's testing obligations: without the `SchemaObject`/
+    /// `PropertyDef` carve-out, this fails.
+    #[test]
+    fn json_schema_positions_produce_no_unknown_field_warnings() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: Schema Carveout
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    inputs:
+      type: object
+      items:
+        type: string
+      enum:
+        - a
+        - b
+      minimum: 1
+      additionalProperties: false
+      oneOf:
+        - type: string
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#;
+
+        let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected a clean document, got: {err}"),
+        };
+        assert!(diagnostics.is_empty(), "diagnostics={diagnostics:?}");
+    }
+
+    /// Pins the suggestion decision from the ticket's Design: detection only,
+    /// no "did you mean" text — a hand-maintained field-name registry would
+    /// be required to offer one, which the design explicitly rules out.
+    #[test]
+    fn unknown_field_message_is_the_bare_form_no_suggestion() {
+        let yaml = r#"arazzo: "1.1.0"
+info:
+  title: Bare Message
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        sucessCriteria: []
+"#;
+
+        let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(v) => v,
+            Err(err) => panic!("expected a warning-only document, got: {err}"),
+        };
+
+        assert_eq!(diagnostics.len(), 1, "diagnostics={diagnostics:?}");
+        assert_eq!(diagnostics[0].kind, ValidationErrorKind::UnknownField);
+        assert_eq!(diagnostics[0].severity, Severity::Warning);
+        assert_eq!(
+            diagnostics[0].message,
+            "unrecognized field \"sucessCriteria\"; only `x-` prefixed extension fields are \
+             permitted here"
+        );
+        assert!(
+            !diagnostics[0].message.contains("successCriteria"),
+            "message must not suggest the correctly spelled field name: {}",
+            diagnostics[0].message
+        );
     }
 }

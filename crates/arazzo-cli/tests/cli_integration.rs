@@ -578,6 +578,103 @@ fn validate_strict_promotes_should_level_identifier_warnings_to_errors() {
     );
 }
 
+/// A workflow-level field that is neither modeled nor `x-*` prefixed
+/// (ac-85c4a). Written to a temp file rather than `testdata/` — the golden
+/// spec baseline sweeps that directory, and this ticket's writes scope does
+/// not include it.
+fn unknown_field_warning_spec(temp: &TempDir) -> PathBuf {
+    let path = temp.path().join("unknown-field-warning.arazzo.yaml");
+    write_file(
+        &path,
+        r#"arazzo: "1.1.0"
+info:
+  title: Unknown field warning
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    sucessCriteriaTypo: not-an-x-extension
+    steps:
+      - stepId: s1
+        operationPath: /test
+"#,
+    );
+    path
+}
+
+#[test]
+fn validate_json_reports_unknown_field_warning_without_failing() {
+    let temp = TempDir::new("arazzo-unknown-field-warning");
+    let spec = unknown_field_warning_spec(&temp);
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(["--json", "validate", &spec_str].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "an unknown-field warning must exit 0 by default; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(true)));
+    assert!(
+        body.get("errors").is_none(),
+        "warning-only spec must not report errors; body={body}"
+    );
+
+    let warnings = match body.get("warnings").and_then(Value::as_array) {
+        Some(v) => v.clone(),
+        None => panic!("expected warnings array in validate JSON; body={body}"),
+    };
+    assert_eq!(warnings.len(), 1, "body={body}");
+    assert_eq!(
+        warnings[0].get("kind"),
+        Some(&Value::String("unknownField".to_string())),
+        "warnings={warnings:?}"
+    );
+    assert_eq!(
+        warnings[0].get("path"),
+        Some(&Value::String("workflow \"wf1\"".to_string()))
+    );
+}
+
+#[test]
+fn validate_strict_promotes_unknown_field_warning_to_error() {
+    let temp = TempDir::new("arazzo-unknown-field-warning-strict");
+    let spec = unknown_field_warning_spec(&temp);
+    let spec_str = spec.to_string_lossy().to_string();
+
+    let output = run(
+        ["--json", "--strict", "validate", &spec_str].as_slice(),
+        None,
+    );
+    assert!(
+        !output.status.success(),
+        "--strict must fail an unknown-field warning; stdout={}",
+        stdout_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = match body.get("errors").and_then(Value::as_array) {
+        Some(v) => v.clone(),
+        None => panic!("expected errors array under --strict; body={body}"),
+    };
+    assert_eq!(errors.len(), 1, "body={body}");
+    assert_eq!(
+        errors[0].get("kind"),
+        Some(&Value::String("unknownField".to_string())),
+        "errors={errors:?}"
+    );
+    assert!(
+        body.get("warnings").is_none(),
+        "promoted findings must not remain in warnings; body={body}"
+    );
+}
+
 fn querystring_fixture_spec() -> PathBuf {
     let mut path = repo_root();
     path.push("testdata/querystring-parameter.arazzo.yaml");

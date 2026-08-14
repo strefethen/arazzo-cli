@@ -442,6 +442,7 @@ fn validation_error_kind_name(kind: &ValidationErrorKind) -> &'static str {
         ValidationErrorKind::InvalidCriterionType => "invalidCriterionType",
         ValidationErrorKind::UnsupportedOperationPath => "unsupportedOperationPath",
         ValidationErrorKind::InvalidIdentifier => "invalidIdentifier",
+        ValidationErrorKind::UnknownField => "unknownField",
         _ => "unknown",
     }
 }
