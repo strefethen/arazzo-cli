@@ -505,7 +505,7 @@ workflows:
         onSuccess:
           - name: inline
             type: end
-            value: 1
+            value: null
 "#,
     );
     let spec_path = spec.to_string_lossy().to_string();

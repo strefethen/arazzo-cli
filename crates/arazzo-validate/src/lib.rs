@@ -1084,8 +1084,8 @@ fn check_unknown_fields(
 
 fn warn_action_reusable_fields(path: &str, action: &OnAction, diagnostics: &mut Vec<Diagnostic>) {
     for field in [
-        (!action.reference.is_empty(), "reference"),
-        (action.value.is_some(), "value"),
+        (action.reference_was_present(), "reference"),
+        (action.value_was_present(), "value"),
     ] {
         if field.0 {
             diagnostics.push(Diagnostic::warning(
@@ -1506,7 +1506,7 @@ fn validate_actions(
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         check_unknown_fields(&action_path, &action.extensions, diagnostics);
-        if action.reference.is_empty() && action.value.is_some() {
+        if action.reference.is_empty() && action.value_was_present() {
             diagnostics.push(Diagnostic::warning(
                 ValidationErrorKind::UnknownField,
                 action_path.clone(),
@@ -1864,8 +1864,7 @@ fn resolve_action_ref(
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
             *action = component.clone();
-            action.reference.clear();
-            action.value = None;
+            action.clear_reusable_fields();
         } else if !action.name.is_empty() {
             resolve_one_action_ref(action, component_map, prefix, kind, entity)?;
         }
@@ -1915,8 +1914,7 @@ fn resolve_one_action_ref(
         if !action.parameters.is_empty() {
             merged.parameters = action.parameters.clone();
         }
-        merged.reference.clear();
-        merged.value = None;
+        merged.clear_reusable_fields();
         *action = merged;
     }
     Ok(())
@@ -3917,6 +3915,20 @@ workflows:
         let err = expect_parse_error(missing.as_bytes());
         assert!(format!("{err}").contains("component successAction \"missing\" not found"));
 
+        let missing_failure = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onFailure: [{reference: $components.failureActions.missing}]
+"#;
+        let err = expect_parse_error(missing_failure.as_bytes());
+        assert!(format!("{err}").contains("component failureAction \"missing\" not found"));
+
         let wrong_namespace = r#"
 arazzo: "1.1.0"
 info: {title: Test, version: "1.0.0"}
@@ -3932,6 +3944,22 @@ workflows:
         let err = expect_parse_error(wrong_namespace.as_bytes());
         assert!(format!("{err}")
             .contains("unsupported successAction reference: $components.failureActions.ok"));
+
+        let non_expression = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components: {successActions: {ok: {name: ok, type: end}}}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{reference: not-a-components-reference}]
+"#;
+        let err = expect_parse_error(non_expression.as_bytes());
+        assert!(format!("{err}")
+            .contains("unsupported successAction reference: not-a-components-reference"));
     }
 
     #[test]
@@ -3992,6 +4020,12 @@ workflows:
         assert_eq!(action.step_id, "s2");
         assert!(action.reference.is_empty());
         assert!(action.value.is_none());
+
+        let reference_only = expect_parsed(yaml.replace("            value: 99\n", "").as_bytes());
+        assert_eq!(
+            action, &reference_only.workflows[0].steps[0].on_success[0],
+            "action value must not affect resolved action semantics"
+        );
     }
 
     #[test]
@@ -4002,13 +4036,16 @@ info: {title: Test, version: "1.0.0"}
 sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
 components:
   successActions:
-    bad: {name: bad, type: end, reference: ignored, value: 1}
+    emptyReference: {name: emptyReference, type: end, reference: ''}
+    nullValue: {name: nullValue, type: end, value: null}
+  failureActions:
+    emptyReferenceAndNullValue: {name: emptyReferenceAndNullValue, type: end, reference: '', value: null}
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
         operationPath: /s1
-        onSuccess: [{name: inline, type: end, value: 1}]
+        onSuccess: [{name: inline, type: end, value: null}]
 "#;
         let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
             Ok(value) => value,
@@ -4018,10 +4055,33 @@ workflows:
             .iter()
             .filter(|diagnostic| diagnostic.message.contains("\"value\""))
             .collect();
-        assert_eq!(value_warnings.len(), 2, "diagnostics={diagnostics:?}");
-        assert!(diagnostics
+        assert_eq!(value_warnings.len(), 3, "diagnostics={diagnostics:?}");
+        assert_eq!(
+            value_warnings
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "components.successActions.nullValue",
+                "components.failureActions.emptyReferenceAndNullValue",
+                "workflow \"wf\" > step \"s1\".onSuccess[0]",
+            ]
+        );
+        let reference_warnings: Vec<_> = diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("\"reference\"")));
+            .filter(|diagnostic| diagnostic.message.contains("\"reference\""))
+            .collect();
+        assert_eq!(reference_warnings.len(), 2, "diagnostics={diagnostics:?}");
+        assert_eq!(
+            reference_warnings
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "components.successActions.emptyReference",
+                "components.failureActions.emptyReferenceAndNullValue",
+            ]
+        );
         assert!(diagnostics
             .iter()
             .all(|diagnostic| { diagnostic.kind == ValidationErrorKind::UnknownField }));
