@@ -33,6 +33,7 @@ other.
 | F9 | `$env.*` is a non-spec expression source | P3 | expr |
 | F10 | Bare `//xpath` output values are a non-spec form | P3 | expr |
 | F11 | `$response.query.<name>` unsupported | P3 | expr |
+| F21 | Required source/workflow lists and workflow steps accepted when absent or empty | P2 | validate |
 
 ---
 
@@ -649,3 +650,29 @@ order, rejects filtered selections that omit local transitive prerequisites,
 rejects external dependencies before execution, and records failed cases as
 completed when `--fail-fast` is disabled. No workflow is auto-added or
 auto-run by a filter.
+
+## Addendum — 2026-08-15 (ac-a10c2 required collections)
+
+### F21. Required source and workflow collections, and workflow steps, were accepted when absent
+
+**Spec:** §4.1 requires an Arazzo Description to contain a
+`sourceDescriptions` field with at least one Source Description and at least
+one Workflow in `workflows`. The §5.8.1.1 fixed-field rows repeat that each
+list MUST have at least one entry. §5.8.4.1 marks the Workflow Object's
+`steps` field REQUIRED, but does not say that the list must contain at least
+one entry.
+
+**We did:** the typed `Vec` fields used `#[serde(default)]`, so absent and
+empty `sourceDescriptions`/`workflows` lists reached validation as empty
+vectors without diagnostics. The same collapse made an absent workflow
+`steps` key indistinguishable from `steps: []`; both were accepted. This also
+allowed the CLI `test` command to treat a zero-workflow document as an empty
+successful suite.
+
+**Closure:** `ac-a10c2` adds `MissingRequiredField` errors for empty or absent
+`sourceDescriptions` and `workflows`, and extends the existing raw-YAML
+validation walk to reject an absent `steps` key. `steps: []` remains valid,
+because the specification requires the field but does not impose an
+at-least-one constraint. Typed `null` values remain parse errors. The shared
+parse boundary applies the diagnostics to CLI, test-runner, MCP, DAP, and
+runtime consumers without surface-specific changes.

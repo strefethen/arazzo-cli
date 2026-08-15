@@ -439,6 +439,23 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
         });
     }
 
+    if spec.source_descriptions.is_empty() {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: "sourceDescriptions".to_string(),
+            message: "sourceDescriptions is required and MUST have at least one entry".to_string(),
+        });
+    }
+    if spec.workflows.is_empty() {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: "workflows".to_string(),
+            message: "workflows is required and MUST have at least one entry".to_string(),
+        });
+    }
+
     let mut source_names = HashSet::<&str>::new();
     let mut source_types = HashMap::<&str, SourceType>::new();
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
@@ -1037,6 +1054,14 @@ fn classify_step_dependency(value: &str) -> StepDependency<'_> {
     }
 }
 
+/// Raw required-list checks for Workflow and Step Objects.
+///
+/// The Workflow Object's `steps` field is REQUIRED, while the Arazzo
+/// Specification Object's `sourceDescriptions` and `workflows` fields are
+/// checked in [`collect_diagnostics`] because their typed lists need no
+/// presence distinction. This raw walk rejects an absent `steps` key while
+/// preserving the specification-valid `steps: []` spelling.
+///
 /// `successCriteria` presence check: Step Object — *"If `successCriteria` is
 /// provided, it MUST contain at least one Criterion Object."*
 ///
@@ -1056,10 +1081,12 @@ fn classify_step_dependency(value: &str) -> StepDependency<'_> {
 /// type error; the null arm remains correct if that serde behavior changes.
 ///
 /// Deliberately tolerant of shapes it does not recognize (non-mapping root,
-/// missing `workflows`/`steps`, non-null non-sequence `successCriteria`): those are
-/// either not-yet-parseable YAML (already rejected earlier in the pipeline
-/// with a clearer error) or someone else's diagnostic to raise, not this
-/// check's.
+/// missing `workflows`, non-mapping workflow/step entries, and non-null
+/// non-sequence `successCriteria`): those are either not-yet-parseable YAML
+/// (already rejected earlier in the pipeline with a clearer error) or someone
+/// else's diagnostic to raise, not this check's. A missing `steps` key is the
+/// exception: it is a required field and is diagnosed here because the typed
+/// model collapses absent and empty lists.
 fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let Ok(serde_yaml_ng::Value::Mapping(root)) =
@@ -1087,10 +1114,16 @@ fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
         } else {
             format!("workflow \"{workflow_id}\"")
         };
-        let Some(steps) = wf_mapping
-            .get("steps")
-            .and_then(serde_yaml_ng::Value::as_sequence)
-        else {
+        let Some(steps_value) = wf_mapping.get("steps") else {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: format!("{wf_path}.steps"),
+                message: format!("{wf_path}.steps is required"),
+            });
+            continue;
+        };
+        let Some(steps) = steps_value.as_sequence() else {
             continue;
         };
         for (step_idx, step_value) in steps.iter().enumerate() {
@@ -2829,6 +2862,86 @@ workflows:
         let errs = expect_validation_errors(validate(&spec));
         assert_eq!(errs[0].kind, ValidationErrorKind::MissingRequiredField);
         assert!(errs[0].message.contains("info.version is required"));
+    }
+
+    fn required_lists_spec(source_descriptions: &str, workflows: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: Required lists
+  version: "1.0.0"
+{source_descriptions}{workflows}
+"#
+        )
+    }
+
+    fn assert_missing_required_path(yaml: &str, path: &str) {
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected {path} to fail validation");
+        };
+        let Some(error) = report.errors.iter().find(|error| error.path == path) else {
+            panic!("expected a diagnostic at {path}, got {:?}", report.errors);
+        };
+        assert_eq!(error.kind, ValidationErrorKind::MissingRequiredField);
+        assert_eq!(error.severity, Severity::Error);
+    }
+
+    #[test]
+    fn required_source_descriptions_and_workflows_reject_empty_and_absent_lists() {
+        let valid_workflows = "workflows:\n  - workflowId: wf1\n    steps: []\n";
+        let valid_sources =
+            "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n";
+
+        for source_descriptions in ["sourceDescriptions: []\n", ""] {
+            let yaml = required_lists_spec(source_descriptions, valid_workflows);
+            assert_missing_required_path(&yaml, "sourceDescriptions");
+        }
+        for workflows in ["workflows: []\n", ""] {
+            let yaml = required_lists_spec(valid_sources, workflows);
+            assert_missing_required_path(&yaml, "workflows");
+        }
+    }
+
+    #[test]
+    fn required_source_descriptions_and_workflows_report_both_absent_lists() {
+        let yaml = required_lists_spec("", "");
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected both required lists to fail validation");
+        };
+        for path in ["sourceDescriptions", "workflows"] {
+            assert!(
+                report.errors.iter().any(|error| {
+                    error.path == path
+                        && error.kind == ValidationErrorKind::MissingRequiredField
+                        && error.severity == Severity::Error
+                }),
+                "expected required-list error at {path}, got {:?}",
+                report.errors
+            );
+        }
+    }
+
+    #[test]
+    fn required_lists_null_values_remain_parse_errors() {
+        let source_null = required_lists_spec(
+            "sourceDescriptions: null\n",
+            "workflows:\n  - workflowId: wf1\n    steps: []\n",
+        );
+        let workflow_null = required_lists_spec(
+            "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n",
+            "workflows: null\n",
+        );
+        let steps_null = required_lists_spec(
+            "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n",
+            "workflows:\n  - workflowId: wf1\n    steps: null\n",
+        );
+
+        for yaml in [source_null, workflow_null, steps_null] {
+            assert!(
+                matches!(expect_parse_error(yaml.as_bytes()), Error::ParseYaml(_)),
+                "expected typed null to remain a parseYaml error"
+            );
+        }
     }
 
     #[test]
@@ -5022,6 +5135,10 @@ workflows:
 info:
   title: Querystring
   version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
 workflows:
   - workflowId: wf1
     parameters:{WORKFLOW_QUERY}
@@ -5136,6 +5253,10 @@ workflows:
 info:
   title: Querystring
   version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
 workflows:
   - workflowId: wf1
     parameters:{WORKFLOW_QUERYSTRING}
@@ -5877,6 +5998,46 @@ workflows:
             "errors={:?}",
             report.errors
         );
+    }
+
+    #[test]
+    fn workflow_steps_are_required_but_empty_steps_are_valid() {
+        let source =
+            "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n";
+        let absent_steps = required_lists_spec(
+            source,
+            "workflows:\n  - workflowId: wf1\n    operationPath: /test\n",
+        );
+        assert_missing_required_path(&absent_steps, "workflow \"wf1\".steps");
+
+        let empty_steps =
+            required_lists_spec(source, "workflows:\n  - workflowId: wf1\n    steps: []\n");
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(empty_steps.as_bytes()) {
+            Ok(value) => value,
+            Err(err) => panic!("steps: [] must remain valid, got: {err}"),
+        };
+        assert!(spec.workflows[0].steps.is_empty());
+        assert!(diagnostics.is_empty(), "diagnostics={diagnostics:?}");
+    }
+
+    #[test]
+    fn anonymous_workflow_missing_steps_uses_indexed_path() {
+        let source =
+            "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n";
+        let yaml = required_lists_spec(source, "workflows:\n  - operationPath: /test\n");
+        assert_missing_required_path(&yaml, "workflows[0].steps");
+    }
+
+    #[test]
+    fn fully_populated_document_remains_clean() {
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(VALID_YAML.as_bytes()) {
+            Ok(value) => value,
+            Err(err) => panic!("fully populated document must remain valid, got: {err}"),
+        };
+        assert_eq!(spec.source_descriptions.len(), 1);
+        assert_eq!(spec.workflows.len(), 1);
+        assert_eq!(spec.workflows[0].steps.len(), 1);
+        assert!(diagnostics.is_empty(), "diagnostics={diagnostics:?}");
     }
 
     /// `successCriteria` absent, populated, bare-null, explicit-null, tilde,
