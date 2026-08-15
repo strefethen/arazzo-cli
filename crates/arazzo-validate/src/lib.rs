@@ -367,11 +367,21 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &action.extensions,
                 &mut diagnostics,
             );
+            warn_action_reusable_fields(
+                &format!("components.successActions.{name}"),
+                action,
+                &mut diagnostics,
+            );
         }
         for (name, action) in &components.failure_actions {
             check_unknown_fields(
                 &format!("components.failureActions.{name}"),
                 &action.extensions,
+                &mut diagnostics,
+            );
+            warn_action_reusable_fields(
+                &format!("components.failureActions.{name}"),
+                action,
                 &mut diagnostics,
             );
         }
@@ -1060,22 +1070,7 @@ fn check_unknown_fields(
     extensions: &VendorExtensions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    check_unknown_fields_except(path, extensions, &[], diagnostics);
-}
-
-/// As [`check_unknown_fields`], but treats every key in `allow` as if it
-/// were a modeled field — for a position whose spec type permits fields this
-/// crate's Rust struct does not (yet) declare.
-fn check_unknown_fields_except(
-    path: &str,
-    extensions: &VendorExtensions,
-    allow: &[&str],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
     for (key, _) in unrecognized_fields(extensions) {
-        if allow.contains(&key) {
-            continue;
-        }
         diagnostics.push(Diagnostic::warning(
             ValidationErrorKind::UnknownField,
             path.to_string(),
@@ -1084,6 +1079,24 @@ fn check_unknown_fields_except(
                  permitted here"
             ),
         ));
+    }
+}
+
+fn warn_action_reusable_fields(path: &str, action: &OnAction, diagnostics: &mut Vec<Diagnostic>) {
+    for field in [
+        (!action.reference.is_empty(), "reference"),
+        (action.value.is_some(), "value"),
+    ] {
+        if field.0 {
+            diagnostics.push(Diagnostic::warning(
+                ValidationErrorKind::UnknownField,
+                path.to_string(),
+                format!(
+                    "unrecognized field \"{}\"; only `x-` prefixed extension fields are permitted here",
+                    field.1
+                ),
+            ));
+        }
     }
 }
 
@@ -1492,24 +1505,15 @@ fn validate_actions(
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
-        // Every position `validate_actions` is called from types as
-        // `[Success Action Object | Reusable Object]` or `[Failure Action
-        // Object | Reusable Object]` (Workflow Object `successActions`/
-        // `failureActions`, Step Object `onSuccess`/`onFailure` — spec/
-        // arazzo/v1.1.0.html §5.8.4.1, §5.8.6.1). The Reusable Object Fixed
-        // Fields (§5.8.10.1) are `reference` (required) and `value`
-        // (optional); `OnAction` does not model either, so without this
-        // allowlist a conformant reference-form action would warn on both.
-        // This does not implement Reusable Object semantics (reference
-        // resolution, `value` only applying to parameter references) — that
-        // remains a separate, tracked follow-up; it only stops these two
-        // field names from being reported as unrecognized.
-        check_unknown_fields_except(
-            &action_path,
-            &action.extensions,
-            &["reference", "value"],
-            diagnostics,
-        );
+        check_unknown_fields(&action_path, &action.extensions, diagnostics);
+        if action.reference.is_empty() && action.value.is_some() {
+            diagnostics.push(Diagnostic::warning(
+                ValidationErrorKind::UnknownField,
+                action_path.clone(),
+                "unrecognized field \"value\"; only `x-` prefixed extension fields are permitted here"
+                    .to_string(),
+            ));
+        }
         validate_action_parameters(&action_path, action, arazzo_version, diagnostics);
         let action_type = action.action_type();
         // Reference checks apply to goto and retry alike: both action types
@@ -1756,9 +1760,7 @@ fn resolve_input_refs(spec: &mut ArazzoSpec) -> Result<(), String> {
 fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
     resolve_input_refs(spec)?;
 
-    let Some(components) = spec.components.clone() else {
-        return Ok(());
-    };
+    let components = spec.components.clone().unwrap_or_default();
 
     for workflow in &mut spec.workflows {
         let wf_label = format!("workflow {}", workflow.workflow_id);
@@ -1851,7 +1853,20 @@ fn resolve_action_ref(
     entity: &str,
 ) -> Result<(), String> {
     for (action_idx, action) in actions.iter_mut().enumerate() {
-        if !action.name.is_empty() {
+        if !action.reference.is_empty() {
+            let Some(name) = action.reference.strip_prefix(prefix) else {
+                return Err(format!(
+                    "{entity}: unsupported {kind} reference: {}",
+                    action.reference
+                ));
+            };
+            let Some(component) = component_map.get(name) else {
+                return Err(format!("{entity}: component {kind} \"{name}\" not found"));
+            };
+            *action = component.clone();
+            action.reference.clear();
+            action.value = None;
+        } else if !action.name.is_empty() {
             resolve_one_action_ref(action, component_map, prefix, kind, entity)?;
         }
         // Action parameters may themselves be Reusable Objects pointing at
@@ -1900,6 +1915,8 @@ fn resolve_one_action_ref(
         if !action.parameters.is_empty() {
             merged.parameters = action.parameters.clone();
         }
+        merged.reference.clear();
+        merged.value = None;
         *action = merged;
     }
     Ok(())
@@ -1928,6 +1945,20 @@ mod tests {
             Ok(()) => panic!("expected validation error"),
             Err(Error::Validation(report)) => report.errors,
             Err(other) => panic!("expected Validation error, got: {other}"),
+        }
+    }
+
+    fn expect_parse_error(data: &[u8]) -> Error {
+        match parse_bytes(data) {
+            Ok(_) => panic!("expected parse error"),
+            Err(err) => err,
+        }
+    }
+
+    fn expect_parsed(data: &[u8]) -> ArazzoSpec {
+        match parse_bytes(data) {
+            Ok(spec) => spec,
+            Err(err) => panic!("expected parsed document, got: {err}"),
         }
     }
 
@@ -2007,6 +2038,15 @@ sourceDescriptions:
   - name: api
     url: https://example.com
     type: openapi
+components:
+  successActions:
+    notify:
+      name: notify
+      type: end
+  failureActions:
+    notify:
+      name: notify
+      type: end
 workflows:
   - workflowId: wf1
     steps:
@@ -3701,6 +3741,15 @@ sourceDescriptions:
   - name: api
     url: https://example.com
     type: openapi
+components:
+  successActions:
+    notify:
+      name: notify
+      type: end
+  failureActions:
+    notify:
+      name: notify
+      type: end
 workflows:
   - workflowId: wf1
     successActions:
@@ -3709,17 +3758,18 @@ workflows:
     failureActions:
       - reference: "$components.failureActions.notify"
         value: 1
-        actionTypo: warn
     steps:
       - stepId: s1
         operationPath: /test
         onSuccess:
           - reference: "$components.successActions.notify"
             value: 1
+          - name: inline
+            type: end
+            actionTypo: warn
         onFailure:
           - reference: "$components.failureActions.notify"
             value: 1
-            actionTypo: warn
 "#;
 
         let (_, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {
@@ -3731,9 +3781,9 @@ workflows:
             .iter()
             .filter(|d| d.kind == ValidationErrorKind::UnknownField)
             .collect();
-        // Exactly the two `actionTypo` fields — never `reference` or `value`,
-        // at any of the four positions.
-        assert_eq!(unknown_field.len(), 2, "diagnostics={unknown_field:?}");
+        // Exactly the one inline `actionTypo` field — never `reference` or
+        // `value`, at any of the four positions.
+        assert_eq!(unknown_field.len(), 1, "diagnostics={unknown_field:?}");
         assert!(
             unknown_field
                 .iter()
@@ -3742,10 +3792,7 @@ workflows:
         );
         assert!(unknown_field
             .iter()
-            .any(|d| d.path == "workflow \"wf1\".failureActions[0]"));
-        assert!(unknown_field
-            .iter()
-            .any(|d| d.path == "workflow \"wf1\" > step \"s1\".onFailure[0]"));
+            .any(|d| d.path == "workflow \"wf1\" > step \"s1\".onSuccess[1]"));
         assert!(
             diagnostics
                 .iter()
@@ -3797,6 +3844,187 @@ workflows:
         assert_eq!(wf.failure_actions.len(), 1);
         assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
         assert_eq!(wf.failure_actions[0].retry_after, 1);
+    }
+
+    #[test]
+    fn parse_bytes_reusable_action_reference_resolves_at_all_four_positions() {
+        let spec_yaml = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions:
+  - {name: api, url: https://example.com, type: openapi}
+components:
+  successActions:
+    goS3: {name: goS3, type: goto, stepId: s3}
+  failureActions:
+    retry: {name: retry, type: retry, retryAfter: 1, retryLimit: 2}
+workflows:
+  - workflowId: wf1
+    successActions:
+      - reference: $components.successActions.goS3
+    failureActions:
+      - reference: $components.failureActions.retry
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - reference: $components.successActions.goS3
+        onFailure:
+          - reference: $components.failureActions.retry
+      - stepId: s2
+        operationPath: /s2
+      - stepId: s3
+        operationPath: /s3
+"#;
+        let spec = expect_parsed(spec_yaml.as_bytes());
+        let workflow = &spec.workflows[0];
+        for action in [
+            &workflow.success_actions[0],
+            &workflow.steps[0].on_success[0],
+        ] {
+            assert_eq!(action.name, "goS3");
+            assert_eq!(action.action_type(), ActionType::Goto);
+            assert_eq!(action.step_id, "s3");
+            assert!(action.reference.is_empty());
+            assert!(action.value.is_none());
+        }
+        for action in [
+            &workflow.failure_actions[0],
+            &workflow.steps[0].on_failure[0],
+        ] {
+            assert_eq!(action.name, "retry");
+            assert_eq!(action.action_type(), ActionType::Retry);
+            assert_eq!(action.retry_after, 1);
+            assert_eq!(action.retry_limit, Some(2));
+            assert!(action.reference.is_empty());
+            assert!(action.value.is_none());
+        }
+    }
+
+    #[test]
+    fn reusable_action_reference_errors_include_missing_components_and_namespaces() {
+        let missing = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{reference: $components.successActions.missing}]
+"#;
+        let err = expect_parse_error(missing.as_bytes());
+        assert!(format!("{err}").contains("component successAction \"missing\" not found"));
+
+        let wrong_namespace = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components: {successActions: {ok: {name: ok, type: end}}}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{reference: $components.failureActions.ok}]
+"#;
+        let err = expect_parse_error(wrong_namespace.as_bytes());
+        assert!(format!("{err}")
+            .contains("unsupported successAction reference: $components.failureActions.ok"));
+    }
+
+    #[test]
+    fn absent_components_do_not_silently_ignore_action_or_parameter_references() {
+        let action = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{name: $components.successActions.missing, type: end}]
+"#;
+        let err = expect_parse_error(action.as_bytes());
+        assert!(format!("{err}").contains("component successAction \"missing\" not found"));
+
+        let parameter = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+workflows:
+  - workflowId: wf
+    parameters: [{reference: $components.parameters.missing}]
+    steps: [{stepId: s1, operationPath: /s1}]
+"#;
+        let err = expect_parse_error(parameter.as_bytes());
+        assert!(format!("{err}").contains("component parameter \"missing\" not found"));
+    }
+
+    #[test]
+    fn reusable_action_reference_takes_precedence_over_name_and_ignores_value() {
+        let yaml = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions:
+    a: {name: a, type: end}
+    b: {name: b, type: goto, stepId: s2}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - name: $components.successActions.a
+            reference: $components.successActions.b
+            value: 99
+      - stepId: s2
+        operationPath: /s2
+"#;
+        let spec = expect_parsed(yaml.as_bytes());
+        let action = &spec.workflows[0].steps[0].on_success[0];
+        assert_eq!(action.name, "b");
+        assert_eq!(action.action_type(), ActionType::Goto);
+        assert_eq!(action.step_id, "s2");
+        assert!(action.reference.is_empty());
+        assert!(action.value.is_none());
+    }
+
+    #[test]
+    fn inline_and_component_action_value_fields_are_warned_at_their_object_positions() {
+        let yaml = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions:
+    bad: {name: bad, type: end, reference: ignored, value: 1}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{name: inline, type: end, value: 1}]
+"#;
+        let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(value) => value,
+            Err(err) => panic!("value warnings must not fail normal validation: {err}"),
+        };
+        let value_warnings: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("\"value\""))
+            .collect();
+        assert_eq!(value_warnings.len(), 2, "diagnostics={diagnostics:?}");
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("\"reference\"")));
+        assert!(diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.kind == ValidationErrorKind::UnknownField }));
     }
 
     #[test]

@@ -581,8 +581,9 @@ distinction). Known escape: `successCriteria:` with a null value still passes
 promoted only under `--strict`); serialization still emits `x-` keys only.
 Two model completions landed with it so conformant documents do not warn:
 workflow-level `dependsOn` (parse/serialize only; semantics ticketed as
-ac-51755) and `reference`/`value` allowed at the four reusable-capable action
-positions (full Reusable Object modeling ticketed as ac-6131b).
+ac-51755) and the inline `reference`/`value` fields at the four
+reusable-capable action positions (full Reusable Object modeling completed by
+ac-6131b).
 
 **F4 is closed.** `2f10fe8` (ac-91284) makes `generate` emit a
 document-pointing relative `sourceDescriptions[].url` (URI-reference rebased
@@ -602,14 +603,27 @@ the Selector Object documented as the conformant preferred form.
 **F11 stays open, now documented.** `$response.query.<name>` /
 `$response.path.<name>` remain unimplemented (evaluate to `null`) and are
 listed as such in README's not-implemented section, alongside `$message.*`
-(evaluator-only context, never populated by the runtime) and the silently
-ignored Reusable Object `reference` form on actions (ac-6131b).
+(evaluator-only context, never populated by the runtime).
 
 The probe document at F8 above now behaves per the epic's acceptance criteria:
 its MUST-level violations fail validation, its SHOULD-level violations warn
 (errors under `--strict`), and the unknown field warns. Still open after this
 epic: F1/F5 (the operationPath / sourceDescriptions idiom product decision),
 F12, F14, F15, F16, F18, F19, and F11's implementation.
+
+## Addendum — 2026-08-15 (ac-6131b Reusable Object action references)
+
+**The action Reusable Object gap is closed.** `OnAction` now models the
+specification's `reference` and optional `value` fields. At workflow
+`successActions`/`failureActions` and step `onSuccess`/`onFailure`, a reference
+must use the matching `$components.successActions.<name>` or
+`$components.failureActions.<name>` namespace and resolves by wholesale
+replacement. The resolved action clears the reusable fields; action `value`
+has no effect because the specification limits it to parameter references.
+Missing component maps and targets now fail through `componentResolution`
+instead of silently ending. The existing name-based component idiom remains an
+explicit arazzo-cli extension for compatibility and is used only when
+`reference` is absent.
 
 ## Addendum — 2026-08-15 (ac-51755 workflow dependencies)
 

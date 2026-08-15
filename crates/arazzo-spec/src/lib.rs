@@ -870,6 +870,13 @@ impl std::fmt::Display for ActionType {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnAction {
+    /// Runtime expression identifying a reusable action component.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference: String,
+    /// Optional reusable-object value. It has meaning only for parameter
+    /// references, but is retained here so action references round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_yaml_ng::Value>,
     #[serde(default)]
     pub name: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
@@ -920,8 +927,8 @@ pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng:
 #[cfg(test)]
 mod tests {
     use super::{
-        unrecognized_fields, ExpressionType, ParamLocation, Parameter, Replacement, RequestBody,
-        SelectorType, VendorExtensions,
+        unrecognized_fields, ActionType, ExpressionType, OnAction, ParamLocation, Parameter,
+        Replacement, RequestBody, SelectorType, VendorExtensions,
     };
 
     fn serialize<T: serde::Serialize>(value: &T) -> String {
@@ -961,6 +968,25 @@ mod tests {
         let reparsed = deserialize_request_body(&serialized);
 
         assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn on_action_reusable_fields_roundtrip_without_changing_inline_shape() {
+        let inline = OnAction {
+            name: "stop".to_string(),
+            type_: Some(ActionType::End),
+            ..OnAction::default()
+        };
+        let serialized = serialize(&inline);
+        assert!(!serialized.contains("reference:"), "{serialized}");
+        assert!(!serialized.contains("value:"), "{serialized}");
+
+        let reusable: OnAction =
+            serde_yaml_ng::from_str("reference: $components.successActions.stop\nvalue: 1\n")
+                .unwrap_or_else(|err| panic!("deserializing reusable action: {err}"));
+        let reparsed: OnAction = serde_yaml_ng::from_str(&serialize(&reusable))
+            .unwrap_or_else(|err| panic!("reparsing reusable action: {err}"));
+        assert_eq!(reparsed, reusable);
     }
 
     #[test]

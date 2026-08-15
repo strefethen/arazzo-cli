@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -481,6 +481,56 @@ fn validate_strict_promotes_warnings_to_errors() {
         body.get("warnings").is_none(),
         "promoted findings must not remain in warnings; body={body}"
     );
+}
+
+#[test]
+fn validate_inline_action_value_warns_and_strict_rejects() {
+    let temp = TempDir::new("arazzo-inline-action-value");
+    let spec = temp.path().join("inline-action-value.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: "1.1.0"
+info:
+  title: Inline action value
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - name: inline
+            type: end
+            value: 1
+"#,
+    );
+    let spec_path = spec.to_string_lossy().to_string();
+    let normal = run(["--json", "validate", &spec_path].as_slice(), None);
+    assert!(
+        normal.status.success(),
+        "normal validation failed: {}",
+        combined_text(&normal)
+    );
+    let normal_body = stdout_json(&normal);
+    assert_eq!(validate_issue_messages(&normal_body, "warnings").len(), 1);
+    assert!(validate_issue_messages(&normal_body, "warnings")[0].contains("\"value\""));
+
+    let strict = run(
+        ["--json", "--strict", "validate", &spec_path].as_slice(),
+        None,
+    );
+    assert!(
+        !strict.status.success(),
+        "strict validation must reject value"
+    );
+    let strict_body = stdout_json(&strict);
+    assert_eq!(validate_issue_messages(&strict_body, "errors").len(), 1);
+    assert!(validate_issue_messages(&strict_body, "errors")[0].contains("\"value\""));
+    assert!(strict_body.get("warnings").is_none());
 }
 
 /// SHOULD-level identifier document (ac-0379b): a `workflowId`, `stepId`,
@@ -3843,6 +3893,68 @@ fn run_dry_run_openapi_32_relative_source_resolves_operation() {
         requests[0].get("url").and_then(Value::as_str),
         Some("https://localhost:5201/v1/banks")
     );
+}
+
+#[test]
+fn run_reusable_action_reference_goto_executes_s1_then_s3_not_s2() {
+    let temp = TempDir::new("arazzo-reusable-action-goto");
+    let seen_paths = Arc::new(Mutex::new(Vec::<String>::new()));
+    let observed_paths = Arc::clone(&seen_paths);
+    let server = start_route_server(move |path| {
+        observed_paths
+            .lock()
+            .unwrap_or_else(|_| panic!("path observer lock"))
+            .push(path.to_string());
+        (200, Vec::new(), r#"{"ok":true}"#.to_string())
+    });
+    let spec = temp.path().join("reusable-goto.arazzo.yaml");
+    let yaml = format!(
+        r#"arazzo: "1.1.0"
+info:
+  title: Reusable Action Goto
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: {base_url}
+    type: openapi
+components:
+  successActions:
+    gotoS3:
+      name: gotoS3
+      type: goto
+      stepId: s3
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - reference: $components.successActions.gotoS3
+      - stepId: s2
+        operationPath: /s2
+      - stepId: s3
+        operationPath: /s3
+"#,
+        base_url = server.base_url
+    );
+    if let Err(err) = fs::write(&spec, yaml) {
+        panic!("write reusable goto spec: {err}");
+    }
+
+    let spec_path = spec.to_string_lossy().to_string();
+    let output = run(["run", &spec_path, "wf"].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "reference-form goto run failed: {}",
+        combined_text(&output)
+    );
+    let paths = seen_paths
+        .lock()
+        .unwrap_or_else(|_| panic!("path observer lock"))
+        .clone();
+    assert_eq!(paths, vec!["/s1", "/s3"], "reference goto must skip s2");
 }
 
 // ── Transport trust: --insecure-host, redirect policy, warnings (ac-fd376) ──

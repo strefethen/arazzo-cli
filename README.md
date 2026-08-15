@@ -403,14 +403,13 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `$request.body` | Request body (dot-path or JSON Pointer) |
 | `$sourceDescriptions.<name>.url` | Source description URL |
 | `reference: $components.parameters.<name>` on a Parameter | Named parameter component, via a Reusable Object's `reference` field |
-| `reference: $components.successActions\|failureActions.<name>` on an action | **Not implemented** — silently ignored. See below. |
-| `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; not the specification's field for this |
+| `reference: $components.successActions\|failureActions.<name>` on an action | Resolves the named action component (the specification's Reusable Object form); `value` is ignored for actions |
+| `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; retained for compatibility and overridden by `reference` when both are present |
 | `//xpath/expression` (**arazzo-cli extension**, retained legacy form) | XML/HTML extraction — prefer the [Selector Object](#arazzo-11-selector-objects) form (`type: xpath`) for new workflows |
 
 **Not implemented:**
 - `$response.query.<name>` and `$response.path.<name>` are listed by the specification but not resolved by arazzo-cli — they evaluate to `null`. Only `$response.header.<name>` and `$response.body...` are supported on `$response`.
 - `$message.header.<name>` and `$message.payload...` are modeled in the expression evaluator but nothing in the runtime populates them for a real request — arazzo-cli does not execute asynchronous/message-style transports. Against an actual HTTP response, both evaluate to `null`, not the response's own header/body (use `$response.*` for that).
-- The Reusable Object's `reference` field (`reference: $components.successActions.<name>` / `reference: $components.failureActions.<name>`), used on a Success or Failure Action Object. Only the `name` field is checked for a `$components.` prefix (an **arazzo-cli extension**, since the specification does not define `name` as a reference mechanism); an action written with `reference` instead is not resolved, and — because it also isn't flagged as an unrecognized field — silently keeps its default fields, which read as a bare `end` action. Modeling the spec's `reference` form for actions is tracked in ac-6131b; until then, use `name` for a component action reference in this tool. Parameter references (`reference: $components.parameters.<name>`) are unaffected — that form is implemented and specification-conformant.
 
 **String interpolation:** `{$expr}` embeds any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
 
@@ -452,7 +451,7 @@ arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.or
 | Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: xpath` |
 | `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
 | `sourceDescriptions[].url` read as an absolute request base URL | None implemented yet — fetching the document at that URL (the specification's reading of the field) is listed under "Not implemented" below |
-| `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's field for this, but arazzo-cli does not implement it — see "Not implemented" below |
+| `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's Reusable Object form; `name` is retained as an **arazzo-cli extension** for compatibility |
 
 The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows, but the runtime's extension reading of an absolute `url` as a base URL still applies to existing documents. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4) and the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
 
@@ -462,7 +461,6 @@ The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the sam
 - `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
 - The specification's `operationPath` form (source reference + JSON Pointer), described above.
 - Fetching a remote document from `sourceDescriptions[].url` — the specification's reading of that field — is not implemented; arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4).
-- The Reusable Object's `reference` field on a Success or Failure Action Object (`reference: $components.successActions.<name>` / `reference: $components.failureActions.<name>`) — the specification's mechanism for referencing a named action component. arazzo-cli checks only the `name` field for a `$components.` prefix instead (the extension form above). An action written with `reference` is not resolved and is not flagged as invalid either — it silently keeps its unresolved default fields, which evaluate as a bare `end` action. Parameter references (`reference: $components.parameters.<name>`) are unaffected by this gap; that form is implemented. Modeling the specification's `reference` form for actions is tracked in ac-6131b.
 
 ## How It Works
 
