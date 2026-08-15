@@ -533,6 +533,111 @@ workflows:
     assert!(strict_body.get("warnings").is_none());
 }
 
+#[test]
+fn validate_former_action_presence_markers_warn_and_strict_promotes() {
+    let temp = TempDir::new("arazzo-action-presence-marker");
+    let spec = temp.path().join("action-presence-marker.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: "1.1.0"
+info:
+  title: Action presence marker spellings
+  version: "1.0.0"
+__arazzo_cli_internal_reference_present: true
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - name: finish
+            type: end
+            __arazzo_cli_internal_value_present: true
+"#,
+    );
+    let spec_path = spec.to_string_lossy().to_string();
+    let normal = run(["--json", "validate", &spec_path].as_slice(), None);
+    assert!(
+        normal.status.success(),
+        "normal validation failed: {}",
+        combined_text(&normal)
+    );
+    let normal_body = stdout_json(&normal);
+    let warnings = validate_issue_messages(&normal_body, "warnings");
+    assert_eq!(warnings.len(), 2, "body={normal_body}");
+    assert!(warnings
+        .iter()
+        .any(|message| message.contains("__arazzo_cli_internal_reference_present")));
+    assert!(warnings
+        .iter()
+        .any(|message| message.contains("__arazzo_cli_internal_value_present")));
+
+    let strict = run(
+        ["--json", "--strict", "validate", &spec_path].as_slice(),
+        None,
+    );
+    assert!(
+        !strict.status.success(),
+        "strict validation must reject unknown marker spellings"
+    );
+    let strict_body = stdout_json(&strict);
+    let errors = validate_issue_messages(&strict_body, "errors");
+    assert_eq!(errors.len(), 2, "body={strict_body}");
+    assert!(errors
+        .iter()
+        .any(|message| message.contains("__arazzo_cli_internal_reference_present")));
+    assert!(errors
+        .iter()
+        .any(|message| message.contains("__arazzo_cli_internal_value_present")));
+    assert!(strict_body.get("warnings").is_none());
+}
+
+#[test]
+fn null_reusable_action_reference_is_rejected_before_dry_run() {
+    let temp = TempDir::new("arazzo-null-action-reference");
+    let spec = temp.path().join("null-action-reference.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: "1.1.0"
+info:
+  title: Null action reference
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - reference: null
+"#,
+    );
+    let spec_path = spec.to_string_lossy().to_string();
+    let validate = run(["--json", "validate", &spec_path].as_slice(), None);
+    assert!(
+        !validate.status.success(),
+        "null reference must fail validation"
+    );
+    assert!(combined_text(&validate).contains("reference must be a runtime expression"));
+
+    let dry_run = run(
+        ["--json", "run", &spec_path, "wf", "--dry-run"].as_slice(),
+        None,
+    );
+    assert!(
+        !dry_run.status.success(),
+        "dry-run must not accept null reference"
+    );
+    assert!(combined_text(&dry_run).contains("reference must be a runtime expression"));
+}
+
 /// SHOULD-level identifier document (ac-0379b): a `workflowId`, `stepId`,
 /// and `sourceDescriptions[].name` that each violate `^[A-Za-z0-9_\-]+$`.
 /// Written to a temp file rather than `testdata/` — the golden spec

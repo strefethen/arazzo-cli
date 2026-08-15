@@ -29,9 +29,6 @@ pub use workflow_dependency::{classify_workflow_dependency, WorkflowDependency};
 /// fields as unrecognized.
 pub type VendorExtensions = BTreeMap<String, serde_yaml_ng::Value>;
 
-const ACTION_REFERENCE_PRESENT: &str = "__arazzo_cli_internal_reference_present";
-const ACTION_VALUE_PRESENT: &str = "__arazzo_cli_internal_value_present";
-
 fn is_vendor_extension_key(key: &str) -> bool {
     key.starts_with("x-")
 }
@@ -52,12 +49,8 @@ pub fn unrecognized_fields(
 ) -> impl Iterator<Item = (&str, &serde_yaml_ng::Value)> {
     extensions
         .iter()
-        .filter(|(key, _)| !is_vendor_extension_key(key) && !is_internal_field_key(key))
+        .filter(|(key, _)| !is_vendor_extension_key(key))
         .map(|(key, value)| (key.as_str(), value))
-}
-
-fn is_internal_field_key(key: &str) -> bool {
-    matches!(key, ACTION_REFERENCE_PRESENT | ACTION_VALUE_PRESENT)
 }
 
 fn serialize_vendor_extensions<S>(
@@ -874,11 +867,15 @@ impl std::fmt::Display for ActionType {
 }
 
 /// Action for `onSuccess` / `onFailure`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnAction {
     /// Runtime expression identifying a reusable action component.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_action_reference",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub reference: String,
     /// Optional reusable-object value. It has meaning only for parameter
     /// references, but is retained here so action references round-trip.
@@ -914,83 +911,12 @@ pub struct OnAction {
     pub extensions: VendorExtensions,
 }
 
-#[derive(Default)]
-struct Present<T> {
-    value: Option<T>,
-    present: bool,
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Present<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self {
-            value: Option::<T>::deserialize(deserializer)?,
-            present: true,
-        })
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OnActionWire {
-    #[serde(default)]
-    reference: Present<String>,
-    #[serde(default)]
-    value: Present<serde_yaml_ng::Value>,
-    #[serde(default)]
-    name: String,
-    #[serde(rename = "type", default)]
-    type_: Option<ActionType>,
-    #[serde(default)]
-    workflow_id: String,
-    #[serde(default)]
-    step_id: String,
-    #[serde(default)]
-    retry_after: u64,
-    #[serde(default)]
-    retry_limit: Option<u64>,
-    #[serde(default)]
-    criteria: Vec<SuccessCriterion>,
-    #[serde(default)]
-    parameters: Vec<Parameter>,
-    #[serde(flatten, default, deserialize_with = "deserialize_vendor_extensions")]
-    extensions: VendorExtensions,
-}
-
-impl<'de> Deserialize<'de> for OnAction {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = OnActionWire::deserialize(deserializer)?;
-        Ok(Self {
-            reference: wire.reference.value.unwrap_or_default(),
-            value: wire.value.value,
-            name: wire.name,
-            type_: wire.type_,
-            workflow_id: wire.workflow_id,
-            step_id: wire.step_id,
-            retry_after: wire.retry_after,
-            retry_limit: wire.retry_limit,
-            criteria: wire.criteria,
-            parameters: wire.parameters,
-            extensions: {
-                let mut extensions = wire.extensions;
-                if wire.reference.present {
-                    extensions.insert(
-                        ACTION_REFERENCE_PRESENT.to_string(),
-                        serde_yaml_ng::Value::Null,
-                    );
-                }
-                if wire.value.present {
-                    extensions.insert(ACTION_VALUE_PRESENT.to_string(), serde_yaml_ng::Value::Null);
-                }
-                extensions
-            },
-        })
-    }
+fn deserialize_action_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .ok_or_else(|| serde::de::Error::custom("reference must be a runtime expression, not null"))
 }
 
 impl OnAction {
@@ -1002,26 +928,6 @@ impl OnAction {
     /// Returns true when the document declared an explicit `type` key.
     pub fn has_declared_type(&self) -> bool {
         self.type_.is_some()
-    }
-
-    /// Returns true when the input object declared a `reference` field,
-    /// including an explicit empty or null value.
-    pub fn reference_was_present(&self) -> bool {
-        self.extensions.contains_key(ACTION_REFERENCE_PRESENT) || !self.reference.is_empty()
-    }
-
-    /// Returns true when the input object declared a `value` field, including
-    /// an explicit null value.
-    pub fn value_was_present(&self) -> bool {
-        self.extensions.contains_key(ACTION_VALUE_PRESENT) || self.value.is_some()
-    }
-
-    /// Clears reusable-object metadata after resolving an action reference.
-    pub fn clear_reusable_fields(&mut self) {
-        self.reference.clear();
-        self.value = None;
-        self.extensions.remove(ACTION_REFERENCE_PRESENT);
-        self.extensions.remove(ACTION_VALUE_PRESENT);
     }
 }
 
@@ -1098,8 +1004,17 @@ mod tests {
             .unwrap_or_else(|err| panic!("deserializing explicit empty fields: {err}"));
         assert!(explicit_empty.reference.is_empty());
         assert!(explicit_empty.value.is_none());
-        assert!(explicit_empty.reference_was_present());
-        assert!(explicit_empty.value_was_present());
+    }
+
+    #[test]
+    fn on_action_reference_null_is_rejected() {
+        let error = match serde_yaml_ng::from_str::<OnAction>("reference: null\n") {
+            Ok(_) => panic!("null is not a Runtime Expression"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("reference must be a runtime expression"));
     }
 
     #[test]

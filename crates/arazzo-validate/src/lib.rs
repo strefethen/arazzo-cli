@@ -201,6 +201,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
     // take only `&ArazzoSpec` and therefore cannot enforce this rule.
     let mut diagnostics = collect_diagnostics(&spec);
+    diagnostics.extend(check_raw_action_field_boundaries(data));
     diagnostics.extend(check_raw_success_criteria(data));
     let warnings = partition_diagnostics(diagnostics)?;
     Ok((spec, warnings))
@@ -233,6 +234,141 @@ fn partition_diagnostics(diagnostics: Vec<Diagnostic>) -> Result<Vec<Diagnostic>
         return Ok(warnings);
     }
     Err(Error::Validation(ValidationReport { errors, warnings }))
+}
+
+fn raw_mapping_field<'a>(
+    value: &'a serde_yaml_ng::Value,
+    key: &str,
+) -> Option<&'a serde_yaml_ng::Value> {
+    let serde_yaml_ng::Value::Mapping(mapping) = value else {
+        return None;
+    };
+    mapping.get(serde_yaml_ng::Value::String(key.to_string()))
+}
+
+fn raw_string_field<'a>(value: &'a serde_yaml_ng::Value, key: &str) -> Option<&'a str> {
+    match raw_mapping_field(value, key) {
+        Some(serde_yaml_ng::Value::String(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.push(Diagnostic::warning(
+        ValidationErrorKind::UnknownField,
+        path,
+        format!(
+            "unrecognized field \"{field}\"; only `x-` prefixed extension fields are permitted here"
+        ),
+    ));
+}
+
+fn check_raw_action_boundary(
+    path: &str,
+    action: &serde_yaml_ng::Value,
+    component: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let reference = raw_mapping_field(action, "reference");
+    let value = raw_mapping_field(action, "value");
+    if component
+        && matches!(reference, Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty())
+    {
+        raw_unknown_action_field(path, "reference", diagnostics);
+    }
+    if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
+        raw_unknown_action_field(path, "value", diagnostics);
+    }
+    if !component
+        && matches!(value, Some(serde_yaml_ng::Value::Null))
+        && reference.is_none_or(|reference| {
+            matches!(reference, serde_yaml_ng::Value::String(reference) if reference.is_empty())
+        })
+    {
+        raw_unknown_action_field(path, "value", diagnostics);
+    }
+}
+
+fn check_raw_action_list(
+    value: Option<&serde_yaml_ng::Value>,
+    path: &str,
+    component: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(serde_yaml_ng::Value::Sequence(actions)) = value else {
+        return;
+    };
+    for (index, action) in actions.iter().enumerate() {
+        check_raw_action_boundary(&format!("{path}[{index}]"), action, component, diagnostics);
+    }
+}
+
+/// Typed `Option<Value>` fields cannot distinguish an omitted `value` from an
+/// explicit YAML null, and an empty reference is the typed default. Inspect
+/// only these boundary shapes at the parse boundary so diagnostics retain the
+/// document's field presence without adding wire metadata to the public model.
+fn check_raw_action_field_boundaries(data: &[u8]) -> Vec<Diagnostic> {
+    let Ok(root) = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+
+    if let Some(components) = raw_mapping_field(&root, "components") {
+        for (field, path) in [
+            ("successActions", "components.successActions"),
+            ("failureActions", "components.failureActions"),
+        ] {
+            let Some(serde_yaml_ng::Value::Mapping(actions)) = raw_mapping_field(components, field)
+            else {
+                continue;
+            };
+            for (name, action) in actions {
+                let Some(name) = name.as_str() else { continue };
+                check_raw_action_boundary(
+                    &format!("{path}.{name}"),
+                    action,
+                    true,
+                    &mut diagnostics,
+                );
+            }
+        }
+    }
+
+    let Some(serde_yaml_ng::Value::Sequence(workflows)) = raw_mapping_field(&root, "workflows")
+    else {
+        return diagnostics;
+    };
+    for (workflow_index, workflow) in workflows.iter().enumerate() {
+        let workflow_path = raw_string_field(workflow, "workflowId")
+            .map(|id| format!("workflow \"{id}\""))
+            .unwrap_or_else(|| format!("workflows[{workflow_index}]"));
+        for field in ["successActions", "failureActions"] {
+            check_raw_action_list(
+                raw_mapping_field(workflow, field),
+                &format!("{workflow_path}.{field}"),
+                false,
+                &mut diagnostics,
+            );
+        }
+        let Some(serde_yaml_ng::Value::Sequence(steps)) = raw_mapping_field(workflow, "steps")
+        else {
+            continue;
+        };
+        for (step_index, step) in steps.iter().enumerate() {
+            let step_path = raw_string_field(step, "stepId")
+                .map(|id| format!("{workflow_path} > step \"{id}\""))
+                .unwrap_or_else(|| format!("{workflow_path} > steps[{step_index}]"));
+            for field in ["onSuccess", "onFailure"] {
+                check_raw_action_list(
+                    raw_mapping_field(step, field),
+                    &format!("{step_path}.{field}"),
+                    false,
+                    &mut diagnostics,
+                );
+            }
+        }
+    }
+    diagnostics
 }
 
 fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
@@ -1084,8 +1220,8 @@ fn check_unknown_fields(
 
 fn warn_action_reusable_fields(path: &str, action: &OnAction, diagnostics: &mut Vec<Diagnostic>) {
     for field in [
-        (action.reference_was_present(), "reference"),
-        (action.value_was_present(), "value"),
+        (!action.reference.is_empty(), "reference"),
+        (action.value.is_some(), "value"),
     ] {
         if field.0 {
             diagnostics.push(Diagnostic::warning(
@@ -1506,7 +1642,7 @@ fn validate_actions(
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         check_unknown_fields(&action_path, &action.extensions, diagnostics);
-        if action.reference.is_empty() && action.value_was_present() {
+        if action.reference.is_empty() && action.value.is_some() {
             diagnostics.push(Diagnostic::warning(
                 ValidationErrorKind::UnknownField,
                 action_path.clone(),
@@ -1864,7 +2000,8 @@ fn resolve_action_ref(
                 return Err(format!("{entity}: component {kind} \"{name}\" not found"));
             };
             *action = component.clone();
-            action.clear_reusable_fields();
+            action.reference.clear();
+            action.value = None;
         } else if !action.name.is_empty() {
             resolve_one_action_ref(action, component_map, prefix, kind, entity)?;
         }
@@ -1914,7 +2051,8 @@ fn resolve_one_action_ref(
         if !action.parameters.is_empty() {
             merged.parameters = action.parameters.clone();
         }
-        merged.clear_reusable_fields();
+        merged.reference.clear();
+        merged.value = None;
         *action = merged;
     }
     Ok(())
@@ -3929,6 +4067,30 @@ workflows:
         let err = expect_parse_error(missing_failure.as_bytes());
         assert!(format!("{err}").contains("component failureAction \"missing\" not found"));
 
+        let missing_with_components = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions: {present: {name: present, type: end}}
+  failureActions: {present: {name: present, type: end}}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{reference: $components.successActions.missing}]
+"#;
+        let err = expect_parse_error(missing_with_components.as_bytes());
+        assert!(format!("{err}").contains("component successAction \"missing\" not found"));
+
+        let missing_failure_with_components = missing_with_components.replace(
+            "onSuccess: [{reference: $components.successActions.missing}]",
+            "onFailure: [{reference: $components.failureActions.missing}]",
+        );
+        let err = expect_parse_error(missing_failure_with_components.as_bytes());
+        assert!(format!("{err}").contains("component failureAction \"missing\" not found"));
+
         let wrong_namespace = r#"
 arazzo: "1.1.0"
 info: {title: Test, version: "1.0.0"}
@@ -4085,6 +4247,56 @@ workflows:
         assert!(diagnostics
             .iter()
             .all(|diagnostic| { diagnostic.kind == ValidationErrorKind::UnknownField }));
+    }
+
+    #[test]
+    fn former_action_presence_markers_are_ordinary_unknown_fields() {
+        let yaml = r#"
+arazzo: "1.1.0"
+info: {title: Test, version: "1.0.0"}
+__arazzo_cli_internal_reference_present: true
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess:
+          - name: finish
+            type: end
+            __arazzo_cli_internal_value_present: true
+          - name: clean
+            type: end
+"#;
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+            Ok(value) => value,
+            Err(err) => panic!("marker spellings are warnings, not parse errors: {err}"),
+        };
+        let unknown: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == ValidationErrorKind::UnknownField)
+            .collect();
+        assert!(unknown.iter().any(|diagnostic| {
+            diagnostic.path.is_empty()
+                && diagnostic
+                    .message
+                    .contains("__arazzo_cli_internal_reference_present")
+        }));
+        assert!(unknown.iter().any(|diagnostic| {
+            diagnostic.path == "workflow \"wf\" > step \"s1\".onSuccess[0]"
+                && diagnostic
+                    .message
+                    .contains("__arazzo_cli_internal_value_present")
+        }));
+        assert!(spec
+            .extensions
+            .contains_key("__arazzo_cli_internal_reference_present"));
+        assert!(spec.workflows[0].steps[0].on_success[0]
+            .extensions
+            .contains_key("__arazzo_cli_internal_value_present"));
+        assert!(spec.workflows[0].steps[0].on_success[1]
+            .extensions
+            .is_empty());
     }
 
     #[test]
