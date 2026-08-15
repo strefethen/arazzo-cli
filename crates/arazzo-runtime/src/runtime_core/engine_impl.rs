@@ -43,6 +43,18 @@ impl Engine {
     ///
     /// A Tokio runtime must be active when calling this method.
     pub fn execute(&self, workflow_id: &str, inputs: BTreeMap<String, Value>) -> ExecutionHandle {
+        self.execute_with_completed_workflows(workflow_id, inputs, &BTreeSet::new())
+    }
+
+    /// Spawns execution with caller-provided completion evidence for local
+    /// workflow dependencies. The set is copied into this invocation and is
+    /// not retained by the engine after the handle is dropped.
+    pub fn execute_with_completed_workflows(
+        &self,
+        workflow_id: &str,
+        inputs: BTreeMap<String, Value>,
+        completed_workflows: &BTreeSet<String>,
+    ) -> ExecutionHandle {
         let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
         let (result_tx, result_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
@@ -52,6 +64,7 @@ impl Engine {
         let wf_id = workflow_id.to_string();
         let cancel_clone = cancel.clone();
         let timeout_clone = Arc::clone(&is_timeout);
+        let completed_workflows = completed_workflows.clone();
 
         tokio::spawn(async move {
             let ctx = Arc::new(ExecutionContext {
@@ -61,6 +74,7 @@ impl Engine {
                 step_attempts: Mutex::new(BTreeMap::new()),
                 cancel: cancel_clone,
                 is_timeout: timeout_clone,
+                completed_workflows: Mutex::new(completed_workflows),
             });
 
             let result = engine.execute_inner(&ctx, &wf_id, inputs, 0).await;
@@ -81,7 +95,25 @@ impl Engine {
         inputs: BTreeMap<String, Value>,
         timeout: Duration,
     ) -> ExecutionHandle {
-        let handle = self.execute(workflow_id, inputs);
+        self.execute_with_timeout_and_completed_workflows(
+            workflow_id,
+            inputs,
+            timeout,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Spawns execution with a timeout and caller-provided completion
+    /// evidence for local workflow dependencies.
+    pub fn execute_with_timeout_and_completed_workflows(
+        &self,
+        workflow_id: &str,
+        inputs: BTreeMap<String, Value>,
+        timeout: Duration,
+        completed_workflows: &BTreeSet<String>,
+    ) -> ExecutionHandle {
+        let handle =
+            self.execute_with_completed_workflows(workflow_id, inputs, completed_workflows);
         let cancel = handle.cancel_token().clone();
         let timeout_flag = handle.timeout_flag().clone();
         tokio::spawn(async move {
@@ -114,6 +146,24 @@ impl Engine {
         inputs: BTreeMap<String, Value>,
         no_deps: bool,
     ) -> ExecutionHandle {
+        self.execute_step_with_completed_workflows(
+            workflow_id,
+            step_id,
+            inputs,
+            no_deps,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Executes a step while enforcing workflow-level completion evidence.
+    pub fn execute_step_with_completed_workflows(
+        &self,
+        workflow_id: &str,
+        step_id: &str,
+        inputs: BTreeMap<String, Value>,
+        no_deps: bool,
+        completed_workflows: &BTreeSet<String>,
+    ) -> ExecutionHandle {
         let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
         let (result_tx, result_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
@@ -124,6 +174,7 @@ impl Engine {
         let s_id = step_id.to_string();
         let cancel_clone = cancel.clone();
         let timeout_clone = Arc::clone(&is_timeout);
+        let completed_workflows = completed_workflows.clone();
 
         tokio::spawn(async move {
             let ctx = Arc::new(ExecutionContext {
@@ -133,6 +184,7 @@ impl Engine {
                 step_attempts: Mutex::new(BTreeMap::new()),
                 cancel: cancel_clone,
                 is_timeout: timeout_clone,
+                completed_workflows: Mutex::new(completed_workflows),
             });
 
             let result = engine
@@ -163,6 +215,8 @@ impl Engine {
                     format!("workflow \"{workflow_id}\" not found"),
                 )
             })?;
+
+            self.require_workflow_dependencies(exec_ctx, &workflow)?;
 
             let target_idx = workflow
                 .steps
@@ -378,15 +432,21 @@ impl Engine {
                 )
             })?;
 
+            self.require_workflow_dependencies(exec_ctx, &workflow)?;
+
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
             if self.inner.parallel_mode
                 && self.inner.debug_controller.is_none()
                 && can_execute_parallel(&workflow)
             {
-                return self
+                let result = self
                     .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
                     .await;
+                if result.is_ok() {
+                    exec_ctx.mark_workflow_completed(workflow_id);
+                }
+                return result;
             }
 
             let workflow_start = Instant::now();
@@ -571,13 +631,17 @@ impl Engine {
                         step_index = idx;
                     }
                     FlowDecision::GotoWorkflow {
-                        workflow_id,
+                        workflow_id: target_workflow_id,
                         inputs,
                     } => {
                         let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
-                        return self
-                            .execute_inner(exec_ctx, &workflow_id, inputs, depth + 1)
+                        let result = self
+                            .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
                             .await;
+                        if result.is_ok() {
+                            exec_ctx.mark_workflow_completed(workflow_id);
+                        }
+                        return result;
                     }
                     FlowDecision::Error(err) => {
                         self.emit_observer_event(
@@ -615,8 +679,35 @@ impl Engine {
                 },
             )
             .await;
+            exec_ctx.mark_workflow_completed(workflow_id);
             Ok(workflow_outputs)
         })
+    }
+
+    fn require_workflow_dependencies(
+        &self,
+        exec_ctx: &ExecutionContext,
+        workflow: &Workflow,
+    ) -> Result<(), RuntimeError> {
+        for dependency in &workflow.depends_on {
+            let satisfied = match arazzo_spec::classify_workflow_dependency(dependency) {
+                arazzo_spec::WorkflowDependency::Local(workflow_id) => {
+                    exec_ctx.workflow_is_completed(workflow_id)
+                }
+                arazzo_spec::WorkflowDependency::External { .. }
+                | arazzo_spec::WorkflowDependency::Invalid => false,
+            };
+            if !satisfied {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::WorkflowDependencyUnsatisfied,
+                    format!(
+                        "workflow \"{}\" depends on workflow \"{dependency}\", which has not completed in this execution context",
+                        workflow.workflow_id
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn get_workflow(&self, workflow_id: &str) -> Option<&Workflow> {

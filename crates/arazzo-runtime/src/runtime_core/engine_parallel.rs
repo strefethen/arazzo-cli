@@ -259,6 +259,7 @@ impl Engine {
             step_attempts: Mutex::new(BTreeMap::new()),
             cancel: cancel.clone(),
             is_timeout: Arc::clone(is_timeout),
+            completed_workflows: Mutex::new(BTreeSet::new()),
         };
 
         let start = Instant::now();

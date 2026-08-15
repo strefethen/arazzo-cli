@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use arazzo_runtime::{
     ClientConfig, EngineBuilder, EngineEvent, RuntimeErrorKind, TransportWarning,
 };
+use arazzo_spec::{classify_workflow_dependency, ArazzoSpec, WorkflowDependency};
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
@@ -134,19 +135,26 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
             spec.info.title.clone()
         };
 
-        // Collect workflow IDs before moving spec into the engine builder.
-        let workflow_ids: Vec<String> = spec
-            .workflows
-            .iter()
-            .filter(|w| {
-                if let Some(re) = &opts.filter {
-                    re.is_match(&w.workflow_id)
-                } else {
-                    true
+        // Plan workflow IDs before moving spec into the engine builder. This
+        // is a stable topological order, not document-order fallback: a
+        // malformed dependency graph is a suite error before any HTTP call.
+        let workflow_ids = match plan_workflow_ids(&spec, opts.filter.as_ref()) {
+            Ok(ids) => ids,
+            Err(error) => {
+                summary.suite_errors += 1;
+                suites.push(TestSuiteResult {
+                    file: file_str.clone(),
+                    name: suite_name,
+                    tests: vec![],
+                    duration_ms: suite_start.elapsed().as_millis() as u64,
+                    error: Some(error),
+                });
+                if opts.fail_fast {
+                    bail = true;
                 }
-            })
-            .map(|w| w.workflow_id.clone())
-            .collect();
+                continue;
+            }
+        };
 
         // Build engine.
         let mut cfg = ClientConfig {
@@ -194,10 +202,16 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
 
         // Execute each workflow.
         let mut cases = Vec::new();
+        let mut completed_workflows = BTreeSet::new();
         for workflow_id in &workflow_ids {
             let wf_start = Instant::now();
             let exec_result = engine
-                .execute_with_timeout(workflow_id, opts.inputs.clone(), opts.execution_timeout)
+                .execute_with_timeout_and_completed_workflows(
+                    workflow_id,
+                    opts.inputs.clone(),
+                    opts.execution_timeout,
+                    &completed_workflows,
+                )
                 .collect()
                 .await;
 
@@ -310,6 +324,11 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                 error_code,
             });
 
+            // A completed test case establishes workflow completion even when
+            // its result is a normal criteria failure. Only fail-fast prevents
+            // the next case from being started.
+            completed_workflows.insert(workflow_id.clone());
+
             if opts.fail_fast && failed {
                 bail = true;
                 break;
@@ -347,6 +366,90 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         suites,
         transport_warnings,
     }
+}
+
+fn plan_workflow_ids(
+    spec: &ArazzoSpec,
+    filter: Option<&regex::Regex>,
+) -> Result<Vec<String>, String> {
+    let positions = spec
+        .workflows
+        .iter()
+        .enumerate()
+        .map(|(index, workflow)| (workflow.workflow_id.as_str(), index))
+        .collect::<std::collections::HashMap<_, _>>();
+    let selected = spec
+        .workflows
+        .iter()
+        .enumerate()
+        .filter(|(_, workflow)| filter.is_none_or(|re| re.is_match(&workflow.workflow_id)))
+        .map(|(index, _)| index)
+        .collect::<BTreeSet<_>>();
+
+    if selected.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    for &index in &selected {
+        for dependency in &spec.workflows[index].depends_on {
+            match classify_workflow_dependency(dependency) {
+                WorkflowDependency::External { .. } => {
+                    return Err(format!(
+                        "suite cannot execute workflow \"{}\": external workflow dependency \"{dependency}\" cannot be established",
+                        spec.workflows[index].workflow_id
+                    ));
+                }
+                WorkflowDependency::Invalid => {
+                    return Err(format!(
+                        "suite cannot execute workflow \"{}\": invalid workflow dependency \"{dependency}\"",
+                        spec.workflows[index].workflow_id
+                    ));
+                }
+                WorkflowDependency::Local(dependency_id) => {
+                    let Some(&dependency_index) = positions.get(dependency_id) else {
+                        return Err(format!(
+                            "suite cannot execute workflow \"{}\": unknown local dependency \"{dependency_id}\"",
+                            spec.workflows[index].workflow_id
+                        ));
+                    };
+                    if !selected.contains(&dependency_index) {
+                        return Err(format!(
+                            "suite filter excludes required workflow \"{dependency_id}\" for \"{}\"",
+                            spec.workflows[index].workflow_id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut indegree = vec![0_usize; spec.workflows.len()];
+    let mut dependents = vec![Vec::<usize>::new(); spec.workflows.len()];
+    for &index in &selected {
+        for dependency in &spec.workflows[index].depends_on {
+            let WorkflowDependency::Local(dependency_id) = classify_workflow_dependency(dependency)
+            else {
+                continue;
+            };
+            let dependency_index = positions[dependency_id];
+            indegree[index] += 1;
+            dependents[dependency_index].push(index);
+        }
+    }
+
+    let mut remaining = selected.clone();
+    let mut order = Vec::with_capacity(selected.len());
+    while !remaining.is_empty() {
+        let Some(&next) = remaining.iter().find(|&&index| indegree[index] == 0) else {
+            return Err("suite workflow dependency graph contains a cycle".to_string());
+        };
+        remaining.remove(&next);
+        order.push(spec.workflows[next].workflow_id.clone());
+        for dependent in &dependents[next] {
+            indegree[*dependent] -= 1;
+        }
+    }
+    Ok(order)
 }
 
 fn is_arazzo_spec_file(path: &str) -> bool {
@@ -622,5 +725,84 @@ fn color_str(text: &str, ansi: &str, use_color: bool) -> String {
         format!("{ansi}{text}\x1b[0m")
     } else {
         text.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plan_workflow_ids;
+    use arazzo_spec::{ArazzoSpec, Workflow};
+
+    #[test]
+    fn plans_stable_topological_order_and_preserves_document_order_when_ready() {
+        let spec = ArazzoSpec {
+            workflows: vec![
+                Workflow {
+                    workflow_id: "later-ready".to_string(),
+                    ..Workflow::default()
+                },
+                Workflow {
+                    workflow_id: "dependent".to_string(),
+                    depends_on: vec!["root".to_string()],
+                    ..Workflow::default()
+                },
+                Workflow {
+                    workflow_id: "root".to_string(),
+                    ..Workflow::default()
+                },
+            ],
+            ..ArazzoSpec::default()
+        };
+        let order = match plan_workflow_ids(&spec, None) {
+            Ok(order) => order,
+            Err(error) => panic!("expected acyclic graph: {error}"),
+        };
+        assert_eq!(order, ["later-ready", "root", "dependent"]);
+    }
+
+    #[test]
+    fn rejects_filtered_transitive_and_external_dependencies() {
+        let spec = ArazzoSpec {
+            workflows: vec![
+                Workflow {
+                    workflow_id: "root".to_string(),
+                    ..Workflow::default()
+                },
+                Workflow {
+                    workflow_id: "middle".to_string(),
+                    depends_on: vec!["root".to_string()],
+                    ..Workflow::default()
+                },
+                Workflow {
+                    workflow_id: "leaf".to_string(),
+                    depends_on: vec!["middle".to_string()],
+                    ..Workflow::default()
+                },
+            ],
+            ..ArazzoSpec::default()
+        };
+        let filter = match regex::Regex::new("leaf|middle") {
+            Ok(filter) => filter,
+            Err(error) => panic!("filter should compile: {error}"),
+        };
+        let error = match plan_workflow_ids(&spec, Some(&filter)) {
+            Ok(order) => panic!("filter should omit root and fail: {order:?}"),
+            Err(error) => error,
+        };
+        assert!(error.contains("root"));
+
+        let external = ArazzoSpec {
+            workflows: vec![Workflow {
+                workflow_id: "leaf".to_string(),
+                depends_on: vec!["$sourceDescriptions.shared.root".to_string()],
+                ..Workflow::default()
+            }],
+            ..ArazzoSpec::default()
+        };
+        let error = match plan_workflow_ids(&external, None) {
+            Ok(order) => panic!("external dependency should fail: {order:?}"),
+            Err(error) => error,
+        };
+        assert!(error.contains("external workflow dependency"));
     }
 }

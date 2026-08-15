@@ -9,12 +9,170 @@ use arazzo_spec::{
 };
 use common::*;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 // ── Basic execution tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn workflow_dependencies_fail_closed_and_accept_explicit_completion() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::SeqCst);
+        MockHttpResponse::empty(200)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![
+            Workflow {
+                workflow_id: "prepare".to_string(),
+                steps: vec![Step {
+                    step_id: "prepare-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/prepare".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "dependent".to_string(),
+                depends_on: vec!["prepare".to_string()],
+                steps: vec![Step {
+                    step_id: "dependent-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+        ],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+
+    let err = match engine
+        .execute_collect("dependent", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("missing workflow completion must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::WorkflowDependencyUnsatisfied);
+    assert_eq!(err.code(), "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+    let completed = BTreeSet::from(["prepare".to_string(), "unrelated".to_string()]);
+    let result = engine
+        .execute_with_completed_workflows("dependent", BTreeMap::new(), &completed)
+        .collect()
+        .await;
+    assert!(result.outputs.is_ok());
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let step_err = match engine
+        .execute_step("dependent", "dependent-step", BTreeMap::new(), true)
+        .collect()
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("step entry must use the same workflow guard"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        step_err.kind,
+        RuntimeErrorKind::WorkflowDependencyUnsatisfied
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let external_spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "external-dependent".to_string(),
+            depends_on: vec!["$sourceDescriptions.shared.other".to_string()],
+            steps: vec![Step {
+                step_id: "external-step".to_string(),
+                target: Some(StepTarget::OperationPath("/external".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    let external_engine = new_test_engine(&server.base_url, external_spec);
+    let external_err = match external_engine
+        .execute_collect("external-dependent", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("external completion cannot be established"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        external_err.kind,
+        RuntimeErrorKind::WorkflowDependencyUnsatisfied
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn nested_workflow_completion_satisfies_later_dependency() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::SeqCst);
+        MockHttpResponse::empty(200)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![
+            Workflow {
+                workflow_id: "first-child".to_string(),
+                steps: vec![Step {
+                    step_id: "first-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/first".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "second-child".to_string(),
+                depends_on: vec!["first-child".to_string()],
+                steps: vec![Step {
+                    step_id: "second-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/second".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "parent".to_string(),
+                steps: vec![
+                    Step {
+                        step_id: "first-call".to_string(),
+                        target: Some(StepTarget::WorkflowId("first-child".to_string())),
+                        ..Step::default()
+                    },
+                    Step {
+                        step_id: "second-call".to_string(),
+                        target: Some(StepTarget::WorkflowId("second-child".to_string())),
+                        ..Step::default()
+                    },
+                ],
+                ..Workflow::default()
+            },
+        ],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
+    assert!(
+        result.is_ok(),
+        "nested dependency should be satisfied: {result:?}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
 
 #[tokio::test]
 async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {

@@ -6,6 +6,10 @@ pub enum RuntimeErrorKind {
     ExecutionTimeout,
     ExecutionCancelled,
     WorkflowNotFound,
+    /// A workflow-level dependency lacks completion evidence in this
+    /// invocation. External dependencies are always rejected because this
+    /// runtime does not load external Arazzo documents.
+    WorkflowDependencyUnsatisfied,
     StepNotFound,
     OperationIdNotFound,
     UnsupportedAsyncApiTransport,
@@ -54,6 +58,7 @@ impl RuntimeErrorKind {
             Self::ExecutionTimeout => "RUNTIME_EXECUTION_TIMEOUT",
             Self::ExecutionCancelled => "RUNTIME_EXECUTION_CANCELLED",
             Self::WorkflowNotFound => "RUNTIME_WORKFLOW_NOT_FOUND",
+            Self::WorkflowDependencyUnsatisfied => "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED",
             Self::StepNotFound => "RUNTIME_STEP_NOT_FOUND",
             Self::OperationIdNotFound => "RUNTIME_OPERATION_ID_NOT_FOUND",
             Self::UnsupportedAsyncApiTransport => "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT",

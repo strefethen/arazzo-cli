@@ -8,10 +8,10 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_operation_path, parse_unvalidated_bytes, unrecognized_fields, ActionType, ArazzoSpec,
-    OnAction, OutputValue, ParamLocation, Parameter, SelectorObject, SelectorType, Step,
-    StepAction, StepTarget, SuccessCriterion, ValueSource, VendorExtensions, Workflow,
-    SUPPORTED_OPERATION_PATH_FORMS,
+    classify_operation_path, classify_workflow_dependency, parse_unvalidated_bytes,
+    unrecognized_fields, ActionType, ArazzoSpec, OnAction, OutputValue, ParamLocation, Parameter,
+    SelectorObject, SelectorType, SourceType, Step, StepAction, StepTarget, SuccessCriterion,
+    ValueSource, VendorExtensions, Workflow, WorkflowDependency, SUPPORTED_OPERATION_PATH_FORMS,
 };
 use iri_string::types::UriReferenceStr;
 
@@ -293,6 +293,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
     }
 
     let mut source_names = HashSet::<&str>::new();
+    let mut source_types = HashMap::<&str, SourceType>::new();
     for (idx, src) in spec.source_descriptions.iter().enumerate() {
         let path = format!("sourceDescriptions[{idx}]");
         check_unknown_fields(&path, &src.extensions, &mut diagnostics);
@@ -317,6 +318,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
         ) {
             diagnostics.push(diag);
         }
+        source_types.insert(src.name.as_str(), src.type_);
         if src.url.is_empty() {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -413,6 +415,60 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             IdentifierClass::Identifier,
         ) {
             diagnostics.push(diag);
+        }
+
+        for (dependency_idx, dependency) in wf.depends_on.iter().enumerate() {
+            let dependency_path = format!("{path}.dependsOn[{dependency_idx}]");
+            match classify_workflow_dependency(dependency) {
+                WorkflowDependency::Local(workflow_id) => {
+                    if !workflow_ids.contains(workflow_id) {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            kind: ValidationErrorKind::InvalidReference,
+                            path: dependency_path,
+                            message: format!(
+                                "{path}.dependsOn references unknown local workflow \"{workflow_id}\""
+                            ),
+                        });
+                    }
+                }
+                WorkflowDependency::External {
+                    source_name,
+                    workflow_id,
+                } => match source_types.get(source_name) {
+                    None => diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        kind: ValidationErrorKind::InvalidReference,
+                        path: dependency_path,
+                        message: format!(
+                            "{path}.dependsOn references unknown sourceDescription \"{source_name}\""
+                        ),
+                    }),
+                    Some(SourceType::Arazzo) => diagnostics.push(Diagnostic::warning(
+                        ValidationErrorKind::UnsupportedDependencyScope,
+                        dependency_path,
+                        format!(
+                            "{path}.dependsOn external workflow \"{workflow_id}\" from Arazzo source \"{source_name}\" is valid but cannot be checked because external Arazzo documents are not loaded"
+                        ),
+                    )),
+                    Some(source_type) => diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        kind: ValidationErrorKind::InvalidReference,
+                        path: dependency_path,
+                        message: format!(
+                            "{path}.dependsOn sourceDescription \"{source_name}\" has type {source_type}, expected type arazzo"
+                        ),
+                    }),
+                },
+                WorkflowDependency::Invalid => diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::InvalidReference,
+                    path: dependency_path,
+                    message: format!(
+                        "{path}.dependsOn contains invalid workflow reference \"{dependency}\""
+                    ),
+                }),
+            }
         }
 
         validate_parameters(
@@ -677,11 +733,22 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             );
         }
 
-        if local_depends_on_has_cycle(wf) {
+        if local_step_depends_on_has_cycle(wf) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 kind: ValidationErrorKind::DependencyCycle,
                 path: format!("{path}.steps"),
+                message: format!(
+                    "{path} contains a dependency cycle in local dependsOn references"
+                ),
+            });
+        }
+
+        if local_workflow_depends_on_has_cycle(spec, wf_idx) {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::DependencyCycle,
+                path: format!("{path}.dependsOn"),
                 message: format!(
                     "{path} contains a dependency cycle in local dependsOn references"
                 ),
@@ -699,6 +766,87 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
     }
 
     diagnostics
+}
+
+fn local_workflow_depends_on_has_cycle(spec: &ArazzoSpec, start: usize) -> bool {
+    let positions = spec
+        .workflows
+        .iter()
+        .enumerate()
+        .map(|(index, workflow)| (workflow.workflow_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut states = vec![0_u8; spec.workflows.len()];
+
+    fn visit(
+        index: usize,
+        spec: &ArazzoSpec,
+        positions: &HashMap<&str, usize>,
+        states: &mut [u8],
+    ) -> bool {
+        if states[index] == 1 {
+            return true;
+        }
+        if states[index] == 2 {
+            return false;
+        }
+        states[index] = 1;
+        for dependency in &spec.workflows[index].depends_on {
+            let WorkflowDependency::Local(workflow_id) = classify_workflow_dependency(dependency)
+            else {
+                continue;
+            };
+            let Some(&dependency_index) = positions.get(workflow_id) else {
+                continue;
+            };
+            if visit(dependency_index, spec, positions, states) {
+                return true;
+            }
+        }
+        states[index] = 2;
+        false
+    }
+
+    start < spec.workflows.len() && visit(start, spec, &positions, &mut states)
+}
+
+fn local_step_depends_on_has_cycle(workflow: &Workflow) -> bool {
+    let positions = workflow
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| (step.step_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut states = vec![0_u8; workflow.steps.len()];
+
+    fn visit(
+        index: usize,
+        workflow: &Workflow,
+        positions: &HashMap<&str, usize>,
+        states: &mut [u8],
+    ) -> bool {
+        if states[index] == 1 {
+            return true;
+        }
+        if states[index] == 2 {
+            return false;
+        }
+        states[index] = 1;
+        for dependency in &workflow.steps[index].depends_on {
+            let StepDependency::Local(step_id) = classify_step_dependency(dependency) else {
+                continue;
+            };
+            let Some(&dependency_index) = positions.get(step_id) else {
+                continue;
+            };
+            if visit(dependency_index, workflow, positions, states) {
+                return true;
+            }
+        }
+        states[index] = 2;
+        false
+    }
+
+    (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
 }
 
 enum StepDependency<'a> {
@@ -730,47 +878,6 @@ fn classify_step_dependency(value: &str) -> StepDependency<'_> {
         }
         _ => StepDependency::Invalid,
     }
-}
-
-fn local_depends_on_has_cycle(workflow: &Workflow) -> bool {
-    let positions = workflow
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(index, step)| (step.step_id.as_str(), index))
-        .collect::<HashMap<_, _>>();
-    let mut states = vec![0_u8; workflow.steps.len()];
-
-    fn visit(
-        index: usize,
-        workflow: &Workflow,
-        positions: &HashMap<&str, usize>,
-        states: &mut [u8],
-    ) -> bool {
-        if states[index] == 1 {
-            return true;
-        }
-        if states[index] == 2 {
-            return false;
-        }
-
-        states[index] = 1;
-        for dependency in &workflow.steps[index].depends_on {
-            let StepDependency::Local(step_id) = classify_step_dependency(dependency) else {
-                continue;
-            };
-            let Some(&dependency_index) = positions.get(step_id) else {
-                continue;
-            };
-            if visit(dependency_index, workflow, positions, states) {
-                return true;
-            }
-        }
-        states[index] = 2;
-        false
-    }
-
-    (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
 }
 
 /// `successCriteria` presence check: Step Object — *"If `successCriteria` is
@@ -2711,6 +2818,85 @@ workflows:
                 && error.path.ends_with(".dependsOn[0]")
                 && error.message.contains("unknown local step \"missing\"")
         }));
+    }
+
+    #[test]
+    fn validate_workflow_depends_on_references_and_external_scope() {
+        let mut spec = valid_spec();
+        spec.workflows.push(Workflow {
+            workflow_id: "wf2".to_string(),
+            depends_on: vec!["wf1".to_string()],
+            steps: vec![Step {
+                step_id: "s2".to_string(),
+                target: Some(StepTarget::OperationPath("/second".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        });
+        assert!(validate(&spec).is_ok());
+
+        spec.workflows[1].depends_on = vec!["WF1".to_string()];
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidReference
+                && error.path.ends_with("dependsOn[0]")
+        }));
+
+        spec.workflows[1].depends_on = vec!["$sourceDescriptions.api.remote".to_string()];
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidReference
+                && error.path.ends_with("dependsOn[0]")
+                && error.message.contains("expected type arazzo")
+        }));
+
+        spec.source_descriptions.push(SourceDescription {
+            name: "shared".to_string(),
+            url: "https://example.com/shared.arazzo.yaml".to_string(),
+            type_: SourceType::Arazzo,
+            ..SourceDescription::default()
+        });
+        spec.workflows[1].depends_on = vec!["$sourceDescriptions.shared.remote".to_string()];
+        let warnings = match validate_diagnostics(&spec) {
+            Ok(warnings) => warnings,
+            Err(err) => panic!("known Arazzo source should warn, not fail: {err}"),
+        };
+        assert!(warnings.iter().any(|warning| {
+            warning.kind == ValidationErrorKind::UnsupportedDependencyScope
+                && warning.severity == Severity::Warning
+                && warning.path.ends_with("dependsOn[0]")
+        }));
+    }
+
+    #[test]
+    fn validate_workflow_depends_on_cycles_are_rejected() {
+        let mut spec = valid_spec();
+        spec.workflows[0].depends_on = vec!["wf1".to_string()];
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::DependencyCycle && error.path.ends_with("dependsOn")
+        }));
+
+        let mut two_node = valid_spec();
+        two_node.workflows[0].depends_on = vec!["wf2".to_string()];
+        two_node.workflows.push(Workflow {
+            workflow_id: "wf2".to_string(),
+            depends_on: vec!["wf1".to_string()],
+            steps: vec![Step {
+                step_id: "s2".to_string(),
+                target: Some(StepTarget::OperationPath("/second".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        });
+        let errors = expect_validation_errors(validate(&two_node));
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.kind == ValidationErrorKind::DependencyCycle)
+                .count(),
+            2
+        );
     }
 
     #[test]

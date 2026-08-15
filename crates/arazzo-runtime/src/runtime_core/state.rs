@@ -10,6 +10,9 @@ pub(super) struct ExecutionContext {
     pub step_attempts: Mutex<BTreeMap<(String, String), u32>>,
     pub cancel: CancellationToken,
     pub is_timeout: Arc<AtomicBool>,
+    /// Workflow IDs completed before or during this invocation. The set is
+    /// scoped to the execution context and is never stored on [`Engine`].
+    pub completed_workflows: Mutex<BTreeSet<String>>,
 }
 
 impl ExecutionContext {
@@ -29,6 +32,19 @@ impl ExecutionContext {
             )
         } else {
             RuntimeError::new(RuntimeErrorKind::ExecutionCancelled, "execution cancelled")
+        }
+    }
+
+    pub(super) fn workflow_is_completed(&self, workflow_id: &str) -> bool {
+        self.completed_workflows
+            .lock()
+            .map(|completed| completed.contains(workflow_id))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn mark_workflow_completed(&self, workflow_id: &str) {
+        if let Ok(mut completed) = self.completed_workflows.lock() {
+            completed.insert(workflow_id.to_string());
         }
     }
 }

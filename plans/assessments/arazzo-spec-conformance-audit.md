@@ -610,3 +610,27 @@ its MUST-level violations fail validation, its SHOULD-level violations warn
 (errors under `--strict`), and the unknown field warns. Still open after this
 epic: F1/F5 (the operationPath / sourceDescriptions idiom product decision),
 F12, F14, F15, F16, F18, F19, and F11's implementation.
+
+## Addendum — 2026-08-15 (ac-51755 workflow dependencies)
+
+Workflow-level `dependsOn` now follows the Arazzo 1.1.0 and 1.0.1 Workflow
+Object rule: local references are checked against case-sensitive workflow IDs,
+and local cycles are rejected as `dependencyCycle` errors. The shared
+`arazzo-spec` classifier accepts only local IDs or the exact
+`$sourceDescriptions.<name>.<workflowId>` form. Unknown sources and
+non-Arazzo sources are `invalidReference` errors; known Arazzo sources produce
+an unsupported-scope warning that global `--strict` promotes.
+
+Runtime execution is fail-closed. Every direct, step, replay, debugger, MCP,
+goto, retry-reference, and sub-workflow entry reaches one guard before HTTP.
+The guard requires local completion evidence in the current invocation and
+rejects external dependencies because this runtime does not load external
+Arazzo documents. The stable error code is
+`RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED`. Completion evidence is an explicit,
+per-invocation set; the Engine does not retain completion history.
+
+The `test` command computes a stable document-order-preserving topological
+order, rejects filtered selections that omit local transitive prerequisites,
+rejects external dependencies before execution, and records failed cases as
+completed when `--fail-fast` is disabled. No workflow is auto-added or
+auto-run by a filter.

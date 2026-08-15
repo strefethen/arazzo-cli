@@ -7,11 +7,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod operation_path;
+mod workflow_dependency;
 
 pub use operation_path::{
     classify_operation_path, split_operation_method, ClassifiedOperationPath, OperationPathForm,
     UnsupportedOperationPath, SUPPORTED_OPERATION_PATH_FORMS,
 };
+pub use workflow_dependency::{classify_workflow_dependency, WorkflowDependency};
 
 /// Every field left over once an Arazzo object's known fields are matched,
 /// keyed by wire name. This is a superset of the `x-*` prefixed
@@ -207,9 +209,7 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<SchemaObject>,
     /// Workflow Object Fixed Fields, `dependsOn`: *"A list of workflows that
-    /// MUST be completed before this workflow can be processed."* Parse and
-    /// serialize only — no execution-ordering semantics are implemented here;
-    /// that is separate, out-of-scope follow-up work.
+    /// MUST be completed before this workflow can be processed."*
     #[serde(rename = "dependsOn", default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
     #[serde(default)]
