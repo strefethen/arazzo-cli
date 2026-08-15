@@ -1064,13 +1064,20 @@ pub fn select_json_path(root: &Value, selector: &str) -> Result<JsonPathSelectio
 /// Resolve a JSONPath from the runtime's supported subset to the RFC 6901
 /// pointer of every matched location, in traversal order.
 ///
-/// Companion to [`select_json_path`]: same subset validation and traversal,
-/// but returns addressable locations instead of cloned values, so callers can
-/// mutate through a JSON Pointer applier (the workspace's single mutating
-/// code path). The root selector `$` resolves to the empty pointer.
+/// Companion to [`select_json_path`]: returns addressable locations instead of
+/// cloned values, so callers can mutate through a JSON Pointer applier (the
+/// workspace's single mutating code path). It applies the shared subset
+/// validation and additionally rejects GJSON-only forms because these
+/// pointers feed writes. The root selector `$` resolves to the empty pointer.
 pub fn resolve_json_path_pointers(root: &Value, selector: &str) -> Result<Vec<String>, PathError> {
     let trimmed = selector.trim();
     validate_json_path_subset(trimmed)?;
+    if mask_json_path_literals(trimmed).contains('#') {
+        return Err(PathError::InvalidSyntax {
+            path: trimmed.to_string(),
+            detail: "'#' is GJSON syntax, not JSONPath; use a bracket filter [?(...)]".to_string(),
+        });
+    }
     let normalized = normalize_json_path(trimmed);
     if normalized.is_empty() {
         return Ok(vec![String::new()]);
@@ -1081,14 +1088,7 @@ pub fn resolve_json_path_pointers(root: &Value, selector: &str) -> Result<Vec<St
     }
 
     let mut current: Vec<(String, &Value)> = vec![(String::new(), root)];
-    for (idx, token) in tokens.iter().copied().enumerate() {
-        let is_last = idx + 1 == tokens.len();
-        if matches!(token, PathToken::Hash) && is_last {
-            return Err(PathError::InvalidSyntax {
-                path: trimmed.to_string(),
-                detail: "'#' selects a length, not an addressable location".to_string(),
-            });
-        }
+    for token in tokens.iter().copied() {
         current = apply_path_token_traced(&current, token);
         if current.is_empty() {
             return Ok(Vec::new());
@@ -2324,6 +2324,51 @@ mod tests {
     }
 
     #[test]
+    fn resolve_json_path_pointers_rejects_gjson_forms() {
+        let root = json!({
+            "items": [
+                {"sku": "A", "q": 1},
+                {"sku": "A", "q": 2}
+            ]
+        });
+
+        for selector in [
+            "$.items.#(sku==\"A\").q",
+            "$.items.#(sku==\"A\")#.q",
+            "$.items.#.q",
+            "$.items[#(sku==\"A\")].q",
+        ] {
+            let error = match super::resolve_json_path_pointers(&root, selector) {
+                Err(error) => error,
+                Ok(pointers) => {
+                    panic!("GJSON syntax must not be accepted; got {pointers:?}")
+                }
+            };
+            assert!(
+                error.to_string().contains("GJSON") || error.to_string().contains("not JSONPath"),
+                "unexpected diagnostic for {selector:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_json_path_pointers_allows_hash_in_jsonpath_literals() {
+        let root = json!({
+            "#": {"q": 1},
+            "items": [{"tag": "#x", "q": 2}]
+        });
+
+        assert_eq!(
+            super::resolve_json_path_pointers(&root, "$['#'].q"),
+            Ok(vec!["/#/q".to_string()])
+        );
+        assert_eq!(
+            super::resolve_json_path_pointers(&root, "$.items[?(@.tag=='#x')].q"),
+            Ok(vec!["/items/0/q".to_string()])
+        );
+    }
+
+    #[test]
     fn resolve_json_path_pointers_root_is_empty_pointer() {
         let root = json!({"a": 1});
         assert_eq!(
@@ -2348,7 +2393,7 @@ mod tests {
             Err(err) => err,
             Ok(pointers) => panic!("expected error, got {pointers:?}"),
         };
-        assert!(err.to_string().contains("addressable location"), "{err}");
+        assert!(err.to_string().contains("GJSON"), "{err}");
     }
 
     #[test]

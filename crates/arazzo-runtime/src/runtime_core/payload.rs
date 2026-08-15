@@ -1030,6 +1030,49 @@ mod tests {
     }
 
     #[test]
+    fn explicit_jsonpath_gjson_filter_warns_and_body_unchanged() {
+        let eval = evaluator();
+        let original = json!({
+            "items": [
+                {"sku": "A", "q": 1},
+                {"sku": "A", "q": 2}
+            ]
+        });
+        let (body, warnings) = apply(
+            original.clone(),
+            vec![typed_replacement(
+                "$.items.#(sku==\"A\").q",
+                name_type("jsonpath"),
+                yaml(json!(99)),
+            )],
+            &eval,
+        );
+
+        assert_eq!(body, original);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_warning_contains(&warnings, "GJSON");
+    }
+
+    #[test]
+    fn explicit_jsonpath_gjson_filter_one_match_warns_and_body_unchanged() {
+        let eval = evaluator();
+        let original = json!({"items": [{"sku": "A", "q": 1}]});
+        let (body, warnings) = apply(
+            original.clone(),
+            vec![typed_replacement(
+                "$.items.#(sku==\"A\").q",
+                name_type("jsonpath"),
+                yaml(json!(99)),
+            )],
+            &eval,
+        );
+
+        assert_eq!(body, original);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_warning_contains(&warnings, "GJSON");
+    }
+
+    #[test]
     fn explicit_jsonpointer_behaves_like_omitted_field() {
         let eval = evaluator();
         let original = json!({"a": 1});

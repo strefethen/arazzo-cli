@@ -595,7 +595,7 @@ successCriteria:
     context: $response.body
 ```
 
-Supports array indexing (`[0]`), wildcards (`[*]`), array length (`.#`), a JSONPath-style bracket filter predicate (`[?(@.field=="value")]`), and a GJSON-style dot-form filter predicate (`.#(field==value)`, or `.#(field==value)#` to keep all matches instead of the first). The bracket-wrapped GJSON form `[#(field==value)]` is **not** supported — it is parsed as a literal (and normally nonexistent) field name, so it silently resolves to `null` instead of erroring or matching; use `[?(@.field=="value")]` or `.#(field==value)` instead. Verified by running each form through `arazzo-cli run --json` against a local test server and comparing outputs.
+Supports array indexing (`[0]`), wildcards (`[*]`), array length (`.#`), a JSONPath-style bracket filter predicate (`[?(@.field=="value")]`), and a GJSON-style dot-form filter predicate (`.#(field==value)`, or `.#(field==value)#` to keep all matches instead of the first). The bracket-wrapped GJSON form `[#(field==value)]` is **not** supported — it is parsed as a literal (and normally nonexistent) field name, so it silently resolves to `null` instead of erroring or matching; use `[?(@.field=="value")]` or `.#(field==value)` instead. Verified by running each form through `arazzo-cli run --json` against a local test server and comparing outputs. Payload replacement targets declared as `targetSelectorType: jsonpath` reject all GJSON forms with a diagnostic; this GJSON extension applies only to runtime-expression dot-path traversal.
 
 ## Control Flow
 

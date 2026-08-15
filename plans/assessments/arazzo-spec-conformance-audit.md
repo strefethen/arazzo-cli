@@ -507,6 +507,7 @@ specification."*
 |---|---|---|---|
 | F18 | JSONPath version tokens accepted without differentiated semantics | P3 | expr/runtime |
 | F19 | XPath engine is 1.0 while the spec's default is `xpath-31` | P3 | runtime |
+| F20 | GJSON `#` forms accepted by typed JSONPath read surfaces | P2 | expr/runtime |
 
 ### F18. Undifferentiated JSONPath version semantics
 
@@ -539,6 +540,23 @@ One surface is not yet covered by the capability diagnostic: the criterion
 XPath path (`crates/arazzo-runtime/src/runtime_core/criteria.rs`) executes any
 declared version silently, with no version gate at all — pre-existing, and now
 the only XPath surface without the Decision 3 diagnostic.
+
+### F20. GJSON forms accepted by typed JSONPath read surfaces
+
+**Spec** (§5.8.11.4.3 and §5.8.12): a criterion with `type: jsonpath` *"MUST
+be a valid JSONPath expression conforming to [RFC9535]"*, and implementations
+*"MUST apply the semantics defined in that version's specification"*. Selector
+Objects use the same versioned JSONPath contract. GJSON's dot-form `#` filters
+are not syntax in either allowed JSONPath dialect.
+
+**We do:** the read-side `select_json_path` path used by typed JSONPath
+criteria and Selector Objects still accepts GJSON `#` forms. A single-match
+`#(...)` form therefore returns the first match instead of reporting invalid
+JSONPath syntax. The write-side pointer resolver now rejects these forms for
+`targetSelectorType: jsonpath`; the read-side behavior remains unchanged in
+that ticket so existing expression semantics are not silently moved. Follow-up
+work should make typed JSONPath reads fail closed without changing the separate
+GJSON runtime-expression extension.
 
 ## Addendum — 2026-08-13 (epic ac-37fe6 close)
 

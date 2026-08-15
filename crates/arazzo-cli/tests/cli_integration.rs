@@ -3218,6 +3218,83 @@ fn run_step_dry_run_returns_request() {
 }
 
 #[test]
+fn run_dry_run_jsonpath_gjson_replacement_warns_and_preserves_body() {
+    let temp = TempDir::new("arazzo-jsonpath-gjson-replacement");
+    let spec_path = temp.path().join("gjson-replacement.arazzo.yaml");
+    write_file(
+        &spec_path,
+        r#"arazzo: 1.1.0
+info:
+  title: GJSON replacement regression
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: update
+        operationPath: /items
+        requestBody:
+          contentType: application/json
+          payload:
+            items:
+              - sku: A
+                q: 1
+              - sku: A
+                q: 2
+          replacements:
+            - target: '$.items.#(sku=="A").q'
+              targetSelectorType: jsonpath
+              value: 99
+"#,
+    );
+
+    let spec = spec_path.to_string_lossy().to_string();
+    let output = run(["--json", "run", &spec, "wf", "--dry-run"].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "dry-run should succeed with a replacement warning; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "expected one request: {body}");
+    assert_eq!(
+        requests[0].get("body"),
+        Some(&json!({
+            "items": [
+                {"sku": "A", "q": 1},
+                {"sku": "A", "q": 2}
+            ]
+        }))
+    );
+
+    let warnings = requests[0]
+        .get("warnings")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("expected one request warning: {body}"));
+    assert_eq!(
+        warnings.len(),
+        1,
+        "request warnings should be singular: {body}"
+    );
+    let warning = warnings[0]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected string warning: {body}"));
+    assert!(
+        warning.contains("GJSON"),
+        "warning should name GJSON: {warning}"
+    );
+    assert!(
+        warning.contains("not JSONPath"),
+        "warning should identify non-JSONPath syntax: {warning}"
+    );
+}
+
+#[test]
 fn run_step_missing_step_id_fails() {
     let spec = fixture_spec();
     let spec_str = spec.to_string_lossy().to_string();
