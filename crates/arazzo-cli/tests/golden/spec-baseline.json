@@ -933,6 +933,53 @@
         }
       }
     },
+    "testdata/arazzo-1.1-conformance.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "action-reference": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "s1",
+              "url": "http://127.0.0.1:9/s1"
+            },
+            {
+              "method": "GET",
+              "stepId": "s3",
+              "url": "http://127.0.0.1:9/s3"
+            }
+          ]
+        },
+        "dependent": {
+          "outcome": "notDryRunnable",
+          "reason": "workflow \"dependent\" depends on workflow \"prerequisite\", which has not completed in this execution context"
+        },
+        "prerequisite": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "prerequisite-step",
+              "url": "http://127.0.0.1:9/prerequisite"
+            }
+          ]
+        },
+        "typed-replacement": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "replace",
+              "url": "http://127.0.0.1:9/replace"
+            }
+          ]
+        }
+      }
+    },
     "testdata/bank-32.arazzo.yaml": {
       "validate": {
         "diagnostics": [],

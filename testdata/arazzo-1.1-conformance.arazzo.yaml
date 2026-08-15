@@ -1,0 +1,73 @@
+arazzo: "1.1.0"
+info:
+  title: Arazzo 1.1 Conformance Follow-ups
+  version: "1.0.0"
+  description: Compact release corpus for the final v0.4.0 conformance guard.
+sourceDescriptions:
+  - name: api
+    url: http://127.0.0.1:9
+    type: openapi
+components:
+  successActions:
+    gotoS3:
+      name: gotoS3
+      type: goto
+      stepId: s3
+workflows:
+  - workflowId: typed-replacement
+    summary: Apply a typed RFC 9535 JSONPath replacement
+    steps:
+      - stepId: replace
+        operationPath: POST /replace
+        requestBody:
+          contentType: application/json
+          payload:
+            items:
+              - sku: ABC123
+                quantity: 1
+              - sku: XYZ999
+                quantity: 2
+          replacements:
+            - target: "$.items[?(@.sku=='ABC123')].quantity"
+              targetSelectorType:
+                type: jsonpath
+                version: rfc9535
+              value: 99
+        successCriteria:
+          - condition: $statusCode == 200
+
+  - workflowId: action-reference
+    summary: Follow a specification-form reusable goto action
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        successCriteria:
+          - condition: $statusCode == 200
+        onSuccess:
+          - reference: $components.successActions.gotoS3
+      - stepId: s2
+        operationPath: /s2
+        successCriteria:
+          - condition: $statusCode == 200
+      - stepId: s3
+        operationPath: /s3
+        successCriteria:
+          - condition: $statusCode == 200
+
+  - workflowId: dependent
+    summary: Run after the local prerequisite workflow
+    dependsOn:
+      - prerequisite
+    steps:
+      - stepId: dependent-step
+        operationPath: /dependent
+        successCriteria:
+          - condition: $statusCode == 200
+
+  - workflowId: prerequisite
+    summary: Complete before the dependent workflow
+    steps:
+      - stepId: prerequisite-step
+        operationPath: /prerequisite
+        successCriteria:
+          - condition: $statusCode == 200
