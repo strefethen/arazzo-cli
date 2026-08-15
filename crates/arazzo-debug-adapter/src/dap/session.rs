@@ -321,7 +321,7 @@ where
                 &output_event(
                     outbound.alloc(),
                     "stderr",
-                    &format!("workflow failed: {err}\n"),
+                    &format!("workflow failed [{}]: {}\n", err.code(), err.message),
                 ),
             )?;
             write_dap_message(writer, &exited_event(outbound.alloc(), 1))?;

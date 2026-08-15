@@ -3972,6 +3972,159 @@ fn json_ok_route(path: &str) -> (u16, Vec<(String, String)>, String) {
     }
 }
 
+fn dependency_test_spec(base_url: &str, workflows: &str) -> String {
+    format!(
+        r#"arazzo: 1.1.0
+info:
+  title: Workflow dependency test
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: {base_url}
+    type: openapi
+workflows:
+{workflows}"#
+    )
+}
+
+fn dependency_test_workflow(id: &str, path: &str, depends_on: Option<&str>) -> String {
+    let dependency = depends_on
+        .map(|value| format!("    dependsOn:\n      - {value}\n"))
+        .unwrap_or_default();
+    format!(
+        "  - workflowId: {id}\n{dependency}    steps:\n      - stepId: request\n        operationPath: {path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
+    )
+}
+
+#[test]
+fn test_json_dependency_order_filter_and_fail_closed_contract() {
+    let server = start_route_server(json_ok_route);
+    let temp = TempDir::new("arazzo-workflow-dependencies");
+    let path = temp.path().join("dependencies.arazzo.yaml");
+    let workflows = format!(
+        "{}{}{}",
+        dependency_test_workflow("final", "/ok", Some("middle")),
+        dependency_test_workflow("root", "/ok", None),
+        dependency_test_workflow("middle", "/ok", Some("root")),
+    );
+    write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
+
+    let output = run(["--json", "test", &path.to_string_lossy()].as_slice(), None);
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let body = stdout_json(&output);
+    let tests = match body.pointer("/suites/0/tests").and_then(Value::as_array) {
+        Some(tests) => tests,
+        None => panic!("test JSON must include suites[0].tests: {body}"),
+    };
+    let ids: Vec<_> = tests
+        .iter()
+        .filter_map(|test| test.get("workflowId").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["root", "middle", "final"]);
+
+    let filtered = run(
+        [
+            "--json",
+            "test",
+            &path.to_string_lossy(),
+            "--filter",
+            "final",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(!filtered.status.success());
+    let filtered_body = stdout_json(&filtered);
+    assert_eq!(filtered_body["summary"]["suiteErrors"], 1);
+    let filtered_error = match filtered_body["suites"][0]["error"].as_str() {
+        Some(error) => error,
+        None => panic!("filtered dependency suite must report an error: {filtered_body}"),
+    };
+    assert!(filtered_error.contains("filter excludes required workflow"));
+
+    let unknown_path = temp.path().join("unknown.arazzo.yaml");
+    let unknown_workflow = dependency_test_workflow("blocked", "/ok", Some("missing"));
+    write_file(
+        &unknown_path,
+        &dependency_test_spec(&server.base_url, &unknown_workflow),
+    );
+    let unknown = run(
+        ["--json", "test", &unknown_path.to_string_lossy()].as_slice(),
+        None,
+    );
+    assert!(!unknown.status.success());
+    let unknown_body = stdout_json(&unknown);
+    assert_eq!(unknown_body["summary"]["suiteErrors"], 1);
+    let unknown_error = match unknown_body["suites"][0]["error"].as_str() {
+        Some(error) => error,
+        None => panic!("unknown dependency suite must report an error: {unknown_body}"),
+    };
+    assert!(unknown_error.contains("unknown local workflow"));
+}
+
+#[test]
+fn test_json_failure_completion_and_fail_fast_order() {
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let requests_ref = Arc::clone(&requests);
+    let server = start_route_server(move |path| {
+        requests_ref
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .push(path.to_string());
+        match path {
+            "/fail" => (500, Vec::new(), String::new()),
+            "/ok" => json_ok_route(path),
+            _ => (404, Vec::new(), String::new()),
+        }
+    });
+    let temp = TempDir::new("arazzo-workflow-failures");
+    let path = temp.path().join("failures.arazzo.yaml");
+    let workflows = format!(
+        "{}{}",
+        dependency_test_workflow("failed", "/fail", None),
+        dependency_test_workflow("after-failure", "/ok", Some("failed")),
+    );
+    write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
+
+    let output = run(["--json", "test", &path.to_string_lossy()].as_slice(), None);
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    assert_eq!(body["summary"]["totalTests"], 2);
+    assert_eq!(body["summary"]["passed"], 1);
+    assert_eq!(body["summary"]["failed"], 1);
+    assert_eq!(body["suites"][0]["tests"][1]["workflowId"], "after-failure");
+    assert_eq!(
+        requests
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .as_slice(),
+        ["/fail", "/ok"]
+    );
+
+    requests
+        .lock()
+        .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+        .clear();
+    let fail_fast = run(
+        ["--json", "test", &path.to_string_lossy(), "--fail-fast"].as_slice(),
+        None,
+    );
+    assert!(!fail_fast.status.success());
+    let fail_fast_body = stdout_json(&fail_fast);
+    assert_eq!(fail_fast_body["summary"]["totalTests"], 1);
+    assert_eq!(
+        fail_fast_body["suites"][0]["tests"][0]["workflowId"],
+        "failed"
+    );
+    assert_eq!(
+        requests
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .as_slice(),
+        ["/fail"]
+    );
+}
+
 /// Minimal HTTPS server over rustls 0.23 with a fresh self-signed cert
 /// (mirrors the arazzo-runtime test helper; tiny_http's ssl feature
 /// pins audit-flagged rustls 0.20/ring 0.16, so it is avoided).

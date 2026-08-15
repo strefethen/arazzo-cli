@@ -485,6 +485,51 @@ fn test_run_workflow_error() {
 }
 
 #[test]
+fn test_run_workflow_preserves_nested_dependency_error_code() {
+    let mut spec = make_spec("http://127.0.0.1:9");
+    spec.workflows = vec![
+        Workflow {
+            workflow_id: "blocked".to_string(),
+            depends_on: vec!["missing".to_string()],
+            steps: vec![Step {
+                step_id: "request".to_string(),
+                target: Some(StepTarget::OperationPath("/never".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "parent".to_string(),
+            steps: vec![Step {
+                step_id: "call".to_string(),
+                target: Some(StepTarget::WorkflowId("blocked".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+    ];
+    let state = ServerState::from_spec("dependency.arazzo.yaml", spec);
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"parent"}}}),
+    ]);
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+    let responses = parse_responses(&output);
+    assert!(responses.len() >= 2);
+    assert!(is_tool_error(&responses[1]));
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED"),
+        "nested dependency code must cross MCP boundary: {text}"
+    );
+}
+
+#[test]
 fn test_unknown_tool() {
     let state = ServerState::empty();
 

@@ -2869,6 +2869,51 @@ workflows:
     }
 
     #[test]
+    fn validate_workflow_depends_on_rejects_unknown_and_malformed_external_references() {
+        let mut spec = valid_spec();
+        spec.workflows[0].depends_on = vec![
+            "$sourceDescriptions.missing.remote".to_string(),
+            "$sourceDescriptions.bad name.ready".to_string(),
+        ];
+        let errors = expect_validation_errors(validate(&spec));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidReference
+                && error.message.contains("unknown sourceDescription")
+        }));
+        assert!(errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidReference
+                && error.message.contains("invalid workflow reference")
+        }));
+
+        spec.workflows[0].depends_on = vec!["$sourceDescriptions.api.ready.extra".to_string()];
+        assert!(
+            validate(&spec).is_err(),
+            "OpenAPI source must remain unsupported"
+        );
+
+        spec.source_descriptions.push(SourceDescription {
+            name: "shared".to_string(),
+            url: "https://example.com/shared.arazzo.yaml".to_string(),
+            type_: SourceType::Arazzo,
+            ..SourceDescription::default()
+        });
+        spec.workflows[0].depends_on = vec!["$sourceDescriptions.shared.ready.extra".to_string()];
+        let warnings = match validate_diagnostics(&spec) {
+            Ok(warnings) => warnings,
+            Err(error) => panic!("known Arazzo source is warning-only: {error}"),
+        };
+        let warning = match warnings
+            .iter()
+            .find(|warning| warning.kind == ValidationErrorKind::UnsupportedDependencyScope)
+        {
+            Some(warning) => warning,
+            None => panic!("expected external dependency warning"),
+        };
+        assert_eq!(warning.severity, Severity::Warning);
+        assert_eq!(warning.clone().into_error().severity, Severity::Error);
+    }
+
+    #[test]
     fn validate_workflow_depends_on_cycles_are_rejected() {
         let mut spec = valid_spec();
         spec.workflows[0].depends_on = vec!["wf1".to_string()];

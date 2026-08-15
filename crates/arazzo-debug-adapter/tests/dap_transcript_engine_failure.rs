@@ -91,6 +91,44 @@ fn engine_failure_emits_error_output_exited_and_terminated() {
     let _ = fs::remove_file(spec_path);
 }
 
+#[test]
+fn nested_dependency_failure_exposes_stable_runtime_code() {
+    let spec_path = write_dependency_spec();
+    let input = dap_test_support::encode_dap_stream(&[
+        json!({ "seq": 1, "type": "request", "command": "initialize", "arguments": {} }),
+        json!({
+            "seq": 2,
+            "type": "request",
+            "command": "launch",
+            "arguments": {
+                "spec": spec_path.to_string_lossy(),
+                "workflowId": "parent",
+                "stopOnEntry": false
+            }
+        }),
+        json!({ "seq": 3, "type": "request", "command": "configurationDone", "arguments": {} }),
+    ]);
+    let reader = Cursor::new(input);
+    let mut output = Vec::<u8>::new();
+    let run = run_dap_stdio(reader, &mut output);
+    assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
+    let messages = dap_test_support::decode_dap_stream(&output);
+    let text = messages
+        .iter()
+        .filter(|message| message.get("event").and_then(|value| value.as_str()) == Some("output"))
+        .filter_map(|message| {
+            message
+                .pointer("/body/output")
+                .and_then(|value| value.as_str())
+        })
+        .collect::<String>();
+    assert!(
+        text.contains("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED"),
+        "DAP failure output must preserve stable code: {messages:#?}"
+    );
+    let _ = fs::remove_file(spec_path);
+}
+
 fn write_temp_spec() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -115,6 +153,39 @@ workflows:
         operationId: MissingOperation
         successCriteria:
           - condition: $statusCode == 200
+"#;
+    fs::write(&path, spec).unwrap_or_else(|err| panic!("writing temp spec: {err}"));
+    path
+}
+
+fn write_dependency_spec() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let path = std::env::temp_dir().join(format!("arazzo-debug-dependency-failure-{nanos}.yaml"));
+    let spec = r#"
+arazzo: "1.1.0"
+info:
+  title: Nested dependency failure
+  version: "1.0.0"
+sourceDescriptions:
+  - name: test
+    url: http://127.0.0.1:9
+    type: openapi
+  - name: shared
+    url: ./shared.arazzo.yaml
+    type: arazzo
+workflows:
+  - workflowId: blocked
+    dependsOn:
+      - $sourceDescriptions.shared.remote
+    steps:
+      - stepId: never
+        operationPath: /never
+  - workflowId: parent
+    steps:
+      - stepId: call
+        workflowId: blocked
 "#;
     fs::write(&path, spec).unwrap_or_else(|err| panic!("writing temp spec: {err}"));
     path

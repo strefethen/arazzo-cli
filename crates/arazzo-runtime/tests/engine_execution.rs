@@ -175,6 +175,149 @@ async fn nested_workflow_completion_satisfies_later_dependency() {
 }
 
 #[tokio::test]
+async fn failed_nested_workflow_counts_as_completion_for_goto_dependency() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::SeqCst);
+        if url == "/first" {
+            MockHttpResponse::empty(500)
+        } else {
+            MockHttpResponse::empty(200)
+        }
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![
+            Workflow {
+                workflow_id: "first-child".to_string(),
+                steps: vec![Step {
+                    step_id: "first-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/first".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "second-child".to_string(),
+                depends_on: vec!["first-child".to_string()],
+                steps: vec![Step {
+                    step_id: "second-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/second".to_string())),
+                    success_criteria: success_200(),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "parent".to_string(),
+                steps: vec![Step {
+                    step_id: "first-call".to_string(),
+                    target: Some(StepTarget::WorkflowId("first-child".to_string())),
+                    on_failure: vec![OnAction {
+                        type_: Some(ActionType::Goto),
+                        workflow_id: "second-child".to_string(),
+                        ..OnAction::default()
+                    }],
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+        ],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine.execute_collect("parent", BTreeMap::new()).await;
+    assert!(
+        result.outputs.is_ok(),
+        "failure-handling goto should succeed"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn nested_dependency_rejection_preserves_stable_error_and_makes_no_request() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::SeqCst);
+        MockHttpResponse::empty(200)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![
+            Workflow {
+                workflow_id: "dependent".to_string(),
+                depends_on: vec!["missing".to_string()],
+                steps: vec![Step {
+                    step_id: "dependent-step".to_string(),
+                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "parent".to_string(),
+                steps: vec![Step {
+                    step_id: "call".to_string(),
+                    target: Some(StepTarget::WorkflowId("dependent".to_string())),
+                    ..Step::default()
+                }],
+                ..Workflow::default()
+            },
+        ],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("nested dependency rejection must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::WorkflowDependencyUnsatisfied);
+    assert_eq!(err.code(), "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unrelated_completion_evidence_does_not_satisfy_unknown_dependency() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        hits_ref.fetch_add(1, Ordering::SeqCst);
+        MockHttpResponse::empty(200)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "dependent".to_string(),
+            depends_on: vec!["missing".to_string()],
+            steps: vec![Step {
+                step_id: "step".to_string(),
+                target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    let engine = new_test_engine(&server.base_url, spec);
+    let completion = BTreeSet::from(["unrelated".to_string()]);
+    let err = match engine
+        .execute_with_completed_workflows("dependent", BTreeMap::new(), &completion)
+        .collect()
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("unrelated completion evidence must not satisfy dependency"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::WorkflowDependencyUnsatisfied);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {
     let hits = Arc::new(AtomicUsize::new(0));
     let hits_ref = Arc::clone(&hits);

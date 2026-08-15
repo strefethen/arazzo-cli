@@ -27,17 +27,23 @@ pub fn classify_workflow_dependency(value: &str) -> WorkflowDependency<'_> {
         return WorkflowDependency::Local(value);
     }
 
-    let parts = value.split('.').collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["$sourceDescriptions", source_name, workflow_id]
-            if !source_name.is_empty() && !workflow_id.is_empty() =>
-        {
-            WorkflowDependency::External {
-                source_name,
-                workflow_id,
-            }
-        }
-        _ => WorkflowDependency::Invalid,
+    let Some(reference) = value.strip_prefix("$sourceDescriptions.") else {
+        return WorkflowDependency::Invalid;
+    };
+    let Some((source_name, workflow_id)) = reference.split_once('.') else {
+        return WorkflowDependency::Invalid;
+    };
+    if source_name.is_empty()
+        || workflow_id.is_empty()
+        || !source_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return WorkflowDependency::Invalid;
+    }
+    WorkflowDependency::External {
+        source_name,
+        workflow_id,
     }
 }
 
@@ -66,8 +72,29 @@ mod tests {
             "",
             "$workflows.ready",
             "$sourceDescriptions.shared",
-            "$sourceDescriptions.shared.ready.extra",
             "$sourceDescriptions..ready",
+            "$sourceDescriptions.shared.",
+        ] {
+            assert_eq!(
+                classify_workflow_dependency(value),
+                WorkflowDependency::Invalid,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_dotted_external_workflow_ids_and_rejects_non_strict_source_names() {
+        assert_eq!(
+            classify_workflow_dependency("$sourceDescriptions.shared.ready.extra"),
+            WorkflowDependency::External {
+                source_name: "shared",
+                workflow_id: "ready.extra"
+            }
+        );
+        for value in [
+            "$sourceDescriptions.shared name.ready",
+            "$sourceDescriptions.shared/name.ready",
             "$sourceDescriptions.shared.",
         ] {
             assert_eq!(

@@ -443,9 +443,10 @@ impl Engine {
                 let result = self
                     .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
                     .await;
-                if result.is_ok() {
-                    exec_ctx.mark_workflow_completed(workflow_id);
-                }
+                // The dependency guard ran before entering parallel execution.
+                // Record terminal failures too: this invocation was admitted
+                // and therefore completed, even when one of its steps failed.
+                exec_ctx.mark_workflow_completed(workflow_id);
                 return result;
             }
 
@@ -615,6 +616,7 @@ impl Engine {
                                 )
                                 .await
                             {
+                                exec_ctx.mark_workflow_completed(workflow_id);
                                 self.emit_observer_event(
                                     exec_ctx,
                                     ObserverEvent::WorkflowCompleted {
@@ -638,12 +640,14 @@ impl Engine {
                         let result = self
                             .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
                             .await;
-                        if result.is_ok() {
-                            exec_ctx.mark_workflow_completed(workflow_id);
-                        }
+                        // The caller workflow was admitted and ran far enough
+                        // to invoke the target. Its terminal outcome is
+                        // completion evidence even when the target fails.
+                        exec_ctx.mark_workflow_completed(workflow_id);
                         return result;
                     }
                     FlowDecision::Error(err) => {
+                        exec_ctx.mark_workflow_completed(workflow_id);
                         self.emit_observer_event(
                             exec_ctx,
                             ObserverEvent::WorkflowCompleted {
@@ -660,6 +664,7 @@ impl Engine {
             }
 
             if !completed {
+                exec_ctx.mark_workflow_completed(workflow_id);
                 return Err(RuntimeError::new(
                     RuntimeErrorKind::IterationLimitExceeded,
                     format!(
@@ -811,11 +816,19 @@ impl Engine {
                     .execute_inner(exec_ctx, &target, sub_inputs.clone(), depth + 1)
                     .await
                     .map_err(|err| {
-                        let msg = format!(
-                            "step {retried_step_id}: retry reference workflow \"{target}\": {}",
-                            err.message
-                        );
-                        RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
+                        if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
+                            err
+                        } else {
+                            let msg = format!(
+                                "step {retried_step_id}: retry reference workflow \"{target}\": {}",
+                                err.message
+                            );
+                            RuntimeError::with_source(
+                                RuntimeErrorKind::RetryReferenceFailed,
+                                msg,
+                                err,
+                            )
+                        }
                     })?;
                 // Register completed reference state for $workflows.<id>.* —
                 // the "context is returned" half of the spec sentence. The
@@ -913,8 +926,12 @@ impl Engine {
             .execute_inner(exec_ctx, wf_id, sub_inputs.clone(), depth + 1)
             .await
             .map_err(|err| {
-                let msg = format!("sub-workflow {wf_id}: {}", err.message);
-                RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
+                if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
+                    err
+                } else {
+                    let msg = format!("sub-workflow {wf_id}: {}", err.message);
+                    RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
+                }
             })?;
 
         // Register completed sub-workflow state for $workflows.<id>.* expressions.

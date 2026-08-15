@@ -110,6 +110,32 @@ async fn replay_reports_request_drift() {
     assert_eq!(err.kind, RuntimeErrorKind::ReplayRequestMismatch);
 }
 
+#[tokio::test]
+async fn replay_propagates_workflow_dependency_error_without_consuming_requests() {
+    let mut spec = replay_spec();
+    spec.workflows[0].workflow_id = "dependent".to_string();
+    spec.workflows[0].depends_on = vec!["missing".to_string()];
+    let engine = match EngineBuilder::new(spec)
+        .trace(true)
+        .replay_trace_steps(Vec::new())
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building replay engine: {err}"),
+    };
+
+    let err = match engine
+        .execute_collect("dependent", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(outputs) => panic!("expected dependency rejection, got outputs: {outputs:?}"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::WorkflowDependencyUnsatisfied);
+    assert_eq!(err.code(), "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED");
+}
+
 // ── Bug #7: replay uses full body, not truncated body_preview ────
 
 #[tokio::test]
