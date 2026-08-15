@@ -168,6 +168,32 @@ pub enum ValidationErrorKind {
     UnknownField,
 }
 
+impl ValidationErrorKind {
+    /// Returns the stable camelCase name used in the CLI `--json` contract.
+    /// Renaming a value is a breaking contract change, like a `RUNTIME_*` code.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::MissingRequiredField => "missingRequiredField",
+            Self::DuplicateIdentifier => "duplicateIdentifier",
+            Self::InvalidStepTarget => "invalidStepTarget",
+            Self::UnsupportedVersion => "unsupportedVersion",
+            Self::InvalidParameterLocation => "invalidParameterLocation",
+            Self::MissingParameterValue => "missingParameterValue",
+            Self::InvalidExpression => "invalidExpression",
+            Self::InvalidReference => "invalidReference",
+            Self::InvalidAsyncStep => "invalidAsyncStep",
+            Self::UnsupportedDependencyScope => "unsupportedDependencyScope",
+            Self::DependencyCycle => "dependencyCycle",
+            Self::InvalidRetryField => "invalidRetryField",
+            Self::InvalidCriterionType => "invalidCriterionType",
+            Self::InvalidSelectorType => "invalidSelectorType",
+            Self::UnsupportedOperationPath => "unsupportedOperationPath",
+            Self::InvalidIdentifier => "invalidIdentifier",
+            Self::UnknownField => "unknownField",
+        }
+    }
+}
+
 /// Parses and validates an Arazzo spec file from disk, discarding warnings.
 pub fn parse(path: impl AsRef<Path>) -> Result<ArazzoSpec, Error> {
     parse_with_diagnostics(path).map(|(spec, _)| spec)
@@ -2207,6 +2233,60 @@ workflows:
                 ..Workflow::default()
             }],
             ..ArazzoSpec::default()
+        }
+    }
+
+    #[test]
+    fn validation_error_kind_names_are_frozen() {
+        let cases = [
+            (
+                ValidationErrorKind::MissingRequiredField,
+                "missingRequiredField",
+            ),
+            (
+                ValidationErrorKind::DuplicateIdentifier,
+                "duplicateIdentifier",
+            ),
+            (ValidationErrorKind::InvalidStepTarget, "invalidStepTarget"),
+            (
+                ValidationErrorKind::UnsupportedVersion,
+                "unsupportedVersion",
+            ),
+            (
+                ValidationErrorKind::InvalidParameterLocation,
+                "invalidParameterLocation",
+            ),
+            (
+                ValidationErrorKind::MissingParameterValue,
+                "missingParameterValue",
+            ),
+            (ValidationErrorKind::InvalidExpression, "invalidExpression"),
+            (ValidationErrorKind::InvalidReference, "invalidReference"),
+            (ValidationErrorKind::InvalidAsyncStep, "invalidAsyncStep"),
+            (
+                ValidationErrorKind::UnsupportedDependencyScope,
+                "unsupportedDependencyScope",
+            ),
+            (ValidationErrorKind::DependencyCycle, "dependencyCycle"),
+            (ValidationErrorKind::InvalidRetryField, "invalidRetryField"),
+            (
+                ValidationErrorKind::InvalidCriterionType,
+                "invalidCriterionType",
+            ),
+            (
+                ValidationErrorKind::InvalidSelectorType,
+                "invalidSelectorType",
+            ),
+            (
+                ValidationErrorKind::UnsupportedOperationPath,
+                "unsupportedOperationPath",
+            ),
+            (ValidationErrorKind::InvalidIdentifier, "invalidIdentifier"),
+            (ValidationErrorKind::UnknownField, "unknownField"),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(kind.name(), expected);
         }
     }
 

@@ -1810,9 +1810,7 @@ workflows:
 /// ac-4a71f: a step `outputs` key that violates the specification's MUST-level
 /// `^[a-zA-Z0-9\.\-_]+$` regular expression reports kind `invalidIdentifier`
 /// over `--json`. This fails if only the `ValidationErrorKind` variant is
-/// added and `crates/arazzo-cli/src/output.rs`'s `validation_error_kind_name`
-/// match is not updated — that function falls through unmapped kinds to
-/// `"unknown"`.
+/// added and the defining crate's exhaustive `name()` mapping is not updated.
 #[test]
 fn validate_json_reports_invalid_identifier_kind_for_bad_outputs_key() {
     let temp = TempDir::new("arazzo-validate-invalid-identifier");
@@ -1857,6 +1855,66 @@ workflows:
         .and_then(Value::as_str)
         .unwrap_or_default()
         .contains("outputs"));
+}
+
+#[test]
+fn validate_json_reports_invalid_selector_type_kind() {
+    let temp = TempDir::new("arazzo-validate-invalid-selector-type");
+    let mut invalid = temp.path().to_path_buf();
+    invalid.push("bad-selector-type.yaml");
+    let content = r#"
+arazzo: 1.1.0
+info:
+  title: Invalid Selector Type
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        outputs:
+          result:
+            context: $response.body
+            selector: '$'
+            type: bogus
+"#;
+    write_file(&invalid, content);
+
+    let invalid_str = invalid.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &invalid_str].as_slice(), None);
+    assert!(!output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or(&Vec::new())
+        .clone();
+    let issue = errors
+        .iter()
+        .find(|item| item.get("kind").and_then(Value::as_str) == Some("invalidSelectorType"))
+        .unwrap_or_else(|| panic!("expected an invalidSelectorType error, got: {errors:?}"));
+    assert!(issue
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .contains("outputs.result.type"));
+
+    for field in ["errors", "warnings"] {
+        if let Some(items) = body.get(field).and_then(Value::as_array) {
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.get("kind").and_then(Value::as_str) != Some("unknown")),
+                "{field} contains an unknown validation kind: {items:?}"
+            );
+        }
+    }
 }
 
 #[test]

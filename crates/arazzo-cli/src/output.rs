@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord, TransportWarning};
 use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
-use arazzo_validate::{Diagnostic, Error as ValidateError, ValidationErrorKind};
+use arazzo_validate::{Diagnostic, Error as ValidateError};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -389,7 +389,7 @@ fn build_validate_warnings(err: &ValidateError) -> Vec<ValidateIssue> {
 fn build_validation_issue(diagnostic: &Diagnostic) -> ValidateIssue {
     ValidateIssue {
         source: "validation".to_string(),
-        kind: Some(validation_error_kind_name(&diagnostic.kind).to_string()),
+        kind: Some(diagnostic.kind.name().to_string()),
         path: if diagnostic.path.is_empty() {
             None
         } else {
@@ -422,28 +422,6 @@ fn build_validate_issues(err: &ValidateError) -> Vec<ValidateIssue> {
             path: None,
             message: message.clone(),
         }],
-    }
-}
-
-fn validation_error_kind_name(kind: &ValidationErrorKind) -> &'static str {
-    match kind {
-        ValidationErrorKind::MissingRequiredField => "missingRequiredField",
-        ValidationErrorKind::DuplicateIdentifier => "duplicateIdentifier",
-        ValidationErrorKind::InvalidStepTarget => "invalidStepTarget",
-        ValidationErrorKind::UnsupportedVersion => "unsupportedVersion",
-        ValidationErrorKind::InvalidParameterLocation => "invalidParameterLocation",
-        ValidationErrorKind::MissingParameterValue => "missingParameterValue",
-        ValidationErrorKind::InvalidExpression => "invalidExpression",
-        ValidationErrorKind::InvalidReference => "invalidReference",
-        ValidationErrorKind::InvalidAsyncStep => "invalidAsyncStep",
-        ValidationErrorKind::UnsupportedDependencyScope => "unsupportedDependencyScope",
-        ValidationErrorKind::DependencyCycle => "dependencyCycle",
-        ValidationErrorKind::InvalidRetryField => "invalidRetryField",
-        ValidationErrorKind::InvalidCriterionType => "invalidCriterionType",
-        ValidationErrorKind::UnsupportedOperationPath => "unsupportedOperationPath",
-        ValidationErrorKind::InvalidIdentifier => "invalidIdentifier",
-        ValidationErrorKind::UnknownField => "unknownField",
-        _ => "unknown",
     }
 }
 
