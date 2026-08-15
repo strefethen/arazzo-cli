@@ -4125,6 +4125,122 @@ fn test_json_failure_completion_and_fail_fast_order() {
     );
 }
 
+#[test]
+fn run_json_rejects_unmet_workflow_dependency_before_http() {
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let requests_ref = Arc::clone(&requests);
+    let server = start_route_server(move |path| {
+        requests_ref
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .push(path.to_string());
+        json_ok_route(path)
+    });
+    let temp = TempDir::new("arazzo-run-workflow-dependency");
+    let path = temp.path().join("run-dependency.arazzo.yaml");
+    let workflows = format!(
+        "{}{}",
+        dependency_test_workflow("root", "/ok", None),
+        dependency_test_workflow("blocked", "/ok", Some("root")),
+    );
+    write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
+
+    let output = run(
+        ["--json", "run", &path.to_string_lossy(), "blocked"].as_slice(),
+        None,
+    );
+    assert!(!output.status.success(), "unmet dependency must fail");
+    let body = stdout_json(&output);
+    assert_run_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED")
+    );
+    assert!(
+        requests
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .is_empty(),
+        "dependency rejection must happen before HTTP"
+    );
+}
+
+#[test]
+fn test_json_without_workflow_dependencies_preserves_document_order() {
+    let server = start_route_server(json_ok_route);
+    let temp = TempDir::new("arazzo-test-document-order");
+    let path = temp.path().join("document-order.arazzo.yaml");
+    let workflows = format!(
+        "{}{}{}",
+        dependency_test_workflow("third", "/ok", None),
+        dependency_test_workflow("first", "/ok", None),
+        dependency_test_workflow("second", "/ok", None),
+    );
+    write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
+
+    let output = run(["--json", "test", &path.to_string_lossy()].as_slice(), None);
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let body = stdout_json(&output);
+    let tests = match body.pointer("/suites/0/tests").and_then(Value::as_array) {
+        Some(tests) => tests,
+        None => panic!("test JSON must include suites[0].tests: {body}"),
+    };
+    let ids: Vec<_> = tests
+        .iter()
+        .filter_map(|test| test.get("workflowId").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["third", "first", "second"]);
+}
+
+#[test]
+fn filtered_workflow_dependency_failure_makes_zero_http_requests() {
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let requests_ref = Arc::clone(&requests);
+    let server = start_route_server(move |path| {
+        requests_ref
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .push(path.to_string());
+        json_ok_route(path)
+    });
+    let temp = TempDir::new("arazzo-filtered-dependency");
+    let path = temp.path().join("filtered-dependency.arazzo.yaml");
+    let workflows = format!(
+        "{}{}",
+        dependency_test_workflow("root", "/ok", None),
+        dependency_test_workflow("blocked", "/ok", Some("root")),
+    );
+    write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
+
+    let output = run(
+        [
+            "--json",
+            "test",
+            &path.to_string_lossy(),
+            "--filter",
+            "blocked",
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(!output.status.success());
+    let body = stdout_json(&output);
+    assert_eq!(body["summary"]["suiteErrors"], 1);
+    assert!(
+        body["suites"][0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("filter excludes required workflow")),
+        "filtered dependency failure must be explicit: {body}"
+    );
+    assert!(
+        requests
+            .lock()
+            .unwrap_or_else(|_| panic!("request recorder lock poisoned"))
+            .is_empty(),
+        "filtered dependency failure must happen before HTTP"
+    );
+}
+
 /// Minimal HTTPS server over rustls 0.23 with a fresh self-signed cert
 /// (mirrors the arazzo-runtime test helper; tiny_http's ssl feature
 /// pins audit-flagged rustls 0.20/ring 0.16, so it is avoided).

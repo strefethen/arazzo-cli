@@ -34,10 +34,10 @@ pub fn classify_workflow_dependency(value: &str) -> WorkflowDependency<'_> {
         return WorkflowDependency::Invalid;
     };
     if source_name.is_empty()
-        || workflow_id.is_empty()
         || !source_name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || !is_source_reference_id(workflow_id)
     {
         return WorkflowDependency::Invalid;
     }
@@ -45,6 +45,39 @@ pub fn classify_workflow_dependency(value: &str) -> WorkflowDependency<'_> {
         source_name,
         workflow_id,
     }
+}
+
+/// Validates the vendored `CHAR` rule used by `source-reference-id`.
+///
+/// The rule permits Unicode characters except `{`, `}`, `"`, and `\\`, with
+/// JSON-style escapes for those characters and for controls. The
+/// source-reference-id itself must contain at least one CHAR token.
+fn is_source_reference_id(value: &str) -> bool {
+    let mut chars = value.chars();
+    let mut token_count = 0;
+    while let Some(ch) = chars.next() {
+        token_count += 1;
+        if ch == '\\' {
+            let Some(escaped) = chars.next() else {
+                return false;
+            };
+            match escaped {
+                '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' => {}
+                'u' => {
+                    if (0..4).any(|_| chars.next().is_none_or(|hex| !hex.is_ascii_hexdigit())) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        } else if !matches!(
+            ch as u32,
+            0x20..=0x21 | 0x23..=0x5b | 0x5d..=0x7a | 0x7c | 0x7e..=0x10ffff
+        ) {
+            return false;
+        }
+    }
+    token_count > 0
 }
 
 #[cfg(test)]
@@ -92,10 +125,24 @@ mod tests {
                 workflow_id: "ready.extra"
             }
         );
+        assert_eq!(
+            classify_workflow_dependency("$sourceDescriptions.shared.ready\\n"),
+            WorkflowDependency::External {
+                source_name: "shared",
+                workflow_id: "ready\\n"
+            }
+        );
         for value in [
             "$sourceDescriptions.shared name.ready",
             "$sourceDescriptions.shared/name.ready",
             "$sourceDescriptions.shared.",
+            "$sourceDescriptions.shared.ready{bad}",
+            "$sourceDescriptions.shared.ready}bad",
+            "$sourceDescriptions.shared.ready\n",
+            "$sourceDescriptions.shared.ready\t",
+            "$sourceDescriptions.shared.ready\\q",
+            "$sourceDescriptions.shared.ready\\u12",
+            "$sourceDescriptions.shared.ready\\",
         ] {
             assert_eq!(
                 classify_workflow_dependency(value),
