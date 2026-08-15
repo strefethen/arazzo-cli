@@ -638,6 +638,74 @@ workflows:
     assert!(combined_text(&dry_run).contains("reference must be a runtime expression"));
 }
 
+#[test]
+fn validate_component_null_action_fields_warn_and_strict_promote() {
+    let temp = TempDir::new("arazzo-component-null-action-fields");
+    let spec = temp.path().join("component-null-action-fields.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: "1.1.0"
+info:
+  title: Component null action fields
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+components:
+  successActions:
+    nullReference: {name: success, type: end, reference: null}
+    nullValue: {name: successValue, type: end, value: null}
+  failureActions:
+    nullReference: {name: failure, type: end, reference: null}
+    nullValue: {name: failureValue, type: end, value: null}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+"#,
+    );
+    let spec_path = spec.to_string_lossy().to_string();
+    let normal = run(["--json", "validate", &spec_path].as_slice(), None);
+    assert!(
+        normal.status.success(),
+        "component unknown fields should warn: {}",
+        combined_text(&normal)
+    );
+    let normal_body = stdout_json(&normal);
+    let warnings = validate_issue_messages(&normal_body, "warnings");
+    assert_eq!(warnings.len(), 4, "body={normal_body}");
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| message.contains("\"reference\""))
+            .count(),
+        2,
+        "body={normal_body}"
+    );
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|message| message.contains("\"value\""))
+            .count(),
+        2,
+        "body={normal_body}"
+    );
+
+    let strict = run(
+        ["--json", "--strict", "validate", &spec_path].as_slice(),
+        None,
+    );
+    assert!(
+        !strict.status.success(),
+        "strict must promote component warnings"
+    );
+    let strict_body = stdout_json(&strict);
+    assert_eq!(validate_issue_messages(&strict_body, "errors").len(), 4);
+    assert!(strict_body.get("warnings").is_none());
+}
+
 /// SHOULD-level identifier document (ac-0379b): a `workflowId`, `stepId`,
 /// and `sourceDescriptions[].name` that each violate `^[A-Za-z0-9_\-]+$`.
 /// Written to a temp file rather than `testdata/` — the golden spec

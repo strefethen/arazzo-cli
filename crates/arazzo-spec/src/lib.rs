@@ -915,8 +915,7 @@ fn deserialize_action_reference<'de, D>(deserializer: D) -> Result<String, D::Er
 where
     D: Deserializer<'de>,
 {
-    Option::<String>::deserialize(deserializer)?
-        .ok_or_else(|| serde::de::Error::custom("reference must be a runtime expression, not null"))
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl OnAction {
@@ -1004,17 +1003,6 @@ mod tests {
             .unwrap_or_else(|err| panic!("deserializing explicit empty fields: {err}"));
         assert!(explicit_empty.reference.is_empty());
         assert!(explicit_empty.value.is_none());
-    }
-
-    #[test]
-    fn on_action_reference_null_is_rejected() {
-        let error = match serde_yaml_ng::from_str::<OnAction>("reference: null\n") {
-            Ok(_) => panic!("null is not a Runtime Expression"),
-            Err(error) => error,
-        };
-        assert!(error
-            .to_string()
-            .contains("reference must be a runtime expression"));
     }
 
     #[test]

@@ -272,12 +272,26 @@ fn check_raw_action_boundary(
     let reference = raw_mapping_field(action, "reference");
     let value = raw_mapping_field(action, "value");
     if component
-        && matches!(reference, Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty())
+        && matches!(
+            reference,
+            Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty()
+        )
     {
+        raw_unknown_action_field(path, "reference", diagnostics);
+    }
+    if component && matches!(reference, Some(serde_yaml_ng::Value::Null)) {
         raw_unknown_action_field(path, "reference", diagnostics);
     }
     if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
         raw_unknown_action_field(path, "value", diagnostics);
+    }
+    if !component && matches!(reference, Some(serde_yaml_ng::Value::Null)) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidReference,
+            path: path.to_string(),
+            message: "reference must be a runtime expression and cannot be null".to_string(),
+        });
     }
     if !component
         && matches!(value, Some(serde_yaml_ng::Value::Null))
@@ -4199,9 +4213,11 @@ sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
 components:
   successActions:
     emptyReference: {name: emptyReference, type: end, reference: ''}
+    nullReference: {name: nullReference, type: end, reference: null}
     nullValue: {name: nullValue, type: end, value: null}
   failureActions:
     emptyReferenceAndNullValue: {name: emptyReferenceAndNullValue, type: end, reference: '', value: null}
+    nullReference: {name: nullReference, type: end, reference: null}
 workflows:
   - workflowId: wf
     steps:
@@ -4233,7 +4249,7 @@ workflows:
             .iter()
             .filter(|diagnostic| diagnostic.message.contains("\"reference\""))
             .collect();
-        assert_eq!(reference_warnings.len(), 2, "diagnostics={diagnostics:?}");
+        assert_eq!(reference_warnings.len(), 4, "diagnostics={diagnostics:?}");
         assert_eq!(
             reference_warnings
                 .iter()
@@ -4241,7 +4257,9 @@ workflows:
                 .collect::<Vec<_>>(),
             vec![
                 "components.successActions.emptyReference",
+                "components.successActions.nullReference",
                 "components.failureActions.emptyReferenceAndNullValue",
+                "components.failureActions.nullReference",
             ]
         );
         assert!(diagnostics
