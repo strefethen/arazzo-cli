@@ -915,7 +915,10 @@ fn deserialize_action_reference<'de, D>(deserializer: D) -> Result<String, D::Er
 where
     D: Deserializer<'de>,
 {
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+    match serde_yaml_ng::Value::deserialize(deserializer)? {
+        serde_yaml_ng::Value::String(reference) => Ok(reference),
+        _ => Ok(String::new()),
+    }
 }
 
 impl OnAction {

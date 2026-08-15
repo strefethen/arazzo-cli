@@ -271,26 +271,23 @@ fn check_raw_action_boundary(
 ) {
     let reference = raw_mapping_field(action, "reference");
     let value = raw_mapping_field(action, "value");
+    let reference_is_non_string =
+        reference.is_some_and(|reference| !matches!(reference, serde_yaml_ng::Value::String(_)));
     if component
-        && matches!(
-            reference,
-            Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty()
-        )
+        && (reference_is_non_string
+            || matches!(reference, Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty()))
     {
-        raw_unknown_action_field(path, "reference", diagnostics);
-    }
-    if component && matches!(reference, Some(serde_yaml_ng::Value::Null)) {
         raw_unknown_action_field(path, "reference", diagnostics);
     }
     if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
         raw_unknown_action_field(path, "value", diagnostics);
     }
-    if !component && matches!(reference, Some(serde_yaml_ng::Value::Null)) {
+    if !component && reference_is_non_string {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::InvalidReference,
             path: path.to_string(),
-            message: "reference must be a runtime expression and cannot be null".to_string(),
+            message: "reference must be a runtime expression string".to_string(),
         });
     }
     if !component
@@ -4265,6 +4262,74 @@ workflows:
         assert!(diagnostics
             .iter()
             .all(|diagnostic| { diagnostic.kind == ValidationErrorKind::UnknownField }));
+    }
+
+    #[test]
+    fn every_component_action_reference_shape_warns_at_its_object_position() {
+        let shapes = [
+            ("nullReference", "null"),
+            ("emptyReference", "''"),
+            ("stringReference", "$components.successActions.target"),
+            ("numberReference", "42"),
+            ("sequenceReference", "[bad, shape]"),
+            ("mappingReference", "{bad: shape}"),
+        ];
+        for (name, shape) in shapes {
+            for section in ["successActions", "failureActions"] {
+                let yaml = format!(
+                    r#"arazzo: "1.1.0"
+info: {{title: Test, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+components:
+  {section}:
+    {name}: {{name: action, type: end, reference: {shape}}}
+workflows:
+  - workflowId: wf
+    steps: [{{stepId: s1, operationPath: /s1}}]
+"#
+                );
+                let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        panic!("component {section} reference shape {name} must warn: {err}")
+                    }
+                };
+                let warnings: Vec<_> = diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.message.contains("\"reference\""))
+                    .collect();
+                assert_eq!(
+                    warnings.len(),
+                    1,
+                    "shape={name}, section={section}, yaml={yaml}, diagnostics={diagnostics:?}"
+                );
+                assert_eq!(warnings[0].path, format!("components.{section}.{name}"));
+                assert_eq!(warnings[0].severity, Severity::Warning);
+            }
+        }
+    }
+
+    #[test]
+    fn structured_action_references_fail_before_execution() {
+        for shape in ["null", "42", "[bad]", "{bad: shape}"] {
+            let yaml = format!(
+                r#"arazzo: "1.1.0"
+info: {{title: Test, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        onSuccess: [{{reference: {shape}}}]
+"#
+            );
+            let err = expect_parse_error(yaml.as_bytes());
+            assert!(
+                format!("{err}").contains("reference must be a runtime expression string"),
+                "shape={shape}, error={err}"
+            );
+        }
     }
 
     #[test]

@@ -706,6 +706,64 @@ workflows:
     assert!(strict_body.get("warnings").is_none());
 }
 
+#[test]
+fn validate_component_reference_shapes_warn_and_strict_promote() {
+    let temp = TempDir::new("arazzo-component-reference-shapes");
+    let shapes = [
+        ("nullReference", "null"),
+        ("emptyReference", "''"),
+        ("stringReference", "$components.successActions.target"),
+        ("numberReference", "42"),
+        ("sequenceReference", "[bad, shape]"),
+        ("mappingReference", "{bad: shape}"),
+    ];
+    for section in ["successActions", "failureActions"] {
+        for (name, shape) in shapes {
+            let spec = temp.path().join(format!("{section}-{name}.arazzo.yaml"));
+            write_file(
+                &spec,
+                &format!(
+                    r#"arazzo: "1.1.0"
+info: {{title: Component reference shape, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+components:
+  {section}:
+    {name}: {{name: action, type: end, reference: {shape}}}
+workflows:
+  - workflowId: wf
+    steps: [{{stepId: s1, operationPath: /s1}}]
+"#
+                ),
+            );
+            let spec_path = spec.to_string_lossy().to_string();
+            let normal = run(["--json", "validate", &spec_path].as_slice(), None);
+            assert!(
+                normal.status.success(),
+                "{section}/{name}: {}",
+                combined_text(&normal)
+            );
+            let normal_body = stdout_json(&normal);
+            let warnings = validate_issue_messages(&normal_body, "warnings");
+            assert_eq!(warnings.len(), 1, "{section}/{name}: body={normal_body}");
+            assert!(warnings[0].contains("\"reference\""));
+
+            let strict = run(
+                ["--json", "--strict", "validate", &spec_path].as_slice(),
+                None,
+            );
+            assert!(
+                !strict.status.success(),
+                "{section}/{name} must strict-promote"
+            );
+            let strict_body = stdout_json(&strict);
+            let errors = validate_issue_messages(&strict_body, "errors");
+            assert_eq!(errors.len(), 1, "{section}/{name}: body={strict_body}");
+            assert!(errors[0].contains("\"reference\""));
+            assert!(strict_body.get("warnings").is_none());
+        }
+    }
+}
+
 /// SHOULD-level identifier document (ac-0379b): a `workflowId`, `stepId`,
 /// and `sourceDescriptions[].name` that each violate `^[A-Za-z0-9_\-]+$`.
 /// Written to a temp file rather than `testdata/` — the golden spec
