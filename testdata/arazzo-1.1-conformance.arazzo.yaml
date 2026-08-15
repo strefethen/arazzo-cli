@@ -4,8 +4,8 @@ info:
   version: "1.0.0"
   description: Compact release corpus for the final v0.4.0 conformance guard.
 sourceDescriptions:
-  - name: api
-    url: http://127.0.0.1:9
+  - name: petstore
+    url: ./petstore.openapi.yaml
     type: openapi
 components:
   successActions:
@@ -18,7 +18,7 @@ workflows:
     summary: Apply a typed RFC 9535 JSONPath replacement
     steps:
       - stepId: replace
-        operationPath: POST /replace
+        operationId: createPet
         requestBody:
           contentType: application/json
           payload:
@@ -40,17 +40,21 @@ workflows:
     summary: Follow a specification-form reusable goto action
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: listPets
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - reference: $components.successActions.gotoS3
       - stepId: s2
-        operationPath: /s2
+        operationId: createPet
         successCriteria:
           - condition: $statusCode == 200
       - stepId: s3
-        operationPath: /s3
+        operationId: getPet
+        parameters:
+          - name: petId
+            in: path
+            value: 42
         successCriteria:
           - condition: $statusCode == 200
 
@@ -60,7 +64,7 @@ workflows:
       - prerequisite
     steps:
       - stepId: dependent-step
-        operationPath: /dependent
+        operationId: createPet
         successCriteria:
           - condition: $statusCode == 200
 
@@ -68,6 +72,10 @@ workflows:
     summary: Complete before the dependent workflow
     steps:
       - stepId: prerequisite-step
-        operationPath: /prerequisite
+        operationId: deletePet
+        parameters:
+          - name: petId
+            in: path
+            value: 42
         successCriteria:
           - condition: $statusCode == 200

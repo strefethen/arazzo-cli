@@ -108,12 +108,11 @@ fn start_route_server() -> RouteServer {
         while !stop_flag.load(Ordering::Relaxed) {
             match server.recv_timeout(Duration::from_millis(20)) {
                 Ok(Some(mut request)) => {
-                    let path = request
-                        .url()
-                        .split('?')
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
+                    let path = format!(
+                        "{} {}",
+                        request.method().as_str(),
+                        request.url().split('?').next().unwrap_or_default()
+                    );
                     observed
                         .lock()
                         .unwrap_or_else(|_| panic!("request path lock"))
@@ -141,10 +140,15 @@ fn hermetic_fixture(server: &RouteServer, dir: &Path) -> PathBuf {
     let source = fixture_path();
     let raw = fs::read_to_string(&source)
         .unwrap_or_else(|err| panic!("reading {}: {err}", source.display()));
-    let rewritten = raw.replace("http://127.0.0.1:9", &server.base_url);
     let destination = dir.join("arazzo-1.1-conformance.arazzo.yaml");
-    fs::write(&destination, rewritten)
+    fs::write(&destination, raw)
         .unwrap_or_else(|err| panic!("writing {}: {err}", destination.display()));
+    let openapi_source = repo_root().join("testdata/petstore.openapi.yaml");
+    let openapi = fs::read_to_string(&openapi_source)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", openapi_source.display()));
+    let openapi = openapi.replace("https://petstore.example.com/v1", &server.base_url);
+    fs::write(dir.join("petstore.openapi.yaml"), openapi)
+        .unwrap_or_else(|err| panic!("writing temporary OpenAPI source: {err}"));
     destination
 }
 
@@ -215,7 +219,7 @@ fn action_reference_and_workflow_dependency_guard_use_hermetic_server() {
     assert!(action.status.success(), "{}", combined_text(&action));
     assert_eq!(
         request_paths(&server),
-        ["/s1", "/s3"],
+        ["GET /pets", "GET /pets/42"],
         "action reference must skip s2"
     );
 
@@ -261,6 +265,12 @@ fn action_reference_and_workflow_dependency_guard_use_hermetic_server() {
     );
     assert_eq!(
         request_paths(&server),
-        ["/replace", "/s1", "/s3", "/prerequisite", "/dependent"]
+        [
+            "POST /pets",
+            "GET /pets",
+            "GET /pets/42",
+            "DELETE /pets/42",
+            "POST /pets"
+        ]
     );
 }

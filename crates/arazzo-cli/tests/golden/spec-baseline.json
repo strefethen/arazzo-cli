@@ -945,12 +945,12 @@
             {
               "method": "GET",
               "stepId": "s1",
-              "url": "http://127.0.0.1:9/s1"
+              "url": "https://petstore.example.com/v1/pets"
             },
             {
               "method": "GET",
               "stepId": "s3",
-              "url": "http://127.0.0.1:9/s3"
+              "url": "https://petstore.example.com/v1/pets/42"
             }
           ]
         },
@@ -962,9 +962,9 @@
           "outcome": "dryRun",
           "steps": [
             {
-              "method": "GET",
+              "method": "DELETE",
               "stepId": "prerequisite-step",
-              "url": "http://127.0.0.1:9/prerequisite"
+              "url": "https://petstore.example.com/v1/pets/42"
             }
           ]
         },
@@ -974,7 +974,7 @@
             {
               "method": "POST",
               "stepId": "replace",
-              "url": "http://127.0.0.1:9/replace"
+              "url": "https://petstore.example.com/v1/pets"
             }
           ]
         }
