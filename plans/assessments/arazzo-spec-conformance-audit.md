@@ -571,10 +571,11 @@ keys against `^[a-zA-Z0-9\.\-_]+$`, via an anchored byte-class predicate (no
 `workflowId`, `stepId`, `sourceDescriptions[].name` against `[A-Za-z0-9_\-]+`
 — as warnings, promoted to errors only under the single `--strict` flag.
 
-**F7 is closed.** `d6dd3ac` rejects `successCriteria: []` at the `parse_bytes`
-raw-YAML site (an absent key stays valid; the typed model cannot see the
-distinction). Known escape: `successCriteria:` with a null value still passes
-— ticketed as ac-d0f42.
+**F7 is closed.** The `parse_bytes` raw-YAML site rejects both
+`successCriteria: []` and the bare `successCriteria:` null spelling (an absent
+key stays valid; the typed model cannot see the distinction). Explicit `null`
+and `~` spellings remain rejected during typed parsing. The bare-null escape is
+closed under ac-d0f42.
 
 **F8 is closed.** `8461693` (ac-85c4a) retains all leftover fields at every
 `x-` capture site and warns on unknown non-`x-` keys (kind `unknownField`,

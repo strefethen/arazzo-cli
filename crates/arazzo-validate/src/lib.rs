@@ -1049,8 +1049,14 @@ fn classify_step_dependency(value: &str) -> StepDependency<'_> {
 /// the only place the distinction survives, and is why the call lives in
 /// `parse_bytes_with_diagnostics` rather than `collect_diagnostics`.
 ///
+/// The implicit null spelling (`successCriteria:` with no value) is a provided
+/// field and is represented as `Value::Null` by the raw YAML parse, so it must
+/// produce the same diagnostic as an empty sequence. Explicit `null` and `~`
+/// spellings currently fail earlier during typed parsing with a `parseYaml`
+/// type error; the null arm remains correct if that serde behavior changes.
+///
 /// Deliberately tolerant of shapes it does not recognize (non-mapping root,
-/// missing `workflows`/`steps`, non-sequence `successCriteria`): those are
+/// missing `workflows`/`steps`, non-null non-sequence `successCriteria`): those are
 /// either not-yet-parseable YAML (already rejected earlier in the pipeline
 /// with a clearer error) or someone else's diagnostic to raise, not this
 /// check's.
@@ -1100,11 +1106,14 @@ fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
             } else {
                 format!("{wf_path} > step \"{step_id}\"")
             };
-            let is_empty_sequence = step_mapping
-                .get("successCriteria")
-                .and_then(serde_yaml_ng::Value::as_sequence)
-                .is_some_and(|criteria| criteria.is_empty());
-            if is_empty_sequence {
+            let provided_without_criteria = match step_mapping.get("successCriteria") {
+                Some(serde_yaml_ng::Value::Null) => true,
+                Some(value) => value
+                    .as_sequence()
+                    .is_some_and(|criteria| criteria.is_empty()),
+                None => false,
+            };
+            if provided_without_criteria {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     kind: ValidationErrorKind::MissingRequiredField,
@@ -5870,7 +5879,8 @@ workflows:
         );
     }
 
-    /// `successCriteria` absent, populated, and empty, exercised through
+    /// `successCriteria` absent, populated, bare-null, explicit-null, tilde,
+    /// and empty, exercised through
     /// `parse_bytes` — the only entry point that can see the distinction
     /// between an absent key and an explicit `[]`. `Step.success_criteria` is
     /// `#[serde(default, skip_serializing_if = "Vec::is_empty")]`, so both
@@ -5909,6 +5919,31 @@ workflows:
             spec_with("        successCriteria:\n          - condition: $statusCode == 200");
         if let Err(err) = parse_bytes(populated.as_bytes()) {
             panic!("populated successCriteria must validate, got: {err}");
+        }
+
+        // Bare null: a present key with no value is still provided and must
+        // contain at least one Criterion Object.
+        let bare_null = spec_with("        successCriteria:");
+        let Err(Error::Validation(report)) = parse_bytes(bare_null.as_bytes()) else {
+            panic!("expected bare successCriteria: to fail validation");
+        };
+        assert!(
+            report.errors.iter().any(|item| {
+                item.kind == ValidationErrorKind::MissingRequiredField
+                    && item.path.ends_with(".successCriteria")
+            }),
+            "errors={:?}",
+            report.errors
+        );
+
+        // Explicit null spellings fail during typed parsing and must remain
+        // rejected even though the raw check handles the implicit null above.
+        for spelling in ["null", "~"] {
+            let explicit_null = spec_with(&format!("        successCriteria: {spelling}"));
+            assert!(
+                parse_bytes(explicit_null.as_bytes()).is_err(),
+                "expected successCriteria: {spelling} to be rejected"
+            );
         }
 
         // Empty: Step Object — "If successCriteria is provided, it MUST
