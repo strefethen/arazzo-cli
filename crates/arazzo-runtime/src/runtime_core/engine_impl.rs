@@ -336,8 +336,6 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
-                let retry_trace = action.trace.clone();
-
                 match action.flow {
                     FlowDecision::Done => {
                         break;
@@ -360,6 +358,7 @@ impl Engine {
                         step_idx: retry_idx,
                         retry_site,
                         retry_limit,
+                        delay_seconds,
                         reference,
                     } => {
                         // Retry targets the current step; find it in our filtered set.
@@ -388,7 +387,7 @@ impl Engine {
                                     step_id: retry_step.step_id.clone(),
                                     attempt: *value,
                                     max_attempts: retry_limit,
-                                    delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
+                                    delay_seconds,
                                 },
                             )
                             .await;
@@ -585,8 +584,6 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
-                let retry_trace = action.trace.clone();
-
                 match action.flow {
                     FlowDecision::Done => {
                         completed = true;
@@ -599,6 +596,7 @@ impl Engine {
                         step_idx: idx,
                         retry_site,
                         retry_limit,
+                        delay_seconds,
                         reference,
                     } => {
                         if let Some(reference) = reference {
@@ -640,7 +638,7 @@ impl Engine {
                                 step_id: retry_step.step_id.clone(),
                                 attempt: *value,
                                 max_attempts: retry_limit,
-                                delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
+                                delay_seconds,
                             },
                         )
                         .await;

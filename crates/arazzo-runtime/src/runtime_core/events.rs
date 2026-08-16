@@ -184,7 +184,7 @@ pub struct TraceDecision {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_workflow_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_after_seconds: Option<u64>,
+    pub retry_after_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_limit: Option<u64>,
 }
@@ -418,7 +418,7 @@ pub enum ObserverEvent {
         step_id: String,
         attempt: u64,
         max_attempts: u64,
-        delay_seconds: u64,
+        delay_seconds: f64,
     },
 
     /// Step completed (success or failure).
@@ -475,7 +475,7 @@ mod tests {
             step_id: "step".to_string(),
             attempt: u64::MAX,
             max_attempts: u64::MAX,
-            delay_seconds: 0,
+            delay_seconds: 0.0,
         };
 
         let ObserverEvent::RetryScheduled {
@@ -491,5 +491,17 @@ mod tests {
         let json = json!({ "attempt": attempt, "maxAttempts": max_attempts });
         assert_eq!(json["attempt"].as_u64(), Some(u64::MAX));
         assert_eq!(json["maxAttempts"].as_u64(), Some(u64::MAX));
+    }
+
+    #[test]
+    fn trace_retry_after_accepts_integer_v1_wire_values_as_decimal_seconds() {
+        let trace: TraceDecision = serde_json::from_value(json!({
+            "path": "retry",
+            "retryAfterSeconds": 1,
+            "retryLimit": 2
+        }))
+        .unwrap_or_else(|err| panic!("trace v1 integer retryAfter must deserialize: {err}"));
+        assert_eq!(trace.retry_after_seconds, Some(1.0));
+        assert_eq!(trace.retry_limit, Some(2));
     }
 }

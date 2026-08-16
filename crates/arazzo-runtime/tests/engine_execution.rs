@@ -38,6 +38,31 @@ impl ExecutionObserver for RetryCancellationObserver {
     }
 }
 
+#[derive(Default)]
+struct RetryDelayObserver {
+    delays: Mutex<Vec<f64>>,
+}
+
+impl RetryDelayObserver {
+    fn delays(&self) -> Vec<f64> {
+        match self.delays.lock() {
+            Ok(delays) => delays.clone(),
+            Err(_) => panic!("reading retry-delay observer events"),
+        }
+    }
+}
+
+impl ExecutionObserver for RetryDelayObserver {
+    fn on_event(&self, event: &ObserverEvent) {
+        if let ObserverEvent::RetryScheduled { delay_seconds, .. } = event {
+            match self.delays.lock() {
+                Ok(mut delays) => delays.push(*delay_seconds),
+                Err(_) => panic!("recording retry-delay observer event"),
+            }
+        }
+    }
+}
+
 // ── Basic execution tests ─────────────────────────────────────────
 
 #[tokio::test]
@@ -1445,6 +1470,186 @@ async fn arazzo_11_omitted_retry_limit_stays_absent_in_trace_and_uses_one_observ
         .contains(&"RetryScheduled:retry-step:1/1".to_string()));
 }
 
+/// Configured retryAfter remains in the trace while RetryScheduled reports the
+/// effective HTTP Retry-After override. Header zero must schedule immediately.
+#[tokio::test]
+async fn retry_after_trace_and_observer_keep_configured_and_effective_delays_distinct() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        let attempt = calls_ref.fetch_add(1, Ordering::Relaxed);
+        if attempt == 0 {
+            return MockHttpResponse {
+                status: 503,
+                headers: BTreeMap::from([("Retry-After".to_string(), "0".to_string())]),
+                body: String::new(),
+            };
+        }
+        MockHttpResponse::empty(200)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-after-observer".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![OnAction {
+                type_: Some(ActionType::Retry),
+                retry_after: 0.25,
+                retry_limit: Some(1),
+                ..OnAction::default()
+            }],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(RetryDelayObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building retry-after observer engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("retry-after-observer", BTreeMap::new())
+        .await;
+    assert!(
+        result.outputs.is_ok(),
+        "Retry-After: 0 must retry without waiting"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        result.trace_steps()[0].decision.retry_after_seconds,
+        Some(0.25),
+        "trace retains the configured Arazzo decimal"
+    );
+    assert_eq!(
+        observer.delays(),
+        vec![0.0],
+        "observer reports the effective header-overridden delay"
+    );
+}
+
+/// A finite but unrepresentable direct-model delay is unused after exhaustion,
+/// so ac-f2160 fallthrough stays visible and no retry is scheduled.
+#[tokio::test]
+async fn exhausted_retry_does_not_convert_or_schedule_an_unused_finite_overflow_delay() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(503)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "exhausted-overflow".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    type_: Some(ActionType::Retry),
+                    retry_after: f64::MAX,
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(RetryDelayObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building exhausted-overflow engine: {err}"),
+    };
+    let err = match engine
+        .execute_collect("exhausted-overflow", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("later end action must fail the workflow"),
+        Err(err) => err,
+    };
+    assert_ne!(err.kind, RuntimeErrorKind::InputValidation);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(observer.delays().is_empty());
+}
+
+/// Invalid typed retryAfter values fail before the exhausted-retry fallthrough;
+/// only finite overflow is unused after exhaustion.
+#[tokio::test]
+async fn invalid_retry_after_is_rejected_before_exhausted_retry_fallthrough() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(503)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "invalid-exhausted-retry".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    type_: Some(ActionType::Retry),
+                    retry_after: f64::NAN,
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(RetryDelayObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building invalid exhausted-retry engine: {err}"),
+    };
+    let err = match engine
+        .execute_collect("invalid-exhausted-retry", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("invalid retryAfter must fail before the later end action"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::InputValidation);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(
+        observer.delays().is_empty(),
+        "invalid retryAfter must not schedule a retry"
+    );
+}
+
 #[tokio::test]
 async fn arazzo_11_later_action_errors_do_not_become_retry_exhaustion() {
     let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
@@ -1578,7 +1783,7 @@ async fn arazzo_11_later_retry_delay_timeout_does_not_resume_action_scanning() {
                 OnAction {
                     name: "delayed-retry-second".to_string(),
                     type_: Some(ActionType::Retry),
-                    retry_after: 2,
+                    retry_after: 2.0,
                     retry_limit: Some(1),
                     ..OnAction::default()
                 },
@@ -1636,7 +1841,7 @@ async fn arazzo_11_later_retry_delay_cancellation_does_not_resume_action_scannin
                 OnAction {
                     name: "delayed-retry-second".to_string(),
                     type_: Some(ActionType::Retry),
-                    retry_after: 1,
+                    retry_after: 1.0,
                     retry_limit: Some(1),
                     ..OnAction::default()
                 },
@@ -1714,7 +1919,7 @@ async fn execute_retry_with_delay() {
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
-                retry_after: 1,
+                retry_after: 1.0,
                 ..OnAction::default()
             }],
             ..Step::default()
@@ -1752,7 +1957,7 @@ async fn execute_retry_delay_honors_execution_timeout() {
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
-                retry_after: 2,
+                retry_after: 2.0,
                 ..OnAction::default()
             }],
             ..Step::default()

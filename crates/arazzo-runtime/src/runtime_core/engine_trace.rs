@@ -159,7 +159,7 @@ impl Engine {
                 Value::String(action.workflow_id.clone()),
             );
         }
-        if action.retry_after != 0 {
+        if action.retry_after.is_finite() && action.retry_after > 0.0 {
             locals.insert("actionRetryAfter".to_string(), json!(action.retry_after));
         }
         if let Some(rl) = action.retry_limit {
@@ -250,6 +250,7 @@ impl Engine {
         action: &OnAction,
         current_retry_count: u64,
         retry_limit_resolved: u64,
+        retry_delay_seconds: f64,
     ) -> Result<(), RuntimeError> {
         let mut locals = BTreeMap::new();
         let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
@@ -262,6 +263,7 @@ impl Engine {
             retry_limit_resolved,
             action.retry_after,
         );
+        locals.insert("retryDelaySeconds".to_string(), json!(retry_delay_seconds));
         if let Some(response) = debug.response {
             insert_response_locals(&mut locals, response);
         }
@@ -613,7 +615,7 @@ pub(super) fn insert_retry_locals(
     stage: &str,
     current_retry_count: u64,
     retry_limit_resolved: u64,
-    retry_after: u64,
+    retry_after: f64,
 ) {
     locals.insert("actionType".to_string(), Value::String("retry".to_string()));
     locals.insert("retryStage".to_string(), Value::String(stage.to_string()));

@@ -924,9 +924,117 @@ workflows:
     assert_eq!(step.on_success[0].action_type(), ActionType::End);
     assert_eq!(step.on_success[0].workflow_id, "");
     assert_eq!(step.on_success[0].step_id, "");
-    assert_eq!(step.on_success[0].retry_after, 0);
+    assert_eq!(step.on_success[0].retry_after, 0.0);
     assert_eq!(step.on_success[0].retry_limit, None);
     assert!(step.on_success[0].criteria.is_empty());
+}
+
+/// Failure Action Object `retryAfter` is a non-negative decimal. Both wire
+/// formats must preserve fractional values while the zero default stays
+/// omitted on serialization.
+#[test]
+fn retry_after_decimal_roundtrips_without_truncation() {
+    for (format, retry_after, expected, should_serialize) in [
+        ("yaml", None, 0.0, false),
+        ("yaml", Some("0"), 0.0, false),
+        ("yaml", Some("1"), 1.0, true),
+        ("yaml", Some("0.25"), 0.25, true),
+        ("yaml", Some("1.75"), 1.75, true),
+        ("json", None, 0.0, false),
+        ("json", Some("0"), 0.0, false),
+        ("json", Some("1"), 1.0, true),
+        ("json", Some("0.25"), 0.25, true),
+        ("json", Some("1.75"), 1.75, true),
+    ] {
+        let raw = if format == "yaml" {
+            let retry_after = retry_after.map_or_else(String::new, |value| {
+                format!("\n            retryAfter: {value}")
+            });
+            format!(
+                r#"arazzo: "1.1.0"
+info: {{title: Retry After, version: "1"}}
+sourceDescriptions: [{{name: api, url: https://example.com/openapi.yaml, type: openapi}}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        onFailure:
+          - name: retry
+            type: retry{retry_after}
+"#
+            )
+        } else {
+            let retry_after =
+                retry_after.map_or_else(String::new, |value| format!(r#","retryAfter":{value}"#));
+            format!(
+                r#"{{"arazzo":"1.1.0","info":{{"title":"Retry After","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com/openapi.yaml","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"call","operationPath":"/get","onFailure":[{{"name":"retry","type":"retry"{retry_after}}}]}}]}}]}}"#
+            )
+        };
+
+        let spec = parse_spec(
+            raw.as_bytes(),
+            &format!("{format} retryAfter={retry_after:?}"),
+        );
+        let action = &spec.workflows[0].steps[0].on_failure[0];
+        assert_eq!(action.retry_after, expected, "format={format} input={raw}");
+
+        let serialized = if format == "yaml" {
+            serialize_spec(&spec, &format!("{format} retryAfter={retry_after:?}"))
+        } else {
+            serde_json::to_string(&spec).unwrap_or_else(|err| {
+                panic!("serializing {format} retryAfter={retry_after:?}: {err}")
+            })
+        };
+        if format == "yaml" {
+            let wire = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized)
+                .unwrap_or_else(|err| panic!("reparsing serialized {format} action: {err}"));
+            let action = wire["workflows"][0]["steps"][0]["onFailure"][0]
+                .as_mapping()
+                .unwrap_or_else(|| panic!("serialized action must be a mapping: {serialized}"));
+            assert_eq!(
+                action.contains_key("retryAfter"),
+                should_serialize,
+                "format={format} input={raw} serialized={serialized}"
+            );
+            if should_serialize {
+                assert_eq!(
+                    action
+                        .get("retryAfter")
+                        .and_then(serde_yaml_ng::Value::as_f64),
+                    Some(expected),
+                    "format={format} input={raw} serialized={serialized}"
+                );
+            }
+        } else {
+            let wire = serde_json::from_str::<serde_json::Value>(&serialized)
+                .unwrap_or_else(|err| panic!("reparsing serialized {format} action: {err}"));
+            let action = &wire["workflows"][0]["steps"][0]["onFailure"][0];
+            assert_eq!(
+                action.get("retryAfter").is_some(),
+                should_serialize,
+                "format={format} input={raw} serialized={serialized}"
+            );
+            if should_serialize {
+                assert_eq!(
+                    action.get("retryAfter").and_then(serde_json::Value::as_f64),
+                    Some(expected),
+                    "format={format} input={raw} serialized={serialized}"
+                );
+            }
+        }
+
+        let reparsed = if format == "yaml" {
+            parse_spec(serialized.as_bytes(), "retryAfter YAML reserialized model")
+        } else {
+            serde_json::from_str::<ArazzoSpec>(&serialized)
+                .unwrap_or_else(|err| panic!("reparsing JSON retryAfter model: {err}"))
+        };
+        assert_eq!(
+            reparsed.workflows[0].steps[0].on_failure[0].retry_after, expected,
+            "format={format} input={raw} serialized={serialized}"
+        );
+    }
 }
 
 #[test]

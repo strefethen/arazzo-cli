@@ -2,6 +2,23 @@
 
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
+// The conformance manifest's source scanner needs top-level test functions.
+// Delegate into the exhaustive evaluator tests below without duplicating them.
+#[cfg(test)]
+#[test]
+fn conformance_simple_string_comparison_positive_evidence() {
+    tests::simple_string_comparisons_are_case_insensitive_for_all_normative_operators();
+}
+
+#[cfg(test)]
+#[test]
+fn conformance_simple_string_comparison_negative_evidence() {
+    tests::simple_non_string_comparisons_preserve_existing_semantics();
+    tests::evaluate_condition_contains_matches_and_in();
+    tests::compare_ordered_matches_go_rules();
+    tests::json_path_filters_remain_case_sensitive_for_equality_and_ordering();
+}
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -567,32 +584,32 @@ impl ExpressionEvaluator {
             "==" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                compare_values(&left, &rv)
+                compare_simple_values(&left, &rv)
             }
             "!=" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                !compare_values(&left, &rv)
+                !compare_simple_values(&left, &rv)
             }
             ">" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                compare_ordered(&left, &rv).is_gt()
+                compare_simple_ordered(&left, &rv).is_gt()
             }
             "<" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                compare_ordered(&left, &rv).is_lt()
+                compare_simple_ordered(&left, &rv).is_lt()
             }
             ">=" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                compare_ordered(&left, &rv).is_ge()
+                compare_simple_ordered(&left, &rv).is_ge()
             }
             "<=" => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                compare_ordered(&left, &rv).is_le()
+                compare_simple_ordered(&left, &rv).is_le()
             }
             " contains " => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
@@ -941,6 +958,16 @@ fn compare_values(a: &Value, b: &Value) -> bool {
     to_string_value(a) == to_string_value(b)
 }
 
+/// Simple Criterion string comparisons use Unicode lowercase normalization.
+/// This is deliberately separate from the shared helpers: JSONPath filters
+/// and the legacy `in` operator retain their existing byte-sensitive behavior.
+fn compare_simple_values(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::String(lhs), Value::String(rhs)) => lhs.to_lowercase() == rhs.to_lowercase(),
+        _ => compare_values(a, b),
+    }
+}
+
 /// Approximate f64 equality using a scaled epsilon. Handles the common case
 /// where two JSON numbers representing the same value may differ slightly
 /// due to serialization round-trips.
@@ -968,6 +995,15 @@ fn compare_ordered(a: &Value, b: &Value) -> Ordering {
     let lhs = to_string_value(a);
     let rhs = to_string_value(b);
     lhs.cmp(&rhs)
+}
+
+/// Ordered Simple Criterion comparisons follow the same case-insensitive
+/// string contract without changing JSONPath's shared ordering helper.
+fn compare_simple_ordered(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::String(lhs), Value::String(rhs)) => lhs.to_lowercase().cmp(&rhs.to_lowercase()),
+        _ => compare_ordered(a, b),
+    }
 }
 
 fn to_f64(value: &Value) -> Option<f64> {
@@ -1707,8 +1743,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator,
-        SourceDescriptionContext,
+        compare_ordered, compare_simple_ordered, compare_simple_values, compare_values,
+        parse_value, EvalContext, ExpressionEvaluator, SourceDescriptionContext,
     };
     use proptest::prelude::*;
     use serde_json::{json, Value};
@@ -1891,6 +1927,55 @@ mod tests {
         assert!(!eval.evaluate_condition("$statusCode == 500"));
     }
 
+    /// Arazzo 1.1.0 §5.8.11.2 and §5.8.11.4.1: the six normative Simple
+    /// comparison operators normalize string operands case-insensitively.
+    #[test]
+    pub(super) fn simple_string_comparisons_are_case_insensitive_for_all_normative_operators() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("ascii".to_string(), json!("Alpha"));
+        ctx.inputs.insert("unicode".to_string(), json!("Ångström"));
+        let eval = ExpressionEvaluator::new(ctx);
+
+        for (condition, expected) in [
+            (r#"$inputs.ascii == 'aLpHa'"#, true),
+            (r#"$inputs.ascii != 'aLpHa'"#, false),
+            (r#"$inputs.ascii < 'bravo'"#, true),
+            (r#"$inputs.ascii <= 'ALPHA'"#, true),
+            (r#"$inputs.ascii > 'aardvark'"#, true),
+            (r#"$inputs.ascii >= 'alpha'"#, true),
+            (r#"$inputs.unicode == 'ångström'"#, true),
+            (r#"$inputs.unicode > 'zebra'"#, true),
+        ] {
+            assert_eq!(
+                eval.evaluate_condition(condition),
+                expected,
+                "condition={condition}"
+            );
+        }
+    }
+
+    /// Numeric, boolean, and null pairs retain the existing helpers instead
+    /// of being coerced through the Simple string normalization path.
+    #[test]
+    pub(super) fn simple_non_string_comparisons_preserve_existing_semantics() {
+        let mut ctx = EvalContext::default();
+        ctx.inputs.insert("number".to_string(), json!(2));
+        ctx.inputs.insert("numericString".to_string(), json!("10"));
+        ctx.inputs
+            .insert("smallerNumericString".to_string(), json!("2"));
+        ctx.inputs.insert("boolean".to_string(), json!(true));
+        ctx.inputs.insert("none".to_string(), Value::Null);
+        let eval = ExpressionEvaluator::new(ctx);
+
+        assert!(eval.evaluate_condition("$inputs.number < 10"));
+        assert!(eval.evaluate_condition("$inputs.numericString < $inputs.smallerNumericString"));
+        assert!(!eval.evaluate_condition("$inputs.numericString == '010'"));
+        assert!(eval.evaluate_condition("$inputs.numericString == 10"));
+        assert!(eval.evaluate_condition("$inputs.boolean == true"));
+        assert!(!eval.evaluate_condition("$inputs.none == null"));
+        assert!(!eval.evaluate_condition("$inputs.none == false"));
+    }
+
     #[test]
     fn evaluate_condition_and_or_precedence() {
         let eval200 = ExpressionEvaluator::new(EvalContext {
@@ -1909,7 +1994,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_condition_contains_matches_and_in() {
+    pub(super) fn evaluate_condition_contains_matches_and_in() {
         let mut ctx = EvalContext {
             status_code: Some(201),
             ..EvalContext::default()
@@ -1934,6 +2019,10 @@ mod tests {
         assert!(eval.evaluate_condition(r#"$steps.s1.outputs.role in ["admin", "superadmin"]"#));
         assert!(eval.evaluate_condition(r#"$steps.s1.outputs.val in ["hello, world", "foo"]"#));
         assert!(!eval.evaluate_condition("$statusCode in []"));
+        assert!(eval.evaluate_condition(r#"$steps.s1.outputs.msg contains "hello""#));
+        assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.msg contains "HELLO""#));
+        assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.email matches "^[A-Z]+@""#));
+        assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.role in ["ADMIN"]"#));
     }
 
     #[test]
@@ -2002,7 +2091,7 @@ mod tests {
     }
 
     #[test]
-    fn compare_ordered_matches_go_rules() {
+    pub(super) fn compare_ordered_matches_go_rules() {
         assert_eq!(compare_ordered(&json!(100), &json!(200)), Ordering::Less);
         assert_eq!(compare_ordered(&json!(200), &json!(200)), Ordering::Equal);
         assert_eq!(compare_ordered(&json!(300), &json!(200)), Ordering::Greater);
@@ -2011,6 +2100,15 @@ mod tests {
             Ordering::Less
         );
         assert_eq!(compare_ordered(&json!(10), &json!(10.0)), Ordering::Equal);
+        assert_eq!(
+            compare_ordered(&json!("Alpha"), &json!("alpha")),
+            Ordering::Less,
+            "shared JSONPath ordering remains byte-sensitive"
+        );
+        assert_eq!(
+            compare_simple_ordered(&json!("Alpha"), &json!("alpha")),
+            Ordering::Equal
+        );
     }
 
     #[test]
@@ -2035,6 +2133,8 @@ mod tests {
         assert!(compare_values(&json!(42), &json!(42)));
         assert!(compare_values(&json!("hello"), &json!("hello")));
         assert!(!compare_values(&json!("hello"), &json!("world")));
+        assert!(!compare_values(&json!("hello"), &json!("HELLO")));
+        assert!(compare_simple_values(&json!("hello"), &json!("HELLO")));
     }
 
     #[test]
@@ -2295,6 +2395,26 @@ mod tests {
         let zero = selected(&root, "$.missing");
         assert_eq!(zero.value, Value::Null);
         assert_eq!(zero.match_count, 0);
+    }
+
+    /// JSONPath filters continue to use the shared byte-sensitive comparison
+    /// helpers; only Simple Criterion dispatch applies case normalization.
+    #[test]
+    pub(super) fn json_path_filters_remain_case_sensitive_for_equality_and_ordering() {
+        let root = json!({
+            "items": [
+                {"name": "Alpha"},
+                {"name": "alpha"}
+            ]
+        });
+
+        let equality = selected(&root, "$.items[?(@.name == 'alpha')].name");
+        assert_eq!(equality.value, json!("alpha"));
+        assert_eq!(equality.match_count, 1);
+
+        let ordering = selected(&root, "$.items[?(@.name < 'alpha')].name");
+        assert_eq!(ordering.value, json!("Alpha"));
+        assert_eq!(ordering.match_count, 1);
     }
 
     #[test]

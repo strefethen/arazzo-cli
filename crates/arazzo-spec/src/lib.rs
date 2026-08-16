@@ -890,7 +890,7 @@ pub struct OnAction {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub step_id: String,
     #[serde(default, skip_serializing_if = "is_zero")]
-    pub retry_after: u64,
+    pub retry_after: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -935,8 +935,8 @@ where
     }
 }
 
-fn is_zero(value: &u64) -> bool {
-    *value == 0
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl OnAction {

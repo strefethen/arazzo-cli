@@ -5,7 +5,8 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{
-    DebugController, DebugStopReason, EngineBuilder, StepBreakpoint, StepCheckpoint,
+    DebugController, DebugStopReason, EngineBuilder, ExecutionObserver, ObserverEvent,
+    StepBreakpoint, StepCheckpoint,
 };
 use arazzo_spec::{
     ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, StepTarget,
@@ -159,9 +160,16 @@ async fn on_failure_action_breakpoint_hits_with_failure_locals() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
-    let server = start_server_with_status(503);
+    let server = start_server_with_status_and_retry_after(503, 1);
     let controller = Arc::new(DebugController::new());
-    let engine = build_retry_engine(server.base_url.clone(), 1, Some(1), Arc::clone(&controller));
+    let observer = Arc::new(RetryScheduledObserver::default());
+    let engine = build_retry_engine(
+        server.base_url.clone(),
+        0.25,
+        Some(1),
+        Arc::clone(&controller),
+        Some(Arc::clone(&observer) as Arc<dyn ExecutionObserver>),
+    );
     if let Err(err) = controller.set_breakpoints(vec![
         StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_selected(0),
         StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_delay(0),
@@ -195,7 +203,7 @@ async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     );
     assert_eq!(
         scopes_selected.locals.get("retryAfterSeconds"),
-        Some(&json!(1))
+        Some(&json!(0.25))
     );
 
     if let Err(err) = controller.continue_execution() {
@@ -215,9 +223,14 @@ async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     assert_eq!(scopes_delay.locals.get("retryStage"), Some(&json!("delay")));
     assert_eq!(
         scopes_delay.locals.get("retryAfterSeconds"),
-        Some(&json!(1))
+        Some(&json!(0.25))
+    );
+    assert_eq!(
+        scopes_delay.locals.get("retryDelaySeconds"),
+        Some(&json!(1.0))
     );
 
+    handle.cancel_token().cancel();
     if let Err(err) = controller.set_breakpoints(Vec::new()) {
         panic!("clearing breakpoints after retry delay: {err}");
     }
@@ -226,15 +239,75 @@ async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     }
     let result = handle.collect().await;
     match result.outputs {
-        Ok(_) => panic!("expected workflow execution to fail after retry limit"),
+        Ok(_) => panic!("expected workflow execution to stop during the retry delay"),
         Err(err) => {
             assert!(
-                err.message.contains("max retries (1) exceeded"),
+                err.message.contains("execution cancelled"),
                 "unexpected error message: {}",
                 err.message
             );
         }
     }
+    assert_eq!(
+        observer.retry_scheduled.load(Ordering::Relaxed),
+        0,
+        "cancellation at the delay checkpoint must not schedule a retry event"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_retry_after_is_omitted_from_generic_debug_locals_before_rejection() {
+    let server = start_server_with_status(503);
+    let controller = Arc::new(DebugController::new());
+    let engine = build_retry_engine(
+        server.base_url.clone(),
+        f64::NAN,
+        Some(1),
+        Arc::clone(&controller),
+        None,
+    );
+    if let Err(err) = controller.set_breakpoints(vec![
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_action(0),
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_selected(0),
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_delay(0),
+    ]) {
+        panic!("setting invalid retryAfter breakpoints: {err}");
+    }
+
+    let handle = engine.execute("wf", BTreeMap::new());
+    wait_for_stop(&controller, 1);
+    let scopes = match controller.current_scopes() {
+        Ok(scopes) => scopes,
+        Err(err) => panic!("reading generic invalid retryAfter scopes: {err}"),
+    };
+    assert_eq!(scopes.locals.get("actionType"), Some(&json!("retry")));
+    assert!(
+        !scopes.locals.contains_key("actionRetryAfter"),
+        "generic action locals must not serialize non-finite retryAfter as JSON null"
+    );
+
+    if let Err(err) = controller.continue_execution() {
+        panic!("continuing invalid retryAfter action: {err}");
+    }
+    let result = handle.collect().await;
+    match result.outputs {
+        Ok(_) => panic!("matched non-finite retryAfter must fail"),
+        Err(err) => assert!(
+            err.message
+                .contains("retryAfter must be a finite non-negative number"),
+            "unexpected error message: {}",
+            err.message
+        ),
+    }
+    let events = read_stop_events(&controller);
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.checkpoint,
+            StepCheckpoint::OnFailureRetrySelected { action_index: 0 }
+                | StepCheckpoint::OnFailureRetryDelay { action_index: 0 }
+        )),
+        "invalid matched retries must fail before retry-specific debug checkpoints"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -267,7 +340,7 @@ async fn arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_late
                     OnAction {
                         name: "exhaust-first".to_string(),
                         type_: Some(ActionType::Retry),
-                        retry_after: 1,
+                        retry_after: 1.0,
                         retry_limit: Some(0),
                         ..OnAction::default()
                     },
@@ -459,12 +532,13 @@ fn build_failure_engine(
 
 fn build_retry_engine(
     base_url: String,
-    retry_after: u64,
+    retry_after: f64,
     retry_limit: Option<u64>,
     controller: Arc<DebugController>,
+    observer: Option<Arc<dyn ExecutionObserver>>,
 ) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
-        arazzo: "1.0.0".to_string(),
+        arazzo: "1.1.0".to_string(),
         info: Info {
             title: "debug-checkpoints-retry".to_string(),
             version: "1.0.0".to_string(),
@@ -503,10 +577,11 @@ fn build_retry_engine(
         ..ArazzoSpec::default()
     };
 
-    match EngineBuilder::new(spec)
-        .debug_controller(controller)
-        .build()
-    {
+    let mut builder = EngineBuilder::new(spec).debug_controller(controller);
+    if let Some(observer) = observer {
+        builder = builder.observer(observer);
+    }
+    match builder.build() {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }
@@ -533,6 +608,17 @@ fn start_server() -> TestServer {
 }
 
 fn start_server_with_status(status: u16) -> TestServer {
+    start_server_with_status_and_optional_retry_after(status, None)
+}
+
+fn start_server_with_status_and_retry_after(status: u16, retry_after: u64) -> TestServer {
+    start_server_with_status_and_optional_retry_after(status, Some(retry_after))
+}
+
+fn start_server_with_status_and_optional_retry_after(
+    status: u16,
+    retry_after: Option<u64>,
+) -> TestServer {
     let server = match Server::http("127.0.0.1:0") {
         Ok(server) => server,
         Err(err) => panic!("binding checkpoint debug server: {err}"),
@@ -560,6 +646,14 @@ fn start_server_with_status(status: u16) -> TestServer {
                     {
                         response = response.with_header(header);
                     }
+                    if let Some(retry_after) = retry_after {
+                        if let Ok(header) = Header::from_bytes(
+                            b"Retry-After".as_slice(),
+                            retry_after.to_string().as_bytes(),
+                        ) {
+                            response = response.with_header(header);
+                        }
+                    }
                     let _ = request.respond(response);
                 }
                 Ok(None) => {}
@@ -572,6 +666,19 @@ fn start_server_with_status(status: u16) -> TestServer {
         base_url,
         stop,
         handle: Some(handle),
+    }
+}
+
+#[derive(Default)]
+struct RetryScheduledObserver {
+    retry_scheduled: std::sync::atomic::AtomicUsize,
+}
+
+impl ExecutionObserver for RetryScheduledObserver {
+    fn on_event(&self, event: &ObserverEvent) {
+        if matches!(event, ObserverEvent::RetryScheduled { .. }) {
+            self.retry_scheduled.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 

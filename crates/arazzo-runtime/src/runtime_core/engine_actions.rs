@@ -380,6 +380,41 @@ impl Engine {
                 let limit = effective_retry_limit(action.retry_limit);
                 let current = ctx.retry_count.get(&ctx.retry_site).copied().unwrap_or(0);
                 let will_execute_retry = current < limit;
+                if let Err(err) = validate_retry_after_value(action.retry_after) {
+                    return RoutedDecision::error(err).into();
+                }
+                if current >= limit {
+                    if let Some(debug) = debug_ctx {
+                        if let Err(err) = self
+                            .debug_gate_retry_selected(
+                                debug,
+                                action,
+                                current,
+                                limit,
+                                will_execute_retry,
+                            )
+                            .await
+                        {
+                            return RoutedDecision::error(err).into();
+                        }
+                    }
+                    return ActionExecution::RetryExhausted(ExhaustedRetry {
+                        effective_limit: limit,
+                        retry_after: action.retry_after,
+                        configured_limit: action.retry_limit,
+                    });
+                }
+
+                // A finite configured decimal is converted only when it is the
+                // fallback. A valid integer Retry-After header takes precedence.
+                let effective_delay = match compute_retry_after_delay(
+                    action,
+                    ctx.response.map(|response| &response.headers),
+                ) {
+                    Ok(delay) => delay,
+                    Err(err) => return RoutedDecision::error(err).into(),
+                };
+
                 if let Some(debug) = debug_ctx {
                     if let Err(err) = self
                         .debug_gate_retry_selected(
@@ -394,22 +429,16 @@ impl Engine {
                         return RoutedDecision::error(err).into();
                     }
                 }
-                if current >= limit {
-                    return ActionExecution::RetryExhausted(ExhaustedRetry {
-                        effective_limit: limit,
-                        retry_after: action.retry_after,
-                        configured_limit: action.retry_limit,
-                    });
-                }
-
-                // RetryScheduled observer event emitted by caller (execute_inner) after FlowDecision::Retry
-                // Spec §4.6.6: Retry-After response header overrides configured retryAfter.
-                let effective_delay =
-                    compute_retry_after_delay(action, ctx.response.map(|r| &r.headers));
                 if !effective_delay.is_zero() {
                     if let Some(debug) = debug_ctx {
                         if let Err(err) = self
-                            .debug_gate_retry_delay(debug, action, current, limit)
+                            .debug_gate_retry_delay(
+                                debug,
+                                action,
+                                current,
+                                limit,
+                                effective_delay.as_secs_f64(),
+                            )
                             .await
                         {
                             return RoutedDecision::error(err).into();
@@ -435,6 +464,7 @@ impl Engine {
                         step_idx: ctx.current_idx,
                         retry_site: ctx.retry_site,
                         retry_limit: limit,
+                        delay_seconds: effective_delay.as_secs_f64(),
                         reference,
                     },
                     trace: TraceDecision {
@@ -470,6 +500,8 @@ pub(super) enum FlowDecision {
         /// Configured or defaulted retry budget. This is not part of the
         /// public trace schema, which preserves the configured Option value.
         retry_limit: u64,
+        /// Effective delay after a valid HTTP Retry-After override, if any.
+        delay_seconds: f64,
         /// Recovery reference from the retry action's `stepId`/`workflowId`.
         /// Executed call-and-return at the consumption site before the step
         /// at `step_idx` is retried; `None` for a plain retry.
@@ -553,7 +585,7 @@ struct MatchedActionRef<'a> {
 #[derive(Debug, Clone, Copy)]
 struct ExhaustedRetry {
     effective_limit: u64,
-    retry_after: u64,
+    retry_after: f64,
     configured_limit: Option<u64>,
 }
 
@@ -702,7 +734,7 @@ impl ActionBranch {
     }
 }
 
-/// Compute the effective retry delay per Arazzo 1.0.1 §4.6.6.
+/// Compute the effective retry delay per Arazzo 1.1.0 §5.8.8.
 ///
 /// When the response carries a `Retry-After` header with a valid integer-seconds
 /// value, that value takes precedence over the configured `retryAfter` on the action.
@@ -710,10 +742,10 @@ impl ActionBranch {
 fn compute_retry_after_delay(
     action: &OnAction,
     headers: Option<&BTreeMap<String, String>>,
-) -> Duration {
-    let configured = Duration::from_secs(action.retry_after);
+) -> Result<Duration, RuntimeError> {
+    validate_retry_after_value(action.retry_after)?;
     let Some(hdrs) = headers else {
-        return configured;
+        return configured_retry_after_delay(action.retry_after);
     };
     // Case-insensitive lookup for the Retry-After header.
     let raw = hdrs
@@ -722,14 +754,33 @@ fn compute_retry_after_delay(
         .map(|(_, v)| v.as_str())
         .unwrap_or("");
     if raw.is_empty() {
-        return configured;
+        return configured_retry_after_delay(action.retry_after);
     }
     // Integer form: number of seconds to wait.
     if let Ok(secs) = raw.parse::<u64>() {
-        return Duration::from_secs(secs);
+        return Ok(Duration::from_secs(secs));
     }
     // HTTP-date form is uncommon for rate-limited APIs; fall back to configured.
-    configured
+    configured_retry_after_delay(action.retry_after)
+}
+
+fn validate_retry_after_value(retry_after: f64) -> Result<(), RuntimeError> {
+    if retry_after.is_finite() && retry_after >= 0.0 {
+        return Ok(());
+    }
+    Err(RuntimeError::new(
+        RuntimeErrorKind::InputValidation,
+        "retryAfter must be a finite non-negative number",
+    ))
+}
+
+fn configured_retry_after_delay(retry_after: f64) -> Result<Duration, RuntimeError> {
+    Duration::try_from_secs_f64(retry_after).map_err(|_| {
+        RuntimeError::new(
+            RuntimeErrorKind::InputValidation,
+            "retryAfter must be a finite non-negative duration representable by the runtime",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -744,57 +795,139 @@ mod tests {
     #[test]
     fn retry_after_header_integer_overrides_config() {
         let action = OnAction {
-            retry_after: 10,
+            retry_after: 10.0,
             ..OnAction::default()
         };
         let mut headers = BTreeMap::new();
         headers.insert("Retry-After".to_string(), "2".to_string());
-        let delay = compute_retry_after_delay(&action, Some(&headers));
+        let delay = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("integer header delay must convert: {err}"));
         assert_eq!(delay, Duration::from_secs(2));
     }
 
     #[test]
     fn retry_after_header_respected_when_no_config() {
         let action = OnAction {
-            retry_after: 0,
+            retry_after: 0.0,
             ..OnAction::default()
         };
         let mut headers = BTreeMap::new();
         headers.insert("retry-after".to_string(), "3".to_string());
-        let delay = compute_retry_after_delay(&action, Some(&headers));
+        let delay = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("header override must convert: {err}"));
         assert_eq!(delay, Duration::from_secs(3));
     }
 
     #[test]
     fn retry_after_config_used_when_no_header() {
         let action = OnAction {
-            retry_after: 5,
+            retry_after: 5.0,
             ..OnAction::default()
         };
         let headers = BTreeMap::new();
-        let delay = compute_retry_after_delay(&action, Some(&headers));
+        let delay = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("configured integer delay must convert: {err}"));
         assert_eq!(delay, Duration::from_secs(5));
     }
 
     #[test]
     fn retry_after_malformed_header_falls_back() {
         let action = OnAction {
-            retry_after: 4,
+            retry_after: 4.0,
             ..OnAction::default()
         };
         let mut headers = BTreeMap::new();
         headers.insert("Retry-After".to_string(), "not-a-number".to_string());
-        let delay = compute_retry_after_delay(&action, Some(&headers));
+        let delay = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("malformed header fallback must convert: {err}"));
         assert_eq!(delay, Duration::from_secs(4));
     }
 
     #[test]
     fn retry_after_no_headers_at_all() {
         let action = OnAction {
-            retry_after: 7,
+            retry_after: 7.0,
             ..OnAction::default()
         };
-        let delay = compute_retry_after_delay(&action, None);
+        let delay = compute_retry_after_delay(&action, None)
+            .unwrap_or_else(|err| panic!("configured integer delay must convert: {err}"));
         assert_eq!(delay, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn retry_after_fractional_config_and_header_zero_preserve_effective_delay() {
+        let action = OnAction {
+            retry_after: 0.25,
+            ..OnAction::default()
+        };
+        let fallback = compute_retry_after_delay(&action, None)
+            .unwrap_or_else(|err| panic!("fractional configured delay must convert: {err}"));
+        assert_eq!(fallback, Duration::from_millis(250));
+
+        let mut headers = BTreeMap::new();
+        headers.insert("Retry-After".to_string(), "0".to_string());
+        let overridden = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("Retry-After: 0 must override: {err}"));
+        assert!(overridden.is_zero());
+
+        headers.insert("Retry-After".to_string(), "invalid".to_string());
+        let malformed_fallback = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("malformed header must use fractional fallback: {err}"));
+        assert_eq!(malformed_fallback, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn retry_after_nonfinite_typed_model_fails_even_with_header_override() {
+        for retry_after in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let action = OnAction {
+                retry_after,
+                ..OnAction::default()
+            };
+            let mut headers = BTreeMap::new();
+            headers.insert("Retry-After".to_string(), "0".to_string());
+            let err = match compute_retry_after_delay(&action, Some(&headers)) {
+                Ok(delay) => panic!(
+                    "invalid configured retryAfter must fail before header override, got {delay:?}"
+                ),
+                Err(err) => err,
+            };
+            assert_eq!(err.kind, RuntimeErrorKind::InputValidation);
+            assert_eq!(err.code(), "RUNTIME_INPUT_VALIDATION");
+        }
+    }
+
+    #[test]
+    fn retry_after_finite_overflow_fails_only_when_used_as_fallback() {
+        let action = OnAction {
+            retry_after: f64::MAX,
+            ..OnAction::default()
+        };
+        let err = match compute_retry_after_delay(&action, None) {
+            Ok(delay) => {
+                panic!(
+                    "finite retryAfter overflow must fail without a header override, got {delay:?}"
+                )
+            }
+            Err(err) => err,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::InputValidation);
+        assert_eq!(err.code(), "RUNTIME_INPUT_VALIDATION");
+
+        let mut headers = BTreeMap::new();
+        headers.insert("Retry-After".to_string(), "0".to_string());
+        let overridden = compute_retry_after_delay(&action, Some(&headers))
+            .unwrap_or_else(|err| panic!("Retry-After: 0 must override finite overflow: {err}"));
+        assert!(overridden.is_zero());
+
+        headers.insert("Retry-After".to_string(), "malformed".to_string());
+        let malformed = match compute_retry_after_delay(&action, Some(&headers)) {
+            Ok(delay) => {
+                panic!(
+                    "malformed header must use the overflowing configured fallback, got {delay:?}"
+                )
+            }
+            Err(err) => err,
+        };
+        assert_eq!(malformed.kind, RuntimeErrorKind::InputValidation);
     }
 }

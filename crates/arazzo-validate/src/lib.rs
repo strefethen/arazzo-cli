@@ -45,6 +45,18 @@ fn conformance_action_fixed_fields_negative_evidence() {
     tests::action_fixed_fields_negative_matrix();
 }
 
+#[cfg(test)]
+#[test]
+fn conformance_decimal_retry_after_positive_evidence() {
+    tests::decimal_retry_after_positive_matrix();
+}
+
+#[cfg(test)]
+#[test]
+fn conformance_decimal_retry_after_negative_evidence() {
+    tests::decimal_retry_after_negative_matrix();
+}
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -653,7 +665,8 @@ fn raw_defaulted_action_field_is_present(action: &serde_yaml_ng::Value, field: &
     match raw_mapping_field(action, field) {
         Some(serde_yaml_ng::Value::Null) => true,
         Some(serde_yaml_ng::Value::String(value)) => value.is_empty(),
-        Some(value) if matches!(field, "retryAfter" | "retryLimit") => value.as_u64() == Some(0),
+        Some(value) if field == "retryAfter" => value.as_f64() == Some(0.0),
+        Some(value) if field == "retryLimit" => value.as_u64() == Some(0),
         _ => false,
     }
 }
@@ -690,7 +703,7 @@ fn raw_action_field_not_applicable(
 }
 
 /// Fields defaulted by the public action model need a narrow raw-presence
-/// check. A typed `retry_after: 0` or empty target is indistinguishable from
+/// check. A typed `retry_after: 0.0` or empty target is indistinguishable from
 /// omission, but an explicitly supplied field remains non-conformant outside
 /// its action context.
 fn check_raw_defaulted_action_field_applicability(
@@ -1054,10 +1067,14 @@ fn check_raw_inherited_component_field_applicability(
             ("retryAfter", ActionFixedField::RetryAfter),
             ("retryLimit", ActionFixedField::RetryLimit),
         ] {
-            if !local_fields.contains(fixed_field)
-                && raw_mapping_field(component, field)
-                    .is_some_and(|value| value.as_u64() == Some(0))
-            {
+            let is_default_value = raw_mapping_field(component, field).is_some_and(|value| {
+                if field == "retryAfter" {
+                    value.as_f64() == Some(0.0)
+                } else {
+                    value.as_u64() == Some(0)
+                }
+            });
+            if !local_fields.contains(fixed_field) && is_default_value {
                 raw_action_field_not_applicable(
                     path,
                     field,
@@ -1096,6 +1113,10 @@ fn check_raw_inherited_component_field_applicability(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ComponentActionFixedFieldOrigin {
+    /// The range source after legacy merge. This deliberately differs from
+    /// `local_fields.retry_after`: an explicit local zero remains visible for
+    /// applicability, but does not override the component value.
+    local_retry_after_overrides: bool,
     local_fields: ActionLocalFields,
 }
 
@@ -2821,6 +2842,13 @@ fn action_fields_are_component_owned(
     })
 }
 
+/// Legacy name-form `retryAfter: 0` is a merge sentinel, not an override.
+/// Keep raw local presence for applicability diagnostics, but assign range
+/// validation to the component when the resolved value still comes from it.
+fn retry_after_range_is_component_owned(origin: Option<ComponentActionFixedFieldOrigin>) -> bool {
+    origin.is_some_and(|origin| !origin.local_retry_after_overrides)
+}
+
 /// Checks intrinsic Success/Failure Action fixed-field applicability. Target
 /// existence is intentionally separate: a component action's `stepId` is
 /// relative to the workflow that consumes it, while its type and supplied
@@ -2834,6 +2862,16 @@ fn validate_action_fixed_fields(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let action_type = action.action_type();
+    if (!action.retry_after.is_finite() || action.retry_after < 0.0)
+        && !retry_after_range_is_component_owned(origin)
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidRetryField,
+            path: format!("{action_path}.retryAfter"),
+            message: format!("{action_path}.retryAfter must be a non-negative finite number"),
+        });
+    }
     if !action.has_declared_type()
         && !raw_action_boundaries_owned
         && !action_fields_are_component_owned(origin, &[ActionFixedField::Type])
@@ -2875,7 +2913,8 @@ fn validate_action_fixed_fields(
                 ),
             });
         }
-        if action.retry_after > 0
+        if action.retry_after.is_finite()
+            && action.retry_after > 0.0
             && !action_fields_are_component_owned(
                 origin,
                 &[ActionFixedField::Type, ActionFixedField::RetryAfter],
@@ -3442,7 +3481,7 @@ fn local_action_fixed_fields(
         type_: action.type_.is_some(),
         workflow_id: !action.workflow_id.is_empty(),
         step_id: !action.step_id.is_empty(),
-        retry_after: action.retry_after != 0,
+        retry_after: action.retry_after != 0.0,
         retry_limit: action.retry_limit.is_some(),
     }
 }
@@ -3524,6 +3563,7 @@ fn resolve_action_ref(
             };
             component_origin = Some(source);
             fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
+                local_retry_after_overrides: false,
                 local_fields: ActionLocalFields::default(),
             });
             raw_parameters = raw_component_action(
@@ -3535,6 +3575,7 @@ fn resolve_action_ref(
         } else if !action.name.is_empty() {
             let local_action_type = action.type_;
             let local_fields = local_action_fixed_fields(raw_action, action);
+            let local_retry_after_overrides = action.retry_after != 0.0;
             if let Some(component_name) = resolve_one_action_ref(
                 action,
                 context.component_map,
@@ -3554,7 +3595,10 @@ fn resolve_action_ref(
                     kind: context.list_key.kind,
                     action_index: component_index,
                 };
-                fixed_field_origin = Some(ComponentActionFixedFieldOrigin { local_fields });
+                fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
+                    local_retry_after_overrides,
+                    local_fields,
+                });
                 let raw_component = raw_component_action(
                     context.raw_components,
                     context.component_field,
@@ -3645,7 +3689,7 @@ fn resolve_one_action_ref(
         if !action.step_id.is_empty() {
             merged.step_id = action.step_id.clone();
         }
-        if action.retry_after != 0 {
+        if action.retry_after != 0.0 {
             merged.retry_after = action.retry_after;
         }
         if action.retry_limit.is_some() {
@@ -4663,7 +4707,7 @@ workflows:
         let actions = &spec.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].action_type(), ActionType::Retry);
-        assert_eq!(actions[0].retry_after, 2);
+        assert_eq!(actions[0].retry_after, 2.0);
         assert_eq!(actions[0].retry_limit, Some(5));
     }
 
@@ -4705,7 +4749,7 @@ workflows:
         assert_eq!(actions.len(), 2);
         // First action: resolved from component ref
         assert_eq!(actions[0].action_type(), ActionType::Retry);
-        assert_eq!(actions[0].retry_after, 2);
+        assert_eq!(actions[0].retry_after, 2.0);
         assert_eq!(actions[0].retry_limit, Some(5));
         // Second action: inline end
         assert_eq!(actions[1].action_type(), ActionType::End);
@@ -5864,7 +5908,7 @@ workflows:
         assert_eq!(wf.success_actions[0].action_type(), ActionType::End);
         assert_eq!(wf.failure_actions.len(), 1);
         assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
-        assert_eq!(wf.failure_actions[0].retry_after, 5);
+        assert_eq!(wf.failure_actions[0].retry_after, 5.0);
         assert_eq!(wf.steps[0].description, "First step");
     }
 
@@ -6106,7 +6150,7 @@ workflows:
         assert_eq!(wf.success_actions[0].name, "stop");
         assert_eq!(wf.failure_actions.len(), 1);
         assert_eq!(wf.failure_actions[0].action_type(), ActionType::Retry);
-        assert_eq!(wf.failure_actions[0].retry_after, 1);
+        assert_eq!(wf.failure_actions[0].retry_after, 1.0);
     }
 
     #[test]
@@ -6157,7 +6201,7 @@ workflows:
         ] {
             assert_eq!(action.name, "retry");
             assert_eq!(action.action_type(), ActionType::Retry);
-            assert_eq!(action.retry_after, 1);
+            assert_eq!(action.retry_after, 1.0);
             assert_eq!(action.retry_limit, Some(2));
             assert!(action.reference.is_empty());
             assert!(action.value.is_none());
@@ -7004,7 +7048,10 @@ workflows:
             "type from component"
         );
         assert_eq!(actions[0].retry_limit, Some(5), "retryLimit from component");
-        assert_eq!(actions[0].retry_after, 10, "retryAfter overridden locally");
+        assert_eq!(
+            actions[0].retry_after, 10.0,
+            "retryAfter overridden locally"
+        );
     }
 
     #[test]
@@ -7037,7 +7084,7 @@ workflows:
         };
         assert!(diagnostics.is_empty(), "diagnostics={diagnostics:?}");
         assert_eq!(
-            spec.workflows[0].steps[0].on_failure[0].retry_after, 2,
+            spec.workflows[0].steps[0].on_failure[0].retry_after, 2.0,
             "legacy retryAfter: 0 remains the historical no-override form"
         );
         assert_eq!(
@@ -7045,6 +7092,170 @@ workflows:
             Some(0),
             "legacy retryLimit: 0 remains an explicit valid retry limit"
         );
+    }
+
+    /// Scanner-visible positive evidence covers direct and component decimal
+    /// retryAfter declarations only. Legacy name-form resolution is a
+    /// compatibility extension, not conformance evidence.
+    pub(super) fn decimal_retry_after_positive_matrix() {
+        for (position, retry_after) in [
+            ("component failure", "0"),
+            ("component failure", "0.25"),
+            ("workflow failure", "1"),
+            ("workflow failure", "1.75"),
+            ("step failure", "0"),
+            ("step failure", "0.25"),
+            ("step failure", "1.75"),
+        ] {
+            let action = format!(r#"{{name: retry, type: retry, retryAfter: {retry_after}}}"#);
+            let document = action_position_document(position, &action, false);
+            if let Err(error) = parse_bytes(document.as_bytes()) {
+                panic!("{position} retryAfter={retry_after} must validate: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_decimal_retry_after_resolution_keeps_compatibility() {
+        let component =
+            legacy_action_fixed_field_document("failure", "retry", "      retryAfter: 0.25", "");
+        let inherited = match parse_bytes(component.as_bytes()) {
+            Ok(spec) => spec,
+            Err(error) => panic!("fractional component retryAfter must validate: {error}"),
+        };
+        assert_eq!(
+            inherited.workflows[0].steps[0].on_failure[0].retry_after, 0.25,
+            "legacy reference must inherit a fractional component retryAfter"
+        );
+
+        let local_override = legacy_action_fixed_field_document(
+            "failure",
+            "retry",
+            "      retryAfter: 0.25",
+            "            retryAfter: 1.75",
+        );
+        let overridden = match parse_bytes(local_override.as_bytes()) {
+            Ok(spec) => spec,
+            Err(error) => panic!("fractional legacy local override must validate: {error}"),
+        };
+        assert_eq!(
+            overridden.workflows[0].steps[0].on_failure[0].retry_after, 1.75,
+            "nonzero legacy decimal retryAfter must override its component"
+        );
+
+        let local_zero = legacy_action_fixed_field_document(
+            "failure",
+            "retry",
+            "      retryAfter: 0.25",
+            "            retryAfter: 0",
+        );
+        let inherited_zero = match parse_bytes(local_zero.as_bytes()) {
+            Ok(spec) => spec,
+            Err(error) => panic!("legacy retryAfter: 0 must remain compatible: {error}"),
+        };
+        assert_eq!(
+            inherited_zero.workflows[0].steps[0].on_failure[0].retry_after, 0.25,
+            "legacy retryAfter: 0 remains the no-override sentinel"
+        );
+    }
+
+    /// Scanner-visible negative evidence covers direct and component decimal
+    /// declarations only. Legacy overlays and ignored reference siblings stay
+    /// in ordinary compatibility tests below.
+    pub(super) fn decimal_retry_after_negative_matrix() {
+        for (position, retry_after) in [
+            ("component failure", "-0.25"),
+            ("workflow failure", "-0.25"),
+            ("step failure", "-0.25"),
+            ("component failure", ".nan"),
+            ("workflow failure", ".nan"),
+            ("step failure", ".nan"),
+            ("component failure", ".inf"),
+            ("workflow failure", ".inf"),
+            ("step failure", ".inf"),
+            ("component failure", "-.inf"),
+            ("workflow failure", "-.inf"),
+            ("step failure", "-.inf"),
+        ] {
+            let action = format!(r#"{{name: retry, type: retry, retryAfter: {retry_after}}}"#);
+            let document = action_position_document(position, &action, false);
+            assert_exact_action_errors(
+                &document,
+                &[(
+                    &format!("{}.retryAfter", action_position_path(position)),
+                    ValidationErrorKind::InvalidRetryField,
+                )],
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_decimal_retry_after_validation_and_reference_siblings_keep_compatibility() {
+        for retry_after in ["-0.25", ".nan", ".inf", "-.inf"] {
+            let component = legacy_action_fixed_field_document(
+                "failure",
+                "retry",
+                &format!("      retryAfter: {retry_after}"),
+                "",
+            );
+            assert_exact_action_errors(
+                &component,
+                &[(
+                    "components.failureActions.policy.retryAfter",
+                    ValidationErrorKind::InvalidRetryField,
+                )],
+            );
+
+            let local = legacy_action_fixed_field_document(
+                "failure",
+                "retry",
+                "      retryAfter: 0.25",
+                &format!("            retryAfter: {retry_after}"),
+            );
+            assert_exact_action_errors(
+                &local,
+                &[(
+                    "workflow \"wf\" > step \"s\".onFailure[0].retryAfter",
+                    ValidationErrorKind::InvalidRetryField,
+                )],
+            );
+        }
+
+        for retry_after in [".nan", "-0.25"] {
+            let local_zero = legacy_action_fixed_field_document(
+                "failure",
+                "retry",
+                &format!("      retryAfter: {retry_after}"),
+                "            retryAfter: 0",
+            );
+            assert_exact_action_errors(
+                &local_zero,
+                &[(
+                    "components.failureActions.policy.retryAfter",
+                    ValidationErrorKind::InvalidRetryField,
+                )],
+            );
+        }
+
+        let canonical_sibling = r#"
+arazzo: "1.1.0"
+info: {title: Canonical sibling, version: "1"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  failureActions:
+    retry: {name: retry, type: retry, retryAfter: 0.25}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step
+        operationPath: /test
+        onFailure:
+          - reference: $components.failureActions.retry
+            retryAfter: .nan
+"#;
+        if let Err(error) = parse_bytes(canonical_sibling.as_bytes()) {
+            panic!("canonical reusable siblings must remain ignored: {error}");
+        }
     }
 
     fn legacy_action_fixed_field_document(
