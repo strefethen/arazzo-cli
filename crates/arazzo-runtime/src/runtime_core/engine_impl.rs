@@ -252,8 +252,9 @@ impl Engine {
 
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
-            // Shared retry_count across all iterations so limits accumulate correctly.
-            let mut retry_count = BTreeMap::<usize, usize>::new();
+            // Shared retry counts across all iterations. Keys identify retry
+            // execution sites, so later failure-action retries are independent.
+            let mut retry_count = BTreeMap::<RetrySite, usize>::new();
             let max_iterations = compute_max_iterations(
                 steps_to_run.iter().map(|&i| &workflow.steps[i]),
                 &workflow.failure_actions,
@@ -335,6 +336,7 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
+                let retry_trace = action.trace.clone();
 
                 match action.flow {
                     FlowDecision::Done => {
@@ -356,10 +358,10 @@ impl Engine {
                     }
                     FlowDecision::Retry {
                         step_idx: retry_idx,
+                        retry_site,
+                        retry_limit,
                         reference,
                     } => {
-                        let value = retry_count.entry(retry_idx).or_insert(0);
-                        *value += 1;
                         // Retry targets the current step; find it in our filtered set.
                         if let Some(pos) = steps_to_run.iter().position(|&i| i == retry_idx) {
                             if let Some(reference) = reference {
@@ -376,6 +378,20 @@ impl Engine {
                                 )
                                 .await?;
                             }
+                            let value = retry_count.entry(retry_site).or_insert(0);
+                            *value += 1;
+                            let retry_step = &workflow.steps[retry_idx];
+                            self.emit_observer_event(
+                                exec_ctx,
+                                ObserverEvent::RetryScheduled {
+                                    workflow_id: workflow_id.to_string(),
+                                    step_id: retry_step.step_id.clone(),
+                                    attempt: *value,
+                                    max_attempts: retry_limit,
+                                    delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
+                                },
+                            )
+                            .await;
                             run_cursor = pos;
                         } else {
                             return Err(RuntimeError::new(
@@ -452,7 +468,7 @@ impl Engine {
 
             let workflow_start = Instant::now();
             let mut step_index: usize = 0;
-            let mut retry_count = BTreeMap::<usize, usize>::new();
+            let mut retry_count = BTreeMap::<RetrySite, usize>::new();
             let max_iterations =
                 compute_max_iterations(workflow.steps.iter(), &workflow.failure_actions);
             let mut completed = false;
@@ -569,6 +585,7 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
+                let retry_trace = action.trace.clone();
 
                 match action.flow {
                     FlowDecision::Done => {
@@ -580,27 +597,10 @@ impl Engine {
                     }
                     FlowDecision::Retry {
                         step_idx: idx,
+                        retry_site,
+                        retry_limit,
                         reference,
                     } => {
-                        let value = retry_count.entry(idx).or_insert(0);
-                        *value += 1;
-                        // Emit retry event for observers
-                        let retry_step = &workflow.steps[idx];
-                        let retry_trace = action.trace.clone();
-                        self.emit_observer_event(
-                            exec_ctx,
-                            ObserverEvent::RetryScheduled {
-                                workflow_id: workflow_id.to_string(),
-                                step_id: retry_step.step_id.clone(),
-                                attempt: *value,
-                                max_attempts: retry_trace
-                                    .retry_limit
-                                    .map(|v| v as usize)
-                                    .unwrap_or(MAX_RETRIES_PER_STEP),
-                                delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
-                            },
-                        )
-                        .await;
                         if let Some(reference) = reference {
                             if let Err(err) = self
                                 .execute_retry_reference(
@@ -630,6 +630,20 @@ impl Engine {
                                 return Err(err);
                             }
                         }
+                        let value = retry_count.entry(retry_site).or_insert(0);
+                        *value += 1;
+                        let retry_step = &workflow.steps[idx];
+                        self.emit_observer_event(
+                            exec_ctx,
+                            ObserverEvent::RetryScheduled {
+                                workflow_id: workflow_id.to_string(),
+                                step_id: retry_step.step_id.clone(),
+                                attempt: *value,
+                                max_attempts: retry_limit,
+                                delay_seconds: retry_trace.retry_after_seconds.unwrap_or(0),
+                            },
+                        )
+                        .await;
                         step_index = idx;
                     }
                     FlowDecision::GotoWorkflow {
@@ -1062,48 +1076,78 @@ pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut St
 }
 
 /// Computes a safe iteration limit for workflow execution that accounts for
-/// per-step retry budgets. Each step needs `1 + max_retry_limit` iterations
-/// in the worst case. When a step has no actions, the engine falls back to
-/// workflow-level actions, so those are also considered. A goto multiplier (×2)
+/// per-step retry budgets. Each step needs its initial attempt plus the sum of
+/// its applicable effective failure-action retry budgets in the worst case.
+/// A goto multiplier (×2)
 /// provides headroom for goto cycles. The result is floored at `step_count × 10`
 /// for backwards compatibility with goto-heavy workflows.
 fn compute_max_iterations<'a>(
     steps: impl Iterator<Item = &'a Step>,
     workflow_actions: &[OnAction],
 ) -> usize {
-    let workflow_retry = max_retry_from_actions(workflow_actions);
+    let workflow_retry = retry_budget_from_actions(workflow_actions);
     let mut step_count: usize = 0;
     let mut total_budget: usize = 0;
     for step in steps {
         step_count += 1;
-        let step_retry = max_retry_from_actions(
-            &step
-                .on_failure
-                .iter()
-                .chain(step.on_success.iter())
-                .cloned()
-                .collect::<Vec<_>>(),
-        );
-        // If the step has no actions of its own, the engine falls back to
-        // workflow-level actions, so use the workflow retry limit.
-        let max_retry = if step.on_failure.is_empty() && step.on_success.is_empty() {
+        // Failure routing uses the step list when present, otherwise the
+        // workflow list. An exhausted retry can fall through to each later
+        // retry action, so their budgets add rather than take a maximum.
+        let retry_budget = if step.on_failure.is_empty() {
             workflow_retry
         } else {
-            step_retry
+            retry_budget_from_actions(&step.on_failure)
         };
-        total_budget = total_budget.saturating_add(1 + max_retry);
+        total_budget = total_budget.saturating_add(1usize.saturating_add(retry_budget));
     }
     // Goto multiplier ×2, floored at the legacy heuristic (step_count × 10).
     let retry_aware = total_budget.saturating_mul(2);
     retry_aware.max(step_count.saturating_mul(10))
 }
 
-fn max_retry_from_actions(actions: &[OnAction]) -> usize {
+fn retry_budget_from_actions(actions: &[OnAction]) -> usize {
     actions
         .iter()
         .filter(|a| a.action_type() == ActionType::Retry)
-        .filter_map(|a| a.retry_limit)
-        .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
-        .max()
-        .unwrap_or(0)
+        .fold(0usize, |budget, action| {
+            budget.saturating_add(effective_retry_limit(action.retry_limit))
+        })
+}
+
+#[cfg(test)]
+mod retry_iteration_tests {
+    use super::*;
+
+    #[test]
+    fn maximum_iterations_sums_effective_failure_retry_budgets_only() {
+        let steps = [Step {
+            on_failure: vec![
+                OnAction {
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(10),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(20),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(30),
+                    ..OnAction::default()
+                },
+            ],
+            // Retry is not legal in a Success Action Object. The runtime's
+            // iteration protection must not give this model deviation budget.
+            on_success: vec![OnAction {
+                type_: Some(ActionType::Retry),
+                retry_limit: Some(99),
+                ..OnAction::default()
+            }],
+            ..Step::default()
+        }];
+
+        assert_eq!(compute_max_iterations(steps.iter(), &[]), 122);
+    }
 }

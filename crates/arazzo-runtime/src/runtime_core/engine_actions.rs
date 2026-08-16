@@ -28,13 +28,14 @@ impl Engine {
                 Err(err) => return RoutedDecision::error(err),
             };
             if let Some(action) = action {
-                return self
+                let decision = self
                     .execute_action(
                         ExecuteActionContext {
                             workflow: ctx.workflow,
                             current_idx: ctx.step_idx,
                             is_failure_path: false,
                             retry_count: ctx.retry_count,
+                            retry_site: RetrySite::new(ctx.step_idx, action.index),
                             cancel: ctx.cancel,
                             is_timeout: ctx.is_timeout,
                             response: ctx.result.response.as_deref(),
@@ -53,6 +54,12 @@ impl Engine {
                         }),
                     )
                     .await;
+                return match decision {
+                    ActionExecution::Routed(decision) => decision,
+                    ActionExecution::RetryExhausted(exhausted) => {
+                        Self::retry_limit_exceeded_decision(step, exhausted)
+                    }
+                };
             }
             return RoutedDecision {
                 flow: FlowDecision::Next(ctx.step_idx + 1),
@@ -65,31 +72,46 @@ impl Engine {
         } else {
             &step.on_failure
         };
-        let action = match self
-            .find_matching_action_with_debug(
-                ActionSelectionContext {
-                    workflow_id: ctx.workflow_id,
-                    step,
-                    branch: ActionBranch::Failure,
-                    vars: ctx.vars,
-                    response: ctx.result.response.as_deref(),
-                    depth: ctx.depth,
-                },
-                failure_actions,
-            )
-            .await
-        {
-            Ok(action) => action,
-            Err(err) => return RoutedDecision::error(err),
-        };
-        if let Some(action) = action {
-            return self
+        // Failure Action Object §5.8.8.1 requires an exhausted retry to yield
+        // to subsequent failure actions. Continue the same routing pass from
+        // the action after the exhausted retry; do not evaluate earlier actions
+        // against the same failed response again.
+        let mut next_action_index = 0;
+        let mut exhausted_retry = None;
+        loop {
+            let action = match self
+                .find_matching_action_with_debug_from(
+                    ActionSelectionContext {
+                        workflow_id: ctx.workflow_id,
+                        step,
+                        branch: ActionBranch::Failure,
+                        vars: ctx.vars,
+                        response: ctx.result.response.as_deref(),
+                        depth: ctx.depth,
+                    },
+                    failure_actions,
+                    next_action_index,
+                )
+                .await
+            {
+                Ok(action) => action,
+                Err(err) => return RoutedDecision::error(err),
+            };
+            let Some(action) = action else {
+                return match exhausted_retry {
+                    Some(exhausted) => Self::retry_limit_exceeded_decision(step, exhausted),
+                    None => RoutedDecision::error(step_result_error(&step.step_id, ctx.result)),
+                };
+            };
+
+            let decision = self
                 .execute_action(
                     ExecuteActionContext {
                         workflow: ctx.workflow,
                         current_idx: ctx.step_idx,
                         is_failure_path: true,
                         retry_count: ctx.retry_count,
+                        retry_site: RetrySite::new(ctx.step_idx, action.index),
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                         response: ctx.result.response.as_deref(),
@@ -108,9 +130,33 @@ impl Engine {
                     }),
                 )
                 .await;
-        }
 
-        RoutedDecision::error(step_result_error(&step.step_id, ctx.result))
+            match decision {
+                ActionExecution::Routed(decision) => return decision,
+                ActionExecution::RetryExhausted(exhausted) => {
+                    exhausted_retry = Some(exhausted);
+                    next_action_index = action.index.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    fn retry_limit_exceeded_decision(step: &Step, exhausted: ExhaustedRetry) -> RoutedDecision {
+        RoutedDecision {
+            flow: FlowDecision::Error(RuntimeError::new(
+                RuntimeErrorKind::RetryLimitExceeded,
+                format!(
+                    "step {}: max retries ({}) exceeded",
+                    step.step_id, exhausted.effective_limit
+                ),
+            )),
+            trace: TraceDecision {
+                action_type: ActionType::Retry.to_string(),
+                retry_after_seconds: Some(exhausted.retry_after),
+                retry_limit: exhausted.configured_limit,
+                ..TraceDecision::with_path(TraceDecisionPath::Error)
+            },
+        }
     }
 
     #[cfg(test)]
@@ -144,6 +190,16 @@ impl Engine {
         ctx: ActionSelectionContext<'_>,
         actions: &'a [OnAction],
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
+        self.find_matching_action_with_debug_from(ctx, actions, 0)
+            .await
+    }
+
+    async fn find_matching_action_with_debug_from<'a>(
+        &self,
+        ctx: ActionSelectionContext<'_>,
+        actions: &'a [OnAction],
+        start_index: usize,
+    ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
         let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
         let gate = DebugGateContext {
@@ -156,7 +212,7 @@ impl Engine {
             depth: ctx.depth,
         };
 
-        for (action_index, action) in actions.iter().enumerate() {
+        for (action_index, action) in actions.iter().enumerate().skip(start_index) {
             self.debug_gate_action(&gate, ctx.branch, action_index, action)
                 .await?;
             if action.criteria.is_empty() {
@@ -202,7 +258,7 @@ impl Engine {
         ctx: ExecuteActionContext<'_>,
         action: &OnAction,
         debug_ctx: Option<SelectedActionDebugContext<'_>>,
-    ) -> RoutedDecision {
+    ) -> ActionExecution {
         match action.action_type() {
             ActionType::End => {
                 if ctx.is_failure_path {
@@ -224,6 +280,7 @@ impl Engine {
                             ..TraceDecision::with_path(TraceDecisionPath::Done)
                         },
                     }
+                    .into()
                 } else {
                     RoutedDecision {
                         flow: FlowDecision::Done,
@@ -232,6 +289,7 @@ impl Engine {
                             ..TraceDecision::with_path(TraceDecisionPath::Done)
                         },
                     }
+                    .into()
                 }
             }
             ActionType::Goto => {
@@ -247,7 +305,8 @@ impl Engine {
                                 target_step_id: resolved_step_id,
                                 ..TraceDecision::with_path(TraceDecisionPath::GotoStep)
                             },
-                        };
+                        }
+                        .into();
                     }
                     return RoutedDecision {
                         flow: FlowDecision::Error(RuntimeError::new(
@@ -259,7 +318,8 @@ impl Engine {
                             target_step_id: resolved_step_id,
                             ..TraceDecision::with_path(TraceDecisionPath::Error)
                         },
-                    };
+                    }
+                    .into();
                 }
                 if !action.workflow_id.is_empty() {
                     let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
@@ -274,7 +334,8 @@ impl Engine {
                             target_workflow_id: resolved_workflow_id,
                             ..TraceDecision::with_path(TraceDecisionPath::GotoWorkflow)
                         },
-                    };
+                    }
+                    .into();
                 }
                 RoutedDecision {
                     flow: FlowDecision::Error(RuntimeError::new(
@@ -286,6 +347,7 @@ impl Engine {
                         ..TraceDecision::with_path(TraceDecisionPath::Error)
                     },
                 }
+                .into()
             }
             ActionType::Retry => {
                 // Failure Action Object: "If a stepId or workflowId are
@@ -315,11 +377,8 @@ impl Engine {
                     }
                     None => (String::new(), String::new()),
                 };
-                let limit = action
-                    .retry_limit
-                    .map(|v| usize::try_from(v).unwrap_or(MAX_RETRIES_PER_STEP))
-                    .unwrap_or(MAX_RETRIES_PER_STEP);
-                let current = ctx.retry_count.get(&ctx.current_idx).copied().unwrap_or(0);
+                let limit = effective_retry_limit(action.retry_limit);
+                let current = ctx.retry_count.get(&ctx.retry_site).copied().unwrap_or(0);
                 let will_execute_retry = current < limit;
                 if let Some(debug) = debug_ctx {
                     if let Err(err) = self
@@ -332,25 +391,15 @@ impl Engine {
                         )
                         .await
                     {
-                        return RoutedDecision::error(err);
+                        return RoutedDecision::error(err).into();
                     }
                 }
                 if current >= limit {
-                    return RoutedDecision {
-                        flow: FlowDecision::Error(RuntimeError::new(
-                            RuntimeErrorKind::RetryLimitExceeded,
-                            format!(
-                                "step {}: max retries ({limit}) exceeded",
-                                ctx.workflow.steps[ctx.current_idx].step_id
-                            ),
-                        )),
-                        trace: TraceDecision {
-                            action_type: action.action_type().to_string(),
-                            retry_after_seconds: Some(action.retry_after),
-                            retry_limit: action.retry_limit,
-                            ..TraceDecision::with_path(TraceDecisionPath::Error)
-                        },
-                    };
+                    return ActionExecution::RetryExhausted(ExhaustedRetry {
+                        effective_limit: limit,
+                        retry_after: action.retry_after,
+                        configured_limit: action.retry_limit,
+                    });
                 }
 
                 // RetryScheduled observer event emitted by caller (execute_inner) after FlowDecision::Retry
@@ -363,7 +412,7 @@ impl Engine {
                             .debug_gate_retry_delay(debug, action, current, limit)
                             .await
                         {
-                            return RoutedDecision::error(err);
+                            return RoutedDecision::error(err).into();
                         }
                     }
                     if let Err(err) =
@@ -377,12 +426,15 @@ impl Engine {
                                 retry_limit: action.retry_limit,
                                 ..TraceDecision::with_path(TraceDecisionPath::Error)
                             },
-                        };
+                        }
+                        .into();
                     }
                 }
                 RoutedDecision {
                     flow: FlowDecision::Retry {
                         step_idx: ctx.current_idx,
+                        retry_site: ctx.retry_site,
+                        retry_limit: limit,
                         reference,
                     },
                     trace: TraceDecision {
@@ -394,6 +446,7 @@ impl Engine {
                         ..TraceDecision::with_path(TraceDecisionPath::Retry)
                     },
                 }
+                .into()
             }
         }
     }
@@ -412,6 +465,11 @@ pub(super) enum FlowDecision {
     Next(usize),
     Retry {
         step_idx: usize,
+        /// Internal `(step index, effective failure-action index)` site.
+        retry_site: RetrySite,
+        /// Configured or defaulted retry budget. This is not part of the
+        /// public trace schema, which preserves the configured Option value.
+        retry_limit: usize,
         /// Recovery reference from the retry action's `stepId`/`workflowId`.
         /// Executed call-and-return at the consumption site before the step
         /// at `step_idx` is retried; `None` for a plain retry.
@@ -493,6 +551,42 @@ struct MatchedActionRef<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct ExhaustedRetry {
+    effective_limit: usize,
+    retry_after: u64,
+    configured_limit: Option<u64>,
+}
+
+#[derive(Debug)]
+enum ActionExecution {
+    Routed(RoutedDecision),
+    RetryExhausted(ExhaustedRetry),
+}
+
+impl From<RoutedDecision> for ActionExecution {
+    fn from(decision: RoutedDecision) -> Self {
+        Self::Routed(decision)
+    }
+}
+
+/// Internal identity for retry budgets. A retry is scoped to its step and its
+/// index in that step's effective failure-action list.
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct RetrySite {
+    step_index: usize,
+    action_index: usize,
+}
+
+impl RetrySite {
+    fn new(step_index: usize, action_index: usize) -> Self {
+        Self {
+            step_index,
+            action_index,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(super) struct SelectedActionDebugContext<'a> {
     pub workflow_id: &'a str,
     pub step: &'a Step,
@@ -521,7 +615,7 @@ pub(super) struct StepDecisionContext<'a> {
     pub result: &'a StepResult,
     pub vars: &'a VarStore,
     pub depth: usize,
-    pub retry_count: &'a BTreeMap<usize, usize>,
+    pub retry_count: &'a BTreeMap<RetrySite, usize>,
     pub cancel: &'a CancellationToken,
     pub is_timeout: &'a AtomicBool,
 }
@@ -531,7 +625,8 @@ struct ExecuteActionContext<'a> {
     workflow: &'a Workflow,
     current_idx: usize,
     is_failure_path: bool,
-    retry_count: &'a BTreeMap<usize, usize>,
+    retry_count: &'a BTreeMap<RetrySite, usize>,
+    retry_site: RetrySite,
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
     response: Option<&'a Response>,
@@ -540,6 +635,16 @@ struct ExecuteActionContext<'a> {
     /// Used by the `End` action on the failure path to preserve the root cause
     /// instead of replacing it with a generic `SuccessCriteriaFailed`.
     original_err_kind: Option<RuntimeErrorKind>,
+}
+
+/// Returns the effective Arazzo retry limit for all runtime consumers.
+///
+/// Failure Action Object §5.8.8.1: an omitted `retryLimit` means one retry;
+/// an explicit value is retained exactly on the current target width.
+pub(super) fn effective_retry_limit(configured_limit: Option<u64>) -> usize {
+    configured_limit
+        .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
+        .unwrap_or(DEFAULT_RETRY_LIMIT)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

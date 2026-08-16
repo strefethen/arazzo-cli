@@ -1,6 +1,9 @@
 mod common;
 
-use arazzo_runtime::{EngineBuilder, RuntimeError, RuntimeErrorKind, TraceDecisionPath};
+use arazzo_runtime::{
+    EngineBuilder, ExecutionObserver, ObserverEvent, RuntimeError, RuntimeErrorKind,
+    TraceDecisionPath,
+};
 use arazzo_spec::{
     ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, OnAction, OutputValue,
     ParamLocation, Parameter, Replacement, RequestBody, SelectorObject, SelectorType,
@@ -13,6 +16,27 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
+
+#[derive(Default)]
+struct RetryCancellationObserver {
+    failed_step_completed: Notify,
+    retry_scheduled: AtomicUsize,
+}
+
+impl ExecutionObserver for RetryCancellationObserver {
+    fn on_event(&self, event: &ObserverEvent) {
+        match event {
+            ObserverEvent::StepCompleted { step_id, .. } if step_id == "retry-step" => {
+                self.failed_step_completed.notify_one();
+            }
+            ObserverEvent::RetryScheduled { .. } => {
+                self.retry_scheduled.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+}
 
 // ── Basic execution tests ─────────────────────────────────────────
 
@@ -784,6 +808,7 @@ async fn execute_on_failure_retry() {
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
+                retry_limit: Some(2),
                 ..OnAction::default()
             }],
             ..Step::default()
@@ -830,7 +855,7 @@ async fn execute_retry_exceeds_max() {
         Ok(_) => panic!("expected max-retries error"),
         Err(err) => err,
     };
-    assert_eq!(err.message, "step s1: max retries (3) exceeded");
+    assert_eq!(err.message, "step s1: max retries (1) exceeded");
 }
 
 #[tokio::test]
@@ -941,6 +966,732 @@ async fn execute_retry_limit_zero_means_no_retries() {
     assert_eq!(err.message, "step s1: max retries (0) exceeded");
     // Only 1 call — the initial request, no retries
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn arazzo_11_retry_limit_counts_omitted_zero_one_and_two() {
+    for (case_name, retry_limit, expected_retries) in [
+        ("omitted", None, 1usize),
+        ("zero", Some(0), 0),
+        ("one", Some(1), 1),
+        ("two", Some(2), 2),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_ref = Arc::clone(&calls);
+        let server = start_server(move |_method, _url, _headers, _body| {
+            calls_ref.fetch_add(1, Ordering::Relaxed);
+            MockHttpResponse::empty(500)
+        });
+        let mut spec = make_spec(vec![Workflow {
+            workflow_id: format!("retry-limit-{case_name}"),
+            steps: vec![Step {
+                step_id: "retry-step".to_string(),
+                target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![OnAction {
+                    name: format!("retry-{case_name}"),
+                    type_: Some(ActionType::Retry),
+                    retry_limit,
+                    ..OnAction::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }]);
+        spec.arazzo = "1.1.0".to_string();
+
+        let engine = new_test_engine(&server.base_url, spec);
+        let err = match engine
+            .execute_collect(&format!("retry-limit-{case_name}"), BTreeMap::new())
+            .await
+            .outputs
+        {
+            Ok(_) => panic!("{case_name}: expected retry-limit error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::RetryLimitExceeded);
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            expected_retries + 1,
+            "{case_name} must count only scheduled retries"
+        );
+    }
+}
+
+#[tokio::test]
+async fn arazzo_11_workflow_failure_retry_fallback_uses_the_same_omitted_limit() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "workflow-retry-fallback".to_string(),
+        failure_actions: vec![OnAction {
+            name: "workflow-omitted-retry".to_string(),
+            type_: Some(ActionType::Retry),
+            ..OnAction::default()
+        }],
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            success_criteria: success_200(),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine
+        .execute_collect("workflow-retry-fallback", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("workflow retry fallback must exhaust"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    assert_eq!(err.message, "step retry-step: max retries (1) exceeded");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn arazzo_11_exhausted_retry_falls_through_to_matching_end_with_final_trace_route() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-then-end".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "exhaust-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "end-second".to_string(),
+                    type_: Some(ActionType::End),
+                    criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 500".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let engine = match EngineBuilder::new(spec).trace(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building traced engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("retry-then-end", BTreeMap::new())
+        .await;
+    let err = match &result.outputs {
+        Ok(_) => panic!("matching end must fail the original step"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::SuccessCriteriaFailed);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(result.trace_steps().len(), 1);
+    assert_eq!(
+        result.trace_steps()[0].decision.path,
+        TraceDecisionPath::Done
+    );
+}
+
+#[tokio::test]
+async fn arazzo_11_exhausted_retry_skips_nonmatching_actions_then_goto() {
+    let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+    let paths_ref = Arc::clone(&paths);
+    let server = start_server(move |_method, url, _headers, _body| {
+        match paths_ref.lock() {
+            Ok(mut paths) => paths.push(url.clone()),
+            Err(_) => panic!("recording request path"),
+        }
+        match url.as_str() {
+            "/fail" => MockHttpResponse::empty(500),
+            "/fallback" => MockHttpResponse::empty(200),
+            _ => MockHttpResponse::empty(404),
+        }
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-then-goto".to_string(),
+        steps: vec![
+            Step {
+                step_id: "retry-step".to_string(),
+                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                success_criteria: success_200(),
+                on_failure: vec![
+                    OnAction {
+                        name: "exhaust-first".to_string(),
+                        type_: Some(ActionType::Retry),
+                        retry_limit: Some(0),
+                        ..OnAction::default()
+                    },
+                    OnAction {
+                        name: "nonmatching-end".to_string(),
+                        type_: Some(ActionType::End),
+                        criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 503".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..OnAction::default()
+                    },
+                    OnAction {
+                        name: "goto-third".to_string(),
+                        type_: Some(ActionType::Goto),
+                        step_id: "fallback".to_string(),
+                        criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 500".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..OnAction::default()
+                    },
+                ],
+                ..Step::default()
+            },
+            Step {
+                step_id: "fallback".to_string(),
+                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                success_criteria: success_200(),
+                ..Step::default()
+            },
+        ],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("retry-then-goto", BTreeMap::new())
+        .await
+        .outputs;
+    assert!(
+        result.is_ok(),
+        "later matching goto must handle failure: {result:?}"
+    );
+    assert_eq!(
+        paths
+            .lock()
+            .unwrap_or_else(|_| panic!("reading request paths"))
+            .clone(),
+        vec!["/fail".to_string(), "/fallback".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn arazzo_11_exhausted_retry_nonmatching_later_actions_returns_stable_limit() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-no-later-handler".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "retry-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(2),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "nonmatching-end".to_string(),
+                    type_: Some(ActionType::End),
+                    criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 503".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "nonmatching-goto".to_string(),
+                    type_: Some(ActionType::Goto),
+                    step_id: "missing".to_string(),
+                    criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 503".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "nonmatching-retry".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(9),
+                    criteria: vec![SuccessCriterion {
+                        condition: "$statusCode == 503".to_string(),
+                        ..SuccessCriterion::default()
+                    }],
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine
+        .execute_collect("retry-no-later-handler", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("nonmatching later actions must not handle failure"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    assert_eq!(err.message, "step retry-step: max retries (2) exceeded");
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn arazzo_11_retry_sites_are_independent_in_serial_and_execute_step_observers() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "independent-retry-sites".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "first-retry".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(1),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "second-retry".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(2),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let serial_observer = Arc::new(TestObserver::default());
+    let serial_engine = match EngineBuilder::new(spec.clone())
+        .trace(true)
+        .observer(Arc::clone(&serial_observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building serial observer engine: {err}"),
+    };
+    let serial_result = serial_engine
+        .execute_collect("independent-retry-sites", BTreeMap::new())
+        .await;
+    let serial_err = match &serial_result.outputs {
+        Ok(_) => panic!("all retry sites must eventually exhaust"),
+        Err(err) => err,
+    };
+    assert_eq!(serial_err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    assert_eq!(
+        serial_err.message,
+        "step retry-step: max retries (2) exceeded"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 4);
+    assert_eq!(
+        serial_observer
+            .events()
+            .into_iter()
+            .filter(|event| event.starts_with("RetryScheduled:"))
+            .collect::<Vec<_>>(),
+        vec![
+            "RetryScheduled:retry-step:1/1".to_string(),
+            "RetryScheduled:retry-step:1/2".to_string(),
+            "RetryScheduled:retry-step:2/2".to_string(),
+        ]
+    );
+    assert_eq!(serial_result.trace_steps().len(), 4);
+    assert_eq!(
+        serial_result
+            .trace_steps()
+            .iter()
+            .map(|record| record.decision.path.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            TraceDecisionPath::Retry,
+            TraceDecisionPath::Retry,
+            TraceDecisionPath::Retry,
+            TraceDecisionPath::Error,
+        ]
+    );
+    assert_eq!(serial_result.trace_steps()[0].decision.retry_limit, Some(1));
+    assert_eq!(serial_result.trace_steps()[1].decision.retry_limit, Some(2));
+
+    let step_observer = Arc::new(TestObserver::default());
+    let step_engine = match EngineBuilder::new(spec)
+        .observer(Arc::clone(&step_observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building execute_step observer engine: {err}"),
+    };
+    let step_err = match step_engine
+        .execute_step(
+            "independent-retry-sites",
+            "retry-step",
+            BTreeMap::new(),
+            false,
+        )
+        .collect()
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("execute_step must exhaust the same retry sites"),
+        Err(err) => err,
+    };
+    assert_eq!(step_err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    assert_eq!(calls.load(Ordering::Relaxed), 8);
+    assert_eq!(
+        step_observer
+            .events()
+            .into_iter()
+            .filter(|event| event.starts_with("RetryScheduled:"))
+            .collect::<Vec<_>>(),
+        vec![
+            "RetryScheduled:retry-step:1/1".to_string(),
+            "RetryScheduled:retry-step:1/2".to_string(),
+            "RetryScheduled:retry-step:2/2".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn arazzo_11_omitted_retry_limit_stays_absent_in_trace_and_uses_one_observer_attempt() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        let call = calls_ref.fetch_add(1, Ordering::Relaxed);
+        if call == 0 {
+            MockHttpResponse::empty(500)
+        } else {
+            MockHttpResponse::empty(200)
+        }
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "omitted-trace-limit".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![OnAction {
+                name: "omitted-retry".to_string(),
+                type_: Some(ActionType::Retry),
+                ..OnAction::default()
+            }],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(TestObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building observer engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("omitted-trace-limit", BTreeMap::new())
+        .await;
+    assert!(result.outputs.is_ok(), "omitted retry must retry once");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        result.trace_steps()[0].decision.path,
+        TraceDecisionPath::Retry
+    );
+    assert_eq!(result.trace_steps()[0].decision.retry_limit, None);
+    assert!(observer
+        .events()
+        .contains(&"RetryScheduled:retry-step:1/1".to_string()));
+}
+
+#[tokio::test]
+async fn arazzo_11_later_action_errors_do_not_become_retry_exhaustion() {
+    let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(500));
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-then-invalid-goto".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "exhaust-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "invalid-goto-second".to_string(),
+                    type_: Some(ActionType::Goto),
+                    step_id: "missing".to_string(),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine
+        .execute_collect("retry-then-invalid-goto", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("invalid later goto must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::GotoTargetNotFound);
+}
+
+#[tokio::test]
+async fn arazzo_11_later_retry_reference_failure_does_not_resume_action_scanning() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-reference-failure".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "exhaust-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "reference-second".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(1),
+                    workflow_id: "missing-recovery".to_string(),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "end-never-reached".to_string(),
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(TestObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .observer(Arc::clone(&observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building retry-reference observer engine: {err}"),
+    };
+    let err = match engine
+        .execute_collect("retry-reference-failure", BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("failed retry reference must fail the workflow"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::RetryReferenceFailed);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(
+        observer
+            .events()
+            .into_iter()
+            .all(|event| !event.starts_with("RetryScheduled:")),
+        "a retry reference that fails before scheduling must not emit RetryScheduled"
+    );
+}
+
+#[tokio::test]
+async fn arazzo_11_later_retry_delay_timeout_does_not_resume_action_scanning() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-delay-timeout-fallthrough".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "exhaust-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "delayed-retry-second".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_after: 2,
+                    retry_limit: Some(1),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "end-never-reached".to_string(),
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let err = match engine
+        .execute_with_timeout(
+            "retry-delay-timeout-fallthrough",
+            BTreeMap::new(),
+            Duration::from_millis(120),
+        )
+        .collect()
+        .await
+        .outputs
+    {
+        Ok(_) => panic!("timeout during later retry delay must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::ExecutionTimeout);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn arazzo_11_later_retry_delay_cancellation_does_not_resume_action_scanning() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_ref = Arc::clone(&calls);
+    let server = start_server(move |_method, _url, _headers, _body| {
+        calls_ref.fetch_add(1, Ordering::Relaxed);
+        MockHttpResponse::empty(500)
+    });
+    let mut spec = make_spec(vec![Workflow {
+        workflow_id: "retry-delay-cancellation-fallthrough".to_string(),
+        steps: vec![Step {
+            step_id: "retry-step".to_string(),
+            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            success_criteria: success_200(),
+            on_failure: vec![
+                OnAction {
+                    name: "exhaust-first".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_limit: Some(0),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "delayed-retry-second".to_string(),
+                    type_: Some(ActionType::Retry),
+                    retry_after: 1,
+                    retry_limit: Some(1),
+                    ..OnAction::default()
+                },
+                OnAction {
+                    name: "end-never-reached".to_string(),
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                },
+            ],
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+    spec.arazzo = "1.1.0".to_string();
+    spec.source_descriptions[0].url = server.base_url.clone();
+
+    let observer = Arc::new(RetryCancellationObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building retry cancellation engine: {err}"),
+    };
+    let handle = engine.execute("retry-delay-cancellation-fallthrough", BTreeMap::new());
+
+    if tokio::time::timeout(
+        Duration::from_secs(1),
+        observer.failed_step_completed.notified(),
+    )
+    .await
+    .is_err()
+    {
+        panic!("initial failed step did not complete before the cancellation deadline");
+    }
+    handle.cancel_token().cancel();
+
+    let result = match tokio::time::timeout(Duration::from_secs(2), handle.collect()).await {
+        Ok(result) => result,
+        Err(_) => panic!("cancelled retry delay did not stop within the deadline"),
+    };
+    let err = match &result.outputs {
+        Ok(_) => panic!("cancellation during the later retry delay must fail"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
+    assert_eq!(result.trace_steps().len(), 1);
+    assert_eq!(
+        result.trace_steps()[0].decision.path,
+        TraceDecisionPath::Error,
+        "the later catch-all end action must not execute"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(observer.retry_scheduled.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -1339,6 +2090,7 @@ async fn execute_retry_reference_runs_once_per_retried_attempt() {
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
+                    retry_limit: Some(2),
                     workflow_id: "recovery".to_string(),
                     ..OnAction::default()
                 }],
@@ -3391,6 +4143,7 @@ async fn execute_step_retries_on_failure() {
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
+                    retry_limit: Some(2),
                     ..OnAction::default()
                 }],
                 ..Step::default()

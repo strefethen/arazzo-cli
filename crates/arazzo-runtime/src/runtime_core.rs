@@ -19,7 +19,8 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-const MAX_RETRIES_PER_STEP: usize = 3;
+/// Arazzo 1.1 Failure Action Object: an omitted `retryLimit` permits one retry.
+const DEFAULT_RETRY_LIMIT: usize = 1;
 const MAX_CALL_DEPTH: usize = 10;
 const DEFAULT_CHANNEL_CAPACITY: usize = 1024;
 pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
@@ -69,7 +70,8 @@ use deps::can_execute_parallel;
 use deps::has_control_flow;
 pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs};
 use engine_actions::{
-    ActionBranch, FlowDecision, RetryReference, SelectedActionDebugContext, StepDecisionContext,
+    effective_retry_limit, ActionBranch, FlowDecision, RetryReference, RetrySite,
+    SelectedActionDebugContext, StepDecisionContext,
 };
 use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};

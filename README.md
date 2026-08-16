@@ -621,7 +621,7 @@ onFailure:
     type: end
 ```
 
-This retries on `429 Too Many Requests` up to 3 times with a 2-second delay, then fails on any other error. The engine enforces a hard cap of 3 retries per step and 10 levels of sub-workflow nesting to prevent runaway execution.
+This retries on `429 Too Many Requests` up to 3 times with a 2-second delay, then fails on any other error. An omitted `retryLimit` performs one retry; explicit limits are exact, and bounded execution uses the declared effective retry budgets with 10 levels of sub-workflow nesting to prevent runaway execution.
 
 ### Goto with Criteria Guards
 
@@ -789,7 +789,7 @@ arazzo-cli is designed to be reliable and predictable:
 - **No unsafe code** — `#![forbid(unsafe_code)]` is enforced across the entire workspace. All concurrency uses safe abstractions (`Arc`, `Mutex`, `tokio::sync`, `CancellationToken`)
 - **No `.unwrap()` or `.expect()`** — Clippy's `unwrap_used` lint is set to `deny`. All error paths are handled explicitly
 - **Deterministic traces** — identical inputs always produce identical event sequences, even under parallel execution. Sequence numbers are assigned by level and step order, not by thread timing
-- **Bounded execution** — hard limits prevent runaway workflows: 3 retries per step, 10 sub-workflow nesting levels, configurable per-request and overall timeouts, response body size cap (10 MiB default)
+- **Bounded execution** — declared effective retry budgets, 10 sub-workflow nesting levels, configurable per-request and overall timeouts, and a 10 MiB default response-body cap prevent runaway workflows
 - **Automatic redaction** — trace files redact 18 sensitive key patterns (`authorization`, `token`, `password`, `secret`, `cookie`, `api-key`, etc.) by default
 - **Rate limiting** — a built-in token-bucket rate limiter (10 requests/sec, burst of 20) prevents accidental API abuse
 

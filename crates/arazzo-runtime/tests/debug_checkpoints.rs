@@ -237,6 +237,121 @@ async fn on_failure_retry_selected_and_delay_checkpoints_are_debuggable() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_later_index() {
+    let server = start_server_with_status(503);
+    let controller = Arc::new(DebugController::new());
+    let spec = ArazzoSpec {
+        arazzo: "1.1.0".to_string(),
+        info: Info {
+            title: "debug-exhausted-retry-fallthrough".to_string(),
+            version: "1.0.0".to_string(),
+            ..Info::default()
+        },
+        source_descriptions: vec![SourceDescription {
+            name: "test".to_string(),
+            url: server.base_url.clone(),
+            type_: SourceType::OpenApi,
+            ..SourceDescription::default()
+        }],
+        workflows: vec![Workflow {
+            workflow_id: "wf".to_string(),
+            steps: vec![Step {
+                step_id: "fetch-rss".to_string(),
+                target: Some(StepTarget::OperationPath("/rss".to_string())),
+                success_criteria: vec![SuccessCriterion {
+                    condition: "$statusCode == 200".to_string(),
+                    ..SuccessCriterion::default()
+                }],
+                on_failure: vec![
+                    OnAction {
+                        name: "exhaust-first".to_string(),
+                        type_: Some(ActionType::Retry),
+                        retry_after: 1,
+                        retry_limit: Some(0),
+                        ..OnAction::default()
+                    },
+                    OnAction {
+                        name: "end-second".to_string(),
+                        type_: Some(ActionType::End),
+                        ..OnAction::default()
+                    },
+                ],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+        components: None,
+        ..ArazzoSpec::default()
+    };
+    let engine = match EngineBuilder::new(spec)
+        .debug_controller(Arc::clone(&controller))
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("creating exhausted retry engine: {err}"),
+    };
+    if let Err(err) = controller.set_breakpoints(vec![
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_selected(0),
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_retry_delay(0),
+        StepBreakpoint::new("wf", "fetch-rss").at_on_failure_action(1),
+    ]) {
+        panic!("setting breakpoints: {err}");
+    }
+
+    let handle = engine.execute("wf", BTreeMap::new());
+    wait_for_stop(&controller, 1);
+    let selected_scopes = match controller.current_scopes() {
+        Ok(scopes) => scopes,
+        Err(err) => panic!("reading exhausted retry scopes: {err}"),
+    };
+    assert_eq!(
+        selected_scopes.locals.get("retryCountCurrent"),
+        Some(&json!(0))
+    );
+    assert_eq!(
+        selected_scopes.locals.get("retryLimitResolved"),
+        Some(&json!(0))
+    );
+    assert_eq!(
+        selected_scopes.locals.get("retryWillExecute"),
+        Some(&json!(false))
+    );
+
+    if let Err(err) = controller.continue_execution() {
+        panic!("continuing after exhausted retry selection: {err}");
+    }
+    wait_for_stop(&controller, 2);
+    let events = read_stop_events(&controller);
+    assert_eq!(
+        events[0].checkpoint,
+        StepCheckpoint::OnFailureRetrySelected { action_index: 0 }
+    );
+    assert_eq!(
+        events[1].checkpoint,
+        StepCheckpoint::OnFailureAction { index: 1 }
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.checkpoint,
+            StepCheckpoint::OnFailureRetryDelay { action_index: 0 }
+        )),
+        "exhaustion must not schedule a retry delay checkpoint"
+    );
+
+    if let Err(err) = controller.set_breakpoints(Vec::new()) {
+        panic!("clearing exhausted-retry breakpoints: {err}");
+    }
+    if let Err(err) = controller.continue_execution() {
+        panic!("continuing after later action: {err}");
+    }
+    let result = handle.collect().await;
+    assert!(
+        result.outputs.is_err(),
+        "later end must end the failed step"
+    );
+}
+
 fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),

@@ -23,9 +23,17 @@
       "specAnchors": ["spec/arazzo/v1.1.0.html#failure-action-object", "spec/arazzo/v1.1.0.html#stepOnFailure"],
       "normativeLevels": ["SHALL", "MUST"],
       "claim": "An omitted retryLimit performs one retry; only after exhaustion can later failure actions be considered in list order.",
-      "status": "deviation",
-      "owner": "ac-f2160",
-      "reason": "Retry default and failure-action fall-through are scheduled in ac-f2160."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/engine_execution.rs#arazzo_11_retry_limit_counts_omitted_zero_one_and_two",
+          "crates/arazzo-runtime/tests/engine_execution.rs#arazzo_11_retry_sites_are_independent_in_serial_and_execute_step_observers"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/tests/engine_execution.rs#arazzo_11_exhausted_retry_nonmatching_later_actions_returns_stable_limit",
+          "crates/arazzo-runtime/tests/debug_checkpoints.rs#arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_later_index"
+        ]
+      }
     },
     {
       "id": "runtime.typed-criterion-interpolation-and-null",
