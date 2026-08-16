@@ -404,6 +404,80 @@ async fn execute_sequential_steps() {
     }
 }
 
+/// Workflow Parameters join an operation Step by the exact `(name, in)` key:
+/// the Step's `shared` query value overrides the workflow value, while the
+/// other workflow parameter remains. A workflow-targeting Step inherits none.
+#[tokio::test]
+async fn workflow_parameter_merge_matches_validation_effective_list() {
+    let paths = Arc::new(Mutex::new(Vec::new()));
+    let paths_ref = Arc::clone(&paths);
+    let server = start_server(move |_method, url, _headers, _body| {
+        match paths_ref.lock() {
+            Ok(mut observed) => observed.push(url),
+            Err(_) => panic!("recording request path"),
+        }
+        MockHttpResponse::empty(200)
+    });
+    let query_parameter = |name: &str, value: &str| Parameter {
+        name: name.to_string(),
+        in_: Some(ParamLocation::Query),
+        value: serde_yaml_ng::Value::String(value.to_string()).into(),
+        ..Parameter::default()
+    };
+    let spec = make_spec(vec![
+        Workflow {
+            workflow_id: "parent".to_string(),
+            parameters: vec![
+                query_parameter("inherited", "global"),
+                query_parameter("shared", "workflow"),
+            ],
+            steps: vec![
+                Step {
+                    step_id: "operation".to_string(),
+                    target: Some(StepTarget::OperationPath("/request".to_string())),
+                    parameters: vec![query_parameter("shared", "step")],
+                    ..Step::default()
+                },
+                Step {
+                    step_id: "child".to_string(),
+                    target: Some(StepTarget::WorkflowId("child".to_string())),
+                    ..Step::default()
+                },
+            ],
+            ..Workflow::default()
+        },
+        Workflow {
+            workflow_id: "child".to_string(),
+            steps: vec![Step {
+                step_id: "child-operation".to_string(),
+                target: Some(StepTarget::OperationPath("/child".to_string())),
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        },
+    ]);
+
+    let result = new_test_engine(&server.base_url, spec)
+        .execute_collect("parent", BTreeMap::new())
+        .await
+        .outputs;
+    if let Err(err) = result {
+        panic!("expected workflow to execute: {err}");
+    }
+
+    let observed = match paths.lock() {
+        Ok(paths) => paths.clone(),
+        Err(_) => panic!("reading request paths"),
+    };
+    assert_eq!(
+        observed,
+        vec![
+            "/request?inherited=global&shared=step".to_string(),
+            "/child".to_string(),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn execute_on_success_goto_interpolation_bug() {
     let server = start_server(|_method, url, _headers, _body| match url.as_str() {

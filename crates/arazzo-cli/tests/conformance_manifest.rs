@@ -1242,10 +1242,10 @@ fn checked_in_manifest_has_deterministic_separate_totals() {
     assert_eq!(
         report.arazzo,
         StatusTotals {
-            covered: 1,
+            covered: 2,
             fail_closed: 1,
             unsupported: 3,
-            deviation: 14,
+            deviation: 13,
         }
     );
     assert_eq!(

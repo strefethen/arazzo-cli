@@ -18,6 +18,21 @@ fn conformance_required_any_values_negative_evidence() {
     tests::raw_required_values_report_exact_paths_for_yaml_and_json();
 }
 
+// See the note above the required-Any adapters. These two execute the complete
+// Parameter context matrix while keeping the manifest's evidence references
+// stable and scanner-visible.
+#[cfg(test)]
+#[test]
+fn conformance_parameter_context_positive_evidence() {
+    tests::parameter_context_positive_matrix();
+}
+
+#[cfg(test)]
+#[test]
+fn conformance_parameter_context_negative_evidence() {
+    tests::parameter_context_negative_matrix();
+}
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -247,7 +262,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // raw bytes here, the one place both the document text and the rest of
     // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
     // take only `&ArazzoSpec` and therefore cannot enforce this rule.
-    let mut diagnostics = collect_diagnostics(&spec);
+    let mut diagnostics = collect_diagnostics(&spec, Some(&raw));
     diagnostics.extend(check_raw_required_values(&raw));
     diagnostics.extend(check_raw_action_field_boundaries(&raw));
     diagnostics.extend(check_raw_success_criteria(&raw));
@@ -265,7 +280,7 @@ pub fn validate(spec: &ArazzoSpec) -> Result<(), Error> {
 /// Applies structural validation rules, returning warnings on success and
 /// failing with a report that also carries them on error.
 pub fn validate_diagnostics(spec: &ArazzoSpec) -> Result<Vec<Diagnostic>, Error> {
-    partition_diagnostics(collect_diagnostics(spec))
+    partition_diagnostics(collect_diagnostics(spec, None))
 }
 
 /// Splits a diagnostics list into a success (warnings only) or failure
@@ -677,7 +692,7 @@ fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnos
     diagnostics
 }
 
-fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
+fn collect_diagnostics(spec: &ArazzoSpec, raw: Option<&serde_yaml_ng::Value>) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::<Diagnostic>::new();
 
     check_unknown_fields("", &spec.extensions, &mut diagnostics);
@@ -788,6 +803,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
         }
     }
 
+    let raw_components = raw.and_then(|root| raw_mapping_field(root, "components"));
     if let Some(components) = &spec.components {
         check_unknown_fields("components", &components.extensions, &mut diagnostics);
         // components.inputs is excluded: each entry is a JSON Schema object
@@ -814,9 +830,11 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &mut diagnostics,
         );
         for (name, param) in &components.parameters {
-            check_unknown_fields(
+            validate_parameter(
                 &format!("components.parameters.{name}"),
-                &param.extensions,
+                param,
+                &spec.arazzo,
+                false,
                 &mut diagnostics,
             );
         }
@@ -831,6 +849,14 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 action,
                 &mut diagnostics,
             );
+            validate_parameters(
+                &format!("components.successActions.{name}.parameters"),
+                &action.parameters,
+                &spec.arazzo,
+                raw_component_action(raw_components, "successActions", name)
+                    .and_then(|action| raw_mapping_field(action, "parameters")),
+                &mut diagnostics,
+            );
         }
         for (name, action) in &components.failure_actions {
             check_unknown_fields(
@@ -841,6 +867,14 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             warn_action_reusable_fields(
                 &format!("components.failureActions.{name}"),
                 action,
+                &mut diagnostics,
+            );
+            validate_parameters(
+                &format!("components.failureActions.{name}.parameters"),
+                &action.parameters,
+                &spec.arazzo,
+                raw_component_action(raw_components, "failureActions", name)
+                    .and_then(|action| raw_mapping_field(action, "parameters")),
                 &mut diagnostics,
             );
         }
@@ -856,7 +890,11 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
 
     let mut seen_workflow_ids = HashSet::<&str>::new();
 
+    let raw_workflows = raw
+        .and_then(|root| raw_mapping_field(root, "workflows"))
+        .and_then(serde_yaml_ng::Value::as_sequence);
     for (wf_idx, wf) in spec.workflows.iter().enumerate() {
+        let raw_workflow = raw_workflows.and_then(|workflows| workflows.get(wf_idx));
         let path = if wf.workflow_id.is_empty() {
             format!("workflows[{wf_idx}]")
         } else {
@@ -944,6 +982,12 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &format!("{path}.parameters"),
             &wf.parameters,
             &spec.arazzo,
+            raw_workflow.and_then(|workflow| raw_mapping_field(workflow, "parameters")),
+            &mut diagnostics,
+        );
+        validate_parameter_identities(
+            &format!("{path}.parameters"),
+            &wf.parameters,
             &mut diagnostics,
         );
 
@@ -961,6 +1005,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &step_ids,
             &workflow_ids,
             &spec.arazzo,
+            raw_workflow.and_then(|workflow| raw_mapping_field(workflow, "successActions")),
             &mut diagnostics,
         );
         validate_actions(
@@ -969,11 +1014,16 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
             &step_ids,
             &workflow_ids,
             &spec.arazzo,
+            raw_workflow.and_then(|workflow| raw_mapping_field(workflow, "failureActions")),
             &mut diagnostics,
         );
 
         let mut seen_step_ids = HashSet::<&str>::new();
+        let raw_steps = raw_workflow
+            .and_then(|workflow| raw_mapping_field(workflow, "steps"))
+            .and_then(serde_yaml_ng::Value::as_sequence);
         for (step_idx, step) in wf.steps.iter().enumerate() {
+            let raw_step = raw_steps.and_then(|steps| steps.get(step_idx));
             let step_path = if step.step_id.is_empty() {
                 format!("{path} > steps[{step_idx}]")
             } else {
@@ -1145,8 +1195,15 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &format!("{step_path}.parameters"),
                 &step.parameters,
                 &spec.arazzo,
+                raw_step.and_then(|step| raw_mapping_field(step, "parameters")),
                 &mut diagnostics,
             );
+            validate_parameter_identities(
+                &format!("{step_path}.parameters"),
+                &step.parameters,
+                &mut diagnostics,
+            );
+            validate_effective_parameter_context(&path, wf, &step_path, step, &mut diagnostics);
             validate_querystring_exclusivity(&step_path, wf, step, &mut diagnostics);
             for (name, output) in &step.outputs {
                 let output_path = format!("{step_path}.outputs.{name}");
@@ -1190,6 +1247,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &step_ids,
                 &workflow_ids,
                 &spec.arazzo,
+                raw_step.and_then(|step| raw_mapping_field(step, "onFailure")),
                 &mut diagnostics,
             );
             validate_actions(
@@ -1198,6 +1256,7 @@ fn collect_diagnostics(spec: &ArazzoSpec) -> Vec<Diagnostic> {
                 &step_ids,
                 &workflow_ids,
                 &spec.arazzo,
+                raw_step.and_then(|step| raw_mapping_field(step, "onSuccess")),
                 &mut diagnostics,
             );
         }
@@ -1605,20 +1664,121 @@ fn declares_pre_1_1(version: &str) -> bool {
     matches!((parts.next(), parts.next()), (Some("1"), Some("0")))
 }
 
-/// The parameters an operation actually sends, mirroring
-/// `merge_workflow_params` in `arazzo-runtime`: workflow-level parameters are
-/// inherited by every step except one that targets another workflow.
-///
-/// The runtime dedups on `(name, in)` when merging, which cannot turn a `query`
-/// parameter into a `querystring` one or the reverse, so the two locations
-/// present here are the two locations the request will carry.
-fn effective_parameters<'a>(workflow: &'a Workflow, step: &'a Step) -> Vec<&'a Parameter> {
-    let mut params = Vec::<&Parameter>::new();
+/// One Parameter after the same inheritance/override selection the runtime
+/// applies, retaining its declaration path for diagnostics. A Step overrides
+/// only an exact `(name, in)` identity; case differences and locations remain
+/// distinct.
+struct EffectiveParameter<'a> {
+    parameter: &'a Parameter,
+    path: String,
+}
+
+/// Mirrors `merge_workflow_params` in `arazzo-runtime`: workflow-level
+/// parameters are inherited only by non-workflow targets, and a Step replaces
+/// the same `(name, in)` identity instead of being a duplicate across lists.
+fn effective_parameters<'a>(
+    workflow: &'a Workflow,
+    workflow_path: &str,
+    step: &'a Step,
+    step_path: &str,
+) -> Vec<EffectiveParameter<'a>> {
+    let step_keys: HashSet<(&str, Option<ParamLocation>)> = step
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.name.as_str(), parameter.in_))
+        .collect();
+    let mut params = Vec::new();
     if !matches!(&step.target, Some(StepTarget::WorkflowId(_))) {
-        params.extend(workflow.parameters.iter());
+        params.extend(
+            workflow
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| {
+                    !step_keys.contains(&(parameter.name.as_str(), parameter.in_))
+                })
+                .map(|(index, parameter)| EffectiveParameter {
+                    parameter,
+                    path: format!("{workflow_path}.parameters[{index}]"),
+                }),
+        );
     }
-    params.extend(step.parameters.iter());
+    params.extend(
+        step.parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| EffectiveParameter {
+                parameter,
+                path: format!("{step_path}.parameters[{index}]"),
+            }),
+    );
     params
+}
+
+/// Parameter Object §5.8.6.1 is context-sensitive: operation targets require
+/// `in`, while a `workflowId` target maps every parameter to workflow inputs
+/// and therefore prohibits it. `channelPath` has AsyncAPI transport semantics
+/// this executor does not implement, so a parameter-bearing channel step fails
+/// validation rather than being assigned invented HTTP semantics.
+fn validate_effective_parameter_context(
+    workflow_path: &str,
+    workflow: &Workflow,
+    step_path: &str,
+    step: &Step,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let parameters = effective_parameters(workflow, workflow_path, step, step_path);
+    let Some(target) = &step.target else {
+        return;
+    };
+
+    match target {
+        StepTarget::OperationId(_) | StepTarget::OperationPath(_) => {
+            for parameter in parameters {
+                if parameter.parameter.in_.is_none() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        kind: ValidationErrorKind::InvalidParameterLocation,
+                        path: format!("{}.in", parameter.path),
+                        message: format!(
+                            "{}.in is required when the Step targets an operation",
+                            parameter.path
+                        ),
+                    });
+                }
+            }
+        }
+        StepTarget::WorkflowId(_) => {
+            for parameter in parameters {
+                if parameter.parameter.in_.is_some() {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        kind: ValidationErrorKind::InvalidParameterLocation,
+                        path: format!("{}.in", parameter.path),
+                        message: format!(
+                            "{}.in must not be set when the Step targets a workflow: \
+                             parameters map to workflow inputs",
+                            parameter.path
+                        ),
+                    });
+                }
+            }
+        }
+        StepTarget::ChannelPath(_) => {
+            for parameter in parameters {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::InvalidParameterLocation,
+                    path: parameter.path.clone(),
+                    message: format!(
+                        "{} cannot be used with a channelPath target: AsyncAPI parameter \
+                         transport is not supported by this executor",
+                        parameter.path
+                    ),
+                });
+            }
+        }
+    }
 }
 
 /// Parameter Object: *"The `querystring` location cannot coexist with `query`
@@ -1636,12 +1796,12 @@ fn validate_querystring_exclusivity(
     step: &Step,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let params = effective_parameters(workflow, step);
+    let params = effective_parameters(workflow, "", step, step_path);
     let named = |location: ParamLocation| {
         params
             .iter()
-            .filter(|param| param.in_ == Some(location))
-            .map(|param| format!("{:?}", param.name))
+            .filter(|param| param.parameter.in_ == Some(location))
+            .map(|param| format!("{:?}", param.parameter.name))
             .collect::<Vec<_>>()
     };
     let querystring = named(ParamLocation::Querystring);
@@ -1695,44 +1855,97 @@ fn validate_querystring_exclusivity(
     });
 }
 
+fn raw_parameter_is_reusable(
+    raw_parameters: Option<&serde_yaml_ng::Value>,
+    parameter_index: usize,
+) -> bool {
+    raw_parameters
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .and_then(|parameters| parameters.get(parameter_index))
+        .is_some_and(|parameter| raw_mapping_has_field(parameter, "reference"))
+}
+
+/// Intrinsic Parameter Object validation. `in` location rules deliberately do
+/// not live here because a component definition has no target context.
+fn validate_parameter(
+    param_path: &str,
+    param: &Parameter,
+    arazzo_version: &str,
+    permits_reusable_object: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    check_unknown_fields(param_path, &param.extensions, diagnostics);
+    if param.in_ == Some(ParamLocation::Querystring) && declares_pre_1_1(arazzo_version) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::UnsupportedVersion,
+            path: format!("{param_path}.in"),
+            message: format!(
+                "{param_path}.in \"querystring\" was introduced in Arazzo 1.1.0, but this \
+                 document declares arazzo: {arazzo_version}, whose vocabulary has no such \
+                 parameter location; declare arazzo: 1.1.0 to use it"
+            ),
+        });
+    }
+    if param.name.is_empty() && (!permits_reusable_object || param.reference.is_empty()) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{param_path}.name"),
+            message: format!("{param_path}.name is required (unless using reference)"),
+        });
+    }
+    validate_value_source(&format!("{param_path}.value"), &param.value, diagnostics);
+}
+
 fn validate_parameters(
     path_prefix: &str,
     params: &[Parameter],
     arazzo_version: &str,
+    raw_parameters: Option<&serde_yaml_ng::Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (param_idx, param) in params.iter().enumerate() {
         let param_path = format!("{path_prefix}[{param_idx}]");
-        check_unknown_fields(&param_path, &param.extensions, diagnostics);
-        if param.in_ == Some(ParamLocation::Querystring) && declares_pre_1_1(arazzo_version) {
-            // Rejected, not accepted-with-a-warning: Arazzo Specification
-            // Object, `arazzo` — *"This string MUST be the version number of
-            // the Arazzo Specification that the Arazzo Description uses. The
-            // `arazzo` field MUST be used by tooling to interpret the Arazzo
-            // Description."* Reading a 1.0.x
-            // document with 1.1.0 vocabulary is not using the field to
-            // interpret it. An error is affordable here only because the remedy
-            // is one line, so the message must name it.
+        // A source Reusable Object has already expanded to its component
+        // definition. Validate that definition once at components.* and only
+        // apply target context at this consuming path below.
+        if !raw_parameter_is_reusable(raw_parameters, param_idx) {
+            validate_parameter(&param_path, param, arazzo_version, true, diagnostics);
+        }
+    }
+}
+
+/// The Parameter Object identity is the case-sensitive `(name, in)` pair.
+/// This is intentionally per declared list: a Step override lives in another
+/// list and was already selected into the effective set above.
+fn validate_parameter_identities(
+    path_prefix: &str,
+    params: &[Parameter],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut first_declarations = HashMap::<(String, Option<ParamLocation>), String>::new();
+    for (index, parameter) in params.iter().enumerate() {
+        if parameter.name.is_empty() {
+            continue;
+        }
+        let parameter_path = format!("{path_prefix}[{index}]");
+        let identity = (parameter.name.clone(), parameter.in_);
+        if let Some(first_path) = first_declarations.get(&identity) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
-                kind: ValidationErrorKind::UnsupportedVersion,
-                path: format!("{param_path}.in"),
+                kind: ValidationErrorKind::DuplicateIdentifier,
+                path: format!("{parameter_path}.name"),
                 message: format!(
-                    "{param_path}.in \"querystring\" was introduced in Arazzo 1.1.0, but this \
-                     document declares arazzo: {arazzo_version}, whose vocabulary has no such \
-                     parameter location; declare arazzo: 1.1.0 to use it"
+                    "{parameter_path}.name \"{}\" is a duplicate: the parameter list \
+                     \"MUST NOT include duplicate parameters\"; first declaration is at \
+                     {first_path}.name",
+                    parameter.name
                 ),
             });
+        } else {
+            first_declarations.insert(identity, parameter_path);
         }
-        if param.name.is_empty() && param.reference.is_empty() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                kind: ValidationErrorKind::MissingRequiredField,
-                path: format!("{param_path}.name"),
-                message: format!("{param_path}.name is required (unless using reference)"),
-            });
-        }
-        validate_value_source(&format!("{param_path}.value"), &param.value, diagnostics);
     }
 }
 
@@ -1971,10 +2184,14 @@ fn validate_actions(
     step_ids: &HashSet<&str>,
     workflow_ids: &HashSet<&str>,
     arazzo_version: &str,
+    raw_actions: Option<&serde_yaml_ng::Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
+        let raw_action = raw_actions
+            .and_then(serde_yaml_ng::Value::as_sequence)
+            .and_then(|actions| actions.get(action_idx));
         check_unknown_fields(&action_path, &action.extensions, diagnostics);
         if action.reference.is_empty() && action.value.is_some() {
             diagnostics.push(Diagnostic::warning(
@@ -1984,7 +2201,13 @@ fn validate_actions(
                     .to_string(),
             ));
         }
-        validate_action_parameters(&action_path, action, arazzo_version, diagnostics);
+        validate_action_parameters(
+            &action_path,
+            action,
+            arazzo_version,
+            raw_action,
+            diagnostics,
+        );
         let action_type = action.action_type();
         // Reference checks apply to goto and retry alike: both action types
         // carry an optional stepId/workflowId reference pair. The reference is
@@ -2082,6 +2305,7 @@ fn validate_action_parameters(
     action_path: &str,
     action: &OnAction,
     arazzo_version: &str,
+    raw_action: Option<&serde_yaml_ng::Value>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if action.parameters.is_empty() {
@@ -2114,7 +2338,6 @@ fn validate_action_parameters(
             ),
         });
     }
-    let mut seen_names = HashSet::<&str>::new();
     for (param_idx, param) in action.parameters.iter().enumerate() {
         let param_path = format!("{params_path}[{param_idx}]");
         if param.in_.is_some() {
@@ -2128,26 +2351,21 @@ fn validate_action_parameters(
                 ),
             });
         }
-        if !param.name.is_empty() && !seen_names.insert(param.name.as_str()) {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                kind: ValidationErrorKind::DuplicateIdentifier,
-                path: format!("{param_path}.name"),
-                message: format!(
-                    "{param_path}.name \"{}\" is a duplicate: the parameter list \
-                     \"MUST NOT include duplicate parameters\"",
-                    param.name
-                ),
-            });
-        }
     }
+    validate_parameter_identities(&params_path, &action.parameters, diagnostics);
     // Shared per-parameter rules: required name/value and Selector Object shape.
-    validate_parameters(
-        &params_path,
-        &action.parameters,
-        arazzo_version,
-        diagnostics,
-    );
+    // A Reusable Action replaces itself wholesale. Its component action
+    // parameters have their intrinsic validation at the component source; the
+    // expanded parameters above still receive action context checks.
+    if !raw_action.is_some_and(|action| raw_mapping_has_field(action, "reference")) {
+        validate_parameters(
+            &params_path,
+            &action.parameters,
+            arazzo_version,
+            raw_action.and_then(|action| raw_mapping_field(action, "parameters")),
+            diagnostics,
+        );
+    }
 }
 
 fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mut Vec<Diagnostic>) {
@@ -3101,7 +3319,7 @@ components:
 workflows:
   - workflowId: wf
     parameters:
-      - {{name: workflowParam, value: {}}}
+      - {{name: workflowParam, in: header, value: {}}}
     successActions:
       - name: workflowSuccess
         type: goto
@@ -3186,7 +3404,7 @@ workflows:
   "workflows": [
     {{
       "workflowId": "wf",
-      "parameters": [{{"name": "workflowParam", "value": {}}}],
+      "parameters": [{{"name": "workflowParam", "in": "header", "value": {}}}],
       "successActions": [{{"name": "workflowSuccess", "type": "goto", "workflowId": "target", "parameters": [{{"name": "workflowSuccessParam", "value": {}}}]}}],
       "failureActions": [{{"name": "workflowFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "workflowFailureParam", "value": {}}}]}}],
       "steps": [{{
@@ -5963,7 +6181,9 @@ workflows:
     steps:
       - stepId: s1
         workflowId: wf2
-        parameters:{STEP_QUERYSTRING}
+        parameters:
+          - name: workflow-input
+            value: accepted
   - workflowId: wf2
     steps:
       - stepId: s2
@@ -6081,7 +6301,9 @@ workflows:
     steps:
       - stepId: s1
         workflowId: wf2
-        parameters:{STEP_QUERYSTRING}
+        parameters:
+          - name: workflow-input
+            value: accepted
   - workflowId: wf2
     steps:
       - stepId: s2
@@ -6224,6 +6446,349 @@ workflows:
         assert!(!declares_pre_1_1("1.1.0"));
         assert!(!declares_pre_1_1("1.10.0"));
         assert!(!declares_pre_1_1("2.0.0"));
+    }
+
+    // ── workflow / Step Parameter target context and identities ─────────
+
+    fn parameter_context_document(components: &str, parent: &str, child: &str) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info:
+  title: Parameter context
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+{components}workflows:
+  - workflowId: parent
+{parent}
+  - workflowId: child
+{child}"#
+        )
+    }
+
+    fn parameter_context_report(yaml: &str) -> super::ValidationReport {
+        let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+            panic!("expected parameter context validation error");
+        };
+        report
+    }
+
+    /// Positive evidence for all supported operation locations, workflow-input
+    /// shape, case-sensitive identities, exact Step overrides, and component
+    /// expansion. `unused` deliberately has no `in`: a component definition
+    /// has no target context until it is consumed.
+    pub(super) fn parameter_context_positive_matrix() {
+        let yaml = parameter_context_document(
+            r#"components:
+  parameters:
+    reusable:
+      name: reusable
+      in: cookie
+      value: component
+    unused:
+      name: unused
+      value: component
+"#,
+            r#"    parameters:
+      - name: inherited
+        in: header
+        value: inherited
+      - name: override
+        in: header
+        value: workflow
+    steps:
+      - stepId: operation-id
+        operationId: invoke
+        parameters:
+          - name: override
+            in: header
+            value: step
+          - name: query-name
+            in: query
+            value: query
+          - name: same
+            in: query
+            value: query
+          - name: same
+            in: header
+            value: header
+          - name: Case
+            in: header
+            value: upper
+          - name: case
+            in: header
+            value: lower
+          - reference: $components.parameters.reusable
+      - stepId: operation-path
+        operationPath: /path
+        parameters:
+          - name: id
+            in: path
+            value: path
+      - stepId: querystring
+        operationId: wholeQuery
+        parameters:
+          - name: search
+            in: querystring
+            value: q=blue
+      - stepId: invoke-workflow
+        workflowId: child
+        parameters:
+          - name: input
+            value: passed
+        onSuccess:
+          - name: continue
+            type: goto
+            workflowId: child
+            parameters:
+              - name: success-input
+                value: passed
+        onFailure:
+          - name: recover
+            type: retry
+            workflowId: child
+            retryLimit: 1
+            parameters:
+              - name: failure-input
+                value: passed
+"#,
+            "    steps: []\n",
+        );
+
+        match parse_bytes(yaml.as_bytes()) {
+            Ok(_) => {}
+            Err(err) => panic!("expected positive parameter matrix to validate: {err}"),
+        }
+    }
+
+    /// Negative evidence pins each declaration/use path. One document uses a
+    /// component reference with a bad operation context to prove that the
+    /// intrinsic component check is not fabricated as a component `in` error,
+    /// while the consuming Step gets the context diagnostic.
+    pub(super) fn parameter_context_negative_matrix() {
+        let missing_operation_in = parameter_context_document(
+            "",
+            r#"    parameters:
+      - name: inherited
+        value: inherited
+    steps:
+      - stepId: by-id
+        operationId: invoke
+      - stepId: by-path
+        operationPath: /path
+        parameters:
+          - name: local
+            value: local
+      - stepId: child
+        workflowId: child
+"#,
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&missing_operation_in);
+        let paths = report
+            .errors
+            .iter()
+            .map(|error| error.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            paths.contains(&"workflow \"parent\".parameters[0].in"),
+            "errors={:?}",
+            report.errors
+        );
+        assert!(
+            paths.contains(&"workflow \"parent\" > step \"by-path\".parameters[0].in"),
+            "errors={:?}",
+            report.errors
+        );
+        assert!(
+            !paths.iter().any(|path| path.contains("step \"child\"")),
+            "workflow targets must not inherit the invalid global parameter: {:?}",
+            report.errors
+        );
+
+        let workflow_and_channel = parameter_context_document(
+            "",
+            r#"    steps:
+      - stepId: child
+        workflowId: child
+        parameters:
+          - name: input
+            in: header
+            value: v
+      - stepId: async
+        channelPath: /events
+        action: send
+        parameters:
+          - name: message
+            in: header
+            value: v
+"#,
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&workflow_and_channel);
+        assert!(report.errors.iter().any(|error| {
+            error.path == "workflow \"parent\" > step \"child\".parameters[0].in"
+                && error.kind == ValidationErrorKind::InvalidParameterLocation
+        }));
+        assert!(report.errors.iter().any(|error| {
+            error.path == "workflow \"parent\" > step \"async\".parameters[0]"
+                && error.message.contains("AsyncAPI parameter transport")
+        }));
+
+        let declared_duplicates = parameter_context_document(
+            "",
+            r#"    parameters:
+      - name: duplicated
+        in: header
+        value: first
+      - name: duplicated
+        in: header
+        value: second
+    steps:
+      - stepId: operation
+        operationId: invoke
+        parameters:
+          - name: repeated
+            in: query
+            value: first
+          - name: repeated
+            in: query
+            value: second
+        onSuccess:
+          - name: handoff
+            type: goto
+            workflowId: child
+            parameters:
+              - name: action
+                value: first
+              - name: action
+                value: second
+        onFailure:
+          - name: recover
+            type: goto
+            workflowId: child
+            parameters:
+              - name: failure
+                value: first
+              - name: failure
+                value: second
+"#,
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&declared_duplicates);
+        for (path, first_path) in [
+            (
+                "workflow \"parent\".parameters[1].name",
+                "workflow \"parent\".parameters[0].name",
+            ),
+            (
+                "workflow \"parent\" > step \"operation\".parameters[1].name",
+                "workflow \"parent\" > step \"operation\".parameters[0].name",
+            ),
+            (
+                "workflow \"parent\" > step \"operation\".onSuccess[0].parameters[1].name",
+                "workflow \"parent\" > step \"operation\".onSuccess[0].parameters[0].name",
+            ),
+            (
+                "workflow \"parent\" > step \"operation\".onFailure[0].parameters[1].name",
+                "workflow \"parent\" > step \"operation\".onFailure[0].parameters[0].name",
+            ),
+        ] {
+            let diagnostic = report
+                .errors
+                .iter()
+                .find(|error| error.path == path)
+                .unwrap_or_else(|| {
+                    panic!("missing duplicate diagnostic {path}: {:?}", report.errors)
+                });
+            assert_eq!(diagnostic.kind, ValidationErrorKind::DuplicateIdentifier);
+            assert!(
+                diagnostic.message.contains(first_path),
+                "diagnostic={diagnostic:?}"
+            );
+        }
+
+        let distinct_invalid_action_locations = parameter_context_document(
+            "",
+            r#"    steps:
+      - stepId: operation
+        operationId: invoke
+        onSuccess:
+          - name: handoff
+            type: goto
+            workflowId: child
+            parameters:
+              - name: same
+                in: header
+                value: first
+              - name: same
+                in: query
+                value: second
+"#,
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&distinct_invalid_action_locations);
+        assert_eq!(
+            report
+                .errors
+                .iter()
+                .filter(|error| error.kind == ValidationErrorKind::DuplicateIdentifier)
+                .count(),
+            0,
+            "different invalid locations must not collapse: {:?}",
+            report.errors
+        );
+        assert_eq!(
+            report
+                .errors
+                .iter()
+                .filter(|error| error.path.ends_with(".parameters[0].in")
+                    || error.path.ends_with(".parameters[1].in"))
+                .count(),
+            2,
+            "each invalid action location must remain visible: {:?}",
+            report.errors
+        );
+
+        let component_use = parameter_context_document(
+            r#"components:
+  parameters:
+    shared:
+      name: shared
+      value: component
+"#,
+            r#"    steps:
+      - stepId: operation
+        operationId: invoke
+        parameters:
+          - reference: $components.parameters.shared
+"#,
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&component_use);
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].path,
+            "workflow \"parent\" > step \"operation\".parameters[0].in"
+        );
+
+        let unused_component = parameter_context_document(
+            r#"components:
+  parameters:
+    incomplete:
+      value: component
+"#,
+            "    steps: []\n",
+            "    steps: []\n",
+        );
+        let report = parameter_context_report(&unused_component);
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(
+            report.errors[0].path,
+            "components.parameters.incomplete.name"
+        );
     }
 
     // ── success/failure action `parameters` (Arazzo 1.1.0) ─────────────

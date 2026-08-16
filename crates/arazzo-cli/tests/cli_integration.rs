@@ -1756,6 +1756,56 @@ workflows:
 }
 
 #[test]
+fn validate_json_reports_parameter_context_path_and_kind() {
+    let temp = TempDir::new("arazzo-validate-parameter-context");
+    let spec_path = temp.path().join("missing-parameter-location.yaml");
+    write_file(
+        &spec_path,
+        r#"
+arazzo: "1.1.0"
+info:
+  title: Parameter context JSON
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: request
+        operationId: invoke
+        parameters:
+          - name: missing-location
+            value: value
+"#,
+    );
+
+    let spec = spec_path.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &spec].as_slice(), None);
+    assert!(!output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("validation output should contain errors: {body}"));
+    let issue = errors
+        .iter()
+        .find(|error| {
+            error.get("kind").and_then(Value::as_str) == Some("invalidParameterLocation")
+                && error.get("path").and_then(Value::as_str)
+                    == Some("workflow \"wf\" > step \"request\".parameters[0].in")
+        })
+        .unwrap_or_else(|| panic!("missing parameter context diagnostic: {errors:?}"));
+    assert_eq!(
+        issue.get("source").and_then(Value::as_str),
+        Some("validation")
+    );
+}
+
+#[test]
 fn validate_json_reports_unknown_operation_path_source_reference() {
     let temp = TempDir::new("arazzo-validate-unknown-source");
     let mut invalid = temp.path().to_path_buf();

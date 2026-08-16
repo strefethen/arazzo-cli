@@ -14,9 +14,16 @@
       ],
       "normativeLevels": ["MUST", "MUST NOT"],
       "claim": "Workflow, Step, and action Parameter lists enforce their target context and duplicate identity rules.",
-      "status": "deviation",
-      "owner": "ac-8f39b",
-      "reason": "Parameter context and identity validation are scheduled in ac-8f39b."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-validate/src/lib.rs#conformance_parameter_context_positive_evidence"
+        ],
+        "negative": [
+          "crates/arazzo-validate/src/lib.rs#conformance_parameter_context_negative_evidence",
+          "crates/arazzo-cli/tests/cli_integration.rs#validate_json_reports_parameter_context_path_and_kind"
+        ]
+      }
     },
     {
       "id": "validation.success-failure-action-fixed-fields",
