@@ -5,6 +5,8 @@ use serde_json::Value;
 
 use crate::{is_truthy, ExpressionEvaluator, ExpressionWarning};
 
+const MAX_CONDITION_DEPTH: usize = 128;
+
 /// The complete result of evaluating an Arazzo `simple` Criterion condition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConditionEvaluation {
@@ -55,11 +57,17 @@ pub(crate) fn evaluate(eval: &ExpressionEvaluator, condition: &str) -> Condition
         }
     };
 
-    let (value, warnings) = evaluate_expression(eval, &expression);
-    ConditionEvaluation {
-        result: value.is_truthy(),
-        warnings,
-        error: None,
+    match evaluate_expression(eval, condition, &expression, 1) {
+        Ok((value, warnings)) => ConditionEvaluation {
+            result: value.is_truthy(),
+            warnings,
+            error: None,
+        },
+        Err(error) => ConditionEvaluation {
+            result: false,
+            warnings: Vec::new(),
+            error: Some(error),
+        },
     }
 }
 
@@ -67,7 +75,180 @@ pub(crate) fn evaluate(eval: &ExpressionEvaluator, condition: &str) -> Condition
 struct JsonNumber {
     negative: bool,
     digits: String,
-    exponent: i64,
+    exponent: DecimalInteger,
+}
+
+/// A signed, arbitrary-size decimal integer used only for JSON-number scales.
+///
+/// Keeping the magnitude as normalized base-10 digits makes work and storage
+/// proportional to the condition input. In particular, an exponent such as
+/// `1e999999999999999999999` never turns into an allocation of that size and
+/// is never narrowed or saturated to a machine integer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DecimalInteger {
+    negative: bool,
+    digits: Vec<u8>,
+}
+
+impl DecimalInteger {
+    fn zero() -> Self {
+        Self {
+            negative: false,
+            digits: vec![0],
+        }
+    }
+
+    fn from_ascii_digits(input: &[u8], negative: bool) -> Self {
+        let first_nonzero = input
+            .iter()
+            .position(|digit| *digit != b'0')
+            .unwrap_or(input.len());
+        if first_nonzero == input.len() {
+            return Self::zero();
+        }
+        Self {
+            negative,
+            digits: input[first_nonzero..]
+                .iter()
+                .map(|digit| digit - b'0')
+                .collect(),
+        }
+    }
+
+    fn from_usize(value: usize) -> Self {
+        let text = value.to_string();
+        Self::from_ascii_digits(text.as_bytes(), false)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.digits == [0]
+    }
+
+    fn add_unsigned(&self, value: usize) -> Self {
+        self.add(&Self::from_usize(value))
+    }
+
+    fn subtract_unsigned(&self, value: usize) -> Self {
+        let mut right = Self::from_usize(value);
+        if !right.is_zero() {
+            right.negative = true;
+        }
+        self.add(&right)
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        if self.negative == other.negative {
+            return Self::from_digits(
+                self.negative,
+                add_decimal_magnitudes(&self.digits, &other.digits),
+            );
+        }
+
+        match compare_decimal_magnitudes(&self.digits, &other.digits) {
+            Ordering::Equal => Self::zero(),
+            Ordering::Greater => Self::from_digits(
+                self.negative,
+                subtract_decimal_magnitudes(&self.digits, &other.digits),
+            ),
+            Ordering::Less => Self::from_digits(
+                other.negative,
+                subtract_decimal_magnitudes(&other.digits, &self.digits),
+            ),
+        }
+    }
+
+    fn compare(&self, other: &Self) -> Ordering {
+        match (self.negative, other.negative) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => compare_decimal_magnitudes(&self.digits, &other.digits),
+            (true, true) => compare_decimal_magnitudes(&self.digits, &other.digits).reverse(),
+        }
+    }
+
+    fn from_digits(negative: bool, digits: Vec<u8>) -> Self {
+        let first_nonzero = digits
+            .iter()
+            .position(|digit| *digit != 0)
+            .unwrap_or(digits.len());
+        if first_nonzero == digits.len() {
+            return Self::zero();
+        }
+        Self {
+            negative,
+            digits: digits[first_nonzero..].to_vec(),
+        }
+    }
+}
+
+impl fmt::Display for DecimalInteger {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.negative {
+            f.write_str("-")?;
+        }
+        for digit in &self.digits {
+            write!(f, "{digit}")?;
+        }
+        Ok(())
+    }
+}
+
+fn compare_decimal_magnitudes(left: &[u8], right: &[u8]) -> Ordering {
+    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+}
+
+fn add_decimal_magnitudes(left: &[u8], right: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(left.len().max(right.len()) + 1);
+    let mut left_cursor = left.len();
+    let mut right_cursor = right.len();
+    let mut carry = 0u8;
+    while left_cursor > 0 || right_cursor > 0 || carry != 0 {
+        let left_digit = if left_cursor > 0 {
+            left_cursor -= 1;
+            left[left_cursor]
+        } else {
+            0
+        };
+        let right_digit = if right_cursor > 0 {
+            right_cursor -= 1;
+            right[right_cursor]
+        } else {
+            0
+        };
+        let sum = left_digit + right_digit + carry;
+        output.push(sum % 10);
+        carry = sum / 10;
+    }
+    output.reverse();
+    output
+}
+
+/// Subtract `right` from `left`; callers prove `left >= right` first.
+fn subtract_decimal_magnitudes(left: &[u8], right: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(left.len());
+    let mut left_cursor = left.len();
+    let mut right_cursor = right.len();
+    let mut borrow = 0i8;
+    while left_cursor > 0 {
+        left_cursor -= 1;
+        let mut digit = left[left_cursor] as i8 - borrow;
+        let right_digit = if right_cursor > 0 {
+            right_cursor -= 1;
+            right[right_cursor] as i8
+        } else {
+            0
+        };
+        if digit < right_digit {
+            digit += 10;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        output.push((digit - right_digit) as u8);
+    }
+    debug_assert_eq!(borrow, 0);
+    output.reverse();
+    output
 }
 
 impl JsonNumber {
@@ -124,7 +305,7 @@ impl JsonNumber {
             fraction_end = cursor;
         }
 
-        let mut explicit_exponent = 0i64;
+        let mut explicit_exponent = DecimalInteger::zero();
         if matches!(bytes.get(cursor), Some(b'e' | b'E')) {
             cursor += 1;
             let exponent_negative = match bytes.get(cursor) {
@@ -144,15 +325,14 @@ impl JsonNumber {
                     "exponent requires at least one digit",
                 ));
             }
-            while let Some(digit @ b'0'..=b'9') = bytes.get(cursor).copied() {
-                explicit_exponent = explicit_exponent
-                    .saturating_mul(10)
-                    .saturating_add(i64::from(digit - b'0'));
+            let exponent_start = cursor;
+            while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
                 cursor += 1;
             }
-            if exponent_negative {
-                explicit_exponent = explicit_exponent.saturating_neg();
-            }
+            explicit_exponent = DecimalInteger::from_ascii_digits(
+                &bytes[exponent_start..cursor],
+                exponent_negative,
+            );
         }
 
         if cursor != bytes.len() {
@@ -178,17 +358,16 @@ impl JsonNumber {
             return Ok(Self {
                 negative: false,
                 digits: "0".to_string(),
-                exponent: 0,
+                exponent: DecimalInteger::zero(),
             });
         }
         digits.drain(..first_nonzero);
 
-        let fraction_len =
-            i64::try_from(fraction_end.saturating_sub(fraction_start)).unwrap_or(i64::MAX);
+        let fraction_len = fraction_end.saturating_sub(fraction_start);
         Ok(Self {
             negative,
             digits,
-            exponent: explicit_exponent.saturating_sub(fraction_len),
+            exponent: explicit_exponent.subtract_unsigned(fraction_len),
         })
     }
 
@@ -210,13 +389,9 @@ impl JsonNumber {
             return self.is_zero().cmp(&other.is_zero()).reverse();
         }
 
-        let self_scale = self
-            .exponent
-            .saturating_add(i64::try_from(self.digits.len()).unwrap_or(i64::MAX));
-        let other_scale = other
-            .exponent
-            .saturating_add(i64::try_from(other.digits.len()).unwrap_or(i64::MAX));
-        match self_scale.cmp(&other_scale) {
+        let self_scale = self.exponent.add_unsigned(self.digits.len());
+        let other_scale = other.exponent.add_unsigned(other.digits.len());
+        match self_scale.compare(&other_scale) {
             Ordering::Equal => {
                 let width = self.digits.len().max(other.digits.len());
                 for index in 0..width {
@@ -438,7 +613,271 @@ impl<'a> Lexer<'a> {
 
     fn scan_runtime_expression(&mut self) -> Result<TokenKind, ConditionError> {
         let start = self.cursor;
+        let expression = &self.condition[start..];
+
+        for exact in ["$statusCode", "$method", "$url", "$self"] {
+            if expression.starts_with(exact) {
+                let end = start + exact.len();
+                if self.is_condition_boundary(end) {
+                    self.cursor = end;
+                    return self.runtime_expression_token(start);
+                }
+            }
+        }
+
+        for prefix in ["$request.header.", "$response.header.", "$message.header."] {
+            if expression.starts_with(prefix) {
+                self.cursor = start + prefix.len();
+                self.scan_header_name();
+                return self.runtime_expression_token(start);
+            }
+        }
+
+        for prefix in [
+            "$request.query.",
+            "$request.path.",
+            "$response.query.",
+            "$response.path.",
+            "$env.",
+        ] {
+            if expression.starts_with(prefix) {
+                self.cursor = start + prefix.len();
+                self.scan_unrestricted_runtime_tail();
+                return self.runtime_expression_token(start);
+            }
+        }
+
+        for prefix in ["$request.body", "$response.body", "$message.payload"] {
+            if expression.starts_with(prefix) {
+                let tail = start + prefix.len();
+                if self.is_condition_boundary(tail) {
+                    self.cursor = tail;
+                    return self.runtime_expression_token(start);
+                }
+                match self.condition.as_bytes().get(tail) {
+                    Some(b'#') => {
+                        self.cursor = tail + 1;
+                        self.scan_unrestricted_runtime_tail();
+                        return self.runtime_expression_token(start);
+                    }
+                    Some(b'.' | b'[') => {
+                        self.cursor = tail;
+                        self.scan_body_traversal()?;
+                        return self.runtime_expression_token(start);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if expression.starts_with("$sourceDescriptions.") {
+            self.cursor = start + "$sourceDescriptions.".len();
+            while self
+                .condition
+                .as_bytes()
+                .get(self.cursor)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                self.cursor += 1;
+            }
+            if self.condition.as_bytes().get(self.cursor) == Some(&b'.') {
+                self.cursor += 1;
+                self.scan_unrestricted_runtime_tail();
+            }
+            return self.runtime_expression_token(start);
+        }
+
+        for prefix in [
+            "$inputs.",
+            "$outputs.",
+            "$steps.",
+            "$workflows.",
+            "$components.",
+        ] {
+            if expression.starts_with(prefix) {
+                self.cursor = start + prefix.len();
+                self.scan_restricted_runtime_tail()?;
+                return self.runtime_expression_token(start);
+            }
+        }
+
+        // Preserve the legacy behavior for unknown namespaces. Recognized
+        // namespaces above use their own grammar so operator punctuation that
+        // belongs to a header, unrestricted name, pointer, or body traversal
+        // cannot be mistaken for a simple-condition operator.
         self.cursor += 1;
+        self.scan_generic_runtime_tail()?;
+        self.runtime_expression_token(start)
+    }
+
+    fn scan_header_name(&mut self) {
+        while let Some(byte) = self.condition.as_bytes().get(self.cursor).copied() {
+            // `!` is a valid RFC header-name tchar, but the complete `!=`
+            // sequence cannot be part of a header name because `=` is not.
+            if self.condition[self.cursor..].starts_with("!=") || !is_header_tchar(byte) {
+                break;
+            }
+            self.cursor += 1;
+        }
+    }
+
+    fn scan_unrestricted_runtime_tail(&mut self) {
+        while let Some(character) = self.current_char() {
+            if character.is_whitespace() || character == ')' {
+                break;
+            }
+            self.cursor += character.len_utf8();
+        }
+    }
+
+    fn scan_restricted_runtime_tail(&mut self) -> Result<(), ConditionError> {
+        let mut bracket_stack = Vec::new();
+        let mut quote: Option<(char, usize)> = None;
+        let mut escaped = false;
+
+        while self.cursor < self.condition.len() {
+            let character = match self.current_char() {
+                Some(character) => character,
+                None => break,
+            };
+            if let Some((delimiter, _)) = quote {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == delimiter {
+                    quote = None;
+                }
+                self.cursor += character.len_utf8();
+                continue;
+            }
+
+            if !bracket_stack.is_empty() {
+                match character {
+                    '\'' | '"' => quote = Some((character, self.cursor)),
+                    '[' => bracket_stack.push(self.cursor),
+                    ']' => {
+                        let Some(open) = bracket_stack.pop() else {
+                            return Err(
+                                self.error(self.cursor, "unbalanced runtime-expression index")
+                            );
+                        };
+                        if self.condition[open + 1..self.cursor].trim().is_empty() {
+                            return Err(
+                                self.error(open, "runtime-expression index cannot be empty")
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                self.cursor += character.len_utf8();
+                continue;
+            }
+
+            if character.is_whitespace() || character == ')' {
+                break;
+            }
+            match character {
+                '[' => bracket_stack.push(self.cursor),
+                ']' => return Err(self.error(self.cursor, "unbalanced runtime-expression index")),
+                '#' => {
+                    self.cursor += 1;
+                    self.scan_unrestricted_runtime_tail();
+                    break;
+                }
+                _ if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') => {}
+                _ => break,
+            }
+            self.cursor += character.len_utf8();
+        }
+
+        if let Some((_, quote_offset)) = quote {
+            return Err(self.error(quote_offset, "unterminated quote in runtime expression"));
+        }
+        if let Some(open) = bracket_stack.last().copied() {
+            return Err(self.error(open, "unclosed runtime-expression index"));
+        }
+        Ok(())
+    }
+
+    fn scan_body_traversal(&mut self) -> Result<(), ConditionError> {
+        let mut bracket_stack = Vec::new();
+        let mut runtime_paren_stack = Vec::new();
+        let mut quote: Option<(char, usize)> = None;
+        let mut escaped = false;
+
+        while self.cursor < self.condition.len() {
+            let character = match self.current_char() {
+                Some(character) => character,
+                None => break,
+            };
+            if let Some((delimiter, _)) = quote {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if character == delimiter {
+                    quote = None;
+                }
+                self.cursor += character.len_utf8();
+                continue;
+            }
+
+            if !bracket_stack.is_empty() || !runtime_paren_stack.is_empty() {
+                match character {
+                    '\'' | '"' => quote = Some((character, self.cursor)),
+                    '[' => bracket_stack.push(self.cursor),
+                    ']' => {
+                        let Some(open) = bracket_stack.pop() else {
+                            return Err(
+                                self.error(self.cursor, "unbalanced runtime-expression index")
+                            );
+                        };
+                        if self.condition[open + 1..self.cursor].trim().is_empty() {
+                            return Err(
+                                self.error(open, "runtime-expression index cannot be empty")
+                            );
+                        }
+                    }
+                    '(' => runtime_paren_stack.push(self.cursor),
+                    ')' if runtime_paren_stack.pop().is_none() && bracket_stack.is_empty() => break,
+                    ')' => {}
+                    _ => {}
+                }
+                self.cursor += character.len_utf8();
+                continue;
+            }
+
+            if character.is_whitespace() || character == ')' {
+                break;
+            }
+            match character {
+                '[' => bracket_stack.push(self.cursor),
+                ']' => return Err(self.error(self.cursor, "unbalanced runtime-expression index")),
+                '(' if self.condition.as_bytes().get(self.cursor.wrapping_sub(1))
+                    == Some(&b'#') =>
+                {
+                    runtime_paren_stack.push(self.cursor)
+                }
+                '(' => break,
+                _ => {}
+            }
+            self.cursor += character.len_utf8();
+        }
+
+        if let Some((_, quote_offset)) = quote {
+            return Err(self.error(quote_offset, "unterminated quote in runtime expression"));
+        }
+        if let Some(open) = bracket_stack.last().copied() {
+            return Err(self.error(open, "unclosed runtime-expression index"));
+        }
+        if let Some(open) = runtime_paren_stack.last().copied() {
+            return Err(self.error(open, "unclosed runtime-expression traversal"));
+        }
+        Ok(())
+    }
+
+    fn scan_generic_runtime_tail(&mut self) -> Result<(), ConditionError> {
         let mut bracket_stack = Vec::new();
         let mut runtime_paren_stack = Vec::new();
         let mut quote: Option<(char, usize)> = None;
@@ -522,6 +961,33 @@ impl<'a> Lexer<'a> {
         if let Some(open) = runtime_paren_stack.last().copied() {
             return Err(self.error(open, "unclosed runtime-expression traversal"));
         }
+        Ok(())
+    }
+
+    fn is_condition_boundary(&self, offset: usize) -> bool {
+        let Some(remainder) = self.condition.get(offset..) else {
+            return false;
+        };
+        if remainder.is_empty() {
+            return true;
+        }
+        if remainder
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_whitespace() || matches!(character, '(' | ')'))
+        {
+            return true;
+        }
+        ["&&", "||", "==", "!=", "<=", ">="]
+            .iter()
+            .any(|operator| remainder.starts_with(operator))
+            || remainder
+                .chars()
+                .next()
+                .is_some_and(|character| matches!(character, '<' | '>' | '!'))
+    }
+
+    fn runtime_expression_token(&self, start: usize) -> Result<TokenKind, ConditionError> {
         if self.cursor == start + 1 {
             return Err(self.error(start, "runtime expression is incomplete"));
         }
@@ -539,6 +1005,27 @@ impl<'a> Lexer<'a> {
     }
 }
 
+fn is_header_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ComparisonOperator {
     Less,
@@ -550,7 +1037,14 @@ enum ComparisonOperator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Expression {
+struct Expression {
+    kind: ExpressionKind,
+    offset: usize,
+    depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpressionKind {
     Null,
     Bool(bool),
     Number(JsonNumber),
@@ -564,6 +1058,16 @@ enum Expression {
         left: Box<Expression>,
         right: Box<Expression>,
     },
+}
+
+impl Expression {
+    fn leaf(kind: ExpressionKind, offset: usize) -> Self {
+        Self {
+            kind,
+            offset,
+            depth: 1,
+        }
+    }
 }
 
 struct Parser<'a> {
@@ -585,88 +1089,116 @@ impl<'a> Parser<'a> {
         if matches!(self.current().kind, TokenKind::End) {
             return Err(self.error(self.current().offset, "condition cannot be empty"));
         }
-        let expression = self.parse_or()?;
+        let expression = self.parse_or(0)?;
         if !matches!(self.current().kind, TokenKind::End) {
             return Err(self.error(self.current().offset, "unexpected trailing token"));
         }
         Ok(expression)
     }
 
-    fn parse_or(&mut self) -> Result<Expression, ConditionError> {
-        let mut expression = self.parse_and()?;
+    fn parse_or(&mut self, nesting: usize) -> Result<Expression, ConditionError> {
+        let mut expression = self.parse_and(nesting)?;
         while matches!(self.current().kind, TokenKind::Or) {
+            let offset = self.current().offset;
             self.advance();
-            let right = self.parse_and()?;
-            expression = Expression::Or(Box::new(expression), Box::new(right));
+            let right = self.parse_and(nesting)?;
+            expression = self.binary(offset, expression, right, |left, right| {
+                ExpressionKind::Or(left, right)
+            })?;
         }
         Ok(expression)
     }
 
-    fn parse_and(&mut self) -> Result<Expression, ConditionError> {
-        let mut expression = self.parse_unary()?;
+    fn parse_and(&mut self, nesting: usize) -> Result<Expression, ConditionError> {
+        let mut expression = self.parse_comparison(nesting)?;
         while matches!(self.current().kind, TokenKind::And) {
+            let offset = self.current().offset;
             self.advance();
-            let right = self.parse_unary()?;
-            expression = Expression::And(Box::new(expression), Box::new(right));
+            let right = self.parse_comparison(nesting)?;
+            expression = self.binary(offset, expression, right, |left, right| {
+                ExpressionKind::And(left, right)
+            })?;
         }
         Ok(expression)
     }
 
-    fn parse_unary(&mut self) -> Result<Expression, ConditionError> {
-        if matches!(self.current().kind, TokenKind::Not) {
-            self.advance();
-            return Ok(Expression::Not(Box::new(self.parse_unary()?)));
-        }
-        self.parse_comparison()
-    }
-
-    fn parse_comparison(&mut self) -> Result<Expression, ConditionError> {
-        let left = self.parse_primary()?;
+    fn parse_comparison(&mut self, nesting: usize) -> Result<Expression, ConditionError> {
+        let left = self.parse_unary(nesting)?;
         let Some(operator) = self.current_comparison() else {
             return Ok(left);
         };
+        let offset = self.current().offset;
         self.advance();
-        let right = self.parse_primary()?;
+        let right = self.parse_unary(nesting)?;
         if self.current_comparison().is_some() {
             return Err(self.error(self.current().offset, "chained comparisons are not allowed"));
         }
-        Ok(Expression::Comparison {
-            operator,
-            left: Box::new(left),
-            right: Box::new(right),
+        self.binary(offset, left, right, |left, right| {
+            ExpressionKind::Comparison {
+                operator,
+                left,
+                right,
+            }
         })
     }
 
-    fn parse_primary(&mut self) -> Result<Expression, ConditionError> {
+    fn parse_unary(&mut self, nesting: usize) -> Result<Expression, ConditionError> {
+        if matches!(self.current().kind, TokenKind::Not) {
+            let offset = self.current().offset;
+            let nested = self.enter_nested(nesting, offset)?;
+            self.advance();
+            let inner = self.parse_unary(nested)?;
+            let depth = inner.depth + 1;
+            self.ensure_ast_depth(depth, offset)?;
+            return Ok(Expression {
+                kind: ExpressionKind::Not(Box::new(inner)),
+                offset,
+                depth,
+            });
+        }
+        self.parse_primary(nesting)
+    }
+
+    fn parse_primary(&mut self, nesting: usize) -> Result<Expression, ConditionError> {
         let token = self.current().clone();
         match token.kind {
             TokenKind::True => {
                 self.advance();
-                Ok(Expression::Bool(true))
+                Ok(Expression::leaf(ExpressionKind::Bool(true), token.offset))
             }
             TokenKind::False => {
                 self.advance();
-                Ok(Expression::Bool(false))
+                Ok(Expression::leaf(ExpressionKind::Bool(false), token.offset))
             }
             TokenKind::Null => {
                 self.advance();
-                Ok(Expression::Null)
+                Ok(Expression::leaf(ExpressionKind::Null, token.offset))
             }
             TokenKind::Number(number) => {
                 self.advance();
-                Ok(Expression::Number(number))
+                Ok(Expression::leaf(
+                    ExpressionKind::Number(number),
+                    token.offset,
+                ))
             }
             TokenKind::String(value) => {
                 self.advance();
-                Ok(Expression::String(value))
+                Ok(Expression::leaf(
+                    ExpressionKind::String(value),
+                    token.offset,
+                ))
             }
             TokenKind::RuntimeExpression(expression) => {
                 self.advance();
-                Ok(Expression::RuntimeValue(expression))
+                Ok(Expression::leaf(
+                    ExpressionKind::RuntimeValue(expression),
+                    token.offset,
+                ))
             }
             TokenKind::LeftParen => {
+                let nested = self.enter_nested(nesting, token.offset)?;
                 self.advance();
-                let expression = self.parse_or()?;
+                let expression = self.parse_or(nested)?;
                 if !matches!(self.current().kind, TokenKind::RightParen) {
                     return Err(self.error(self.current().offset, "expected closing parenthesis"));
                 }
@@ -679,6 +1211,43 @@ impl<'a> Parser<'a> {
             TokenKind::End => Err(self.error(token.offset, "expected a condition operand")),
             _ => Err(self.error(token.offset, "expected a condition operand")),
         }
+    }
+
+    fn binary(
+        &self,
+        offset: usize,
+        left: Expression,
+        right: Expression,
+        kind: impl FnOnce(Box<Expression>, Box<Expression>) -> ExpressionKind,
+    ) -> Result<Expression, ConditionError> {
+        let depth = left.depth.max(right.depth) + 1;
+        self.ensure_ast_depth(depth, offset)?;
+        Ok(Expression {
+            kind: kind(Box::new(left), Box::new(right)),
+            offset,
+            depth,
+        })
+    }
+
+    fn enter_nested(&self, nesting: usize, offset: usize) -> Result<usize, ConditionError> {
+        let next = nesting + 1;
+        if next > MAX_CONDITION_DEPTH {
+            return Err(self.error(
+                offset,
+                format!("condition nesting exceeds {MAX_CONDITION_DEPTH} levels"),
+            ));
+        }
+        Ok(next)
+    }
+
+    fn ensure_ast_depth(&self, depth: usize, offset: usize) -> Result<(), ConditionError> {
+        if depth > MAX_CONDITION_DEPTH {
+            return Err(self.error(
+                offset,
+                format!("condition expression exceeds {MAX_CONDITION_DEPTH} levels"),
+            ));
+        }
+        Ok(())
     }
 
     fn current_comparison(&self) -> Option<ComparisonOperator> {
@@ -768,53 +1337,64 @@ impl EvaluatedValue {
 
 fn evaluate_expression(
     eval: &ExpressionEvaluator,
+    condition: &str,
     expression: &Expression,
-) -> (EvaluatedValue, Vec<ExpressionWarning>) {
-    match expression {
-        Expression::Null => (EvaluatedValue::Null, Vec::new()),
-        Expression::Bool(value) => (EvaluatedValue::Bool(*value), Vec::new()),
-        Expression::Number(value) => (EvaluatedValue::Number(value.clone()), Vec::new()),
-        Expression::String(value) => (EvaluatedValue::String(value.clone()), Vec::new()),
-        Expression::RuntimeValue(expression) => {
+    depth: usize,
+) -> Result<(EvaluatedValue, Vec<ExpressionWarning>), ConditionError> {
+    if depth > MAX_CONDITION_DEPTH {
+        return Err(ConditionError {
+            condition: condition.to_string(),
+            offset: expression.offset,
+            message: format!("condition evaluation exceeds {MAX_CONDITION_DEPTH} levels"),
+        });
+    }
+
+    let evaluated = match &expression.kind {
+        ExpressionKind::Null => (EvaluatedValue::Null, Vec::new()),
+        ExpressionKind::Bool(value) => (EvaluatedValue::Bool(*value), Vec::new()),
+        ExpressionKind::Number(value) => (EvaluatedValue::Number(value.clone()), Vec::new()),
+        ExpressionKind::String(value) => (EvaluatedValue::String(value.clone()), Vec::new()),
+        ExpressionKind::RuntimeValue(expression) => {
             let (value, warnings) = eval.evaluate_with_diagnostics(expression);
             (EvaluatedValue::Runtime(value), warnings)
         }
-        Expression::Not(inner) => {
-            let (value, warnings) = evaluate_expression(eval, inner);
+        ExpressionKind::Not(inner) => {
+            let (value, warnings) = evaluate_expression(eval, condition, inner, depth + 1)?;
             (EvaluatedValue::Bool(!value.is_truthy()), warnings)
         }
-        Expression::And(left, right) => {
-            let (left, mut warnings) = evaluate_expression(eval, left);
+        ExpressionKind::And(left, right) => {
+            let (left, mut warnings) = evaluate_expression(eval, condition, left, depth + 1)?;
             if !left.is_truthy() {
-                return (EvaluatedValue::Bool(false), warnings);
+                return Ok((EvaluatedValue::Bool(false), warnings));
             }
-            let (right, right_warnings) = evaluate_expression(eval, right);
+            let (right, right_warnings) = evaluate_expression(eval, condition, right, depth + 1)?;
             warnings.extend(right_warnings);
             (EvaluatedValue::Bool(right.is_truthy()), warnings)
         }
-        Expression::Or(left, right) => {
-            let (left, mut warnings) = evaluate_expression(eval, left);
+        ExpressionKind::Or(left, right) => {
+            let (left, mut warnings) = evaluate_expression(eval, condition, left, depth + 1)?;
             if left.is_truthy() {
-                return (EvaluatedValue::Bool(true), warnings);
+                return Ok((EvaluatedValue::Bool(true), warnings));
             }
-            let (right, right_warnings) = evaluate_expression(eval, right);
+            let (right, right_warnings) = evaluate_expression(eval, condition, right, depth + 1)?;
             warnings.extend(right_warnings);
             (EvaluatedValue::Bool(right.is_truthy()), warnings)
         }
-        Expression::Comparison {
+        ExpressionKind::Comparison {
             operator,
             left,
             right,
         } => {
-            let (left, mut warnings) = evaluate_expression(eval, left);
-            let (right, right_warnings) = evaluate_expression(eval, right);
+            let (left, mut warnings) = evaluate_expression(eval, condition, left, depth + 1)?;
+            let (right, right_warnings) = evaluate_expression(eval, condition, right, depth + 1)?;
             warnings.extend(right_warnings);
             (
                 EvaluatedValue::Bool(compare(*operator, &left, &right)),
                 warnings,
             )
         }
-    }
+    };
+    Ok(evaluated)
 }
 
 fn compare(operator: ComparisonOperator, left: &EvaluatedValue, right: &EvaluatedValue) -> bool {
@@ -873,7 +1453,11 @@ pub(super) mod tests {
                 ("none".to_string(), Value::Null),
                 ("flag".to_string(), json!(true)),
             ]),
+            request_query: BTreeMap::from([("a==b".to_string(), "query-value".to_string())]),
+            request_path: BTreeMap::from([("x&&y".to_string(), "path-value".to_string())]),
+            response_headers: BTreeMap::from([("X||Y".to_string(), "header-value".to_string())]),
             response_body: Some(json!({
+                "a==b": "pointer-value",
                 "name||title": "Something",
                 "nested": {"value": 7},
                 "users": [
@@ -919,8 +1503,12 @@ pub(super) mod tests {
             ("3 != 4", true),
             ("true && !false", true),
             ("false || true", true),
+            ("true||false&&false", true),
             ("(false || true) && true", true),
             ("$statusCode == 200", true),
+            ("$statusCode==200", true),
+            ("$statusCode>=200&&$statusCode<300", true),
+            ("$inputs.number==10", true),
             ("$inputs.text == 'aLpHa'", true),
             ("$response.body.users[0].name == 'alice'", true),
             ("$response.body#/nested/value == 7", true),
@@ -975,15 +1563,17 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn precedence_grouping_and_unary_are_deterministic() {
+    pub(crate) fn precedence_grouping_and_unary_are_deterministic() {
         assert_condition("true || false && false", true);
         assert_condition("(true || false) && false", false);
         assert_condition("!($statusCode == 404)", true);
         assert_condition("!!true", true);
+        assert_condition("!2 < 1", false);
+        assert_condition("!(2 < 1)", true);
     }
 
     #[test]
-    fn parser_consumes_invalid_short_circuited_branches() {
+    pub(crate) fn parser_consumes_invalid_short_circuited_branches() {
         assert_syntax_error("true || contains");
         assert_syntax_error("false && (1 <)");
     }
@@ -1008,6 +1598,25 @@ pub(super) mod tests {
     }
 
     #[test]
+    pub(crate) fn arbitrary_size_exponents_compare_without_saturation() {
+        for (condition, expected) in [
+            ("1e9223372036854775807 == 1e9223372036854775808", false),
+            ("1e9223372036854775807 < 1e9223372036854775808", true),
+            ("10e9223372036854775807 == 1e9223372036854775808", true),
+            ("-1e9223372036854775807 > -1e9223372036854775808", true),
+            ("1e-9223372036854775808 > 1e-9223372036854775809", true),
+            ("0.1e9223372036854775808 == 1e9223372036854775807", true),
+            ("0.1e-9223372036854775808 == 1e-9223372036854775809", true),
+            (
+                "'1e999999999999999999999' < '1e1000000000000000000000'",
+                true,
+            ),
+        ] {
+            assert_condition(condition, expected);
+        }
+    }
+
+    #[test]
     fn null_only_equals_null_and_is_otherwise_falsy() {
         for (condition, expected) in [
             ("null == null", true),
@@ -1025,7 +1634,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn runtime_expression_legacy_traversal_remains_an_operand() {
+    pub(crate) fn runtime_expression_legacy_traversal_remains_an_operand() {
         for condition in [
             "$response.body['name||title'] == 'Something'",
             "$response.body.users[?(@.role=='admin')].name == 'Alice'",
@@ -1033,6 +1642,47 @@ pub(super) mod tests {
         ] {
             assert_condition(condition, true);
         }
+    }
+
+    #[test]
+    pub(crate) fn runtime_expression_names_own_operator_punctuation() {
+        for (condition, expected) in [
+            ("$response.header.X||Y", true),
+            ("$request.query.a==b", true),
+            ("$request.path.x&&y", true),
+            ("$response.body#/a==b", true),
+            ("$response.header.X||Y == 'HEADER-VALUE'", true),
+            ("$request.query.a==b == 'query-value'", true),
+            ("$request.path.x&&y == 'path-value'", true),
+            ("$response.body#/a==b == 'pointer-value'", true),
+        ] {
+            assert_condition(condition, expected);
+        }
+    }
+
+    #[test]
+    pub(crate) fn excessive_parser_and_evaluator_depth_fails_closed() {
+        let deep_unary = format!("{}true", "!".repeat(10_000));
+        let deep_groups = format!("{}true{}", "(".repeat(10_000), ")".repeat(10_000));
+        let left_deep = format!("{}true", "true && ".repeat(10_000));
+
+        for condition in [deep_unary, deep_groups, left_deep] {
+            let error = assert_syntax_error(&condition);
+            assert_eq!(error.condition, condition);
+            assert!(error.offset <= error.condition.len());
+            assert!(error.condition.is_char_boundary(error.offset));
+            assert!(error.message.contains("exceeds"), "{error:?}");
+        }
+
+        let leaf = Expression::leaf(ExpressionKind::Bool(true), 0);
+        let error = match evaluate_expression(&evaluator(), "true", &leaf, MAX_CONDITION_DEPTH + 1)
+        {
+            Err(error) => error,
+            Ok(result) => panic!("evaluator depth guard unexpectedly returned {result:?}"),
+        };
+        assert_eq!(error.condition, "true");
+        assert_eq!(error.offset, 0);
+        assert!(error.message.contains("evaluation exceeds"));
     }
 
     #[test]

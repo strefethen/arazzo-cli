@@ -5,7 +5,13 @@
       "id": "expr.simple-criterion-grammar",
       "area": "expressions",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#simple-conditions"],
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#literals",
+        "spec/arazzo/v1.1.0.html#operators",
+        "spec/arazzo/v1.1.0.html#runtime-expressions-in-conditions",
+        "spec/arazzo/v1.1.0.html#simple-conditions",
+        "spec/arazzo/v1.1.0.html#evaluation-errors"
+      ],
       "normativeLevels": ["MUST"],
       "claim": "Simple Criterion conditions accept only the Arazzo 1.1 literals and operators.",
       "status": "covered",

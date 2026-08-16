@@ -18,6 +18,8 @@
       "failure-action-object",
       "identity-based-referencing",
       "jsonpath-conditions",
+      "literals",
+      "operators",
       "parameter-object",
       "parsing-documents",
       "payload-replacement-object",

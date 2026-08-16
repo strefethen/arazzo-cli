@@ -610,7 +610,7 @@ The probe document at F8 above now behaves per the epic's acceptance criteria:
 its MUST-level violations fail validation, its SHOULD-level violations warn
 (errors under `--strict`), and the unknown field warns. Still open after this
 epic: F1/F5 (the operationPath / sourceDescriptions idiom product decision),
-F12, F14, F15, F16, F18, F19, and F11's implementation.
+F14, F15, F16, F18, F19, and F11's implementation.
 
 ## Addendum — 2026-08-15 (ac-6131b Reusable Object action references)
 

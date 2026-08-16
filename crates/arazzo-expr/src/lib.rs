@@ -26,12 +26,18 @@ fn conformance_simple_string_comparison_negative_evidence() {
 #[test]
 fn conformance_simple_condition_grammar_positive_evidence() {
     simple_condition::tests::conformance_positive_matrix();
+    simple_condition::tests::precedence_grouping_and_unary_are_deterministic();
+    simple_condition::tests::arbitrary_size_exponents_compare_without_saturation();
+    simple_condition::tests::runtime_expression_legacy_traversal_remains_an_operand();
+    simple_condition::tests::runtime_expression_names_own_operator_punctuation();
 }
 
 #[cfg(test)]
 #[test]
 fn conformance_simple_condition_grammar_negative_evidence() {
     simple_condition::tests::conformance_negative_matrix();
+    simple_condition::tests::parser_consumes_invalid_short_circuited_branches();
+    simple_condition::tests::excessive_parser_and_evaluator_depth_fails_closed();
 }
 
 use std::borrow::Cow;

@@ -243,6 +243,16 @@
             }
           ]
         },
+        "case-insensitive-equality": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "fetch-url",
+              "url": "https://httpbin.org/get"
+            }
+          ]
+        },
         "compound-conditions": {
           "outcome": "dryRun",
           "steps": [
@@ -254,16 +264,6 @@
             {
               "method": "GET",
               "stepId": "fetch-with-or",
-              "url": "https://httpbin.org/get"
-            }
-          ]
-        },
-        "contains-operator": {
-          "outcome": "dryRun",
-          "steps": [
-            {
-              "method": "GET",
-              "stepId": "fetch-url",
               "url": "https://httpbin.org/get"
             }
           ]

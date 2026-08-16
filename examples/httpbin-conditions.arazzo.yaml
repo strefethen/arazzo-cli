@@ -49,7 +49,7 @@ workflows:
     outputs:
       fruit: $steps.fetch-data.outputs.fruit
 
-  - workflowId: contains-operator
+  - workflowId: case-insensitive-equality
     summary: Test case-insensitive equality on response body strings
     steps:
       - stepId: fetch-url
