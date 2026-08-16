@@ -5,6 +5,8 @@
 //! The inventory is deliberate review surface. It is not inferred from current
 //! tests or source files, and this gate deliberately does not consult `tkt`:
 //! orchestration verifies live owners after the Cargo evidence passes.
+//! Specification identity and allowed anchors are pinned in the tracked root
+//! manifest, so validation never depends on ignored local specification files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,7 +14,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use regex::Regex;
 use serde_json::{json, Map, Value};
 
 const AREAS: [(&str, &str); 5] = [
@@ -23,8 +24,11 @@ const AREAS: [(&str, &str); 5] = [
     ("surfaces", "tests/conformance/surfaces.json"),
 ];
 const INVENTORY_PATH: &str = "tests/conformance/manifest.json";
-const SPEC_PATH: &str = "spec/arazzo/v1.1.0.html";
 const SPEC_PREFIX: &str = "spec/arazzo/v1.1.0.html#";
+const SPEC_DOCUMENT: &str = "Arazzo Specification";
+const SPEC_VERSION: &str = "1.1.0";
+const SPEC_SOURCE: &str = "https://spec.openapis.org/arazzo/v1.1.0.html";
+const SPEC_SHA256: &str = "8e2ea7d20accaef846080bca77d349b137414e66c94f015a002b290cbf79b538";
 static TEMP_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 type Fragments = BTreeMap<String, Value>;
@@ -102,18 +106,6 @@ impl TempWorkspace {
         ));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
-        let spec_path = path.join(SPEC_PATH);
-        fs::create_dir_all(
-            spec_path
-                .parent()
-                .unwrap_or_else(|| panic!("spec fixture must have a parent")),
-        )
-        .unwrap_or_else(|err| panic!("creating {}: {err}", spec_path.display()));
-        fs::write(
-            &spec_path,
-            r#"<html><body><section id="versions"></section></body></html>"#,
-        )
-        .unwrap_or_else(|err| panic!("writing {}: {err}", spec_path.display()));
         Self { path }
     }
 
@@ -224,6 +216,9 @@ fn is_normative_level(value: &str) -> bool {
             | "SHOULD"
             | "SHOULD NOT"
             | "RECOMMENDED"
+            | "NOT RECOMMENDED"
+            | "MAY"
+            | "OPTIONAL"
     )
 }
 
@@ -270,26 +265,63 @@ fn resolve_workspace_file(workspace: &Path, relative: &str) -> Result<PathBuf, S
     Ok(resolved)
 }
 
-fn vendored_arazzo_anchor_ids(workspace: &Path) -> Result<BTreeSet<String>, String> {
-    let spec_path = workspace.join(SPEC_PATH);
-    let html = fs::read_to_string(&spec_path).map_err(|err| {
-        format!(
-            "reading vendored Arazzo specification {}: {err}",
-            spec_path.display()
-        )
-    })?;
-    let id_attribute = Regex::new(r#"\bid\s*=\s*(?:"([^"]+)"|'([^']+)')"#)
-        .map_err(|err| format!("building vendored-spec anchor matcher: {err}"))?;
-    let anchors = id_attribute
-        .captures_iter(&html)
-        .filter_map(|captures| captures.get(1).or_else(|| captures.get(2)))
-        .map(|value| value.as_str().to_string())
+fn is_spec_anchor_id(value: &str) -> bool {
+    value
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn tracked_spec_anchor_ids(manifest: &Map<String, Value>) -> Result<BTreeSet<String>, String> {
+    let subject = "manifest specAuthority";
+    let authority = manifest
+        .get("specAuthority")
+        .ok_or_else(|| format!("{subject} is required"))?;
+    let authority = required_object(authority, subject)?;
+    let expected_fields = BTreeSet::from([
+        "allowedAnchorIds",
+        "document",
+        "sha256",
+        "source",
+        "version",
+    ]);
+    let actual_fields = authority
+        .keys()
+        .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    if anchors.is_empty() {
+    if actual_fields != expected_fields {
         return Err(format!(
-            "vendored Arazzo specification {} contains no HTML id attributes",
-            spec_path.display()
+            "{subject} fields must be exactly {expected_fields:?}, got {actual_fields:?}"
         ));
+    }
+    for (field, expected) in [
+        ("document", SPEC_DOCUMENT),
+        ("version", SPEC_VERSION),
+        ("source", SPEC_SOURCE),
+        ("sha256", SPEC_SHA256),
+    ] {
+        let actual = required_text(authority, field, subject)?;
+        if actual != expected {
+            return Err(format!(
+                "{subject}: {field} must be the pinned value {expected:?}, got {actual:?}"
+            ));
+        }
+    }
+
+    let mut anchors = BTreeSet::new();
+    for anchor in required_array(authority, "allowedAnchorIds", subject)? {
+        let anchor = anchor
+            .as_str()
+            .filter(|anchor| is_spec_anchor_id(anchor))
+            .ok_or_else(|| {
+                format!("{subject}: allowedAnchorIds must contain non-empty HTML anchor IDs")
+            })?;
+        if !anchors.insert(anchor.to_string()) {
+            return Err(format!("{subject}: duplicate allowed anchor ID {anchor:?}"));
+        }
     }
     Ok(anchors)
 }
@@ -443,62 +475,259 @@ fn is_ignore_attribute(attribute: &str) -> bool {
     attribute == "ignore" || attribute.starts_with("ignore=")
 }
 
+fn skip_delimited(source: &[u8], cursor: &mut usize) -> bool {
+    let Some(open) = source.get(*cursor).copied() else {
+        return false;
+    };
+    let Some(close) = (match open {
+        b'(' => Some(b')'),
+        b'[' => Some(b']'),
+        b'{' => Some(b'}'),
+        _ => None,
+    }) else {
+        return false;
+    };
+    let mut closing = vec![close];
+    *cursor += 1;
+    while let Some(byte) = source.get(*cursor).copied() {
+        *cursor += 1;
+        match byte {
+            b'(' => closing.push(b')'),
+            b'[' => closing.push(b']'),
+            b'{' => closing.push(b'}'),
+            b')' | b']' | b'}' if closing.last() == Some(&byte) => {
+                closing.pop();
+                if closing.is_empty() {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn normalized_attribute(source: &[u8], start: usize, end: usize) -> String {
+    source[start..end]
+        .iter()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .map(|byte| char::from(*byte))
+        .collect()
+}
+
+fn parse_outer_attributes(source: &[u8], cursor: &mut usize) -> Vec<String> {
+    let mut attributes = Vec::new();
+    while source
+        .get(*cursor..)
+        .is_some_and(|remaining| remaining.starts_with(b"#["))
+    {
+        let Some(end) = attribute_end(source, *cursor + 1) else {
+            *cursor = source.len();
+            break;
+        };
+        attributes.push(normalized_attribute(source, *cursor + 2, end - 1));
+        *cursor = end;
+        skip_whitespace(source, cursor);
+    }
+    attributes
+}
+
+fn parse_inner_attribute(source: &[u8], cursor: &mut usize) -> Option<String> {
+    if !source
+        .get(*cursor..)
+        .is_some_and(|remaining| remaining.starts_with(b"#!["))
+    {
+        return None;
+    }
+    let Some(end) = attribute_end(source, *cursor + 2) else {
+        *cursor = source.len();
+        return Some("malformed".to_string());
+    };
+    let attribute = normalized_attribute(source, *cursor + 3, end - 1);
+    *cursor = end;
+    Some(attribute)
+}
+
+fn attributes_are_enabled_for_test(attributes: &[String]) -> bool {
+    attributes.iter().all(|attribute| {
+        if attribute == "cfg_attr" || attribute.starts_with("cfg_attr(") {
+            return false;
+        }
+        if attribute == "cfg" || attribute.starts_with("cfg(") {
+            return attribute == "cfg(test)";
+        }
+        true
+    })
+}
+
+fn skip_visibility(source: &[u8], cursor: &mut usize) {
+    if !consume_word(source, cursor, "pub") {
+        return;
+    }
+    skip_whitespace(source, cursor);
+    if source.get(*cursor) == Some(&b'(') {
+        let _ = skip_delimited(source, cursor);
+        skip_whitespace(source, cursor);
+    }
+}
+
+fn skip_non_module_item(source: &[u8], cursor: &mut usize) {
+    while let Some(byte) = source.get(*cursor).copied() {
+        match byte {
+            b';' => {
+                *cursor += 1;
+                return;
+            }
+            b'}' => return,
+            b'(' | b'[' => {
+                if !skip_delimited(source, cursor) {
+                    return;
+                }
+            }
+            b'{' => {
+                let _ = skip_delimited(source, cursor);
+                skip_whitespace(source, cursor);
+                if source.get(*cursor) == Some(&b';') {
+                    *cursor += 1;
+                }
+                return;
+            }
+            _ => *cursor += 1,
+        }
+    }
+}
+
+fn skip_remaining_item_list(source: &[u8], cursor: &mut usize, nested_module: bool) {
+    if !nested_module {
+        *cursor = source.len();
+        return;
+    }
+    while let Some(byte) = source.get(*cursor).copied() {
+        match byte {
+            b'}' => {
+                *cursor += 1;
+                return;
+            }
+            b'(' | b'[' | b'{' => {
+                if !skip_delimited(source, cursor) {
+                    return;
+                }
+            }
+            _ => *cursor += 1,
+        }
+    }
+}
+
+fn scan_rust_item_list(
+    source: &[u8],
+    cursor: &mut usize,
+    nested_module: bool,
+    tests: &mut BTreeSet<String>,
+) {
+    while *cursor < source.len() {
+        skip_whitespace(source, cursor);
+        while source.get(*cursor) == Some(&b';') {
+            *cursor += 1;
+            skip_whitespace(source, cursor);
+        }
+        if source.get(*cursor) == Some(&b'}') {
+            *cursor += usize::from(nested_module);
+            return;
+        }
+        if let Some(attribute) = parse_inner_attribute(source, cursor) {
+            if !attributes_are_enabled_for_test(std::slice::from_ref(&attribute)) {
+                skip_remaining_item_list(source, cursor, nested_module);
+                return;
+            }
+            continue;
+        }
+
+        let attributes = parse_outer_attributes(source, cursor);
+        let item_start = *cursor;
+        let mut head = item_start;
+        skip_visibility(source, &mut head);
+
+        let mut module_head = head;
+        if consume_word(source, &mut module_head, "mod") {
+            skip_whitespace(source, &mut module_head);
+            while source
+                .get(module_head)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'#'))
+            {
+                module_head += 1;
+            }
+            skip_whitespace(source, &mut module_head);
+            *cursor = module_head;
+            if source.get(*cursor) == Some(&b'{') {
+                *cursor += 1;
+                if attributes_are_enabled_for_test(&attributes) {
+                    scan_rust_item_list(source, cursor, true, tests);
+                } else {
+                    *cursor -= 1;
+                    let _ = skip_delimited(source, cursor);
+                }
+            } else {
+                skip_non_module_item(source, cursor);
+            }
+            continue;
+        }
+
+        let mut function_head = head;
+        loop {
+            let before_qualifier = function_head;
+            for qualifier in ["async", "unsafe"] {
+                if consume_word(source, &mut function_head, qualifier) {
+                    skip_whitespace(source, &mut function_head);
+                    break;
+                }
+            }
+            if function_head == before_qualifier {
+                break;
+            }
+        }
+        if consume_word(source, &mut function_head, "fn") {
+            skip_whitespace(source, &mut function_head);
+            let name_start = function_head;
+            while source
+                .get(function_head)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                function_head += 1;
+            }
+            let name = std::str::from_utf8(&source[name_start..function_head])
+                .unwrap_or_else(|err| panic!("scrubbed Rust identifier must be UTF-8: {err}"));
+            let has_test_attribute = attributes
+                .iter()
+                .any(|attribute| is_test_attribute(attribute));
+            let ignored = attributes
+                .iter()
+                .any(|attribute| is_ignore_attribute(attribute));
+            if has_test_attribute
+                && !ignored
+                && attributes_are_enabled_for_test(&attributes)
+                && is_rust_identifier(name)
+            {
+                tests.insert(name.to_string());
+            }
+            *cursor = function_head;
+            skip_non_module_item(source, cursor);
+            continue;
+        }
+
+        *cursor = item_start;
+        skip_non_module_item(source, cursor);
+        if *cursor == item_start {
+            *cursor += 1;
+        }
+    }
+}
+
 fn recognized_non_ignored_test_items(source: &str) -> BTreeSet<String> {
     let source = scrub_non_code(source);
     let bytes = source.as_bytes();
     let mut tests = BTreeSet::new();
     let mut cursor = 0;
-
-    while cursor < bytes.len() {
-        skip_whitespace(bytes, &mut cursor);
-        if !bytes[cursor..].starts_with(b"#[") {
-            cursor += 1;
-            continue;
-        }
-
-        let mut has_test_attribute = false;
-        let mut ignored = false;
-        while bytes[cursor..].starts_with(b"#[") {
-            let Some(end) = attribute_end(bytes, cursor + 1) else {
-                break;
-            };
-            let attribute: String = bytes[cursor + 2..end - 1]
-                .iter()
-                .filter(|byte| !byte.is_ascii_whitespace())
-                .map(|byte| char::from(*byte))
-                .collect();
-            has_test_attribute |= is_test_attribute(&attribute);
-            ignored |= is_ignore_attribute(&attribute);
-            cursor = end;
-            skip_whitespace(bytes, &mut cursor);
-        }
-
-        let mut item = cursor;
-        if consume_word(bytes, &mut item, "pub") {
-            skip_whitespace(bytes, &mut item);
-        }
-        let _ = consume_word(bytes, &mut item, "async");
-        skip_whitespace(bytes, &mut item);
-        let _ = consume_word(bytes, &mut item, "unsafe");
-        skip_whitespace(bytes, &mut item);
-        if !consume_word(bytes, &mut item, "fn") {
-            continue;
-        }
-        skip_whitespace(bytes, &mut item);
-        let start = item;
-        while bytes
-            .get(item)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
-        {
-            item += 1;
-        }
-        let name = &source[start..item];
-        if has_test_attribute && !ignored && is_rust_identifier(name) {
-            tests.insert(name.to_string());
-        }
-        cursor = item;
-    }
-
+    scan_rust_item_list(bytes, &mut cursor, false, &mut tests);
     tests
 }
 
@@ -587,7 +816,8 @@ fn validate_optional_evidence(
 
 fn validate_authority(
     workspace: &Path,
-    spec_anchor_ids: &BTreeSet<String>,
+    allowed_spec_anchor_ids: &BTreeSet<String>,
+    used_spec_anchor_ids: &mut BTreeSet<String>,
     entry: &Map<String, Value>,
     claim_id: &str,
 ) -> Result<Authority, String> {
@@ -615,12 +845,15 @@ fn validate_authority(
                     ));
                 }
                 let fragment = &anchor[SPEC_PREFIX.len()..];
-                if !spec_anchor_ids.contains(fragment) {
+                if !allowed_spec_anchor_ids.contains(fragment) {
                     return Err(claim_error(
                         claim_id,
-                        &format!("spec anchor {anchor:?} does not exist in vendored {SPEC_PATH}"),
+                        &format!(
+                            "spec anchor {anchor:?} is not in the tracked specAuthority allowlist"
+                        ),
                     ));
                 }
+                used_spec_anchor_ids.insert(fragment.to_string());
             }
             let levels = required_array(entry, "normativeLevels", &format!("claim {claim_id}"))?;
             if levels.is_empty() {
@@ -666,8 +899,10 @@ fn validate_authority(
 
 fn validate_claim(
     workspace: &Path,
-    spec_anchor_ids: &BTreeSet<String>,
-    expected_area: &str,
+    allowed_spec_anchor_ids: &BTreeSet<String>,
+    used_spec_anchor_ids: &mut BTreeSet<String>,
+    inventory_area: &str,
+    fragment_area: &str,
     entry: &Value,
 ) -> Result<(String, Authority, Status), String> {
     let entry = required_object(entry, "claim entry")?;
@@ -679,14 +914,26 @@ fn validate_claim(
         ));
     }
     let area = required_text(entry, "area", &format!("claim {claim_id}"))?;
-    if area != expected_area {
+    if area != inventory_area {
         return Err(claim_error(
             claim_id,
-            &format!("owning area {area:?} does not match fragment {expected_area:?}"),
+            &format!("owning area {area:?} does not match inventory area {inventory_area:?}"),
+        ));
+    }
+    if area != fragment_area {
+        return Err(claim_error(
+            claim_id,
+            &format!("owning area {area:?} does not match physical fragment {fragment_area:?}"),
         ));
     }
     let _ = required_text(entry, "claim", &format!("claim {claim_id}"))?;
-    let authority = validate_authority(workspace, spec_anchor_ids, entry, claim_id)?;
+    let authority = validate_authority(
+        workspace,
+        allowed_spec_anchor_ids,
+        used_spec_anchor_ids,
+        entry,
+        claim_id,
+    )?;
     let status = Status::parse(
         required_text(entry, "status", &format!("claim {claim_id}"))?,
         claim_id,
@@ -744,6 +991,7 @@ fn validate_manifest(
     if manifest.get("formatVersion").and_then(Value::as_u64) != Some(1) {
         return Err("manifest: formatVersion must be 1".to_string());
     }
+    let allowed_spec_anchor_ids = tracked_spec_anchor_ids(manifest)?;
     let full_compliance = manifest
         .get("fullCompliance")
         .and_then(Value::as_bool)
@@ -787,8 +1035,7 @@ fn validate_manifest(
         ));
     }
 
-    let spec_anchor_ids = vendored_arazzo_anchor_ids(workspace)?;
-
+    let mut used_spec_anchor_ids = BTreeSet::new();
     let mut observed_ids = BTreeSet::new();
     let mut report = ManifestReport {
         full_compliance,
@@ -819,8 +1066,14 @@ fn validate_manifest(
             let expected_area = inventory_by_id.get(entry_id).ok_or_else(|| {
                 claim_error(entry_id, "is not declared by the canonical inventory")
             })?;
-            let (claim_id, authority, status) =
-                validate_claim(workspace, &spec_anchor_ids, expected_area, entry)?;
+            let (claim_id, authority, status) = validate_claim(
+                workspace,
+                &allowed_spec_anchor_ids,
+                &mut used_spec_anchor_ids,
+                expected_area,
+                area,
+                entry,
+            )?;
             match authority {
                 Authority::ArazzoSpec => report.arazzo.add(status),
                 Authority::RepositoryContract => report.repository.add(status),
@@ -841,6 +1094,15 @@ fn validate_manifest(
                 "is missing from the merged fragments",
             ));
         }
+    }
+    if used_spec_anchor_ids != allowed_spec_anchor_ids {
+        let unused = allowed_spec_anchor_ids
+            .difference(&used_spec_anchor_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "manifest specAuthority contains allowed anchor IDs not used by any Arazzo claim: {unused:?}"
+        ));
     }
     if full_compliance && !report.arazzo.all_covered() {
         return Err(
@@ -901,6 +1163,16 @@ fn repository_claim(id: &str, status: &str) -> Value {
     })
 }
 
+fn test_spec_authority(allowed_anchor_ids: Vec<&str>) -> Value {
+    json!({
+        "document": SPEC_DOCUMENT,
+        "version": SPEC_VERSION,
+        "source": SPEC_SOURCE,
+        "sha256": SPEC_SHA256,
+        "allowedAnchorIds": allowed_anchor_ids
+    })
+}
+
 fn documents_with_claim(claim: Value, full_compliance: bool) -> (Value, Fragments) {
     let id = claim
         .get("id")
@@ -910,6 +1182,12 @@ fn documents_with_claim(claim: Value, full_compliance: bool) -> (Value, Fragment
         .get("area")
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("test claim must have an area"));
+    let allowed_anchor_ids = if claim.get("authority").and_then(Value::as_str) == Some("arazzoSpec")
+    {
+        vec!["versions"]
+    } else {
+        Vec::new()
+    };
     let mut fragments = Fragments::new();
     for (known_area, _) in AREAS {
         let claims = if known_area == area {
@@ -926,6 +1204,7 @@ fn documents_with_claim(claim: Value, full_compliance: bool) -> (Value, Fragment
         json!({
             "formatVersion": 1,
             "fullCompliance": full_compliance,
+            "specAuthority": test_spec_authority(allowed_anchor_ids),
             "inventory": [{ "id": id, "area": area }]
         }),
         fragments,
@@ -1015,6 +1294,36 @@ fn duplicate_inventory_ids_and_fragment_ids_fail() {
     );
     assert!(
         error.contains("model.version-grammar-feature-set"),
+        "{error}"
+    );
+
+    let (manifest, mut fragments) = checked_in_documents();
+    let moved_claim = {
+        let model_claims = fragments
+            .get_mut("model")
+            .and_then(|fragment| fragment.get_mut("claims"))
+            .and_then(Value::as_array_mut)
+            .unwrap_or_else(|| panic!("model claims array"));
+        let index = model_claims
+            .iter()
+            .position(|claim| {
+                claim.get("id").and_then(Value::as_str) == Some("model.version-grammar-feature-set")
+            })
+            .unwrap_or_else(|| panic!("model claim must exist"));
+        model_claims.remove(index)
+    };
+    fragments
+        .get_mut("runtime")
+        .and_then(|fragment| fragment.get_mut("claims"))
+        .and_then(Value::as_array_mut)
+        .unwrap_or_else(|| panic!("runtime claims array"))
+        .push(moved_claim);
+    let error = expected_error(
+        validate_manifest(&root, &manifest, &fragments),
+        "claim moved across physical fragments must fail",
+    );
+    assert!(
+        error.contains("model.version-grammar-feature-set") && error.contains("physical fragment"),
         "{error}"
     );
 }
@@ -1186,6 +1495,17 @@ fn sync_case() {}
 #[tokio::test]
 async fn async_case() {}
 
+#[cfg(test)]
+mod nested_tests {
+    #[test]
+    fn nested_sync_case() {}
+
+    mod deeper {
+        #[tokio::test]
+        async fn nested_async_case() {}
+    }
+}
+
 fn helper_only() {}
 
 // #[test]
@@ -1194,11 +1514,98 @@ fn helper_only() {}
 #[test]
 #[ignore]
 fn ignored_case() {}
+
+macro_rules! define_macro_rule_case {
+    () => {
+        #[test]
+        fn macro_rule_case() {}
+    };
+}
+
+define_tests! {
+    #[test]
+    fn macro_invocation_case() {}
+}
+
+#[cfg(any())]
+#[test]
+fn disabled_cfg_case() {}
+
+#[cfg_attr(test, ignore)]
+#[test]
+fn disabled_cfg_attr_case() {}
+
+#[cfg(any())]
+mod disabled_module {
+    #[test]
+    fn disabled_module_case() {}
+}
+
+mod inner_disabled_module {
+    #![cfg(any())]
+
+    #[test]
+    fn inner_disabled_module_case() {}
+}
+
+mod inner_cfg_attr_module {
+    #![cfg_attr(test, cfg(any()))]
+
+    #[test]
+    fn inner_cfg_attr_module_case() {}
+}
+
+fn enclosing_function() {
+    #[test]
+    fn nested_in_function_body_case() {}
+}
+
+struct Fixture;
+
+impl Fixture {
+    #[test]
+    fn nested_in_impl_body_case() {}
+}
+
+const TOKEN_BODY: () = {
+    #[test]
+    fn nested_in_const_body_case() {}
+};
 "#,
     );
+    let source = fs::read_to_string(temp.path().join("tests/evidence.rs"))
+        .unwrap_or_else(|err| panic!("reading evidence parser fixture: {err}"));
+    let recognized = recognized_non_ignored_test_items(&source);
+    for test_name in [
+        "sync_case",
+        "async_case",
+        "nested_sync_case",
+        "nested_async_case",
+    ] {
+        assert!(recognized.contains(test_name), "missing {test_name:?}");
+    }
+    for test_name in [
+        "macro_rule_case",
+        "macro_invocation_case",
+        "disabled_cfg_case",
+        "disabled_cfg_attr_case",
+        "disabled_module_case",
+        "inner_disabled_module_case",
+        "inner_cfg_attr_module_case",
+        "nested_in_function_body_case",
+        "nested_in_impl_body_case",
+        "nested_in_const_body_case",
+    ] {
+        assert!(
+            !recognized.contains(test_name),
+            "non-executable token item {test_name:?} must not be recognized"
+        );
+    }
     for reference in [
         "tests/evidence.rs#sync_case",
         "tests/evidence.rs#async_case",
+        "tests/evidence.rs#nested_sync_case",
+        "tests/evidence.rs#nested_async_case",
     ] {
         let (manifest, fragments) = documents_with_claim(
             covered_claim("model.test-reference", reference, reference),
@@ -1214,6 +1621,16 @@ fn ignored_case() {}
         "tests/evidence.rs#helper_only",
         "tests/evidence.rs#commented_case",
         "tests/evidence.rs#ignored_case",
+        "tests/evidence.rs#macro_rule_case",
+        "tests/evidence.rs#macro_invocation_case",
+        "tests/evidence.rs#disabled_cfg_case",
+        "tests/evidence.rs#disabled_cfg_attr_case",
+        "tests/evidence.rs#disabled_module_case",
+        "tests/evidence.rs#inner_disabled_module_case",
+        "tests/evidence.rs#inner_cfg_attr_module_case",
+        "tests/evidence.rs#nested_in_function_body_case",
+        "tests/evidence.rs#nested_in_impl_body_case",
+        "tests/evidence.rs#nested_in_const_body_case",
     ] {
         let (manifest, fragments) = documents_with_claim(
             covered_claim("model.test-reference", reference, reference),
@@ -1225,6 +1642,90 @@ fn ignored_case() {}
         );
         assert!(error.contains("model.test-reference"), "{error}");
     }
+}
+
+#[test]
+fn tracked_spec_authority_is_pinned_finite_and_hermetic() {
+    let temp = TempWorkspace::new();
+    write_source(temp.path(), "tests/evidence.rs", "#[test]\nfn good() {}\n");
+    assert!(
+        !temp.path().join("spec").exists(),
+        "the manifest gate fixture must not depend on a vendored spec directory"
+    );
+
+    let (manifest, fragments) = documents_with_claim(
+        covered_claim(
+            "model.authority",
+            "tests/evidence.rs#good",
+            "tests/evidence.rs#good",
+        ),
+        true,
+    );
+    validate_manifest(temp.path(), &manifest, &fragments)
+        .unwrap_or_else(|err| panic!("tracked authority must validate without /spec: {err}"));
+
+    let mut missing_authority = manifest.clone();
+    missing_authority
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("manifest object"))
+        .remove("specAuthority");
+    let error = expected_error(
+        validate_manifest(temp.path(), &missing_authority, &fragments),
+        "missing specification authority must fail",
+    );
+    assert!(error.contains("specAuthority is required"), "{error}");
+
+    let mut extra_field = manifest.clone();
+    extra_field["specAuthority"]["unreviewed"] = json!(true);
+    let error = expected_error(
+        validate_manifest(temp.path(), &extra_field, &fragments),
+        "extra specification authority field must fail",
+    );
+    assert!(error.contains("fields must be exactly"), "{error}");
+
+    let mut changed_checksum = manifest.clone();
+    changed_checksum["specAuthority"]["sha256"] = json!("not-the-pinned-checksum");
+    let error = expected_error(
+        validate_manifest(temp.path(), &changed_checksum, &fragments),
+        "changed specification checksum must fail",
+    );
+    assert!(
+        error.contains("sha256") && error.contains("pinned"),
+        "{error}"
+    );
+
+    let mut duplicate_anchor = manifest.clone();
+    duplicate_anchor["specAuthority"]["allowedAnchorIds"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("allowed anchors array"))
+        .push(json!("versions"));
+    let error = expected_error(
+        validate_manifest(temp.path(), &duplicate_anchor, &fragments),
+        "duplicate allowed anchor must fail",
+    );
+    assert!(error.contains("duplicate allowed anchor"), "{error}");
+
+    let mut malformed_anchor = manifest.clone();
+    malformed_anchor["specAuthority"]["allowedAnchorIds"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("allowed anchors array"))
+        .push(json!("not an anchor"));
+    let error = expected_error(
+        validate_manifest(temp.path(), &malformed_anchor, &fragments),
+        "malformed allowed anchor must fail",
+    );
+    assert!(error.contains("non-empty HTML anchor IDs"), "{error}");
+
+    let mut unused_anchor = manifest;
+    unused_anchor["specAuthority"]["allowedAnchorIds"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("allowed anchors array"))
+        .push(json!("unused-anchor"));
+    let error = expected_error(
+        validate_manifest(temp.path(), &unused_anchor, &fragments),
+        "unused allowed anchor must fail",
+    );
+    assert!(error.contains("not used"), "{error}");
 }
 
 #[test]
@@ -1322,7 +1823,7 @@ fn authority_forms_are_exclusive_and_repository_totals_are_separate() {
 }
 
 #[test]
-fn nonexistent_vendored_spec_anchor_fails() {
+fn anchor_outside_tracked_spec_authority_fails() {
     let temp = TempWorkspace::new();
     write_source(temp.path(), "tests/evidence.rs", "#[test]\nfn good() {}\n");
     let (manifest, mut fragments) = documents_with_claim(
@@ -1340,12 +1841,12 @@ fn nonexistent_vendored_spec_anchor_fails() {
 
     let error = expected_error(
         validate_manifest(temp.path(), &manifest, &fragments),
-        "nonexistent vendored specification anchor must fail",
+        "anchor outside tracked specification authority must fail",
     );
     assert!(
         error.contains("model.nonexistent-spec-anchor")
             && error.contains("correctly-prefixed-but-nonexistent")
-            && error.contains(SPEC_PATH),
+            && error.contains("tracked specAuthority"),
         "{error}"
     );
 }

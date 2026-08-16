@@ -5,9 +5,9 @@
       "id": "model.version-grammar-feature-set",
       "area": "model",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#versions"],
-      "normativeLevels": ["SHALL", "SHOULD NOT"],
-      "claim": "Arazzo version declarations use the supported major.minor feature set and ignore patch differences.",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#arazzoVersion", "spec/arazzo/v1.1.0.html#versions"],
+      "normativeLevels": ["REQUIRED", "MUST", "SHALL", "SHOULD NOT"],
+      "claim": "Arazzo Descriptions require a version declaration that tooling uses to select the major.minor feature set without distinguishing patch versions.",
       "status": "deviation",
       "owner": "ac-d15a3",
       "reason": "Version syntax and feature-set validation are scheduled in ac-d15a3."
@@ -16,9 +16,9 @@
       "id": "model.source-descriptor-wire-rules",
       "area": "model",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#source-description-object"],
-      "normativeLevels": ["MUST"],
-      "claim": "Source Description URL values preserve the specified wire rules and type remains optional.",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#source-description-object", "spec/arazzo/v1.1.0.html#schema"],
+      "normativeLevels": ["MUST", "OPTIONAL"],
+      "claim": "Source Description URL values conform to URI-reference rules and type is optional.",
       "status": "deviation",
       "owner": "ac-d15a3",
       "reason": "Source URL and optional type handling are scheduled in ac-d15a3."
@@ -41,9 +41,14 @@
       "id": "model.lossless-json-schema-2020-12-inputs",
       "area": "model",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#workflow-object", "spec/arazzo/v1.1.0.html#components-object"],
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#data-types",
+        "spec/arazzo/v1.1.0.html#parsing-documents",
+        "spec/arazzo/v1.1.0.html#workflow-object",
+        "spec/arazzo/v1.1.0.html#components-object"
+      ],
       "normativeLevels": ["MUST"],
-      "claim": "Workflow and reusable input schemas retain the JSON Schema 2020-12 forms required by Arazzo.",
+      "claim": "Workflow and reusable input schemas use JSON Schema 2020-12 and are fully parsed under its requirements.",
       "status": "unsupported",
       "owner": "ac-93d90",
       "reason": "The lossless JSON Schema 2020-12 design is owned by ac-93d90."

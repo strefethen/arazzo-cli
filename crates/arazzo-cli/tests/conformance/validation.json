@@ -8,7 +8,9 @@
       "specAnchors": [
         "spec/arazzo/v1.1.0.html#parameter-object",
         "spec/arazzo/v1.1.0.html#workflow-object",
-        "spec/arazzo/v1.1.0.html#step-object"
+        "spec/arazzo/v1.1.0.html#step-object",
+        "spec/arazzo/v1.1.0.html#success-action-object",
+        "spec/arazzo/v1.1.0.html#failure-action-object"
       ],
       "normativeLevels": ["MUST", "MUST NOT"],
       "claim": "Workflow, Step, and action Parameter lists enforce their target context and duplicate identity rules.",
@@ -24,8 +26,8 @@
         "spec/arazzo/v1.1.0.html#success-action-object",
         "spec/arazzo/v1.1.0.html#failure-action-object"
       ],
-      "normativeLevels": ["REQUIRED", "MUST"],
-      "claim": "Success and Failure Action Objects enforce their distinct required and permitted fixed fields.",
+      "normativeLevels": ["REQUIRED"],
+      "claim": "Success and Failure Action Objects require name and type, restrict type to their listed values, and expose distinct fixed-field sets.",
       "status": "deviation",
       "owner": "ac-2e941",
       "reason": "Action fixed-field validation is scheduled in ac-2e941."
@@ -34,9 +36,9 @@
       "id": "validation.duplicate-action-identity",
       "area": "validation",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#success-action-object", "spec/arazzo/v1.1.0.html#failure-action-object"],
+      "specAnchors": ["spec/arazzo/v1.1.0.html#workflow-object", "spec/arazzo/v1.1.0.html#step-object"],
       "normativeLevels": ["MUST NOT"],
-      "claim": "Success and failure action lists reject duplicate actions under a settled specification identity rule.",
+      "claim": "Workflow and Step success and failure action lists prohibit duplicate actions, but Arazzo 1.1 does not define the action identity predicate.",
       "status": "unsupported",
       "owner": "ac-68f7d",
       "reason": "The duplicate-action identity decision is owned by ac-68f7d."

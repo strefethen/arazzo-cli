@@ -16,9 +16,13 @@
       "id": "expr.typed-jsonpath-rejects-gjson",
       "area": "expressions",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#criterion-object", "spec/arazzo/v1.1.0.html#selector-object"],
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#jsonpath-conditions",
+        "spec/arazzo/v1.1.0.html#expression-type-object",
+        "spec/arazzo/v1.1.0.html#selector-object"
+      ],
       "normativeLevels": ["MUST"],
-      "claim": "Typed JSONPath Criterion and Selector reads reject GJSON-only syntax.",
+      "claim": "JSONPath Criterion and Selector expressions conform to the selected Arazzo-supported JSONPath version; invalid Criterion expressions fail.",
       "status": "deviation",
       "owner": "ac-a983f",
       "reason": "Typed JSONPath read rejection is scheduled in ac-a983f."
