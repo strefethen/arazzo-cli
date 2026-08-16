@@ -33,9 +33,15 @@
       ],
       "normativeLevels": ["REQUIRED"],
       "claim": "Required Parameter and Payload Replacement values distinguish omission from explicitly present Any values.",
-      "status": "deviation",
-      "owner": "ac-1e003",
-      "reason": "Wire-presence preservation is scheduled in ac-1e003."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-cli/tests/cli_integration.rs#conformance_required_any_values_positive_evidence"
+        ],
+        "negative": [
+          "crates/arazzo-cli/tests/cli_integration.rs#conformance_required_any_values_negative_evidence"
+        ]
+      }
     },
     {
       "id": "model.lossless-json-schema-2020-12-inputs",

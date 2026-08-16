@@ -2708,6 +2708,58 @@ async fn replacements_dry_run_emits_merged_body() {
 }
 
 #[tokio::test]
+async fn dry_run_resolves_explicit_null_and_empty_parameter_and_replacement_values() {
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "wf".to_string(),
+        steps: vec![Step {
+            step_id: "request".to_string(),
+            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            parameters: vec![
+                Parameter {
+                    name: "X-Null".to_string(),
+                    in_: Some(ParamLocation::Header),
+                    value: serde_yaml_ng::Value::Null.into(),
+                    ..Parameter::default()
+                },
+                Parameter {
+                    name: "X-Empty".to_string(),
+                    in_: Some(ParamLocation::Header),
+                    value: serde_yaml_ng::Value::String(String::new()).into(),
+                    ..Parameter::default()
+                },
+            ],
+            request_body: Some(request_body_with_replacements(
+                json!({"nullValue": "old", "emptyValue": "old"}),
+                vec![
+                    replacement("/nullValue", serde_yaml_ng::Value::Null),
+                    replacement("/emptyValue", serde_yaml_ng::Value::String(String::new())),
+                ],
+            )),
+            ..Step::default()
+        }],
+        ..Workflow::default()
+    }]);
+
+    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building dry-run engine: {err}"),
+    };
+    let result = engine.execute_collect("wf", BTreeMap::new()).await;
+    if let Err(err) = &result.outputs {
+        panic!("executing dry-run workflow: {err}");
+    }
+
+    let requests = result.dry_run_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].headers.get("X-Null"), Some(&String::new()));
+    assert_eq!(requests[0].headers.get("X-Empty"), Some(&String::new()));
+    assert_eq!(
+        requests[0].body,
+        Some(json!({"nullValue": null, "emptyValue": ""}))
+    );
+}
+
+#[tokio::test]
 async fn replacements_warnings_propagate_to_step_trace() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)

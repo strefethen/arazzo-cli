@@ -1,5 +1,17 @@
 #![forbid(unsafe_code)]
 
+// Keep the manifest evidence before the integration-test helpers: its source
+// scanner intentionally recognizes the executable test-item prefix only.
+#[test]
+fn conformance_required_any_values_positive_evidence() {
+    run_dry_run_accepts_and_resolves_explicit_null_and_empty_values();
+}
+
+#[test]
+fn conformance_required_any_values_negative_evidence() {
+    validate_reports_missing_parameter_and_replacement_value_paths();
+}
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -3630,6 +3642,104 @@ workflows:
     assert!(
         warning.contains("not JSONPath"),
         "warning should identify non-JSONPath syntax: {warning}"
+    );
+}
+
+#[test]
+fn run_dry_run_accepts_and_resolves_explicit_null_and_empty_values() {
+    let temp = TempDir::new("arazzo-required-any-values");
+    let spec_path = temp.path().join("required-any-values.arazzo.yaml");
+    write_file(
+        &spec_path,
+        r#"arazzo: "1.1.0"
+info: {title: Required Any Values, version: "1.0.0"}
+sourceDescriptions:
+  - {name: api, url: https://example.com, type: openapi}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: request
+        operationPath: POST /items
+        parameters:
+          - {name: X-Null, in: header, value: null}
+          - {name: X-Empty, in: header, value: ""}
+        requestBody:
+          contentType: application/json
+          payload: {nullValue: old, emptyValue: old}
+          replacements:
+            - {target: /nullValue, value: null}
+            - {target: /emptyValue, value: ""}
+"#,
+    );
+
+    let spec = spec_path.to_string_lossy().to_string();
+    let output = run(["--json", "run", &spec, "wf", "--dry-run"].as_slice(), None);
+    assert!(
+        output.status.success(),
+        "explicit Any values must validate and dry-run: {}",
+        combined_text(&output)
+    );
+
+    let body = stdout_json(&output);
+    let requests = run_json_requests(&body);
+    assert_eq!(requests.len(), 1, "body={body}");
+    let headers = requests[0]
+        .get("headers")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("dry-run request must include headers: {body}"));
+    assert_eq!(headers.get("X-Null"), Some(&Value::String(String::new())));
+    assert_eq!(headers.get("X-Empty"), Some(&Value::String(String::new())));
+    assert_eq!(
+        requests[0].get("body"),
+        Some(&json!({"nullValue": null, "emptyValue": ""}))
+    );
+}
+
+#[test]
+fn validate_reports_missing_parameter_and_replacement_value_paths() {
+    let temp = TempDir::new("arazzo-missing-required-any-values");
+    let spec_path = temp.path().join("missing-required-any-values.arazzo.json");
+    write_file(
+        &spec_path,
+        r#"{
+  "arazzo": "1.1.0",
+  "info": {"title": "Missing required Any values", "version": "1.0.0"},
+  "sourceDescriptions": [{"name": "api", "url": "https://example.com", "type": "openapi"}],
+  "workflows": [{
+    "workflowId": "wf",
+    "steps": [{
+      "stepId": "request",
+      "operationPath": "POST /items",
+      "parameters": [{"name": "X-Required", "in": "header"}],
+      "requestBody": {
+        "contentType": "application/json",
+        "payload": {},
+        "replacements": [{"target": "/value"}]
+      }
+    }]
+  }]
+}"#,
+    );
+
+    let spec = spec_path.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &spec].as_slice(), None);
+    assert!(
+        !output.status.success(),
+        "omitted required values must fail validation"
+    );
+    let body = stdout_json(&output);
+    let errors = validate_issue_messages(&body, "errors");
+    assert_eq!(errors.len(), 2, "body={body}");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("workflow \"wf\" > step \"request\".parameters[0].value")),
+        "body={body}"
+    );
+    assert!(
+        errors.iter().any(|error| error
+            .contains("workflow \"wf\" > step \"request\".requestBody.replacements[0].value")),
+        "body={body}"
     );
 }
 

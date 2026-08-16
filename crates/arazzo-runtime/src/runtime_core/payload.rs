@@ -647,6 +647,22 @@ mod tests {
     }
 
     #[test]
+    fn explicit_null_and_empty_replacement_values_reach_json_pointer_resolution() {
+        let eval = evaluator();
+        let (body, warnings) = apply(
+            json!({"nullValue": "old", "emptyValue": "old"}),
+            vec![
+                replacement("/nullValue", serde_yaml_ng::Value::Null),
+                replacement("/emptyValue", serde_yaml_ng::Value::String(String::new())),
+            ],
+            &eval,
+        );
+
+        assert_eq!(body, json!({"nullValue": null, "emptyValue": ""}));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
     fn json_pointer_unescapes_tilde_one_and_tilde_zero() {
         let eval = evaluator();
         let (body, warnings) = apply(

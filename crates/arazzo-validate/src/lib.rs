@@ -218,8 +218,13 @@ pub fn parse_with_diagnostics(
 /// Parses and validates an Arazzo spec from raw YAML bytes, returning any
 /// non-fatal diagnostics alongside the spec.
 pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diagnostic>), Error> {
+    // The typed model intentionally keeps its public `value` fields as the
+    // declared `ValueSource` types. It cannot retain whether a defaulted null
+    // came from an omitted key or from an explicit Any value, so retain the
+    // parsed document only inside this boundary pass.
+    let raw = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data).map_err(Error::ParseYaml)?;
     let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
-    resolve_components(&mut spec).map_err(Error::ComponentResolution)?;
+    resolve_components(&mut spec, &raw).map_err(Error::ComponentResolution)?;
 
     // `successCriteria` emptiness cannot be seen in the typed model — see the
     // comment on `check_raw_success_criteria` — so it is checked against the
@@ -227,8 +232,9 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
     // take only `&ArazzoSpec` and therefore cannot enforce this rule.
     let mut diagnostics = collect_diagnostics(&spec);
-    diagnostics.extend(check_raw_action_field_boundaries(data));
-    diagnostics.extend(check_raw_success_criteria(data));
+    diagnostics.extend(check_raw_required_values(&raw));
+    diagnostics.extend(check_raw_action_field_boundaries(&raw));
+    diagnostics.extend(check_raw_success_criteria(&raw));
     let warnings = partition_diagnostics(diagnostics)?;
     Ok((spec, warnings))
 }
@@ -277,6 +283,229 @@ fn raw_string_field<'a>(value: &'a serde_yaml_ng::Value, key: &str) -> Option<&'
         Some(serde_yaml_ng::Value::String(value)) => Some(value),
         _ => None,
     }
+}
+
+fn raw_mapping_has_field(value: &serde_yaml_ng::Value, key: &str) -> bool {
+    raw_mapping_field(value, key).is_some()
+}
+
+fn raw_parameter_value_is_present(
+    parameters: Option<&serde_yaml_ng::Value>,
+    parameter_index: usize,
+) -> bool {
+    parameters
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .and_then(|parameters| parameters.get(parameter_index))
+        .is_some_and(|parameter| raw_mapping_has_field(parameter, "value"))
+}
+
+fn raw_component_action<'a>(
+    components: Option<&'a serde_yaml_ng::Value>,
+    field: &str,
+    name: &str,
+) -> Option<&'a serde_yaml_ng::Value> {
+    raw_mapping_field(components?, field)?
+        .as_mapping()?
+        .get(name)
+}
+
+fn check_raw_parameter_values(
+    parameters: Option<&serde_yaml_ng::Value>,
+    path: &str,
+    permits_reusable_objects: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(parameters) = parameters.and_then(serde_yaml_ng::Value::as_sequence) else {
+        return;
+    };
+    for (index, parameter) in parameters.iter().enumerate() {
+        let Some(_) = parameter.as_mapping() else {
+            continue;
+        };
+        // Workflow, Step, and Action lists are Parameter Object | Reusable
+        // Object unions. Components.parameters is a map of Parameter Objects,
+        // so a stray `reference` there cannot waive Parameter.value.
+        if permits_reusable_objects && raw_mapping_has_field(parameter, "reference") {
+            continue;
+        }
+        if !raw_mapping_has_field(parameter, "value") {
+            let value_path = format!("{path}[{index}].value");
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: value_path.clone(),
+                message: format!("{value_path} is required"),
+            });
+        }
+    }
+}
+
+fn check_raw_action_parameter_values(
+    actions: Option<&serde_yaml_ng::Value>,
+    path: &str,
+    skip_reusable_actions: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(actions) = actions.and_then(serde_yaml_ng::Value::as_sequence) else {
+        return;
+    };
+    for (index, action) in actions.iter().enumerate() {
+        let Some(_) = action.as_mapping() else {
+            continue;
+        };
+        // Workflow/Step action lists are Action Object | Reusable Object
+        // unions. A reusable action ignores extra fields, including a nested
+        // parameters list, so do not report through that ignored shape.
+        if skip_reusable_actions && raw_mapping_has_field(action, "reference") {
+            continue;
+        }
+        check_raw_parameter_values(
+            raw_mapping_field(action, "parameters"),
+            &format!("{path}[{index}].parameters"),
+            true,
+            diagnostics,
+        );
+    }
+}
+
+fn check_raw_replacement_values(
+    request_body: Option<&serde_yaml_ng::Value>,
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(replacements) = request_body
+        .and_then(|body| raw_mapping_field(body, "replacements"))
+        .and_then(serde_yaml_ng::Value::as_sequence)
+    else {
+        return;
+    };
+    for (index, replacement) in replacements.iter().enumerate() {
+        let Some(_) = replacement.as_mapping() else {
+            continue;
+        };
+        if !raw_mapping_has_field(replacement, "value") {
+            let value_path = format!("{path}.replacements[{index}].value");
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::MissingRequiredField,
+                path: value_path.clone(),
+                message: format!("{value_path} is required"),
+            });
+        }
+    }
+}
+
+/// Required `value` fields accept Any, including YAML null and empty values.
+/// The typed defaults intentionally erase that presence bit, so inspect only
+/// well-formed container shapes at the parse boundary. Serde owns malformed
+/// maps and lists; this pass must not add a second, less-specific diagnostic.
+fn check_raw_required_values(root: &serde_yaml_ng::Value) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    let components = raw_mapping_field(root, "components");
+    if let Some(parameters) = components
+        .and_then(|components| raw_mapping_field(components, "parameters"))
+        .and_then(serde_yaml_ng::Value::as_mapping)
+    {
+        for (name, parameter) in parameters {
+            let Some(name) = name.as_str() else {
+                continue;
+            };
+            if parameter.as_mapping().is_none() {
+                continue;
+            }
+            if !raw_mapping_has_field(parameter, "value") {
+                let value_path = format!("components.parameters.{name}.value");
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::MissingRequiredField,
+                    path: value_path.clone(),
+                    message: format!("{value_path} is required"),
+                });
+            }
+        }
+    }
+    if let Some(components) = components {
+        for (field, path) in [
+            ("successActions", "components.successActions"),
+            ("failureActions", "components.failureActions"),
+        ] {
+            let Some(actions) =
+                raw_mapping_field(components, field).and_then(serde_yaml_ng::Value::as_mapping)
+            else {
+                continue;
+            };
+            for (name, action) in actions {
+                let Some(name) = name.as_str() else {
+                    continue;
+                };
+                // Component maps contain Action Objects, not Reusable Object
+                // wrappers, so inspect parameters even when an invalid
+                // `reference` field appears on the action.
+                check_raw_parameter_values(
+                    raw_mapping_field(action, "parameters"),
+                    &format!("{path}.{name}.parameters"),
+                    true,
+                    &mut diagnostics,
+                );
+            }
+        }
+    }
+
+    let Some(workflows) =
+        raw_mapping_field(root, "workflows").and_then(serde_yaml_ng::Value::as_sequence)
+    else {
+        return diagnostics;
+    };
+    for (workflow_index, workflow) in workflows.iter().enumerate() {
+        let workflow_path = raw_string_field(workflow, "workflowId")
+            .map(|id| format!("workflow \"{id}\""))
+            .unwrap_or_else(|| format!("workflows[{workflow_index}]"));
+        check_raw_parameter_values(
+            raw_mapping_field(workflow, "parameters"),
+            &format!("{workflow_path}.parameters"),
+            true,
+            &mut diagnostics,
+        );
+        for field in ["successActions", "failureActions"] {
+            check_raw_action_parameter_values(
+                raw_mapping_field(workflow, field),
+                &format!("{workflow_path}.{field}"),
+                true,
+                &mut diagnostics,
+            );
+        }
+        let Some(steps) =
+            raw_mapping_field(workflow, "steps").and_then(serde_yaml_ng::Value::as_sequence)
+        else {
+            continue;
+        };
+        for (step_index, step) in steps.iter().enumerate() {
+            let step_path = raw_string_field(step, "stepId")
+                .map(|id| format!("{workflow_path} > step \"{id}\""))
+                .unwrap_or_else(|| format!("{workflow_path} > steps[{step_index}]"));
+            check_raw_parameter_values(
+                raw_mapping_field(step, "parameters"),
+                &format!("{step_path}.parameters"),
+                true,
+                &mut diagnostics,
+            );
+            for field in ["onSuccess", "onFailure"] {
+                check_raw_action_parameter_values(
+                    raw_mapping_field(step, field),
+                    &format!("{step_path}.{field}"),
+                    true,
+                    &mut diagnostics,
+                );
+            }
+            check_raw_replacement_values(
+                raw_mapping_field(step, "requestBody"),
+                &format!("{step_path}.requestBody"),
+                &mut diagnostics,
+            );
+        }
+    }
+    diagnostics
 }
 
 fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -344,13 +573,10 @@ fn check_raw_action_list(
 /// explicit YAML null, and an empty reference is the typed default. Inspect
 /// only these boundary shapes at the parse boundary so diagnostics retain the
 /// document's field presence without adding wire metadata to the public model.
-fn check_raw_action_field_boundaries(data: &[u8]) -> Vec<Diagnostic> {
-    let Ok(root) = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data) else {
-        return Vec::new();
-    };
+fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    if let Some(components) = raw_mapping_field(&root, "components") {
+    if let Some(components) = raw_mapping_field(root, "components") {
         for (field, path) in [
             ("successActions", "components.successActions"),
             ("failureActions", "components.failureActions"),
@@ -371,7 +597,7 @@ fn check_raw_action_field_boundaries(data: &[u8]) -> Vec<Diagnostic> {
         }
     }
 
-    let Some(serde_yaml_ng::Value::Sequence(workflows)) = raw_mapping_field(&root, "workflows")
+    let Some(serde_yaml_ng::Value::Sequence(workflows)) = raw_mapping_field(root, "workflows")
     else {
         return diagnostics;
     };
@@ -1113,16 +1339,10 @@ fn classify_step_dependency(value: &str) -> StepDependency<'_> {
 /// else's diagnostic to raise, not this check's. A missing `steps` key is the
 /// exception: it is a required field and is diagnosed here because the typed
 /// model collapses absent and empty lists.
-fn check_raw_success_criteria(data: &[u8]) -> Vec<Diagnostic> {
+fn check_raw_success_criteria(root: &serde_yaml_ng::Value) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let Ok(serde_yaml_ng::Value::Mapping(root)) =
-        serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data)
-    else {
-        return diagnostics;
-    };
-    let Some(workflows) = root
-        .get("workflows")
-        .and_then(serde_yaml_ng::Value::as_sequence)
+    let Some(workflows) =
+        raw_mapping_field(root, "workflows").and_then(serde_yaml_ng::Value::as_sequence)
     else {
         return diagnostics;
     };
@@ -1467,14 +1687,6 @@ fn validate_parameters(
                 kind: ValidationErrorKind::MissingRequiredField,
                 path: format!("{param_path}.name"),
                 message: format!("{param_path}.name is required (unless using reference)"),
-            });
-        }
-        if param.is_value_empty() && param.reference.is_empty() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                kind: ValidationErrorKind::MissingParameterValue,
-                path: param_path.clone(),
-                message: format!("{path_prefix}[{param_idx}] must have value or reference"),
             });
         }
         validate_value_source(&format!("{param_path}.value"), &param.value, diagnostics);
@@ -1972,49 +2184,89 @@ fn resolve_input_refs(spec: &mut ArazzoSpec) -> Result<(), String> {
 }
 
 /// Resolves `$components.*` references to inline step definitions.
-fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
+fn resolve_components(spec: &mut ArazzoSpec, raw: &serde_yaml_ng::Value) -> Result<(), String> {
     resolve_input_refs(spec)?;
 
     let components = spec.components.clone().unwrap_or_default();
+    let raw_components = raw_mapping_field(raw, "components");
+    let raw_workflows =
+        raw_mapping_field(raw, "workflows").and_then(serde_yaml_ng::Value::as_sequence);
 
-    for workflow in &mut spec.workflows {
+    for (workflow_index, workflow) in spec.workflows.iter_mut().enumerate() {
         let wf_label = format!("workflow {}", workflow.workflow_id);
-        resolve_param_refs(&mut workflow.parameters, &components, &wf_label)?;
+        let raw_workflow = raw_workflows.and_then(|workflows| workflows.get(workflow_index));
+        resolve_param_refs(
+            &mut workflow.parameters,
+            &components,
+            raw_workflow.and_then(|workflow| raw_mapping_field(workflow, "parameters")),
+            &wf_label,
+        )?;
         resolve_action_ref(
             &mut workflow.success_actions,
-            &components,
-            &components.success_actions,
-            "$components.successActions.",
-            "successAction",
-            &wf_label,
+            ActionResolutionContext {
+                components: &components,
+                component_map: &components.success_actions,
+                prefix: "$components.successActions.",
+                kind: "successAction",
+                raw_actions: raw_workflow
+                    .and_then(|workflow| raw_mapping_field(workflow, "successActions")),
+                raw_components,
+                component_field: "successActions",
+                entity: &wf_label,
+            },
         )?;
         resolve_action_ref(
             &mut workflow.failure_actions,
-            &components,
-            &components.failure_actions,
-            "$components.failureActions.",
-            "failureAction",
-            &wf_label,
+            ActionResolutionContext {
+                components: &components,
+                component_map: &components.failure_actions,
+                prefix: "$components.failureActions.",
+                kind: "failureAction",
+                raw_actions: raw_workflow
+                    .and_then(|workflow| raw_mapping_field(workflow, "failureActions")),
+                raw_components,
+                component_field: "failureActions",
+                entity: &wf_label,
+            },
         )?;
 
-        for step in &mut workflow.steps {
+        let raw_steps = raw_workflow
+            .and_then(|workflow| raw_mapping_field(workflow, "steps"))
+            .and_then(serde_yaml_ng::Value::as_sequence);
+        for (step_index, step) in workflow.steps.iter_mut().enumerate() {
             let step_label = format!("step {}", step.step_id);
-            resolve_param_refs(&mut step.parameters, &components, &step_label)?;
-            resolve_action_ref(
-                &mut step.on_success,
+            let raw_step = raw_steps.and_then(|steps| steps.get(step_index));
+            resolve_param_refs(
+                &mut step.parameters,
                 &components,
-                &components.success_actions,
-                "$components.successActions.",
-                "successAction",
+                raw_step.and_then(|step| raw_mapping_field(step, "parameters")),
                 &step_label,
             )?;
             resolve_action_ref(
+                &mut step.on_success,
+                ActionResolutionContext {
+                    components: &components,
+                    component_map: &components.success_actions,
+                    prefix: "$components.successActions.",
+                    kind: "successAction",
+                    raw_actions: raw_step.and_then(|step| raw_mapping_field(step, "onSuccess")),
+                    raw_components,
+                    component_field: "successActions",
+                    entity: &step_label,
+                },
+            )?;
+            resolve_action_ref(
                 &mut step.on_failure,
-                &components,
-                &components.failure_actions,
-                "$components.failureActions.",
-                "failureAction",
-                &step_label,
+                ActionResolutionContext {
+                    components: &components,
+                    component_map: &components.failure_actions,
+                    prefix: "$components.failureActions.",
+                    kind: "failureAction",
+                    raw_actions: raw_step.and_then(|step| raw_mapping_field(step, "onFailure")),
+                    raw_components,
+                    component_field: "failureActions",
+                    entity: &step_label,
+                },
             )?;
         }
     }
@@ -2025,10 +2277,11 @@ fn resolve_components(spec: &mut ArazzoSpec) -> Result<(), String> {
 fn resolve_param_refs(
     params: &mut Vec<Parameter>,
     components: &arazzo_spec::Components,
+    raw_parameters: Option<&serde_yaml_ng::Value>,
     entity: &str,
 ) -> Result<(), String> {
     let mut resolved = Vec::with_capacity(params.len());
-    for mut param in params.drain(..) {
+    for (parameter_index, mut param) in params.drain(..).enumerate() {
         if !param.reference.is_empty() {
             let Some(name) = param.reference.strip_prefix("$components.parameters.") else {
                 return Err(format!(
@@ -2047,7 +2300,12 @@ fn resolve_param_refs(
             if param.in_.is_none() {
                 param.in_ = component_param.in_;
             }
-            if param.is_value_empty() {
+            // A Reusable Object may omit `value` to inherit the component
+            // value, but an explicitly present null or empty string is an
+            // Any value that overrides it. The public typed model intentionally
+            // does not carry a wire-presence flag, so consult the matching raw
+            // list entry at this parse boundary.
+            if !raw_parameter_value_is_present(raw_parameters, parameter_index) {
                 param.value = component_param.value.clone();
             }
             param.extensions = component_param.extensions.clone();
@@ -2059,38 +2317,83 @@ fn resolve_param_refs(
     Ok(())
 }
 
+struct ActionResolutionContext<'a> {
+    components: &'a arazzo_spec::Components,
+    component_map: &'a std::collections::BTreeMap<String, OnAction>,
+    prefix: &'a str,
+    kind: &'a str,
+    raw_actions: Option<&'a serde_yaml_ng::Value>,
+    raw_components: Option<&'a serde_yaml_ng::Value>,
+    component_field: &'a str,
+    entity: &'a str,
+}
+
 fn resolve_action_ref(
     actions: &mut [OnAction],
-    components: &arazzo_spec::Components,
-    component_map: &std::collections::BTreeMap<String, OnAction>,
-    prefix: &str,
-    kind: &str,
-    entity: &str,
+    context: ActionResolutionContext<'_>,
 ) -> Result<(), String> {
     for (action_idx, action) in actions.iter_mut().enumerate() {
+        let raw_action = context
+            .raw_actions
+            .and_then(serde_yaml_ng::Value::as_sequence)
+            .and_then(|actions| actions.get(action_idx));
+        let mut raw_parameters =
+            raw_action.and_then(|action| raw_mapping_field(action, "parameters"));
         if !action.reference.is_empty() {
-            let Some(name) = action.reference.strip_prefix(prefix) else {
+            let Some(name) = action.reference.strip_prefix(context.prefix) else {
                 return Err(format!(
-                    "{entity}: unsupported {kind} reference: {}",
-                    action.reference
+                    "{}: unsupported {} reference: {}",
+                    context.entity, context.kind, action.reference
                 ));
             };
-            let Some(component) = component_map.get(name) else {
-                return Err(format!("{entity}: component {kind} \"{name}\" not found"));
+            let component_name = name.to_string();
+            let Some(component) = context.component_map.get(&component_name) else {
+                return Err(format!(
+                    "{}: component {} \"{component_name}\" not found",
+                    context.entity, context.kind
+                ));
             };
             *action = component.clone();
             action.reference.clear();
             action.value = None;
+            raw_parameters = raw_component_action(
+                context.raw_components,
+                context.component_field,
+                &component_name,
+            )
+            .and_then(|component| raw_mapping_field(component, "parameters"));
         } else if !action.name.is_empty() {
-            resolve_one_action_ref(action, component_map, prefix, kind, entity)?;
+            if let Some(component_name) = resolve_one_action_ref(
+                action,
+                context.component_map,
+                context.prefix,
+                context.kind,
+                context.entity,
+            )? {
+                // `resolve_one_action_ref` preserves a non-empty local list,
+                // matching the existing merge behavior. Otherwise the copied
+                // component list needs its own raw presence source.
+                let local_parameters_are_non_empty = raw_parameters
+                    .and_then(serde_yaml_ng::Value::as_sequence)
+                    .is_some_and(|parameters| !parameters.is_empty());
+                if !local_parameters_are_non_empty {
+                    raw_parameters = raw_component_action(
+                        context.raw_components,
+                        context.component_field,
+                        &component_name,
+                    )
+                    .and_then(|component| raw_mapping_field(component, "parameters"));
+                }
+            }
         }
         // Action parameters may themselves be Reusable Objects pointing at
         // `$components.parameters.<name>`. Resolve them after the action-level
         // merge so parameters inherited from a component action resolve too.
         resolve_param_refs(
             &mut action.parameters,
-            components,
-            &format!("{entity} {kind}[{action_idx}]"),
+            context.components,
+            raw_parameters,
+            &format!("{} {}[{action_idx}]", context.entity, context.kind),
         )?;
     }
     Ok(())
@@ -2102,10 +2405,13 @@ fn resolve_one_action_ref(
     prefix: &str,
     kind: &str,
     entity: &str,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     if let Some(name) = action.name.strip_prefix(prefix) {
-        let Some(resolved) = component_map.get(name) else {
-            return Err(format!("{entity}: component {kind} \"{name}\" not found"));
+        let component_name = name.to_string();
+        let Some(resolved) = component_map.get(&component_name) else {
+            return Err(format!(
+                "{entity}: component {kind} \"{component_name}\" not found"
+            ));
         };
         // Merge: start with resolved component, overlay locally declared fields
         let mut merged = resolved.clone();
@@ -2133,8 +2439,9 @@ fn resolve_one_action_ref(
         merged.reference.clear();
         merged.value = None;
         *action = merged;
+        return Ok(Some(component_name));
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -2607,7 +2914,7 @@ workflows:
     }
 
     #[test]
-    fn parse_bytes_component_parameter_override() {
+    fn parse_bytes_component_parameter_override_preserves_explicit_any_values() {
         let spec_yaml = r#"
 arazzo: "1.0.0"
 info:
@@ -2623,6 +2930,9 @@ components:
       name: Authorization
       in: header
       value: "Bearer default-token"
+    optional:
+      name: optional
+      value: "component default"
 workflows:
   - workflowId: wf1
     steps:
@@ -2631,6 +2941,10 @@ workflows:
         parameters:
           - reference: "$components.parameters.authHeader"
             value: "Bearer custom-token"
+          - reference: "$components.parameters.optional"
+            value: null
+          - reference: "$components.parameters.optional"
+            value: ""
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -2639,6 +2953,250 @@ workflows:
         };
         let params = &spec.workflows[0].steps[0].parameters;
         assert_eq!(params[0].value, "Bearer custom-token".into());
+        assert_eq!(params[1].value, serde_yaml_ng::Value::Null.into());
+        assert_eq!(
+            params[2].value,
+            serde_yaml_ng::Value::String(String::new()).into()
+        );
+    }
+
+    fn required_value_fixture(values: [&str; 15]) -> String {
+        format!(
+            r#"arazzo: "1.1.0"
+info: {{title: Required value presence, version: "1.0.0"}}
+sourceDescriptions:
+  - {{name: api, url: https://example.com, type: openapi}}
+components:
+  parameters:
+    componentParam: {{name: componentParam, value: {}}}
+  successActions:
+    componentSuccess:
+      name: componentSuccess
+      type: goto
+      workflowId: target
+      parameters:
+        - {{name: componentSuccessParam, value: {}}}
+  failureActions:
+    componentFailure:
+      name: componentFailure
+      type: goto
+      workflowId: target
+      parameters:
+        - {{name: componentFailureParam, value: {}}}
+workflows:
+  - workflowId: wf
+    parameters:
+      - {{name: workflowParam, value: {}}}
+    successActions:
+      - name: workflowSuccess
+        type: goto
+        workflowId: target
+        parameters:
+          - {{name: workflowSuccessParam, value: {}}}
+    failureActions:
+      - name: workflowFailure
+        type: goto
+        workflowId: target
+        parameters:
+          - {{name: workflowFailureParam, value: {}}}
+    steps:
+      - stepId: request
+        operationPath: /request
+        parameters:
+          - {{name: stepParam, in: query, value: {}}}
+        onSuccess:
+          - name: stepSuccess
+            type: goto
+            workflowId: target
+            parameters:
+              - {{name: stepSuccessParam, value: {}}}
+        onFailure:
+          - name: stepFailure
+            type: goto
+            workflowId: target
+            parameters:
+              - {{name: stepFailureParam, value: {}}}
+        requestBody:
+          contentType: application/json
+          payload: {{}}
+          replacements:
+            - {{target: /a, value: {}}}
+            - {{target: /b, value: {}}}
+            - {{target: /c, value: {}}}
+            - {{target: /d, value: {}}}
+            - {{target: /e, value: {}}}
+            - {{target: /f, value: {}}}
+  - workflowId: target
+    steps:
+      - stepId: targetStep
+        operationPath: /target
+"#,
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7],
+            values[8],
+            values[9],
+            values[10],
+            values[11],
+            values[12],
+            values[13],
+            values[14],
+        )
+    }
+
+    fn missing_required_value_fixture() -> String {
+        required_value_fixture([
+            "null", "null", "null", "null", "null", "null", "null", "null", "null", "null", "null",
+            "null", "null", "null", "null",
+        ])
+        .replace(", value: null", "")
+    }
+
+    fn required_value_json(values: [&str; 15]) -> String {
+        format!(
+            r#"{{
+  "arazzo": "1.1.0",
+  "info": {{"title": "Required value presence", "version": "1.0.0"}},
+  "sourceDescriptions": [{{"name": "api", "url": "https://example.com", "type": "openapi"}}],
+  "components": {{
+    "parameters": {{"componentParam": {{"name": "componentParam", "value": {}}}}},
+    "successActions": {{"componentSuccess": {{"name": "componentSuccess", "type": "goto", "workflowId": "target", "parameters": [{{"name": "componentSuccessParam", "value": {}}}]}}}},
+    "failureActions": {{"componentFailure": {{"name": "componentFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "componentFailureParam", "value": {}}}]}}}}
+  }},
+  "workflows": [
+    {{
+      "workflowId": "wf",
+      "parameters": [{{"name": "workflowParam", "value": {}}}],
+      "successActions": [{{"name": "workflowSuccess", "type": "goto", "workflowId": "target", "parameters": [{{"name": "workflowSuccessParam", "value": {}}}]}}],
+      "failureActions": [{{"name": "workflowFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "workflowFailureParam", "value": {}}}]}}],
+      "steps": [{{
+        "stepId": "request",
+        "operationPath": "/request",
+        "parameters": [{{"name": "stepParam", "in": "query", "value": {}}}],
+        "onSuccess": [{{"name": "stepSuccess", "type": "goto", "workflowId": "target", "parameters": [{{"name": "stepSuccessParam", "value": {}}}]}}],
+        "onFailure": [{{"name": "stepFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "stepFailureParam", "value": {}}}]}}],
+        "requestBody": {{"contentType": "application/json", "payload": {{}}, "replacements": [
+          {{"target": "/a", "value": {}}}, {{"target": "/b", "value": {}}}, {{"target": "/c", "value": {}}},
+          {{"target": "/d", "value": {}}}, {{"target": "/e", "value": {}}}, {{"target": "/f", "value": {}}}
+        ]}}
+      }}]
+    }},
+    {{"workflowId": "target", "steps": [{{"stepId": "targetStep", "operationPath": "/target"}}]}}
+  ]
+}}"#,
+            values[0],
+            values[1],
+            values[2],
+            values[3],
+            values[4],
+            values[5],
+            values[6],
+            values[7],
+            values[8],
+            values[9],
+            values[10],
+            values[11],
+            values[12],
+            values[13],
+            values[14],
+        )
+    }
+
+    fn missing_required_value_json() -> String {
+        required_value_json([
+            "null", "null", "null", "null", "null", "null", "null", "null", "null", "null", "null",
+            "null", "null", "null", "null",
+        ])
+        .replace(", \"value\": null", "")
+    }
+
+    #[test]
+    fn raw_required_values_report_exact_paths_for_yaml_and_json() {
+        let yaml = missing_required_value_fixture();
+        let json = missing_required_value_json();
+        let expected = [
+            "components.parameters.componentParam.value",
+            "components.successActions.componentSuccess.parameters[0].value",
+            "components.failureActions.componentFailure.parameters[0].value",
+            "workflow \"wf\".parameters[0].value",
+            "workflow \"wf\".successActions[0].parameters[0].value",
+            "workflow \"wf\".failureActions[0].parameters[0].value",
+            "workflow \"wf\" > step \"request\".parameters[0].value",
+            "workflow \"wf\" > step \"request\".onSuccess[0].parameters[0].value",
+            "workflow \"wf\" > step \"request\".onFailure[0].parameters[0].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[0].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[1].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[2].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[3].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[4].value",
+            "workflow \"wf\" > step \"request\".requestBody.replacements[5].value",
+        ];
+
+        for (format, document) in [("YAML", yaml.as_bytes()), ("JSON", json.as_bytes())] {
+            let Err(Error::Validation(report)) = parse_bytes_with_diagnostics(document) else {
+                panic!("{format} document with omitted values must fail validation");
+            };
+            let actual = report
+                .errors
+                .iter()
+                .filter(|diagnostic| diagnostic.kind == ValidationErrorKind::MissingRequiredField)
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{format} errors={:?}", report.errors);
+        }
+    }
+
+    #[test]
+    fn raw_required_values_accept_explicit_any_values_for_yaml_and_json() {
+        let yaml = required_value_fixture([
+            "null", "\"\"", "false", "0", "{}", "[]", "null", "\"\"", "false", "null", "\"\"",
+            "false", "0", "{}", "[]",
+        ]);
+        let json = required_value_json([
+            "null", "\"\"", "false", "0", "{}", "[]", "null", "\"\"", "false", "null", "\"\"",
+            "false", "0", "{}", "[]",
+        ]);
+        for (format, document) in [("YAML", yaml.as_bytes()), ("JSON", json.as_bytes())] {
+            let result = parse_bytes_with_diagnostics(document);
+            assert!(
+                result.is_ok(),
+                "{format} explicit Any values must pass: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_value_containers_do_not_add_raw_missing_value_diagnostics() {
+        for malformed in [
+            "parameters: {name: not-a-list}",
+            "requestBody: {replacements: {target: /a}}",
+        ] {
+            let yaml = format!(
+                r#"arazzo: "1.1.0"
+info: {{title: malformed container, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: request
+        operationPath: /request
+        {malformed}
+"#
+            );
+            let result = parse_bytes_with_diagnostics(yaml.as_bytes());
+            let Err(Error::ParseYaml(error)) = result else {
+                panic!("malformed container must remain a serde parse error");
+            };
+            assert!(
+                !error.to_string().contains("value is required"),
+                "raw pass must not duplicate malformed-container diagnostics: {error}"
+            );
+        }
     }
 
     #[test]
