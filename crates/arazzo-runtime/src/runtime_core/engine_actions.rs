@@ -469,7 +469,7 @@ pub(super) enum FlowDecision {
         retry_site: RetrySite,
         /// Configured or defaulted retry budget. This is not part of the
         /// public trace schema, which preserves the configured Option value.
-        retry_limit: usize,
+        retry_limit: u64,
         /// Recovery reference from the retry action's `stepId`/`workflowId`.
         /// Executed call-and-return at the consumption site before the step
         /// at `step_idx` is retried; `None` for a plain retry.
@@ -552,7 +552,7 @@ struct MatchedActionRef<'a> {
 
 #[derive(Debug, Clone, Copy)]
 struct ExhaustedRetry {
-    effective_limit: usize,
+    effective_limit: u64,
     retry_after: u64,
     configured_limit: Option<u64>,
 }
@@ -615,7 +615,7 @@ pub(super) struct StepDecisionContext<'a> {
     pub result: &'a StepResult,
     pub vars: &'a VarStore,
     pub depth: usize,
-    pub retry_count: &'a BTreeMap<RetrySite, usize>,
+    pub retry_count: &'a BTreeMap<RetrySite, u64>,
     pub cancel: &'a CancellationToken,
     pub is_timeout: &'a AtomicBool,
 }
@@ -625,7 +625,7 @@ struct ExecuteActionContext<'a> {
     workflow: &'a Workflow,
     current_idx: usize,
     is_failure_path: bool,
-    retry_count: &'a BTreeMap<RetrySite, usize>,
+    retry_count: &'a BTreeMap<RetrySite, u64>,
     retry_site: RetrySite,
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
@@ -640,11 +640,9 @@ struct ExecuteActionContext<'a> {
 /// Returns the effective Arazzo retry limit for all runtime consumers.
 ///
 /// Failure Action Object §5.8.8.1: an omitted `retryLimit` means one retry;
-/// an explicit value is retained exactly on the current target width.
-pub(super) fn effective_retry_limit(configured_limit: Option<u64>) -> usize {
-    configured_limit
-        .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-        .unwrap_or(DEFAULT_RETRY_LIMIT)
+/// an explicit value is retained exactly.
+pub(super) fn effective_retry_limit(configured_limit: Option<u64>) -> u64 {
+    configured_limit.unwrap_or(DEFAULT_RETRY_LIMIT)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -737,6 +735,11 @@ fn compute_retry_after_delay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_retry_limit_preserves_u64_max() {
+        assert_eq!(effective_retry_limit(Some(u64::MAX)), u64::MAX);
+    }
 
     #[test]
     fn retry_after_header_integer_overrides_config() {

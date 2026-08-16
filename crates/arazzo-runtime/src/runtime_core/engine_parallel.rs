@@ -62,7 +62,7 @@ impl Engine {
 
             level_results.sort_by_key(|(idx, _, _)| *idx);
             // Parallel levels never retry or goto, so use an empty typed site map.
-            let retry_count = BTreeMap::<RetrySite, usize>::new();
+            let retry_count = BTreeMap::<RetrySite, u64>::new();
             for (idx, step, execution_result) in level_results {
                 let attempt = if self.inner.trace_enabled {
                     Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)

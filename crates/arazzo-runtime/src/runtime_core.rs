@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// Arazzo 1.1 Failure Action Object: an omitted `retryLimit` permits one retry.
-const DEFAULT_RETRY_LIMIT: usize = 1;
+const DEFAULT_RETRY_LIMIT: u64 = 1;
 const MAX_CALL_DEPTH: usize = 10;
 const DEFAULT_CHANNEL_CAPACITY: usize = 1024;
 pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;

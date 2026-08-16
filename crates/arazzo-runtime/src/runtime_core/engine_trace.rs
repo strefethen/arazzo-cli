@@ -206,8 +206,8 @@ impl Engine {
         &self,
         debug: SelectedActionDebugContext<'_>,
         action: &OnAction,
-        current_retry_count: usize,
-        retry_limit_resolved: usize,
+        current_retry_count: u64,
+        retry_limit_resolved: u64,
         will_execute_retry: bool,
     ) -> Result<(), RuntimeError> {
         let mut locals = BTreeMap::new();
@@ -248,8 +248,8 @@ impl Engine {
         &self,
         debug: SelectedActionDebugContext<'_>,
         action: &OnAction,
-        current_retry_count: usize,
-        retry_limit_resolved: usize,
+        current_retry_count: u64,
+        retry_limit_resolved: u64,
     ) -> Result<(), RuntimeError> {
         let mut locals = BTreeMap::new();
         let status_code = debug.response.map(|r| r.status_code).unwrap_or(0);
@@ -611,8 +611,8 @@ pub(super) fn insert_action_branch_locals(
 pub(super) fn insert_retry_locals(
     locals: &mut BTreeMap<String, Value>,
     stage: &str,
-    current_retry_count: usize,
-    retry_limit_resolved: usize,
+    current_retry_count: u64,
+    retry_limit_resolved: u64,
     retry_after: u64,
 ) {
     locals.insert("actionType".to_string(), Value::String("retry".to_string()));

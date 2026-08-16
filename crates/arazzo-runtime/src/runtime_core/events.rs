@@ -410,12 +410,14 @@ pub enum ObserverEvent {
         passed: bool,
     },
 
-    /// A retry action has been selected; about to wait.
+    /// A retry will execute. Emitted after the retry delay and any recovery
+    /// reference complete successfully, immediately before the retried step is
+    /// scheduled.
     RetryScheduled {
         workflow_id: String,
         step_id: String,
-        attempt: usize,
-        max_attempts: usize,
+        attempt: u64,
+        max_attempts: u64,
         delay_seconds: u64,
     },
 
@@ -460,4 +462,34 @@ pub enum ObserverEvent {
 /// computation. Send events to a channel and process on another task.
 pub trait ExecutionObserver: Send + Sync {
     fn on_event(&self, event: &ObserverEvent);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_scheduled_preserves_u64_boundary_values() {
+        let event = ObserverEvent::RetryScheduled {
+            workflow_id: "workflow".to_string(),
+            step_id: "step".to_string(),
+            attempt: u64::MAX,
+            max_attempts: u64::MAX,
+            delay_seconds: 0,
+        };
+
+        let ObserverEvent::RetryScheduled {
+            attempt,
+            max_attempts,
+            ..
+        } = event
+        else {
+            unreachable!("constructed RetryScheduled variant must match")
+        };
+        assert_eq!(attempt, u64::MAX);
+        assert_eq!(max_attempts, u64::MAX);
+        let json = json!({ "attempt": attempt, "maxAttempts": max_attempts });
+        assert_eq!(json["attempt"].as_u64(), Some(u64::MAX));
+        assert_eq!(json["maxAttempts"].as_u64(), Some(u64::MAX));
+    }
 }

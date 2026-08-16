@@ -254,7 +254,7 @@ impl Engine {
 
             // Shared retry counts across all iterations. Keys identify retry
             // execution sites, so later failure-action retries are independent.
-            let mut retry_count = BTreeMap::<RetrySite, usize>::new();
+            let mut retry_count = BTreeMap::<RetrySite, u64>::new();
             let max_iterations = compute_max_iterations(
                 steps_to_run.iter().map(|&i| &workflow.steps[i]),
                 &workflow.failure_actions,
@@ -468,7 +468,7 @@ impl Engine {
 
             let workflow_start = Instant::now();
             let mut step_index: usize = 0;
-            let mut retry_count = BTreeMap::<RetrySite, usize>::new();
+            let mut retry_count = BTreeMap::<RetrySite, u64>::new();
             let max_iterations =
                 compute_max_iterations(workflow.steps.iter(), &workflow.failure_actions);
             let mut completed = false;
@@ -1078,18 +1078,19 @@ pub(super) fn merge_workflow_params(workflow_params: &[Parameter], step: &mut St
 /// Computes a safe iteration limit for workflow execution that accounts for
 /// per-step retry budgets. Each step needs its initial attempt plus the sum of
 /// its applicable effective failure-action retry budgets in the worst case.
-/// A goto multiplier (×2)
-/// provides headroom for goto cycles. The result is floored at `step_count × 10`
-/// for backwards compatibility with goto-heavy workflows.
+/// A goto multiplier (×2) provides headroom for goto cycles. The result is
+/// floored at `step_count × 10` for backwards compatibility with goto-heavy
+/// workflows. The `u128` budget keeps one initial attempt plus `u64::MAX`
+/// retries representable.
 fn compute_max_iterations<'a>(
     steps: impl Iterator<Item = &'a Step>,
     workflow_actions: &[OnAction],
-) -> usize {
+) -> u128 {
     let workflow_retry = retry_budget_from_actions(workflow_actions);
-    let mut step_count: usize = 0;
-    let mut total_budget: usize = 0;
+    let mut step_count = 0u128;
+    let mut total_budget = 0u128;
     for step in steps {
-        step_count += 1;
+        step_count = step_count.saturating_add(1);
         // Failure routing uses the step list when present, otherwise the
         // workflow list. An exhausted retry can fall through to each later
         // retry action, so their budgets add rather than take a maximum.
@@ -1098,19 +1099,19 @@ fn compute_max_iterations<'a>(
         } else {
             retry_budget_from_actions(&step.on_failure)
         };
-        total_budget = total_budget.saturating_add(1usize.saturating_add(retry_budget));
+        total_budget = total_budget.saturating_add(1u128.saturating_add(retry_budget));
     }
     // Goto multiplier ×2, floored at the legacy heuristic (step_count × 10).
     let retry_aware = total_budget.saturating_mul(2);
     retry_aware.max(step_count.saturating_mul(10))
 }
 
-fn retry_budget_from_actions(actions: &[OnAction]) -> usize {
+fn retry_budget_from_actions(actions: &[OnAction]) -> u128 {
     actions
         .iter()
         .filter(|a| a.action_type() == ActionType::Retry)
-        .fold(0usize, |budget, action| {
-            budget.saturating_add(effective_retry_limit(action.retry_limit))
+        .fold(0u128, |budget, action| {
+            budget.saturating_add(u128::from(effective_retry_limit(action.retry_limit)))
         })
 }
 
@@ -1149,5 +1150,22 @@ mod retry_iteration_tests {
         }];
 
         assert_eq!(compute_max_iterations(steps.iter(), &[]), 122);
+    }
+
+    #[test]
+    fn maximum_iterations_preserves_u64_max_retry_and_initial_attempt() {
+        let steps = [Step {
+            on_failure: vec![OnAction {
+                type_: Some(ActionType::Retry),
+                retry_limit: Some(u64::MAX),
+                ..OnAction::default()
+            }],
+            ..Step::default()
+        }];
+
+        assert_eq!(
+            compute_max_iterations(steps.iter(), &[]),
+            (u128::from(u64::MAX) + 1) * 2
+        );
     }
 }
