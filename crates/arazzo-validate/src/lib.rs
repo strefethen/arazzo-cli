@@ -2,6 +2,22 @@
 
 //! Validation layer for parsed Arazzo specifications.
 
+// The conformance manifest's hermetic source scanner does not recognize the
+// nested tests in this large library module. Keep these minimal executable
+// adapters before the library items and delegate all assertions to the direct,
+// comprehensive YAML/JSON validation tests below.
+#[cfg(test)]
+#[test]
+fn conformance_required_any_values_positive_evidence() {
+    tests::raw_required_values_accept_concrete_any_values_for_yaml_and_json();
+}
+
+#[cfg(test)]
+#[test]
+fn conformance_required_any_values_negative_evidence() {
+    tests::raw_required_values_report_exact_paths_for_yaml_and_json();
+}
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -309,6 +325,29 @@ fn raw_component_action<'a>(
         .get(name)
 }
 
+/// Reusable Object `value` is an optional string, unlike the required Any
+/// `value` on a concrete Parameter Object or Payload Replacement Object.
+fn check_raw_reusable_value(
+    reusable: &serde_yaml_ng::Value,
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(value) = raw_mapping_field(reusable, "value") else {
+        return;
+    };
+    if matches!(value, serde_yaml_ng::Value::String(_)) {
+        return;
+    }
+
+    let value_path = format!("{path}.value");
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        kind: ValidationErrorKind::InvalidReference,
+        path: value_path.clone(),
+        message: format!("{value_path} must be a string when used on a Reusable Object"),
+    });
+}
+
 fn check_raw_parameter_values(
     parameters: Option<&serde_yaml_ng::Value>,
     path: &str,
@@ -326,6 +365,7 @@ fn check_raw_parameter_values(
         // Object unions. Components.parameters is a map of Parameter Objects,
         // so a stray `reference` there cannot waive Parameter.value.
         if permits_reusable_objects && raw_mapping_has_field(parameter, "reference") {
+            check_raw_reusable_value(parameter, &format!("{path}[{index}]"), diagnostics);
             continue;
         }
         if !raw_mapping_has_field(parameter, "value") {
@@ -544,6 +584,9 @@ fn check_raw_action_boundary(
             path: path.to_string(),
             message: "reference must be a runtime expression string".to_string(),
         });
+    }
+    if !component && reference.is_some() {
+        check_raw_reusable_value(action, path, diagnostics);
     }
     if !component
         && matches!(value, Some(serde_yaml_ng::Value::Null))
@@ -2913,51 +2956,123 @@ workflows:
         assert!(spec.workflows[0].steps[0].extensions.contains_key("x-step"));
     }
 
-    #[test]
-    fn parse_bytes_component_parameter_override_preserves_explicit_any_values() {
-        let spec_yaml = r#"
-arazzo: "1.0.0"
-info:
-  title: Test
-  version: "1.0.0"
-sourceDescriptions:
-  - name: api
-    url: https://example.com
-    type: openapi
+    fn reusable_parameter_document(value: Option<&str>, json: bool) -> String {
+        if json {
+            let value = value.map_or_else(String::new, |value| format!(r#", "value": {value}"#));
+            return format!(
+                r#"{{
+  "arazzo": "1.1.0",
+  "info": {{"title": "Reusable parameter value", "version": "1.0.0"}},
+  "sourceDescriptions": [{{"name": "api", "url": "https://example.com", "type": "openapi"}}],
+  "components": {{"parameters": {{"shared": {{"name": "shared", "in": "header", "value": "component default"}}}}}},
+  "workflows": [{{
+    "workflowId": "wf",
+    "steps": [{{
+      "stepId": "request",
+      "operationPath": "/request",
+      "parameters": [{{"reference": "$components.parameters.shared"{value}}}]
+    }}]
+  }}]
+}}"#
+            );
+        }
+
+        let value = value.map_or_else(String::new, |value| format!("\n            value: {value}"));
+        format!(
+            r#"arazzo: "1.1.0"
+info: {{title: Reusable parameter value, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
 components:
   parameters:
-    authHeader:
-      name: Authorization
-      in: header
-      value: "Bearer default-token"
-    optional:
-      name: optional
-      value: "component default"
+    shared: {{name: shared, in: header, value: "component default"}}
 workflows:
-  - workflowId: wf1
+  - workflowId: wf
     steps:
-      - stepId: s1
-        operationPath: /test
+      - stepId: request
+        operationPath: /request
         parameters:
-          - reference: "$components.parameters.authHeader"
-            value: "Bearer custom-token"
-          - reference: "$components.parameters.optional"
-            value: null
-          - reference: "$components.parameters.optional"
-            value: ""
-"#;
+          - reference: "$components.parameters.shared"{value}
+"#
+        )
+    }
 
-        let spec = match parse_bytes(spec_yaml.as_bytes()) {
-            Ok(spec) => spec,
-            Err(err) => panic!("expected no error, got: {err}"),
-        };
-        let params = &spec.workflows[0].steps[0].parameters;
-        assert_eq!(params[0].value, "Bearer custom-token".into());
-        assert_eq!(params[1].value, serde_yaml_ng::Value::Null.into());
-        assert_eq!(
-            params[2].value,
-            serde_yaml_ng::Value::String(String::new()).into()
-        );
+    #[test]
+    fn reusable_parameter_values_distinguish_omitted_and_empty_string_for_yaml_and_json() {
+        for (format, json) in [("YAML", false), ("JSON", true)] {
+            let inherited = expect_parsed(reusable_parameter_document(None, json).as_bytes());
+            assert_eq!(
+                inherited.workflows[0].steps[0].parameters[0].value,
+                "component default".into(),
+                "{format} omitted value must inherit"
+            );
+
+            let overridden =
+                expect_parsed(reusable_parameter_document(Some("\"\""), json).as_bytes());
+            assert_eq!(
+                overridden.workflows[0].steps[0].parameters[0].value,
+                serde_yaml_ng::Value::String(String::new()).into(),
+                "{format} empty string must override"
+            );
+        }
+    }
+
+    #[test]
+    fn reusable_parameter_values_reject_non_string_classes_for_yaml_and_json() {
+        for (format, json) in [("YAML", false), ("JSON", true)] {
+            for value in ["null", "false", "0", "{}", "[]"] {
+                let document = reusable_parameter_document(Some(value), json);
+                let Err(Error::Validation(report)) =
+                    parse_bytes_with_diagnostics(document.as_bytes())
+                else {
+                    panic!("{format} Reusable Object value {value} must fail validation");
+                };
+                assert_eq!(report.errors.len(), 1, "{format} value={value}: {report:?}");
+                let error = &report.errors[0];
+                assert_eq!(error.kind, ValidationErrorKind::InvalidReference);
+                assert_eq!(
+                    error.path,
+                    "workflow \"wf\" > step \"request\".parameters[0].value"
+                );
+                assert_eq!(
+                    error.message,
+                    "workflow \"wf\" > step \"request\".parameters[0].value must be a string when used on a Reusable Object"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn component_parameter_definition_with_reference_still_requires_value() {
+        let yaml = r#"arazzo: "1.1.0"
+info: {title: Component parameter, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  parameters:
+    shared: {name: shared, reference: "$components.parameters.other"}
+workflows:
+  - workflowId: wf
+    steps: [{stepId: request, operationPath: /request}]
+"#;
+        let json = r#"{
+  "arazzo": "1.1.0",
+  "info": {"title": "Component parameter", "version": "1.0.0"},
+  "sourceDescriptions": [{"name": "api", "url": "https://example.com", "type": "openapi"}],
+  "components": {"parameters": {"shared": {"name": "shared", "reference": "$components.parameters.other"}}},
+  "workflows": [{"workflowId": "wf", "steps": [{"stepId": "request", "operationPath": "/request"}]}]
+}"#;
+
+        for (format, document) in [("YAML", yaml), ("JSON", json)] {
+            let Err(Error::Validation(report)) = parse_bytes_with_diagnostics(document.as_bytes())
+            else {
+                panic!("{format} component Parameter Object must require value");
+            };
+            assert_eq!(report.errors.len(), 1, "{format}: {report:?}");
+            assert_eq!(
+                report.errors[0].kind,
+                ValidationErrorKind::MissingRequiredField
+            );
+            assert_eq!(report.errors[0].path, "components.parameters.shared.value");
+        }
     }
 
     fn required_value_fixture(values: [&str; 15]) -> String {
@@ -3116,7 +3231,7 @@ workflows:
     }
 
     #[test]
-    fn raw_required_values_report_exact_paths_for_yaml_and_json() {
+    pub(super) fn raw_required_values_report_exact_paths_for_yaml_and_json() {
         let yaml = missing_required_value_fixture();
         let json = missing_required_value_json();
         let expected = [
@@ -3152,7 +3267,7 @@ workflows:
     }
 
     #[test]
-    fn raw_required_values_accept_explicit_any_values_for_yaml_and_json() {
+    pub(super) fn raw_required_values_accept_concrete_any_values_for_yaml_and_json() {
         let yaml = required_value_fixture([
             "null", "\"\"", "false", "0", "{}", "[]", "null", "\"\"", "false", "null", "\"\"",
             "false", "0", "{}", "[]",
@@ -4639,7 +4754,7 @@ workflows:
     /// modeled nor `reference`/`value` nor `x-*` must still warn, proving the
     /// allowlist is narrowly scoped to those two names.
     #[test]
-    fn reusable_object_reference_and_value_do_not_warn_at_any_action_position() {
+    fn reusable_object_reference_and_string_value_do_not_warn_at_any_action_position() {
         let spec_yaml = r#"arazzo: "1.1.0"
 info:
   title: Reusable Object Fields
@@ -4661,22 +4776,22 @@ workflows:
   - workflowId: wf1
     successActions:
       - reference: "$components.successActions.notify"
-        value: 1
+        value: ""
     failureActions:
       - reference: "$components.failureActions.notify"
-        value: 1
+        value: ""
     steps:
       - stepId: s1
         operationPath: /test
         onSuccess:
           - reference: "$components.successActions.notify"
-            value: 1
+            value: ""
           - name: inline
             type: end
             actionTypo: warn
         onFailure:
           - reference: "$components.failureActions.notify"
-            value: 1
+            value: ""
 "#;
 
         let (_, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {
@@ -4706,6 +4821,70 @@ workflows:
                 .all(|d| !d.message.contains("\"reference\"") && !d.message.contains("\"value\"")),
             "reference/value must never be reported as unrecognized; diagnostics={diagnostics:?}"
         );
+    }
+
+    fn reusable_action_document(value: &str, json: bool) -> String {
+        if json {
+            return format!(
+                r#"{{
+  "arazzo": "1.1.0",
+  "info": {{"title": "Reusable action value", "version": "1.0.0"}},
+  "sourceDescriptions": [{{"name": "api", "url": "https://example.com", "type": "openapi"}}],
+  "components": {{"successActions": {{"notify": {{"name": "notify", "type": "end"}}}}}},
+  "workflows": [{{
+    "workflowId": "wf",
+    "steps": [{{
+      "stepId": "request",
+      "operationPath": "/request",
+      "onSuccess": [{{"reference": "$components.successActions.notify", "value": {value}}}]
+    }}]
+  }}]
+}}"#
+            );
+        }
+
+        format!(
+            r#"arazzo: "1.1.0"
+info: {{title: Reusable action value, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+components:
+  successActions:
+    notify: {{name: notify, type: end}}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: request
+        operationPath: /request
+        onSuccess:
+          - reference: "$components.successActions.notify"
+            value: {value}
+"#
+        )
+    }
+
+    #[test]
+    fn reusable_action_values_reject_non_string_classes_for_yaml_and_json() {
+        for (format, json) in [("YAML", false), ("JSON", true)] {
+            for value in ["null", "false", "0", "{}", "[]"] {
+                let document = reusable_action_document(value, json);
+                let Err(Error::Validation(report)) =
+                    parse_bytes_with_diagnostics(document.as_bytes())
+                else {
+                    panic!("{format} Reusable Object action value {value} must fail validation");
+                };
+                assert_eq!(report.errors.len(), 1, "{format} value={value}: {report:?}");
+                let error = &report.errors[0];
+                assert_eq!(error.kind, ValidationErrorKind::InvalidReference);
+                assert_eq!(
+                    error.path,
+                    "workflow \"wf\" > step \"request\".onSuccess[0].value"
+                );
+                assert_eq!(
+                    error.message,
+                    "workflow \"wf\" > step \"request\".onSuccess[0].value must be a string when used on a Reusable Object"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4925,7 +5104,7 @@ workflows:
     }
 
     #[test]
-    fn reusable_action_reference_takes_precedence_over_name_and_ignores_value() {
+    fn reusable_action_reference_takes_precedence_over_name_and_ignores_string_value() {
         let yaml = r#"
 arazzo: "1.1.0"
 info: {title: Test, version: "1.0.0"}
@@ -4942,7 +5121,7 @@ workflows:
         onSuccess:
           - name: $components.successActions.a
             reference: $components.successActions.b
-            value: 99
+            value: ""
       - stepId: s2
         operationPath: /s2
 "#;
@@ -4954,7 +5133,8 @@ workflows:
         assert!(action.reference.is_empty());
         assert!(action.value.is_none());
 
-        let reference_only = expect_parsed(yaml.replace("            value: 99\n", "").as_bytes());
+        let reference_only =
+            expect_parsed(yaml.replace("            value: \"\"\n", "").as_bytes());
         assert_eq!(
             action, &reference_only.workflows[0].steps[0].on_success[0],
             "action value must not affect resolved action semantics"

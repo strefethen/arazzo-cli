@@ -1,17 +1,5 @@
 #![forbid(unsafe_code)]
 
-// Keep the manifest evidence before the integration-test helpers: its source
-// scanner intentionally recognizes the executable test-item prefix only.
-#[test]
-fn conformance_required_any_values_positive_evidence() {
-    run_dry_run_accepts_and_resolves_explicit_null_and_empty_values();
-}
-
-#[test]
-fn conformance_required_any_values_negative_evidence() {
-    validate_reports_missing_parameter_and_replacement_value_paths();
-}
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

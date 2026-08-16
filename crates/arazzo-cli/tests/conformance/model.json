@@ -36,10 +36,10 @@
       "status": "covered",
       "evidence": {
         "positive": [
-          "crates/arazzo-cli/tests/cli_integration.rs#conformance_required_any_values_positive_evidence"
+          "crates/arazzo-validate/src/lib.rs#conformance_required_any_values_positive_evidence"
         ],
         "negative": [
-          "crates/arazzo-cli/tests/cli_integration.rs#conformance_required_any_values_negative_evidence"
+          "crates/arazzo-validate/src/lib.rs#conformance_required_any_values_negative_evidence"
         ]
       }
     },
