@@ -719,10 +719,7 @@ fn typed_reusable_parameter_value_is_valid(value: &ValueSource) -> bool {
 }
 
 fn typed_reusable_action_value_is_valid(value: Option<&serde_yaml_ng::Value>) -> bool {
-    matches!(
-        value,
-        None | Some(serde_yaml_ng::Value::Null | serde_yaml_ng::Value::String(_))
-    )
+    matches!(value, None | Some(serde_yaml_ng::Value::String(_)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -7737,6 +7734,73 @@ workflows:
                 .map(|diagnostic| diagnostic.path.as_str())
                 .collect::<Vec<_>>(),
             expected_paths
+        );
+    }
+
+    #[test]
+    fn direct_reusable_action_null_values_fail_in_all_four_action_lists() {
+        let document = r#"arazzo: "1.1.0"
+info: {title: Direct reusable Action nulls, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions:
+    imported: {name: imported-success, type: end}
+  failureActions:
+    imported: {name: imported-failure, type: end}
+workflows:
+  - workflowId: parent
+    successActions:
+      - {reference: $components.successActions.imported, value: null}
+    failureActions:
+      - {reference: $components.failureActions.imported, value: null}
+    steps:
+      - stepId: operation
+        operationId: invoke
+        onSuccess:
+          - {reference: $components.successActions.imported, value: null}
+        onFailure:
+          - {reference: $components.failureActions.imported, value: null}
+"#;
+        let mut spec = parse_unvalidated(document);
+
+        // Deserialization collapses these raw nulls to `None`. Construct the
+        // distinguishable typed boundary state that direct callers can supply.
+        spec.workflows[0].success_actions[0].value = Some(serde_yaml_ng::Value::Null);
+        spec.workflows[0].failure_actions[0].value = Some(serde_yaml_ng::Value::Null);
+        spec.workflows[0].steps[0].on_success[0].value = Some(serde_yaml_ng::Value::Null);
+        spec.workflows[0].steps[0].on_failure[0].value = Some(serde_yaml_ng::Value::Null);
+        let original = spec.clone();
+
+        let direct_validate = expect_validation_errors(validate(&spec));
+        let direct_diagnostics = diagnostic_errors(validate_diagnostics(&spec));
+        let raw_errors = match parse_bytes_with_diagnostics(document.as_bytes()) {
+            Err(Error::Validation(report)) => report.errors,
+            Ok(_) => panic!("all four raw null reusable Action values must fail parsing"),
+            Err(other) => panic!("expected Validation, got {other}"),
+        };
+        let expected_paths = vec![
+            "workflow \"parent\".successActions[0].value",
+            "workflow \"parent\".failureActions[0].value",
+            "workflow \"parent\" > step \"operation\".onSuccess[0].value",
+            "workflow \"parent\" > step \"operation\".onFailure[0].value",
+        ];
+
+        assert_eq!(direct_validate, direct_diagnostics);
+        assert_eq!(direct_diagnostics, raw_errors);
+        assert_eq!(direct_diagnostics.len(), expected_paths.len());
+        assert!(direct_diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.kind == ValidationErrorKind::InvalidReference));
+        assert_eq!(
+            direct_diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect::<Vec<_>>(),
+            expected_paths
+        );
+        assert_eq!(
+            spec, original,
+            "direct validation must not mutate the caller"
         );
     }
 
