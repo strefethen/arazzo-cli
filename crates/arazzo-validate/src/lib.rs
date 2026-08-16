@@ -33,6 +33,18 @@ fn conformance_parameter_context_negative_evidence() {
     tests::parameter_context_negative_matrix();
 }
 
+#[cfg(test)]
+#[test]
+fn conformance_action_fixed_fields_positive_evidence() {
+    tests::action_fixed_fields_positive_matrix();
+}
+
+#[cfg(test)]
+#[test]
+fn conformance_action_fixed_fields_negative_evidence() {
+    tests::action_fixed_fields_negative_matrix();
+}
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -255,7 +267,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // parsed document only inside this boundary pass.
     let raw = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data).map_err(Error::ParseYaml)?;
     let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
-    let provenance =
+    let mut provenance =
         resolve_components(&mut spec, Some(&raw)).map_err(Error::ComponentResolution)?;
 
     // `successCriteria` emptiness cannot be seen in the typed model — see the
@@ -264,6 +276,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
     // take only `&ArazzoSpec` and therefore cannot enforce this rule.
     let mut diagnostics = collect_diagnostics(&spec, &provenance);
+    diagnostics.append(&mut provenance.raw_legacy_action_diagnostics);
     diagnostics.extend(check_raw_required_values(&raw));
     diagnostics.extend(check_raw_action_field_boundaries(&raw));
     diagnostics.extend(check_raw_success_criteria(&raw));
@@ -582,6 +595,21 @@ fn check_raw_required_values(root: &serde_yaml_ng::Value) -> Vec<Diagnostic> {
     diagnostics
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ActionKind {
+    Success,
+    Failure,
+}
+
+impl ActionKind {
+    const fn component_prefix(self) -> &'static str {
+        match self {
+            Self::Success => "$components.successActions.",
+            Self::Failure => "$components.failureActions.",
+        }
+    }
+}
+
 fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagnostic>) {
     diagnostics.push(Diagnostic::warning(
         ValidationErrorKind::UnknownField,
@@ -592,14 +620,178 @@ fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagn
     ));
 }
 
+fn raw_action_is_legacy_component_reference(
+    action: &serde_yaml_ng::Value,
+    kind: ActionKind,
+) -> bool {
+    raw_string_field(action, "name").is_some_and(|name| name.starts_with(kind.component_prefix()))
+}
+
+fn check_raw_action_required_field(
+    path: &str,
+    action: &serde_yaml_ng::Value,
+    field: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if matches!(
+        raw_mapping_field(action, field),
+        Some(serde_yaml_ng::Value::String(_))
+    ) {
+        return;
+    }
+
+    let field_path = format!("{path}.{field}");
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        kind: ValidationErrorKind::MissingRequiredField,
+        path: field_path.clone(),
+        message: format!("{field_path} is required and must be a string"),
+    });
+}
+
+fn raw_defaulted_action_field_is_present(action: &serde_yaml_ng::Value, field: &str) -> bool {
+    match raw_mapping_field(action, field) {
+        Some(serde_yaml_ng::Value::Null) => true,
+        Some(serde_yaml_ng::Value::String(value)) => value.is_empty(),
+        Some(value) if matches!(field, "retryAfter" | "retryLimit") => value.as_u64() == Some(0),
+        _ => false,
+    }
+}
+
+fn raw_retry_field_is_null(action: &serde_yaml_ng::Value, field: &str) -> bool {
+    matches!(
+        raw_mapping_field(action, field),
+        Some(serde_yaml_ng::Value::Null)
+    )
+}
+
+fn raw_action_type(action: &serde_yaml_ng::Value) -> Option<ActionType> {
+    match raw_string_field(action, "type")? {
+        "end" => Some(ActionType::End),
+        "goto" => Some(ActionType::Goto),
+        "retry" => Some(ActionType::Retry),
+        _ => None,
+    }
+}
+
+fn raw_action_field_not_applicable(
+    path: &str,
+    field: &str,
+    kind: ValidationErrorKind,
+    message: String,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        kind,
+        path: format!("{path}.{field}"),
+        message,
+    });
+}
+
+/// Fields defaulted by the public action model need a narrow raw-presence
+/// check. A typed `retry_after: 0` or empty target is indistinguishable from
+/// omission, but an explicitly supplied field remains non-conformant outside
+/// its action context.
+fn check_raw_defaulted_action_field_applicability(
+    path: &str,
+    action: &serde_yaml_ng::Value,
+    kind: ActionKind,
+    action_type: ActionType,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let retry_is_applicable = kind == ActionKind::Failure && action_type == ActionType::Retry;
+    if !retry_is_applicable {
+        for field in ["retryAfter", "retryLimit"] {
+            if raw_defaulted_action_field_is_present(action, field) {
+                raw_action_field_not_applicable(
+                    path,
+                    field,
+                    ValidationErrorKind::InvalidRetryField,
+                    format!("{path}.{field} is only applicable to a failure retry action"),
+                    diagnostics,
+                );
+            }
+        }
+    } else {
+        for field in ["retryAfter", "retryLimit"] {
+            if raw_retry_field_is_null(action, field) {
+                let expected = if field == "retryAfter" {
+                    "a non-negative number"
+                } else {
+                    "a non-negative integer"
+                };
+                raw_action_field_not_applicable(
+                    path,
+                    field,
+                    ValidationErrorKind::InvalidRetryField,
+                    format!("{path}.{field} must be {expected}"),
+                    diagnostics,
+                );
+            }
+        }
+    }
+
+    if !action_allows_target(kind, action_type) {
+        for field in ["workflowId", "stepId"] {
+            if raw_defaulted_action_field_is_present(action, field) {
+                raw_action_field_not_applicable(
+                    path,
+                    field,
+                    ValidationErrorKind::InvalidReference,
+                    format!("{path}.{field} is only applicable to a goto action or failure retry action"),
+                    diagnostics,
+                );
+            }
+        }
+    }
+}
+
 fn check_raw_action_boundary(
     path: &str,
     action: &serde_yaml_ng::Value,
     component: bool,
+    kind: ActionKind,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // Action lists and component maps have independently typed containers.
+    // Let serde own a malformed entry rather than adding field-level noise.
+    if action.as_mapping().is_none() {
+        return;
+    }
+
+    // Only workflow and Step lists admit a Reusable Object. A canonical
+    // `reference` object ignores its siblings; the shipped name-form
+    // component extension similarly sources name/type from its component.
+    // Components maps always hold concrete Action Objects.
+    let canonical_reusable = !component && raw_mapping_has_field(action, "reference");
+    let legacy_reusable = !component && raw_action_is_legacy_component_reference(action, kind);
+    if component || (!canonical_reusable && !legacy_reusable) {
+        check_raw_action_required_field(path, action, "name", diagnostics);
+        check_raw_action_required_field(path, action, "type", diagnostics);
+        if let Some(action_type) = raw_action_type(action) {
+            // Legacy name-form fields are checked after component resolution so
+            // omitted local `type` can inherit the effective component context.
+            // Canonical Reusable Object siblings remain ignored.
+            check_raw_defaulted_action_field_applicability(
+                path,
+                action,
+                kind,
+                action_type,
+                diagnostics,
+            );
+        }
+    }
+
     let reference = raw_mapping_field(action, "reference");
     let value = raw_mapping_field(action, "value");
+    let reusable_reference_is_invalid = !component
+        && reference.is_some_and(|reference| match reference {
+            serde_yaml_ng::Value::String(reference) => {
+                reference.is_empty() || !reference.starts_with('$')
+            }
+            _ => true,
+        });
     let reference_is_non_string =
         reference.is_some_and(|reference| !matches!(reference, serde_yaml_ng::Value::String(_)));
     if component
@@ -611,23 +803,18 @@ fn check_raw_action_boundary(
     if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
         raw_unknown_action_field(path, "value", diagnostics);
     }
-    if !component && reference_is_non_string {
+    if reusable_reference_is_invalid {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::InvalidReference,
             path: path.to_string(),
-            message: "reference must be a runtime expression string".to_string(),
+            message: "reference must be a non-empty runtime expression string".to_string(),
         });
     }
-    if !component && reference.is_some() {
+    if !component && reference.is_some() && !reusable_reference_is_invalid {
         check_raw_reusable_value(action, path, diagnostics);
     }
-    if !component
-        && matches!(value, Some(serde_yaml_ng::Value::Null))
-        && reference.is_none_or(|reference| {
-            matches!(reference, serde_yaml_ng::Value::String(reference) if reference.is_empty())
-        })
-    {
+    if !component && matches!(value, Some(serde_yaml_ng::Value::Null)) && reference.is_none() {
         raw_unknown_action_field(path, "value", diagnostics);
     }
 }
@@ -636,13 +823,20 @@ fn check_raw_action_list(
     value: Option<&serde_yaml_ng::Value>,
     path: &str,
     component: bool,
+    kind: ActionKind,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(serde_yaml_ng::Value::Sequence(actions)) = value else {
         return;
     };
     for (index, action) in actions.iter().enumerate() {
-        check_raw_action_boundary(&format!("{path}[{index}]"), action, component, diagnostics);
+        check_raw_action_boundary(
+            &format!("{path}[{index}]"),
+            action,
+            component,
+            kind,
+            diagnostics,
+        );
     }
 }
 
@@ -654,9 +848,17 @@ fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnos
     let mut diagnostics = Vec::new();
 
     if let Some(components) = raw_mapping_field(root, "components") {
-        for (field, path) in [
-            ("successActions", "components.successActions"),
-            ("failureActions", "components.failureActions"),
+        for (field, path, kind) in [
+            (
+                "successActions",
+                "components.successActions",
+                ActionKind::Success,
+            ),
+            (
+                "failureActions",
+                "components.failureActions",
+                ActionKind::Failure,
+            ),
         ] {
             let Some(serde_yaml_ng::Value::Mapping(actions)) = raw_mapping_field(components, field)
             else {
@@ -668,6 +870,7 @@ fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnos
                     &format!("{path}.{name}"),
                     action,
                     true,
+                    kind,
                     &mut diagnostics,
                 );
             }
@@ -682,11 +885,15 @@ fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnos
         let workflow_path = raw_string_field(workflow, "workflowId")
             .map(|id| format!("workflow \"{id}\""))
             .unwrap_or_else(|| format!("workflows[{workflow_index}]"));
-        for field in ["successActions", "failureActions"] {
+        for (field, kind) in [
+            ("successActions", ActionKind::Success),
+            ("failureActions", ActionKind::Failure),
+        ] {
             check_raw_action_list(
                 raw_mapping_field(workflow, field),
                 &format!("{workflow_path}.{field}"),
                 false,
+                kind,
                 &mut diagnostics,
             );
         }
@@ -698,11 +905,15 @@ fn check_raw_action_field_boundaries(root: &serde_yaml_ng::Value) -> Vec<Diagnos
             let step_path = raw_string_field(step, "stepId")
                 .map(|id| format!("{workflow_path} > step \"{id}\""))
                 .unwrap_or_else(|| format!("{workflow_path} > steps[{step_index}]"));
-            for field in ["onSuccess", "onFailure"] {
+            for (field, kind) in [
+                ("onSuccess", ActionKind::Success),
+                ("onFailure", ActionKind::Failure),
+            ] {
                 check_raw_action_list(
                     raw_mapping_field(step, field),
                     &format!("{step_path}.{field}"),
                     false,
+                    kind,
                     &mut diagnostics,
                 );
             }
@@ -720,12 +931,6 @@ fn typed_reusable_parameter_value_is_valid(value: &ValueSource) -> bool {
 
 fn typed_reusable_action_value_is_valid(value: Option<&serde_yaml_ng::Value>) -> bool {
     matches!(value, None | Some(serde_yaml_ng::Value::String(_)))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ActionKind {
-    Success,
-    Failure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -799,12 +1004,111 @@ struct ComponentParameterKey {
     parameter_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ActionLocalFields {
+    type_: bool,
+    workflow_id: bool,
+    step_id: bool,
+    retry_after: bool,
+    retry_limit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActionFixedField {
+    Type,
+    WorkflowId,
+    StepId,
+    RetryAfter,
+    RetryLimit,
+}
+
+impl ActionLocalFields {
+    const fn contains(self, field: ActionFixedField) -> bool {
+        match field {
+            ActionFixedField::Type => self.type_,
+            ActionFixedField::WorkflowId => self.workflow_id,
+            ActionFixedField::StepId => self.step_id,
+            ActionFixedField::RetryAfter => self.retry_after,
+            ActionFixedField::RetryLimit => self.retry_limit,
+        }
+    }
+}
+
+/// Checks default-valued component fields that become invalid only because a
+/// legacy wrapper supplies a different action type. Positive/non-empty values
+/// remain visible to typed validation; only zero and empty-string presence
+/// needs the raw component declaration here.
+fn check_raw_inherited_component_field_applicability(
+    path: &str,
+    component: &serde_yaml_ng::Value,
+    kind: ActionKind,
+    component_type: ActionType,
+    action_type: ActionType,
+    local_fields: ActionLocalFields,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let component_allows_retry = kind == ActionKind::Failure && component_type == ActionType::Retry;
+    let action_allows_retry = kind == ActionKind::Failure && action_type == ActionType::Retry;
+    if component_allows_retry && !action_allows_retry {
+        for (field, fixed_field) in [
+            ("retryAfter", ActionFixedField::RetryAfter),
+            ("retryLimit", ActionFixedField::RetryLimit),
+        ] {
+            if !local_fields.contains(fixed_field)
+                && raw_mapping_field(component, field)
+                    .is_some_and(|value| value.as_u64() == Some(0))
+            {
+                raw_action_field_not_applicable(
+                    path,
+                    field,
+                    ValidationErrorKind::InvalidRetryField,
+                    format!("{path}.{field} is only applicable to a failure retry action"),
+                    diagnostics,
+                );
+            }
+        }
+    }
+
+    if action_allows_target(kind, component_type) && !action_allows_target(kind, action_type) {
+        for (field, fixed_field) in [
+            ("workflowId", ActionFixedField::WorkflowId),
+            ("stepId", ActionFixedField::StepId),
+        ] {
+            if !local_fields.contains(fixed_field)
+                && matches!(
+                    raw_mapping_field(component, field),
+                    Some(serde_yaml_ng::Value::String(value)) if value.is_empty()
+                )
+            {
+                raw_action_field_not_applicable(
+                    path,
+                    field,
+                    ValidationErrorKind::InvalidReference,
+                    format!(
+                        "{path}.{field} is only applicable to a goto action or failure retry action"
+                    ),
+                    diagnostics,
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ComponentActionFixedFieldOrigin {
+    local_fields: ActionLocalFields,
+}
+
 /// Validation-only metadata retained while component references are expanded.
 /// Structural destination and source keys use deterministic collection
 /// indices; rendered diagnostic paths never participate in identity. The
 /// public model stays unchanged for direct `validate*` callers.
 #[derive(Debug, Default, PartialEq)]
 struct ResolutionProvenance {
+    /// The byte-parse entry point runs the raw Action boundary pass. It owns
+    /// presence diagnostics that a defaulted typed model cannot distinguish;
+    /// direct typed validation owns the equivalent `type_: None` diagnostic.
+    raw_action_boundaries_owned: bool,
     /// Parameter declarations whose intrinsic fields came from a reusable
     /// component, mapped to their source in `components.parameters`.
     component_parameter_origins: HashMap<ParameterDeclarationKey, ComponentParameterKey>,
@@ -812,9 +1116,18 @@ struct ResolutionProvenance {
     /// action through canonical or supported legacy resolution, mapped to the
     /// structural source component action.
     component_action_origins: HashMap<DeclarationScope, DeclarationScope>,
+    /// Fixed action fields inherited from a component action. Canonical
+    /// Reusable Objects have no local fields; legacy name-form references can
+    /// override individual fixed fields and must validate those at the use.
+    component_action_fixed_field_origins:
+        HashMap<DeclarationScope, ComponentActionFixedFieldOrigin>,
     /// Direct-API-only findings collected immediately before resolution would
     /// erase the invalid typed wrapper value.
     reusable_value_diagnostics: Vec<Diagnostic>,
+    /// Parse-boundary findings for default-valued legacy wrapper fields. These
+    /// are collected only after the component Action type is resolved, because
+    /// the public model cannot retain zero/null/empty field presence.
+    raw_legacy_action_diagnostics: Vec<Diagnostic>,
 }
 
 fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> Vec<Diagnostic> {
@@ -966,6 +1279,14 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
             let action_path = format!("components.successActions.{name}");
             check_unknown_fields(&action_path, &action.extensions, &mut diagnostics);
             warn_action_reusable_fields(&action_path, action, &mut diagnostics);
+            validate_action_fixed_fields(
+                &action_path,
+                action,
+                ActionKind::Success,
+                None,
+                provenance.raw_action_boundaries_owned,
+                &mut diagnostics,
+            );
             // Components hold Success Action Objects, not Reusable Objects.
             // Their complete parameter contract applies even when unused, and
             // an invalid `reference` field must not suppress it.
@@ -986,6 +1307,14 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
             let action_path = format!("components.failureActions.{name}");
             check_unknown_fields(&action_path, &action.extensions, &mut diagnostics);
             warn_action_reusable_fields(&action_path, action, &mut diagnostics);
+            validate_action_fixed_fields(
+                &action_path,
+                action,
+                ActionKind::Failure,
+                None,
+                provenance.raw_action_boundaries_owned,
+                &mut diagnostics,
+            );
             validate_action_parameters(
                 &action_path,
                 action,
@@ -2423,10 +2752,16 @@ fn validate_actions(
     list_key: ActionListScope,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let (step_ids, workflow_ids) = target_ids;
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         let action_key = list_key.declaration(action_idx);
+        let action_is_component_owned = provenance
+            .component_action_origins
+            .contains_key(&action_key);
+        let fixed_field_origin = provenance
+            .component_action_fixed_field_origins
+            .get(&action_key)
+            .copied();
         check_unknown_fields(&action_path, &action.extensions, diagnostics);
         if action.reference.is_empty() && action.value.is_some() {
             diagnostics.push(Diagnostic::warning(
@@ -2442,89 +2777,24 @@ fn validate_actions(
             arazzo_version,
             provenance,
             action_key,
-            provenance
-                .component_action_origins
-                .contains_key(&action_key),
+            action_is_component_owned,
             diagnostics,
         );
-        let action_type = action.action_type();
-        // Reference checks apply to goto and retry alike: both action types
-        // carry an optional stepId/workflowId reference pair. The reference is
-        // required for goto (a transfer needs a destination) but optional for
-        // retry (Failure Action Object: "If a stepId or workflowId are
-        // specified, then the reference is executed ...").
-        if matches!(action_type, ActionType::Goto | ActionType::Retry) {
-            let has_step = !action.step_id.is_empty();
-            let has_workflow = !action.workflow_id.is_empty();
-            if action_type == ActionType::Goto && !has_step && !has_workflow {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::MissingRequiredField,
-                    path: action_path.clone(),
-                    message: format!("{action_path} goto action must specify stepId or workflowId"),
-                });
-            }
-            if has_step && has_workflow {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidReference,
-                    path: action_path.clone(),
-                    message: format!(
-                        "{action_path} {action_type} action specifies both stepId and workflowId; use one or the other"
-                    ),
-                });
-            }
-            if has_step
-                && !action.step_id.starts_with('$')
-                && !step_ids.contains(action.step_id.as_str())
-            {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidReference,
-                    path: format!("{action_path}.stepId"),
-                    message: format!(
-                        "{action_path}.stepId references unknown step \"{}\"",
-                        action.step_id
-                    ),
-                });
-            }
-            if has_workflow
-                && !action.workflow_id.starts_with('$')
-                && !workflow_ids.contains(action.workflow_id.as_str())
-            {
-                diagnostics.push(Diagnostic {
-                    severity: Severity::Error,
-                    kind: ValidationErrorKind::InvalidReference,
-                    path: format!("{action_path}.workflowId"),
-                    message: format!(
-                        "{action_path}.workflowId references unknown workflow \"{}\"",
-                        action.workflow_id
-                    ),
-                });
-            }
-        }
-        if action.action_type() != ActionType::Retry {
-            if action.retry_limit.is_some() {
-                diagnostics.push(Diagnostic::warning(
-                    ValidationErrorKind::InvalidRetryField,
-                    format!("{action_path}.retryLimit"),
-                    format!(
-                        "{action_path}.retryLimit has no effect on {} action",
-                        action.action_type()
-                    ),
-                ));
-            }
-            if action.retry_after > 0 {
-                diagnostics.push(Diagnostic::warning(
-                    ValidationErrorKind::InvalidRetryField,
-                    format!("{action_path}.retryAfter"),
-                    format!(
-                        "{action_path}.retryAfter has no effect on {} action",
-                        action.action_type()
-                    ),
-                ));
-            }
-        }
+        validate_action_fixed_fields(
+            &action_path,
+            action,
+            list_key.kind,
+            fixed_field_origin,
+            provenance.raw_action_boundaries_owned,
+            diagnostics,
+        );
+        validate_action_target_references(
+            &action_path,
+            action,
+            list_key.kind,
+            target_ids,
+            diagnostics,
+        );
         for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
             validate_criterion(
                 &format!("{action_path}.criteria[{criterion_idx}]"),
@@ -2532,6 +2802,210 @@ fn validate_actions(
                 diagnostics,
             );
         }
+    }
+}
+
+fn action_allows_target(kind: ActionKind, action_type: ActionType) -> bool {
+    action_type == ActionType::Goto
+        || (kind == ActionKind::Failure && action_type == ActionType::Retry)
+}
+
+fn action_fields_are_component_owned(
+    origin: Option<ComponentActionFixedFieldOrigin>,
+    fields: &[ActionFixedField],
+) -> bool {
+    origin.is_some_and(|origin| {
+        fields
+            .iter()
+            .all(|field| !origin.local_fields.contains(*field))
+    })
+}
+
+/// Checks intrinsic Success/Failure Action fixed-field applicability. Target
+/// existence is intentionally separate: a component action's `stepId` is
+/// relative to the workflow that consumes it, while its type and supplied
+/// fields have one component-owned definition site.
+fn validate_action_fixed_fields(
+    action_path: &str,
+    action: &OnAction,
+    kind: ActionKind,
+    origin: Option<ComponentActionFixedFieldOrigin>,
+    raw_action_boundaries_owned: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let action_type = action.action_type();
+    if !action.has_declared_type()
+        && !raw_action_boundaries_owned
+        && !action_fields_are_component_owned(origin, &[ActionFixedField::Type])
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: format!("{action_path}.type"),
+            message: format!("{action_path}.type is required and must be a string"),
+        });
+    }
+    if kind == ActionKind::Success
+        && action_type == ActionType::Retry
+        && !action_fields_are_component_owned(origin, &[ActionFixedField::Type])
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidRetryField,
+            path: format!("{action_path}.type"),
+            message: format!("{action_path}.type must be end or goto for a success action"),
+        });
+    }
+
+    let retry_is_applicable = kind == ActionKind::Failure && action_type == ActionType::Retry;
+    if !retry_is_applicable {
+        if action.retry_limit.is_some()
+            && !(raw_action_boundaries_owned && action.retry_limit == Some(0))
+            && !action_fields_are_component_owned(
+                origin,
+                &[ActionFixedField::Type, ActionFixedField::RetryLimit],
+            )
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::InvalidRetryField,
+                path: format!("{action_path}.retryLimit"),
+                message: format!(
+                    "{action_path}.retryLimit is only applicable to a failure retry action"
+                ),
+            });
+        }
+        if action.retry_after > 0
+            && !action_fields_are_component_owned(
+                origin,
+                &[ActionFixedField::Type, ActionFixedField::RetryAfter],
+            )
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                kind: ValidationErrorKind::InvalidRetryField,
+                path: format!("{action_path}.retryAfter"),
+                message: format!(
+                    "{action_path}.retryAfter is only applicable to a failure retry action"
+                ),
+            });
+        }
+    }
+
+    if !action_allows_target(kind, action_type) {
+        for (field, value) in [
+            ("workflowId", &action.workflow_id),
+            ("stepId", &action.step_id),
+        ] {
+            let fixed_field = match field {
+                "workflowId" => ActionFixedField::WorkflowId,
+                "stepId" => ActionFixedField::StepId,
+                _ => unreachable!("the target field list is fixed"),
+            };
+            if !value.is_empty()
+                && !action_fields_are_component_owned(
+                    origin,
+                    &[ActionFixedField::Type, fixed_field],
+                )
+            {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    kind: ValidationErrorKind::InvalidReference,
+                    path: format!("{action_path}.{field}"),
+                    message: format!(
+                        "{action_path}.{field} is only applicable to a goto action or failure retry action"
+                    ),
+                });
+            }
+        }
+        return;
+    }
+
+    let has_step = !action.step_id.is_empty();
+    let has_workflow = !action.workflow_id.is_empty();
+    if action_type == ActionType::Goto
+        && !has_step
+        && !has_workflow
+        && !action_fields_are_component_owned(
+            origin,
+            &[
+                ActionFixedField::Type,
+                ActionFixedField::WorkflowId,
+                ActionFixedField::StepId,
+            ],
+        )
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::MissingRequiredField,
+            path: action_path.to_string(),
+            message: format!("{action_path} goto action must specify stepId or workflowId"),
+        });
+    }
+    if has_step
+        && has_workflow
+        && !action_fields_are_component_owned(
+            origin,
+            &[
+                ActionFixedField::Type,
+                ActionFixedField::WorkflowId,
+                ActionFixedField::StepId,
+            ],
+        )
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidReference,
+            path: action_path.to_string(),
+            message: format!(
+                "{action_path} {action_type} action specifies both stepId and workflowId; use one or the other"
+            ),
+        });
+    }
+}
+
+/// Applies current-workflow target lookup after an action is consumed. A
+/// reusable component action can validly name a step that exists only in the
+/// consuming workflow, so this must retain the use-site path.
+fn validate_action_target_references(
+    action_path: &str,
+    action: &OnAction,
+    kind: ActionKind,
+    target_ids: (&HashSet<&str>, &HashSet<&str>),
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let action_type = action.action_type();
+    if !action_allows_target(kind, action_type) {
+        return;
+    }
+    let (step_ids, workflow_ids) = target_ids;
+    if !action.step_id.is_empty()
+        && !action.step_id.starts_with('$')
+        && !step_ids.contains(action.step_id.as_str())
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidReference,
+            path: format!("{action_path}.stepId"),
+            message: format!(
+                "{action_path}.stepId references unknown step \"{}\"",
+                action.step_id
+            ),
+        });
+    }
+    if !action.workflow_id.is_empty()
+        && !action.workflow_id.starts_with('$')
+        && !workflow_ids.contains(action.workflow_id.as_str())
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidReference,
+            path: format!("{action_path}.workflowId"),
+            message: format!(
+                "{action_path}.workflowId references unknown workflow \"{}\"",
+                action.workflow_id
+            ),
+        });
     }
 }
 
@@ -2694,7 +3168,10 @@ fn resolve_components(
 ) -> Result<ResolutionProvenance, String> {
     resolve_input_refs(spec)?;
 
-    let mut provenance = ResolutionProvenance::default();
+    let mut provenance = ResolutionProvenance {
+        raw_action_boundaries_owned: raw.is_some(),
+        ..ResolutionProvenance::default()
+    };
     let mut components = spec.components.clone().unwrap_or_default();
     let component_lookup = components.clone();
     let raw_components = raw.and_then(|root| raw_mapping_field(root, "components"));
@@ -2948,6 +3425,28 @@ struct ActionResolutionContext<'a> {
     list_key: ActionListScope,
 }
 
+fn local_action_fixed_fields(
+    raw_action: Option<&serde_yaml_ng::Value>,
+    action: &OnAction,
+) -> ActionLocalFields {
+    if let Some(action) = raw_action.filter(|action| action.as_mapping().is_some()) {
+        return ActionLocalFields {
+            type_: raw_mapping_has_field(action, "type"),
+            workflow_id: raw_mapping_has_field(action, "workflowId"),
+            step_id: raw_mapping_has_field(action, "stepId"),
+            retry_after: raw_mapping_has_field(action, "retryAfter"),
+            retry_limit: raw_mapping_has_field(action, "retryLimit"),
+        };
+    }
+    ActionLocalFields {
+        type_: action.type_.is_some(),
+        workflow_id: !action.workflow_id.is_empty(),
+        step_id: !action.step_id.is_empty(),
+        retry_after: action.retry_after != 0,
+        retry_limit: action.retry_limit.is_some(),
+    }
+}
+
 fn component_entry<'a, T>(
     map: &'a std::collections::BTreeMap<String, T>,
     name: &str,
@@ -2975,6 +3474,24 @@ fn resolve_action_ref(
             raw_action.and_then(|action| raw_mapping_field(action, "parameters"));
         let local_parameters_are_non_empty = !action.parameters.is_empty();
         let mut component_origin = None;
+        let mut fixed_field_origin = None;
+        // The raw parse boundary classifies empty/non-runtime-expression
+        // references as an invalid Reusable Object. Replace its ignored
+        // siblings before typed validation so the one structured reference
+        // diagnostic owns the failure; direct typed callers retain the
+        // existing component-resolution rule.
+        if raw_action
+            .and_then(|action| raw_mapping_field(action, "reference"))
+            .is_some_and(|reference| match reference {
+                serde_yaml_ng::Value::String(reference) => {
+                    reference.is_empty() || !reference.starts_with('$')
+                }
+                _ => true,
+            })
+        {
+            *action = OnAction::default();
+            continue;
+        }
         if !action.reference.is_empty() {
             if context.raw_actions.is_none()
                 && !typed_reusable_action_value_is_valid(action.value.as_ref())
@@ -3001,9 +3518,13 @@ fn resolve_action_ref(
             *action = component.clone();
             action.reference.clear();
             action.value = None;
-            component_origin = Some(DeclarationScope::ComponentAction {
+            let source = DeclarationScope::ComponentAction {
                 kind: context.list_key.kind,
                 action_index: component_index,
+            };
+            component_origin = Some(source);
+            fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
+                local_fields: ActionLocalFields::default(),
             });
             raw_parameters = raw_component_action(
                 context.raw_components,
@@ -3012,6 +3533,8 @@ fn resolve_action_ref(
             )
             .and_then(|component| raw_mapping_field(component, "parameters"));
         } else if !action.name.is_empty() {
+            let local_action_type = action.type_;
+            let local_fields = local_action_fixed_fields(raw_action, action);
             if let Some(component_name) = resolve_one_action_ref(
                 action,
                 context.component_map,
@@ -3019,28 +3542,55 @@ fn resolve_action_ref(
                 context.kind,
                 context.entity,
             )? {
+                let Some((component_index, component)) =
+                    component_entry(context.component_map, &component_name)
+                else {
+                    return Err(format!(
+                        "{}: component {} \"{component_name}\" not found",
+                        context.entity, context.kind
+                    ));
+                };
+                let source = DeclarationScope::ComponentAction {
+                    kind: context.list_key.kind,
+                    action_index: component_index,
+                };
+                fixed_field_origin = Some(ComponentActionFixedFieldOrigin { local_fields });
+                let raw_component = raw_component_action(
+                    context.raw_components,
+                    context.component_field,
+                    &component_name,
+                );
+                if let Some(raw_action) = raw_action {
+                    check_raw_defaulted_action_field_applicability(
+                        &action_path,
+                        raw_action,
+                        context.list_key.kind,
+                        action.action_type(),
+                        &mut provenance.raw_legacy_action_diagnostics,
+                    );
+                    if let (Some(local_type), Some(component_type), Some(raw_component)) =
+                        (local_action_type, component.type_, raw_component)
+                    {
+                        if local_type != component_type {
+                            check_raw_inherited_component_field_applicability(
+                                &action_path,
+                                raw_component,
+                                context.list_key.kind,
+                                component_type,
+                                action.action_type(),
+                                local_fields,
+                                &mut provenance.raw_legacy_action_diagnostics,
+                            );
+                        }
+                    }
+                }
                 // `resolve_one_action_ref` preserves a non-empty local list,
                 // matching the existing merge behavior. Otherwise the copied
                 // component list needs its own raw presence source.
                 if !local_parameters_are_non_empty {
-                    let Some((component_index, _)) =
-                        component_entry(context.component_map, &component_name)
-                    else {
-                        return Err(format!(
-                            "{}: component {} \"{component_name}\" not found",
-                            context.entity, context.kind
-                        ));
-                    };
-                    component_origin = Some(DeclarationScope::ComponentAction {
-                        kind: context.list_key.kind,
-                        action_index: component_index,
-                    });
-                    raw_parameters = raw_component_action(
-                        context.raw_components,
-                        context.component_field,
-                        &component_name,
-                    )
-                    .and_then(|component| raw_mapping_field(component, "parameters"));
+                    component_origin = Some(source);
+                    raw_parameters = raw_component
+                        .and_then(|component| raw_mapping_field(component, "parameters"));
                 }
             }
         }
@@ -3048,6 +3598,11 @@ fn resolve_action_ref(
             provenance
                 .component_action_origins
                 .insert(action_key, component_origin);
+        }
+        if let Some(fixed_field_origin) = fixed_field_origin {
+            provenance
+                .component_action_fixed_field_origins
+                .insert(action_key, fixed_field_origin);
         }
         // Action parameters may themselves be Reusable Objects pointing at
         // `$components.parameters.<name>`. Resolve them after the action-level
@@ -3271,8 +3826,9 @@ workflows:
         std::env::temp_dir().join(format!("{prefix}-{nanos}.yaml"))
     }
 
-    /// Structurally valid: its only findings are the two retry-field warnings.
+    /// Structurally valid: its only finding is an unknown-field warning.
     const WARNING_ONLY_YAML: &str = r#"arazzo: "1.0.0"
+unknownField: true
 info:
   title: Warning Only
   version: "1.0.0"
@@ -3297,12 +3853,11 @@ workflows:
         onSuccess:
           - name: finish
             type: end
-            retryAfter: 2
-            retryLimit: 3
 "#;
 
-    /// Missing `info.title` (error) plus one retry-field warning.
+    /// Missing `info.title` (error) plus one unknown-field warning.
     const MIXED_YAML: &str = r#"arazzo: "1.0.0"
+unknownField: true
 info:
   version: "1.0.0"
 sourceDescriptions:
@@ -3317,7 +3872,6 @@ workflows:
         onSuccess:
           - name: finish
             type: end
-            retryLimit: 3
 "#;
 
     #[test]
@@ -3327,22 +3881,15 @@ workflows:
             Err(err) => panic!("warnings must not fail validation, got: {err}"),
         };
         assert_eq!(spec.info.title, "Warning Only");
-        assert_eq!(diagnostics.len(), 2, "diagnostics={diagnostics:?}");
+        assert_eq!(diagnostics.len(), 1, "diagnostics={diagnostics:?}");
         assert!(diagnostics.iter().all(|d| d.severity == Severity::Warning));
         assert!(diagnostics
             .iter()
-            .all(|d| d.kind == ValidationErrorKind::InvalidRetryField));
-        assert_eq!(
-            diagnostics[0].path,
-            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit"
-        );
+            .all(|d| d.kind == ValidationErrorKind::UnknownField));
+        assert_eq!(diagnostics[0].path, "");
         assert_eq!(
             diagnostics[0].message,
-            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action"
-        );
-        assert_eq!(
-            diagnostics[1].path,
-            "workflow \"wf1\" > step \"s1\".onSuccess[0].retryAfter"
+            "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here"
         );
 
         // The signature-preserving entry point still succeeds on the same bytes.
@@ -3387,7 +3934,7 @@ workflows: []
                 assert_eq!(report.warnings[0].severity, Severity::Warning);
                 assert_eq!(
                     report.warnings[0].message,
-                    "workflow \"wf1\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action"
+                    "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here"
                 );
             }
             Err(other) => panic!("expected Validation error, got: {other}"),
@@ -4095,6 +4642,7 @@ sourceDescriptions:
 components:
   failureActions:
     retryPolicy:
+      name: retryPolicy
       type: retry
       retryAfter: 2
       retryLimit: 5
@@ -4133,6 +4681,7 @@ sourceDescriptions:
 components:
   failureActions:
     retryPolicy:
+      name: retryPolicy
       type: retry
       retryAfter: 2
       retryLimit: 5
@@ -4143,7 +4692,8 @@ workflows:
         operationPath: /test
         onFailure:
           - name: "$components.failureActions.retryPolicy"
-          - type: end
+          - name: finish
+            type: end
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -5289,9 +5839,11 @@ workflows:
         in: header
         value: "Bearer token"
     successActions:
-      - type: end
+      - name: finish
+        type: end
     failureActions:
-      - type: retry
+      - name: retry
+        type: retry
         retryAfter: 5
         retryLimit: 3
     steps:
@@ -5529,6 +6081,7 @@ components:
       name: stop
   failureActions:
     retryAll:
+      name: retryAll
       type: retry
       retryAfter: 1
       retryLimit: 2
@@ -5693,9 +6246,15 @@ workflows:
         operationPath: /s1
         onSuccess: [{reference: not-a-components-reference}]
 "#;
-        let err = expect_parse_error(non_expression.as_bytes());
-        assert!(format!("{err}")
-            .contains("unsupported successAction reference: not-a-components-reference"));
+        let Err(Error::Validation(report)) = parse_bytes(non_expression.as_bytes()) else {
+            panic!("a non-runtime-expression action reference must fail validation");
+        };
+        assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
+        assert_eq!(report.errors[0].kind, ValidationErrorKind::InvalidReference);
+        assert_eq!(
+            report.errors[0].path,
+            "workflow \"wf\" > step \"s1\".onSuccess[0]"
+        );
     }
 
     #[test]
@@ -5888,10 +6447,17 @@ workflows:
         onSuccess: [{{reference: {shape}}}]
 "#
             );
-            let err = expect_parse_error(yaml.as_bytes());
+            let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
+                panic!("shape={shape} must fail validation");
+            };
             assert!(
-                format!("{err}").contains("reference must be a runtime expression string"),
-                "shape={shape}, error={err}"
+                report.errors.len() == 1
+                    && report.errors[0].kind == ValidationErrorKind::InvalidReference
+                    && report.errors[0]
+                        .message
+                        .contains("reference must be a non-empty runtime expression string"),
+                "shape={shape}, errors={:?}",
+                report.errors
             );
         }
     }
@@ -6411,6 +6977,7 @@ sourceDescriptions:
 components:
   failureActions:
     retryPolicy:
+      name: retryPolicy
       type: retry
       retryAfter: 2
       retryLimit: 5
@@ -6441,10 +7008,201 @@ workflows:
     }
 
     #[test]
+    fn legacy_component_retry_zero_values_keep_compatibility() {
+        // `ac-80a8f` owns the unresolved distinction between an omitted
+        // retryAfter and a legacy local `retryAfter: 0`. Preserve the shipped
+        // merge behavior here; raw presence is used only for fixed-field
+        // applicability diagnostics in this ticket.
+        let spec_yaml = r#"
+arazzo: "1.0.0"
+info: {title: Test, version: "1.0.0"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  failureActions:
+    retryPolicy: {name: retryPolicy, type: retry, retryAfter: 2, retryLimit: 5}
+workflows:
+  - workflowId: wf1
+    steps:
+      - stepId: s1
+        operationPath: /test
+        onFailure:
+          - name: "$components.failureActions.retryPolicy"
+            retryAfter: 0
+            retryLimit: 0
+"#;
+
+        let (spec, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {
+            Ok(result) => result,
+            Err(error) => panic!("failure retry zero values must remain valid: {error}"),
+        };
+        assert!(diagnostics.is_empty(), "diagnostics={diagnostics:?}");
+        assert_eq!(
+            spec.workflows[0].steps[0].on_failure[0].retry_after, 2,
+            "legacy retryAfter: 0 remains the historical no-override form"
+        );
+        assert_eq!(
+            spec.workflows[0].steps[0].on_failure[0].retry_limit,
+            Some(0),
+            "legacy retryLimit: 0 remains an explicit valid retry limit"
+        );
+    }
+
+    fn legacy_action_fixed_field_document(
+        kind: &str,
+        component_type: &str,
+        component_fields: &str,
+        local_fields: &str,
+    ) -> String {
+        let (component_section, action_list) = match kind {
+            "success" => ("successActions", "onSuccess"),
+            "failure" => ("failureActions", "onFailure"),
+            other => panic!("unknown action kind {other}"),
+        };
+        format!(
+            r#"arazzo: "1.1.0"
+info: {{title: Test, version: "1.0.0"}}
+sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+components:
+  {component_section}:
+    policy:
+      name: policy
+      type: {component_type}
+{component_fields}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s
+        operationPath: /test
+        {action_list}:
+          - name: "$components.{component_section}.policy"
+{local_fields}
+"#
+        )
+    }
+
+    fn assert_exact_action_errors(document: &str, expected: &[(&str, ValidationErrorKind)]) {
+        let report = action_validation_report(document);
+        assert_eq!(
+            report.errors.len(),
+            expected.len(),
+            "unexpected diagnostics: {:?}",
+            report.errors
+        );
+        for (error, (path, kind)) in report.errors.iter().zip(expected) {
+            assert_eq!(error.path, *path, "errors={:?}", report.errors);
+            assert_eq!(error.kind, *kind, "errors={:?}", report.errors);
+        }
+    }
+
+    #[test]
+    fn legacy_inherited_end_and_goto_reject_local_zero_retry_fields() {
+        for (kind, component_type, component_fields, list) in [
+            ("success", "end", "", "onSuccess"),
+            ("success", "goto", "      stepId: s", "onSuccess"),
+            ("failure", "end", "", "onFailure"),
+            ("failure", "goto", "      stepId: s", "onFailure"),
+        ] {
+            let document = legacy_action_fixed_field_document(
+                kind,
+                component_type,
+                component_fields,
+                "            retryAfter: 0\n            retryLimit: 0",
+            );
+            let base = format!("workflow \"wf\" > step \"s\".{list}[0]");
+            let retry_after = format!("{base}.retryAfter");
+            let retry_limit = format!("{base}.retryLimit");
+            assert_exact_action_errors(
+                &document,
+                &[
+                    (&retry_after, ValidationErrorKind::InvalidRetryField),
+                    (&retry_limit, ValidationErrorKind::InvalidRetryField),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_inherited_retry_rejects_local_null_retry_limit_once() {
+        let document = legacy_action_fixed_field_document(
+            "failure",
+            "retry",
+            "",
+            "            retryLimit: null",
+        );
+        assert_exact_action_errors(
+            &document,
+            &[(
+                "workflow \"wf\" > step \"s\".onFailure[0].retryLimit",
+                ValidationErrorKind::InvalidRetryField,
+            )],
+        );
+    }
+
+    #[test]
+    fn legacy_inherited_end_rejects_local_empty_targets_for_both_kinds() {
+        for (kind, list) in [("success", "onSuccess"), ("failure", "onFailure")] {
+            let document = legacy_action_fixed_field_document(
+                kind,
+                "end",
+                "",
+                "            workflowId: \"\"\n            stepId: \"\"",
+            );
+            let base = format!("workflow \"wf\" > step \"s\".{list}[0]");
+            let workflow_id = format!("{base}.workflowId");
+            let step_id = format!("{base}.stepId");
+            assert_exact_action_errors(
+                &document,
+                &[
+                    (&workflow_id, ValidationErrorKind::InvalidReference),
+                    (&step_id, ValidationErrorKind::InvalidReference),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_local_type_override_checks_inherited_default_field_presence() {
+        let retry_fields = legacy_action_fixed_field_document(
+            "failure",
+            "retry",
+            "      retryAfter: 0\n      retryLimit: 0",
+            "            type: end",
+        );
+        assert_exact_action_errors(
+            &retry_fields,
+            &[
+                (
+                    "workflow \"wf\" > step \"s\".onFailure[0].retryAfter",
+                    ValidationErrorKind::InvalidRetryField,
+                ),
+                (
+                    "workflow \"wf\" > step \"s\".onFailure[0].retryLimit",
+                    ValidationErrorKind::InvalidRetryField,
+                ),
+            ],
+        );
+
+        let empty_target = legacy_action_fixed_field_document(
+            "failure",
+            "retry",
+            "      workflowId: \"\"",
+            "            type: end",
+        );
+        assert_exact_action_errors(
+            &empty_target,
+            &[(
+                "workflow \"wf\" > step \"s\".onFailure[0].workflowId",
+                ValidationErrorKind::InvalidReference,
+            )],
+        );
+    }
+
+    #[test]
     fn parse_bytes_component_action_explicit_end_overrides_component_type() {
         // Component defines retry; the local reference explicitly sets type: end.
         // The explicit end must survive the merge instead of being treated as
-        // an omitted (default) type.
+        // an omitted (default) type, but its inherited retry fields then make
+        // the effective Failure Action Object invalid.
         let spec_yaml = r#"
 arazzo: "1.0.0"
 info:
@@ -6457,6 +7215,7 @@ sourceDescriptions:
 components:
   failureActions:
     retryPolicy:
+      name: retryPolicy
       type: retry
       retryAfter: 2
       retryLimit: 5
@@ -6470,17 +7229,34 @@ workflows:
             type: end
 "#;
 
-        let spec = match parse_bytes(spec_yaml.as_bytes()) {
-            Ok(spec) => spec,
-            Err(err) => panic!("expected no error, got: {err}"),
-        };
-
-        let actions = &spec.workflows[0].steps[0].on_failure;
+        let mut resolved = parse_unvalidated(spec_yaml);
+        if let Err(error) = super::resolve_components(&mut resolved, None) {
+            panic!("expected component resolution to preserve the local type: {error}");
+        }
+        let actions = &resolved.workflows[0].steps[0].on_failure;
         assert_eq!(actions.len(), 1);
         assert_eq!(
             actions[0].action_type(),
             ActionType::End,
             "explicit type: end must override the component's retry"
+        );
+
+        let report = action_validation_report(spec_yaml);
+        assert!(
+            report.errors.iter().any(|error| {
+                error.path == "workflow \"wf1\" > step \"s1\".onFailure[0].retryAfter"
+                    && error.kind == ValidationErrorKind::InvalidRetryField
+            }),
+            "errors={:?}",
+            report.errors
+        );
+        assert!(
+            report.errors.iter().any(|error| {
+                error.path == "workflow \"wf1\" > step \"s1\".onFailure[0].retryLimit"
+                    && error.kind == ValidationErrorKind::InvalidRetryField
+            }),
+            "errors={:?}",
+            report.errors
         );
     }
 
@@ -8679,6 +9455,7 @@ sourceDescriptions:
 components:
   successActions:
     "{key}":
+      name: action
       type: end
 workflows:
   - workflowId: wf1
@@ -8702,6 +9479,7 @@ sourceDescriptions:
 components:
   failureActions:
     "{key}":
+      name: action
       type: end
 workflows:
   - workflowId: wf1
@@ -8975,6 +9753,7 @@ sourceDescriptions:
 components:
   failureActions:
     standardRetry:
+      name: standardRetry
       type: retry
       retryAfter: 1
       retryLimit: 3
@@ -9541,6 +10320,351 @@ workflows:
             !diagnostics[0].message.contains("successCriteria"),
             "message must not suggest the correctly spelled field name: {}",
             diagnostics[0].message
+        );
+    }
+
+    fn action_position_document(position: &str, action: &str, json: bool) -> String {
+        if json {
+            let document = match position {
+                "component success" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"components":{{"successActions":{{"component":{action}}}}},"workflows":[{{"workflowId":"wf","steps":[]}}]}}"#
+                ),
+                "component failure" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"components":{{"failureActions":{{"component":{action}}}}},"workflows":[{{"workflowId":"wf","steps":[]}}]}}"#
+                ),
+                "workflow success" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","successActions":[{action}],"steps":[]}}]}}"#
+                ),
+                "workflow failure" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","failureActions":[{action}],"steps":[]}}]}}"#
+                ),
+                "step success" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationPath":"/test","onSuccess":[{action}]}}]}}]}}"#
+                ),
+                "step failure" => format!(
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationPath":"/test","onFailure":[{action}]}}]}}]}}"#
+                ),
+                other => panic!("unknown action position {other}"),
+            };
+            return document;
+        }
+
+        match position {
+            "component success" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\ncomponents:\n  successActions:\n    component: {action}\nworkflows:\n  - workflowId: wf\n    steps: []\n"
+            ),
+            "component failure" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\ncomponents:\n  failureActions:\n    component: {action}\nworkflows:\n  - workflowId: wf\n    steps: []\n"
+            ),
+            "workflow success" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    successActions: [{action}]\n    steps: []\n"
+            ),
+            "workflow failure" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    failureActions: [{action}]\n    steps: []\n"
+            ),
+            "step success" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationPath: /test\n        onSuccess: [{action}]\n"
+            ),
+            "step failure" => format!(
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationPath: /test\n        onFailure: [{action}]\n"
+            ),
+            other => panic!("unknown action position {other}"),
+        }
+    }
+
+    fn action_position_path(position: &str) -> &'static str {
+        match position {
+            "component success" => "components.successActions.component",
+            "component failure" => "components.failureActions.component",
+            "workflow success" => "workflow \"wf\".successActions[0]",
+            "workflow failure" => "workflow \"wf\".failureActions[0]",
+            "step success" => "workflow \"wf\" > step \"step\".onSuccess[0]",
+            "step failure" => "workflow \"wf\" > step \"step\".onFailure[0]",
+            other => panic!("unknown action position {other}"),
+        }
+    }
+
+    fn action_validation_report(document: &str) -> super::ValidationReport {
+        let Err(Error::Validation(report)) = parse_bytes(document.as_bytes()) else {
+            panic!("expected action validation failure for document:\n{document}");
+        };
+        report
+    }
+
+    fn assert_action_error(document: &str, path: &str, kind: ValidationErrorKind) {
+        let report = action_validation_report(document);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|error| error.path == path && error.kind == kind),
+            "expected {kind:?} at {path}; errors={:?}",
+            report.errors
+        );
+    }
+
+    /// Scanner-visible positive evidence exercises every concrete container
+    /// in both YAML and JSON. An empty action name is valid; raw validation
+    /// cares about its string shape and presence, not its length.
+    pub(super) fn action_fixed_fields_positive_matrix() {
+        const POSITIONS: [&str; 6] = [
+            "component success",
+            "component failure",
+            "workflow success",
+            "workflow failure",
+            "step success",
+            "step failure",
+        ];
+        for json in [false, true] {
+            for position in POSITIONS {
+                let document =
+                    action_position_document(position, r#"{"name":"","type":"end"}"#, json);
+                if let Err(error) = parse_bytes(document.as_bytes()) {
+                    panic!("json={json} position={position}: {error}");
+                }
+            }
+        }
+
+        for (position, action) in [
+            (
+                "step success",
+                r#"{"name":"goto","type":"goto","stepId":"step"}"#,
+            ),
+            (
+                "step failure",
+                r#"{"name":"goto","type":"goto","stepId":"step"}"#,
+            ),
+            (
+                "step failure",
+                r#"{"name":"retry","type":"retry","retryAfter":0,"retryLimit":0}"#,
+            ),
+        ] {
+            let document = action_position_document(position, action, false);
+            if let Err(error) = parse_bytes(document.as_bytes()) {
+                panic!("valid {position} action {action} failed: {error}");
+            }
+        }
+    }
+
+    /// Scanner-visible negative evidence covers raw absence/null shape,
+    /// serde-owned malformed containers, type-field applicability, reusable
+    /// exemptions, and component diagnostic provenance.
+    pub(super) fn action_fixed_fields_negative_matrix() {
+        const POSITIONS: [&str; 6] = [
+            "component success",
+            "component failure",
+            "workflow success",
+            "workflow failure",
+            "step success",
+            "step failure",
+        ];
+        for json in [false, true] {
+            for position in POSITIONS {
+                let path = action_position_path(position);
+                for (field, action) in [
+                    ("name", r#"{"type":"end"}"#),
+                    ("name", r#"{"name":null,"type":"end"}"#),
+                    ("type", r#"{"name":"action"}"#),
+                    ("type", r#"{"name":"action","type":null}"#),
+                ] {
+                    assert_action_error(
+                        &action_position_document(position, action, json),
+                        &format!("{path}.{field}"),
+                        ValidationErrorKind::MissingRequiredField,
+                    );
+                }
+
+                for action in [
+                    r#"[]"#,
+                    r#"{"name":[],"type":"end"}"#,
+                    r#"{"name":"action","type":[]}"#,
+                ] {
+                    let result =
+                        parse_bytes(action_position_document(position, action, json).as_bytes());
+                    assert!(
+                        matches!(result, Err(Error::ParseYaml(_))),
+                        "json={json} position={position} action={action}: malformed action shape must remain serde-owned, got {result:?}"
+                    );
+                }
+            }
+        }
+
+        for (position, action, path, kind) in [
+            (
+                "step success",
+                r#"{"name":"retry","type":"retry"}"#,
+                "workflow \"wf\" > step \"step\".onSuccess[0].type",
+                ValidationErrorKind::InvalidRetryField,
+            ),
+            (
+                "step success",
+                r#"{"name":"end","type":"end","retryAfter":0}"#,
+                "workflow \"wf\" > step \"step\".onSuccess[0].retryAfter",
+                ValidationErrorKind::InvalidRetryField,
+            ),
+            (
+                "step success",
+                r#"{"name":"end","type":"end","retryLimit":0}"#,
+                "workflow \"wf\" > step \"step\".onSuccess[0].retryLimit",
+                ValidationErrorKind::InvalidRetryField,
+            ),
+            (
+                "step failure",
+                r#"{"name":"end","type":"end","retryAfter":0}"#,
+                "workflow \"wf\" > step \"step\".onFailure[0].retryAfter",
+                ValidationErrorKind::InvalidRetryField,
+            ),
+            (
+                "step failure",
+                r#"{"name":"goto","type":"goto","retryLimit":0,"stepId":"step"}"#,
+                "workflow \"wf\" > step \"step\".onFailure[0].retryLimit",
+                ValidationErrorKind::InvalidRetryField,
+            ),
+            (
+                "step success",
+                r#"{"name":"end","type":"end","workflowId":""}"#,
+                "workflow \"wf\" > step \"step\".onSuccess[0].workflowId",
+                ValidationErrorKind::InvalidReference,
+            ),
+        ] {
+            assert_action_error(
+                &action_position_document(position, action, false),
+                path,
+                kind,
+            );
+        }
+
+        let missing_type = action_position_document("step success", r#"{"name":"action"}"#, false);
+        let parsed_missing_type = action_validation_report(&missing_type);
+        assert_eq!(
+            parsed_missing_type.errors.len(),
+            1,
+            "raw parse must own exactly one missing-type diagnostic: {:?}",
+            parsed_missing_type.errors
+        );
+        assert_eq!(
+            parsed_missing_type.errors[0].path,
+            "workflow \"wf\" > step \"step\".onSuccess[0].type"
+        );
+        let direct_missing_type =
+            expect_validation_errors(validate(&parse_unvalidated(&missing_type)));
+        assert_eq!(
+            direct_missing_type.len(),
+            1,
+            "direct validation must own the same defaulted type state: {direct_missing_type:?}"
+        );
+        assert_eq!(
+            direct_missing_type[0].path,
+            "workflow \"wf\" > step \"step\".onSuccess[0].type"
+        );
+
+        for reference in ["\"\"", "\"not-a-runtime-expression\"", "null"] {
+            let document = action_position_document(
+                "step success",
+                &format!(r#"{{"reference":{reference},"type":"retry"}}"#),
+                false,
+            );
+            let report = action_validation_report(&document);
+            assert_eq!(
+                report.errors.len(),
+                1,
+                "reference={reference}: canonical reference must produce one error, got {:?}",
+                report.errors
+            );
+            assert_eq!(report.errors[0].kind, ValidationErrorKind::InvalidReference);
+            assert_eq!(
+                report.errors[0].path,
+                "workflow \"wf\" > step \"step\".onSuccess[0]"
+            );
+        }
+
+        let retry_limit_null = action_position_document(
+            "step failure",
+            r#"{"name":"retry","type":"retry","retryLimit":null}"#,
+            false,
+        );
+        let report = action_validation_report(&retry_limit_null);
+        assert_eq!(
+            report.errors.len(),
+            1,
+            "retryLimit null must be diagnosed once, got {:?}",
+            report.errors
+        );
+        assert_eq!(
+            report.errors[0].kind,
+            ValidationErrorKind::InvalidRetryField
+        );
+        assert_eq!(
+            report.errors[0].path,
+            "workflow \"wf\" > step \"step\".onFailure[0].retryLimit"
+        );
+        // `Option<u64>` collapses raw null to `None`; this parse-boundary
+        // diagnostic is intentionally the only place that can reject it
+        // without changing the public Action model.
+        assert!(validate(&parse_unvalidated(&retry_limit_null)).is_ok());
+
+        let retry_limit_zero = action_validation_report(&action_position_document(
+            "step success",
+            r#"{"name":"end","type":"end","retryLimit":0}"#,
+            false,
+        ));
+        assert_eq!(
+            retry_limit_zero.errors.len(),
+            1,
+            "raw zero retryLimit must not duplicate the typed applicability error: {:?}",
+            retry_limit_zero.errors
+        );
+
+        let reusable = r#"arazzo: "1.1.0"
+info: {title: T, version: "1"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions:
+    good: {name: good, type: end}
+    bad: {name: bad, type: retry}
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: step
+        operationPath: /test
+        onSuccess:
+          - reference: $components.successActions.good
+            type: retry
+          - name: $components.successActions.bad
+"#;
+        let report = action_validation_report(reusable);
+        let component_errors = report
+            .errors
+            .iter()
+            .filter(|error| {
+                error.path == "components.successActions.bad.type"
+                    && error.kind == ValidationErrorKind::InvalidRetryField
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(component_errors.len(), 1, "errors={:?}", report.errors);
+        assert!(
+            report
+                .errors
+                .iter()
+                .all(|error| !error.path.contains("onSuccess")),
+            "canonical and legacy reusable actions must not duplicate component diagnostics: {:?}",
+            report.errors
+        );
+
+        let component_reference = r#"arazzo: "1.1.0"
+info: {title: T, version: "1"}
+sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
+components:
+  successActions:
+    invalid: {reference: $components.successActions.good, type: end}
+workflows:
+  - workflowId: wf
+    steps: []
+"#;
+        assert_action_error(
+            component_reference,
+            "components.successActions.invalid.name",
+            ValidationErrorKind::MissingRequiredField,
         );
     }
 }

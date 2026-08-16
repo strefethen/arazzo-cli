@@ -152,7 +152,7 @@ fn snapshot_validate_warnings_json_contract() {
     let output = run([
         "--json",
         "validate",
-        "testdata/retry-field-warnings.arazzo.yaml",
+        "testdata/unsupported-operation-path.arazzo.yaml",
     ]
     .as_slice());
     assert!(

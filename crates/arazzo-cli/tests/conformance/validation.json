@@ -35,9 +35,16 @@
       ],
       "normativeLevels": ["REQUIRED"],
       "claim": "Success and Failure Action Objects require name and type, restrict type to their listed values, and expose distinct fixed-field sets.",
-      "status": "deviation",
-      "owner": "ac-2e941",
-      "reason": "Action fixed-field validation is scheduled in ac-2e941."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-validate/src/lib.rs#conformance_action_fixed_fields_positive_evidence"
+        ],
+        "negative": [
+          "crates/arazzo-validate/src/lib.rs#conformance_action_fixed_fields_negative_evidence",
+          "crates/arazzo-cli/tests/cli_integration.rs#validate_json_reports_action_fixed_field_path_and_kind"
+        ]
+      }
     },
     {
       "id": "validation.duplicate-action-identity",

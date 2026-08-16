@@ -19,7 +19,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: retry
+          - name: retry-failure
+            type: retry
             retryAfter: 1
             retryLimit: 2
     outputs: {}
@@ -32,15 +33,18 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-not-found
+            type: goto
             stepId: handle-not-found
             criteria:
               - condition: $statusCode == 404
-          - type: goto
+          - name: handle-server-error
+            type: goto
             stepId: handle-server-error
             criteria:
               - condition: $statusCode >= 500
-          - type: end
+          - name: end-unhandled-error
+            type: end
       - stepId: handle-not-found
         operationPath: /get
         parameters:
@@ -50,7 +54,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: end
+          - name: end-after-not-found
+            type: end
       - stepId: handle-server-error
         operationPath: /get
         parameters:
@@ -72,15 +77,18 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-not-found
+            type: goto
             stepId: handle-not-found
             criteria:
               - condition: $statusCode == 404
-          - type: goto
+          - name: handle-other
+            type: goto
             stepId: handle-other
             criteria:
               - condition: $statusCode >= 400
-          - type: end
+          - name: end-unhandled-error
+            type: end
       - stepId: handle-not-found
         operationPath: /get
         parameters:
@@ -92,7 +100,8 @@ workflows:
         outputs:
           handler: $response.body.args.handler
         onSuccess:
-          - type: end
+          - name: end-after-not-found
+            type: end
       - stepId: handle-other
         operationPath: /get
         parameters:
@@ -109,7 +118,8 @@ workflows:
   - workflowId: workflow-default-failure
     summary: Workflow-level failureActions apply when steps have no onFailure
     failureActions:
-      - type: end
+      - name: end-workflow-failure
+        type: end
     steps:
       - stepId: will-fail
         operationPath: /status/500
@@ -129,14 +139,16 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: recover-after-failure
+            type: goto
             stepId: recover
       - stepId: success-path
         operationPath: /get
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: end
+          - name: end-after-success
+            type: end
       - stepId: recover
         operationPath: /get
         parameters:

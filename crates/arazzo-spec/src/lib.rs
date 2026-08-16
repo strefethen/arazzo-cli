@@ -881,15 +881,15 @@ pub struct OnAction {
     /// references, but is retained here so action references round-trip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_yaml_ng::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_action_name")]
     pub name: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub type_: Option<ActionType>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub step_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub retry_after: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_limit: Option<u64>,
@@ -919,6 +919,24 @@ where
         serde_yaml_ng::Value::String(reference) => Ok(reference),
         _ => Ok(String::new()),
     }
+}
+
+/// Retain a null action name as the typed default so the validation boundary
+/// can report the required-field violation at its precise document path.
+/// Other non-string shapes remain serde-owned parse errors.
+fn deserialize_action_name<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_yaml_ng::Value::deserialize(deserializer)? {
+        serde_yaml_ng::Value::String(name) => Ok(name),
+        serde_yaml_ng::Value::Null => Ok(String::new()),
+        _ => Err(serde::de::Error::custom("action name must be a string")),
+    }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl OnAction {

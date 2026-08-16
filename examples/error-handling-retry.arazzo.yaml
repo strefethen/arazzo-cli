@@ -29,19 +29,22 @@ workflows:
   - workflowId: retry-then-recover
     summary: Retry on server error, then goto recovery
     failureActions:
-      - type: end
+      - name: end-workflow-failure
+        type: end
     steps:
       - stepId: unstable-call
         operationPath: /status/503
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: retry
+          - name: retry-server-error
+            type: retry
             retryAfter: 1
             retryLimit: 2
             criteria:
               - condition: $statusCode >= 500
-          - type: goto
+          - name: recover-after-retries
+            type: goto
             stepId: recover
             criteria:
               - condition: $statusCode >= 500

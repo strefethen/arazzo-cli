@@ -18,7 +18,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: end  # any failure = end workflow
+          - name: end-on-failure
+            type: end  # any failure = end workflow
     outputs: {}
 
   - workflowId: test-goto-on-failure
@@ -32,14 +33,16 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-failure
+            type: goto
             stepId: handle-error
       - stepId: success-path
         operationPath: /get
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: end
+          - name: end-on-success
+            type: end
       - stepId: handle-error
         operationPath: /get
         successCriteria:
@@ -57,7 +60,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: end
+          - name: end-after-check
+            type: end
       - stepId: should-not-run
         operationPath: /status/500
         successCriteria:
@@ -75,21 +79,25 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-rate-limit
+            type: goto
             stepId: rate-limited
             criteria:
               - condition: $statusCode == 429
-          - type: goto
+          - name: handle-server-error
+            type: goto
             stepId: server-error
             criteria:
               - condition: $statusCode == 500
-          - type: end  # default: end for other errors
+          - name: end-unmatched-failure
+            type: end  # default: end for other errors
       - stepId: rate-limited
         operationPath: /get
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: end
+          - name: end-after-rate-limit
+            type: end
       - stepId: server-error
         operationPath: /get
         successCriteria:

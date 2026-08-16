@@ -2,21 +2,15 @@
   "valid": true,
   "file": "<SPEC_PATH>",
   "version": "1.0.1",
-  "title": "Retry Field Warnings",
+  "title": "Unsupported operationPath",
   "workflows": 1,
   "sources": 1,
   "warnings": [
     {
       "source": "validation",
-      "kind": "invalidRetryField",
-      "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit",
-      "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action"
-    },
-    {
-      "source": "validation",
-      "kind": "invalidRetryField",
-      "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter",
-      "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action"
+      "kind": "unsupportedOperationPath",
+      "path": "workflow \"probe\" > step \"list-pets\".operationPath",
+      "message": "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method."
     }
   ]
 }

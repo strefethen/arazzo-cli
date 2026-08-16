@@ -801,68 +801,7 @@
     },
     "examples/swagger-petstore-crud.arazzo.yaml": {
       "validate": {
-        "diagnostics": [
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-pet\" > step \"create-pet\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-pet\" > step \"create-pet\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-pet\" > step \"read-pet\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-pet\" > step \"read-pet\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-pet\" > step \"delete-pet\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-pet\" > step \"delete-pet\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-order\" > step \"create-order\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-order\" > step \"create-order\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-order\" > step \"read-order\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-order\" > step \"read-order\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-order\" > step \"delete-order\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-order\" > step \"delete-order\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-user\" > step \"create-user\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-user\" > step \"create-user\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-user\" > step \"read-user\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-user\" > step \"read-user\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-user\" > step \"update-user\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-user\" > step \"update-user\".onFailure[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"crud-user\" > step \"delete-user\".onFailure[0].retryLimit has no effect on end action",
-            "path": "workflow \"crud-user\" > step \"delete-user\".onFailure[0].retryLimit",
-            "severity": "warning"
-          }
-        ],
+        "diagnostics": [],
         "outcome": "valid"
       },
       "workflows": {
@@ -1124,20 +1063,7 @@
     },
     "testdata/retry-field-warnings.arazzo.yaml": {
       "validate": {
-        "diagnostics": [
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action",
-            "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit",
-            "severity": "warning"
-          },
-          {
-            "kind": "invalidRetryField",
-            "message": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action",
-            "path": "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter",
-            "severity": "warning"
-          }
-        ],
+        "diagnostics": [],
         "outcome": "valid"
       },
       "workflows": {

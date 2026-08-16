@@ -1,6 +1,6 @@
 arazzo: 1.0.1
 info:
-  title: Retry Field Warnings
+  title: Retry Field Validity
   version: 1.0.0
 sourceDescriptions:
   - name: api
@@ -8,17 +8,14 @@ sourceDescriptions:
     type: openapi
 workflows:
   - workflowId: warn-only
-    summary: Structurally valid spec whose only findings are warnings.
+    summary: Valid failure retry fields.
     steps:
       - stepId: fetch
-        # Deliberately a supported form: this fixture pins retry-field warnings
-        # only. The unresolvable specification form lives in
-        # testdata/unsupported-operation-path.arazzo.yaml.
         operationPath: '{api}./status'
         successCriteria:
           - condition: $statusCode == 200
-        onSuccess:
-          - name: finish
-            type: end
+        onFailure:
+          - name: retry-transient-failure
+            type: retry
             retryAfter: 2
             retryLimit: 3

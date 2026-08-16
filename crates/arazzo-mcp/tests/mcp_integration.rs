@@ -395,22 +395,22 @@ fn warning_messages(result: &Value) -> Vec<String> {
 
 #[test]
 fn test_validate_spec_reports_warnings_on_success_envelope() {
-    let result = call_validate_spec(&testdata_path("retry-field-warnings.arazzo.yaml"));
+    let result = call_validate_spec(&testdata_path("unsupported-operation-path.arazzo.yaml"));
 
     assert_eq!(result["valid"], true, "result={result}");
     let messages = warning_messages(&result);
     assert_eq!(
         messages,
         vec![
-            "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action".to_string(),
-            "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action".to_string(),
+            "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method."
+                .to_string(),
         ],
         "result={result}"
     );
     assert_eq!(result["warnings"][0]["source"], "validation");
     assert_eq!(
         result["warnings"][0]["path"],
-        "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit"
+        "workflow \"probe\" > step \"list-pets\".operationPath"
     );
 }
 
@@ -433,7 +433,7 @@ workflows:
         onSuccess:
           - name: finish
             type: end
-            retryLimit: 2
+            unknownField: true
 "#;
     std::fs::write(&spec_path, spec_yaml).unwrap_or_else(|e| panic!("write temp: {e}"));
 
@@ -453,7 +453,7 @@ workflows:
     assert_eq!(
         warning_messages(&result),
         vec![
-            "workflow \"mixed\" > step \"placeholder\".onSuccess[0].retryLimit has no effect on end action"
+            "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here"
                 .to_string(),
         ],
         "result={result}"

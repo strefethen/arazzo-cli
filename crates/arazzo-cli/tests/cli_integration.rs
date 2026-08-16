@@ -349,16 +349,12 @@ fn validate_json_reports_valid_metadata() {
 
 fn warning_fixture_spec() -> PathBuf {
     let mut path = repo_root();
-    path.push("testdata/retry-field-warnings.arazzo.yaml");
+    path.push("testdata/unsupported-operation-path.arazzo.yaml");
     path
 }
 
-const RETRY_LIMIT_PATH: &str = "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit";
-const RETRY_AFTER_PATH: &str = "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter";
-const RETRY_LIMIT_WARNING: &str =
-    "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryLimit has no effect on end action";
-const RETRY_AFTER_WARNING: &str =
-    "workflow \"warn-only\" > step \"fetch\".onSuccess[0].retryAfter has no effect on end action";
+const WARNING_PATH: &str = "workflow \"probe\" > step \"list-pets\".operationPath";
+const OPERATION_PATH_WARNING: &str = "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method.";
 
 fn validate_issue_messages(body: &Value, field: &str) -> Vec<String> {
     let Some(items) = body.get(field).and_then(Value::as_array) else {
@@ -394,15 +390,9 @@ fn validate_warning_only_spec_stays_valid_and_exits_zero() {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         stderr.contains(&format!(
-            "warning: {RETRY_LIMIT_PATH}: {RETRY_LIMIT_WARNING}"
+            "warning: {WARNING_PATH}: {OPERATION_PATH_WARNING}"
         )),
-        "missing retryLimit warning; stderr={stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "warning: {RETRY_AFTER_PATH}: {RETRY_AFTER_WARNING}"
-        )),
-        "missing retryAfter warning; stderr={stderr}"
+        "missing unsupported-operation-path warning; stderr={stderr}"
     );
 }
 
@@ -425,13 +415,10 @@ fn validate_json_reports_warnings_without_failing() {
         Some(v) => v.clone(),
         None => panic!("expected warnings array in validate JSON; body={body}"),
     };
-    assert_eq!(warnings.len(), 2, "body={body}");
+    assert_eq!(warnings.len(), 1, "body={body}");
     assert_eq!(
         validate_issue_messages(&body, "warnings"),
-        vec![
-            RETRY_LIMIT_WARNING.to_string(),
-            RETRY_AFTER_WARNING.to_string()
-        ]
+        vec![OPERATION_PATH_WARNING.to_string()]
     );
 
     let first = match warnings[0].as_object() {
@@ -444,11 +431,11 @@ fn validate_json_reports_warnings_without_failing() {
     );
     assert_eq!(
         first.get("kind"),
-        Some(&Value::String("invalidRetryField".to_string()))
+        Some(&Value::String("unsupportedOperationPath".to_string()))
     );
     assert_eq!(
         first.get("path"),
-        Some(&Value::String(RETRY_LIMIT_PATH.to_string()))
+        Some(&Value::String(WARNING_PATH.to_string()))
     );
 }
 
@@ -471,10 +458,7 @@ fn validate_strict_promotes_warnings_to_errors() {
     assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
     assert_eq!(
         validate_issue_messages(&body, "errors"),
-        vec![
-            RETRY_LIMIT_WARNING.to_string(),
-            RETRY_AFTER_WARNING.to_string()
-        ],
+        vec![OPERATION_PATH_WARNING.to_string()],
         "--strict must report the same findings as errors; body={body}"
     );
     assert!(
@@ -625,7 +609,8 @@ workflows:
         !validate.status.success(),
         "null reference must fail validation"
     );
-    assert!(combined_text(&validate).contains("reference must be a runtime expression"));
+    assert!(combined_text(&validate)
+        .contains("reference must be a non-empty runtime expression string"));
 
     let dry_run = run(
         ["--json", "run", &spec_path, "wf", "--dry-run"].as_slice(),
@@ -635,7 +620,9 @@ workflows:
         !dry_run.status.success(),
         "dry-run must not accept null reference"
     );
-    assert!(combined_text(&dry_run).contains("reference must be a runtime expression"));
+    assert!(
+        combined_text(&dry_run).contains("reference must be a non-empty runtime expression string")
+    );
 }
 
 #[test]
@@ -1169,7 +1156,7 @@ workflows:
 fn validate_reports_errors_and_warnings_together() {
     let temp = TempDir::new("arazzo-validate-mixed");
     let spec_path = temp.path().join("mixed.arazzo.yaml");
-    // Missing info.title (error) plus one retry-field warning.
+    // Missing info.title (error) plus one ordinary unknown-field warning.
     write_file(
         &spec_path,
         r#"
@@ -1188,12 +1175,12 @@ workflows:
         onSuccess:
           - name: finish
             type: end
-            retryLimit: 3
+            unknownField: true
 "#,
     );
     let spec_str = spec_path.to_string_lossy().to_string();
     let mixed_warning =
-        "workflow \"mixed\" > step \"s1\".onSuccess[0].retryLimit has no effect on end action";
+        "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here";
 
     let output = run(["--json", "validate", &spec_str].as_slice(), None);
     assert!(!output.status.success());
@@ -1239,8 +1226,8 @@ fn validate_strict_human_output_fails_with_findings() {
         "strict human output should fail loudly; stderr={stderr}"
     );
     assert!(
-        stderr.contains(RETRY_LIMIT_WARNING) && stderr.contains(RETRY_AFTER_WARNING),
-        "strict human output should list both findings; stderr={stderr}"
+        stderr.contains(OPERATION_PATH_WARNING),
+        "strict human output should list the finding; stderr={stderr}"
     );
 }
 
@@ -1802,6 +1789,55 @@ workflows:
     assert_eq!(
         issue.get("source").and_then(Value::as_str),
         Some("validation")
+    );
+}
+
+#[test]
+fn validate_json_reports_action_fixed_field_path_and_kind() {
+    let temp = TempDir::new("arazzo-validate-action-fixed-field");
+    let spec_path = temp.path().join("success-retry.yaml");
+    write_file(
+        &spec_path,
+        r#"
+arazzo: "1.1.0"
+info:
+  title: Action fixed-field JSON
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: request
+        operationId: invoke
+        onSuccess:
+          - name: retry-is-failure-only
+            type: retry
+"#,
+    );
+
+    let spec = spec_path.to_string_lossy().to_string();
+    let output = run(["--json", "validate", &spec].as_slice(), None);
+    assert!(!output.status.success());
+
+    let body = stdout_json(&output);
+    assert_eq!(body.get("valid"), Some(&Value::Bool(false)));
+    let errors = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("validation output should contain errors: {body}"));
+    assert_eq!(errors.len(), 1, "unexpected action diagnostics: {body}");
+    assert_eq!(
+        errors[0],
+        serde_json::json!({
+            "source": "validation",
+            "kind": "invalidRetryField",
+            "path": "workflow \"wf\" > step \"request\".onSuccess[0].type",
+            "message": "workflow \"wf\" > step \"request\".onSuccess[0].type must be end or goto for a success action"
+        }),
+        "action fixed-field JSON contract changed: {body}"
     );
 }
 

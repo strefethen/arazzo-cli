@@ -37,9 +37,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
     outputs:
       petId: $response.body.petId
   - stepId: list-pets
@@ -51,9 +48,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
   - stepId: read-pets
     description: Get a single pets
     operationPath: GET {petstore}./pets/{petId}
@@ -68,9 +62,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
   - stepId: update-pets
     description: Update a pets
     operationPath: PUT {petstore}./pets/{petId}
@@ -91,9 +82,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
   - stepId: delete-pets
     description: Delete a pets
     operationPath: DELETE {petstore}./pets/{petId}
@@ -108,9 +96,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
   outputs:
     created_id: $steps.create-pets.outputs.petId
   parameters:

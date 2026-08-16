@@ -60,6 +60,7 @@ components:
   # Reusable failure actions
   failureActions:
     standardRetry:
+      name: standard-retry
       type: retry
       retryAfter: 2
       retryLimit: 3

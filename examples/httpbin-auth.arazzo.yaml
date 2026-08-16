@@ -56,11 +56,13 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-auth-error
+            type: goto
             stepId: handle-auth-error
             criteria:
               - condition: $statusCode == 401
-          - type: end
+          - name: end-unhandled-auth-error
+            type: end
       - stepId: handle-auth-error
         operationPath: /get
         successCriteria:
@@ -102,5 +104,6 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: end
+          - name: end-missing-token
+            type: end
     outputs: {}

@@ -974,6 +974,66 @@ workflows:
     assert_eq!(reparsed.workflows[0].steps[0].on_success[0].type_, None);
 }
 
+#[test]
+fn action_serialization_keeps_name_and_type_but_omits_default_wire_noise() {
+    let raw = r#"
+arazzo: "1.1.0"
+info:
+  title: Action Serialization
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: call
+        operationPath: /get
+        onFailure:
+          - name: ""
+            type: retry
+            workflowId: ""
+            stepId: ""
+            retryAfter: 0
+            retryLimit: 0
+"#;
+
+    let spec = parse_spec(raw.as_bytes(), "defaulted action serialization spec");
+    let serialized = serialize_spec(&spec, "defaulted action serialization spec");
+    let wire = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&serialized) {
+        Ok(value) => value,
+        Err(err) => panic!("reparsing serialized spec as raw YAML: {err}"),
+    };
+    let action = wire["workflows"][0]["steps"][0]["onFailure"][0]
+        .as_mapping()
+        .unwrap_or_else(|| panic!("onFailure[0] should serialize as a mapping"));
+    assert_eq!(
+        action.get("name"),
+        Some(&serde_yaml_ng::Value::String(String::new())),
+        "the required empty string name must remain on the wire: {serialized}"
+    );
+    assert_eq!(
+        action.get("type"),
+        Some(&serde_yaml_ng::Value::String("retry".to_string())),
+        "an explicit type must remain on the wire: {serialized}"
+    );
+    for field in ["workflowId", "stepId", "retryAfter"] {
+        assert!(
+            !action.contains_key(field),
+            "default {field} must not serialize: {serialized}"
+        );
+    }
+    assert_eq!(
+        action.get("retryLimit"),
+        Some(&serde_yaml_ng::Value::Number(0.into())),
+        "an explicit retryLimit: 0 must remain on the wire: {serialized}"
+    );
+
+    let reparsed = parse_spec(serialized.as_bytes(), "reserialized defaulted action spec");
+    assert_eq!(reparsed, spec);
+}
+
 /// Success/Failure Action Object (Arazzo 1.1.0): `parameters` — a list of
 /// Parameter Object | Reusable Object — round-trips on actions. A literal, a
 /// runtime-expression string, a full three-field Selector Object value, and a

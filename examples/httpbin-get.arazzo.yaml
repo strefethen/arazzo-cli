@@ -56,11 +56,13 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
-          - type: goto
+          - name: handle-rate-limit
+            type: goto
             stepId: handle-error
             criteria:
               - condition: $statusCode == 429
-          - type: end
+          - name: end-unhandled-status
+            type: end
       - stepId: handle-error
         operationPath: /get
         successCriteria:

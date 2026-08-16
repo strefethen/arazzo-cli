@@ -37,10 +37,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
     outputs:
       id: $response.body.id
   - stepId: read-pet
@@ -57,10 +53,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   - stepId: delete-pet
     description: Delete a pet
     operationPath: DELETE {swagger-petstore-openapi-3-0}./pet/{petId}
@@ -75,10 +67,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   outputs:
     created_id: $steps.create-pet.outputs.id
 - workflowId: crud-order
@@ -103,10 +91,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
     outputs:
       id: $response.body.id
   - stepId: read-order
@@ -123,10 +107,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   - stepId: delete-order
     description: Delete a order
     operationPath: DELETE {swagger-petstore-openapi-3-0}./store/order/{orderId}
@@ -141,10 +121,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   outputs:
     created_id: $steps.create-order.outputs.id
 - workflowId: crud-user
@@ -169,10 +145,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
     outputs:
       id: $response.body.id
   - stepId: read-user
@@ -189,10 +161,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   - stepId: update-user
     description: Update a user
     operationPath: PUT {swagger-petstore-openapi-3-0}./user/{username}
@@ -216,10 +184,6 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   - stepId: delete-user
     description: Delete a user
     operationPath: DELETE {swagger-petstore-openapi-3-0}./user/{username}
@@ -234,9 +198,5 @@ workflows:
     onFailure:
     - name: fail-fast
       type: end
-      workflowId: ''
-      stepId: ''
-      retryAfter: 0
-      retryLimit: 0
   outputs:
     created_id: $steps.create-user.outputs.id

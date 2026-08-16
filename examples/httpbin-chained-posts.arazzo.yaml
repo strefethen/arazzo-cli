@@ -106,7 +106,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
-          - type: goto
+          - name: skip-to-final-report
+            type: goto
             stepId: final-report
 
       - stepId: fallback-request
