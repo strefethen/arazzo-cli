@@ -289,7 +289,7 @@ tracks above.
 
 | # | Deviation | Severity | Surface |
 |---|---|---|---|
-| F12 | ~~Condition operators `contains`, `matches`, `in [...]`~~ (closed by ac-67bf5) | P3 | expr |
+| F12 | Condition operators `contains`, `matches`, `in [...]` | P3 | expr |
 | F13 | `$response.body` wildcard/filter traversal | P3 | expr |
 | F14 | `RequestBody.reference` is not a spec field | P2 | model |
 | F15 | Success and Failure Action Objects share one `OnAction` struct | P2 | model |
@@ -298,12 +298,12 @@ tracks above.
 
 The Criterion Object's `simple` grammar defines `<`, `<=`, `>`, `>=`, `==`,
 `!=`, `!`, `&&`, `||`, `()`, `[]`, `.` over `boolean`/`null`/`number`/`string`
-literals. These three word operators are not in it. ac-67bf5 removed them from
-simple Criterion parsing and replaced the permissive splitter with a complete,
-full-input parser that reports stable syntax errors and fails closed.
+literals. These three word operators are not in it. Implemented in
+`arazzo-expr` (`for word_op in [" contains ", " matches ", " in "]`).
 
-The shipped condition fixture now uses conformant, case-insensitive string
-equality. Pattern matching remains available through a `regex`-type criterion.
+Blast radius is small: one fixture uses them —
+`examples/httpbin-conditions.arazzo.yaml`, three occurrences. `matches` has a
+conformant replacement in a `regex`-type criterion.
 
 ### F13. `$response.body` wildcard and filter traversal
 
@@ -610,7 +610,7 @@ The probe document at F8 above now behaves per the epic's acceptance criteria:
 its MUST-level violations fail validation, its SHOULD-level violations warn
 (errors under `--strict`), and the unknown field warns. Still open after this
 epic: F1/F5 (the operationPath / sourceDescriptions idiom product decision),
-F14, F15, F16, F18, F19, and F11's implementation.
+F12, F14, F15, F16, F18, F19, and F11's implementation.
 
 ## Addendum — 2026-08-15 (ac-6131b Reusable Object action references)
 

@@ -49,14 +49,6 @@ async fn evaluate_and_watch_expressions_at_pause() {
     };
     assert!(cond);
 
-    let invalid = controller.evaluate_condition("true || contains");
-    let error = match invalid {
-        Ok(value) => panic!("invalid condition unexpectedly evaluated to {value}"),
-        Err(error) => error,
-    };
-    assert!(error.contains("invalid simple condition"), "got: {error}");
-    assert!(error.contains("byte"), "got: {error}");
-
     let watches = match controller.evaluate_watches(&[
         "$inputs.code".to_string(),
         "$steps.s1.outputs.code".to_string(),
@@ -77,33 +69,6 @@ async fn evaluate_and_watch_expressions_at_pause() {
     if let Err(err) = result.outputs {
         panic!("workflow execution failed: {err}");
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invalid_conditional_breakpoint_fails_closed() {
-    let server = start_server();
-    let controller = Arc::new(DebugController::new());
-    let engine = build_engine(server.base_url.clone(), Arc::clone(&controller));
-    if let Err(error) = controller.set_breakpoints(vec![
-        StepBreakpoint::new("wf", "s2").with_condition("true || contains")
-    ]) {
-        panic!("setting invalid conditional breakpoint: {error}");
-    }
-
-    let result = engine
-        .execute("wf", BTreeMap::from([(String::from("code"), json!(429))]))
-        .collect()
-        .await;
-
-    assert!(result.outputs.is_ok(), "workflow must continue");
-    let events = match controller.stop_events() {
-        Ok(events) => events,
-        Err(error) => panic!("reading stop events: {error}"),
-    };
-    assert!(
-        events.is_empty(),
-        "invalid breakpoint condition must not stop"
-    );
 }
 
 fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {

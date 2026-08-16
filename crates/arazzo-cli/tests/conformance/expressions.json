@@ -5,24 +5,12 @@
       "id": "expr.simple-criterion-grammar",
       "area": "expressions",
       "authority": "arazzoSpec",
-      "specAnchors": [
-        "spec/arazzo/v1.1.0.html#literals",
-        "spec/arazzo/v1.1.0.html#operators",
-        "spec/arazzo/v1.1.0.html#runtime-expressions-in-conditions",
-        "spec/arazzo/v1.1.0.html#simple-conditions",
-        "spec/arazzo/v1.1.0.html#evaluation-errors"
-      ],
+      "specAnchors": ["spec/arazzo/v1.1.0.html#simple-conditions"],
       "normativeLevels": ["MUST"],
       "claim": "Simple Criterion conditions accept only the Arazzo 1.1 literals and operators.",
-      "status": "covered",
-      "evidence": {
-        "positive": [
-          "crates/arazzo-expr/src/lib.rs#conformance_simple_condition_grammar_positive_evidence"
-        ],
-        "negative": [
-          "crates/arazzo-expr/src/lib.rs#conformance_simple_condition_grammar_negative_evidence"
-        ]
-      }
+      "status": "deviation",
+      "owner": "ac-67bf5",
+      "reason": "Simple Criterion grammar enforcement is scheduled in ac-67bf5."
     },
     {
       "id": "expr.typed-jsonpath-rejects-gjson",

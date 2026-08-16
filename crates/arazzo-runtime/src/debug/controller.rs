@@ -187,12 +187,7 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
-            .evaluate_condition_detailed(condition);
-        match evaluation.error {
-            Some(error) => Err(error.to_string()),
-            None => Ok(evaluation.result),
-        }
+        Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate_condition(condition))
     }
 
     pub fn evaluate_watches(&self, expressions: &[String]) -> Result<Vec<WatchEvaluation>, String> {

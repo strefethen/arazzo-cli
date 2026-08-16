@@ -425,57 +425,7 @@ async fn arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_late
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invalid_simple_criterion_exposes_criterion_error_local() {
-    let server = start_server();
-    let controller = Arc::new(DebugController::new());
-    let engine = build_engine_with_condition(
-        server.base_url.clone(),
-        Arc::clone(&controller),
-        "$statusCode contains 200",
-    );
-    if let Err(error) = controller.set_breakpoints(vec![
-        StepBreakpoint::new("wf", "fetch-rss").at_success_criterion(0)
-    ]) {
-        panic!("setting criterion breakpoint: {error}");
-    }
-
-    let handle = engine.execute("wf", BTreeMap::new());
-    wait_for_stop(&controller, 1);
-    let scopes = match controller.current_scopes() {
-        Ok(scopes) => scopes,
-        Err(error) => panic!("reading invalid criterion scopes: {error}"),
-    };
-    assert_eq!(
-        scopes.locals.get("criterionConditionResult"),
-        Some(&json!(false))
-    );
-    let error = scopes
-        .locals
-        .get("criterionError")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(error.contains("invalid simple condition"), "got: {error}");
-    assert!(error.contains("byte"), "got: {error}");
-
-    if let Err(error) = controller.continue_execution() {
-        panic!("continuing invalid criterion: {error}");
-    }
-    assert!(
-        handle.collect().await.outputs.is_err(),
-        "invalid criterion must fail the step"
-    );
-}
-
 fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {
-    build_engine_with_condition(base_url, controller, "$statusCode == 200")
-}
-
-fn build_engine_with_condition(
-    base_url: String,
-    controller: Arc<DebugController>,
-    condition: &str,
-) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),
         info: Info {
@@ -495,7 +445,7 @@ fn build_engine_with_condition(
                 step_id: "fetch-rss".to_string(),
                 target: Some(StepTarget::OperationPath("/rss".to_string())),
                 success_criteria: vec![SuccessCriterion {
-                    condition: condition.to_string(),
+                    condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
                 }],
                 outputs: BTreeMap::from([(

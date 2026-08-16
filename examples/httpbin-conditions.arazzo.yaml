@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: >
     Tests the full range of Arazzo condition expressions: comparison operators,
-    case-insensitive string equality, and compound conditions (&&, ||).
+    string operators (contains, matches), and compound conditions (&&, ||).
 sourceDescriptions:
   - name: httpbin
     url: https://httpbin.org
@@ -45,19 +45,19 @@ workflows:
             value: $steps.fetch-data.outputs.fruit
         successCriteria:
           - condition: $statusCode == 200
-          - condition: "$response.body.args.check == 'apple'"
+          - condition: $response.body.args.check == "apple"
     outputs:
       fruit: $steps.fetch-data.outputs.fruit
 
-  - workflowId: case-insensitive-equality
-    summary: Test case-insensitive equality on response body strings
+  - workflowId: contains-operator
+    summary: Test the contains operator on response body strings
     steps:
       - stepId: fetch-url
         operationPath: /get
         successCriteria:
           - condition: $statusCode == 200
-          - condition: "$response.body.url == 'https://httpbin.org/get'"
-          - condition: "$response.body.headers.Host == 'HTTPBIN.ORG'"
+          - condition: '$response.body.url contains "httpbin"'
+          - condition: '$response.body.headers.Host contains "httpbin"'
     outputs: {}
 
   - workflowId: compound-conditions

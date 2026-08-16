@@ -119,26 +119,6 @@ fn evaluate_criterion_modes() {
 }
 
 #[test]
-fn simple_criterion_retains_structured_syntax_error() {
-    let criterion = SuccessCriterion {
-        condition: "$statusCode contains 200".to_string(),
-        ..SuccessCriterion::default()
-    };
-    let eval = ExpressionEvaluator::new(EvalContext {
-        status_code: Some(200),
-        ..EvalContext::default()
-    });
-
-    let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
-
-    assert!(!evaluation.condition_result);
-    assert!(!evaluation.matched);
-    let error = evaluation.error.as_deref().unwrap_or_default();
-    assert!(error.contains("invalid simple condition"), "got: {error}");
-    assert!(error.contains("byte"), "got: {error}");
-}
-
-#[test]
 fn evaluate_criterion_xpath_uses_context_and_condition() {
     let cache = RegexCache::new();
     let criterion = xpath_criterion("$response.body", "//item[1]/title");
