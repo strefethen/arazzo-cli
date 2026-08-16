@@ -8,9 +8,15 @@
       "specAnchors": ["spec/arazzo/v1.1.0.html#simple-conditions"],
       "normativeLevels": ["MUST"],
       "claim": "Simple Criterion conditions accept only the Arazzo 1.1 literals and operators.",
-      "status": "deviation",
-      "owner": "ac-67bf5",
-      "reason": "Simple Criterion grammar enforcement is scheduled in ac-67bf5."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-expr/src/lib.rs#conformance_simple_condition_grammar_positive_evidence"
+        ],
+        "negative": [
+          "crates/arazzo-expr/src/lib.rs#conformance_simple_condition_grammar_negative_evidence"
+        ]
+      }
     },
     {
       "id": "expr.typed-jsonpath-rejects-gjson",

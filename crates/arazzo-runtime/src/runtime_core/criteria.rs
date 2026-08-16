@@ -109,10 +109,12 @@ pub(crate) fn evaluate_criterion_detailed(
             }
         }
         _ => {
-            let (result, cond_warnings) =
-                eval.evaluate_condition_with_diagnostics(&criterion.condition);
-            expr_warnings.extend(cond_warnings);
-            result
+            let evaluation = eval.evaluate_condition_detailed(&criterion.condition);
+            expr_warnings.extend(evaluation.warnings);
+            if let Some(condition_error) = evaluation.error {
+                error = Some(condition_error.to_string());
+            }
+            evaluation.result
         }
     };
 

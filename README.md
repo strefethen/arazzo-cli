@@ -154,7 +154,7 @@ The `examples/` directory contains 17 runnable specs:
 | `httpbin-get.arazzo.yaml` | Basic GET, headers, status codes, inputs |
 | `httpbin-methods.arazzo.yaml` | POST, PUT, PATCH, DELETE with JSON bodies |
 | `httpbin-auth.arazzo.yaml` | Basic auth, bearer tokens, auth failure handling |
-| `httpbin-conditions.arazzo.yaml` | Comparison operators, contains, compound conditions |
+| `httpbin-conditions.arazzo.yaml` | Comparison operators, string equality, compound conditions |
 | `httpbin-data-flow.arazzo.yaml` | Output chaining, interpolation, cookies, sub-workflows |
 | `httpbin-error-handling.arazzo.yaml` | Retry, criteria-based goto, workflow-level failure actions |
 | `httpbin-parallel.arazzo.yaml` | Parallel execution, diamond dependencies |
@@ -415,7 +415,7 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 
 **Multi-source routing (arazzo-cli extension):** `{sourceName}./path` — e.g. `operationPath: "{petstore}./pets"`, or with a method prefix, `operationPath: "GET {petstore}./pets"` — selects a source description's base URL for a step. This, and the bare-path form used elsewhere in this README (e.g. `operationPath: /protected` in [Sub-Workflows](#sub-workflows)), are not the specification's `operationPath` syntax — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
-**Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
+**Simple condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `!`, `&&`, `||`, grouping with `()`, and runtime-expression property/index access with `.` and `[]`. Literals are `true`, `false`, `null`, JSON numbers, and single-quoted strings; string comparisons are case-insensitive.
 
 **JSONPath criteria (supported subset):** `type: jsonpath` success criteria support dot paths, bracket indexing (`$.items[0].name`), wildcards (`$.items[*].id`, `$.*`), filter predicates (`$[?(@.price > 10)]`) with `&&`/`||`, comparison operators, `count(...)` over resolved nodes, and bare existence checks (`$.name`). Recursive descent (`$..foo`) and array slices (`$.items[0:2]`) are **not** supported — a criterion using them fails with an `unsupported JSONPath` diagnostic rather than silently evaluating to false.
 
@@ -551,11 +551,11 @@ Boolean expressions evaluated against the runtime context:
 ```yaml
 successCriteria:
   - condition: $statusCode == 200
-  - condition: $response.body.status == "active"
+  - condition: "$response.body.status == 'active'"
   - condition: $response.body.items.length > 0
 ```
 
-Supports all comparison and logical operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`.
+Simple conditions accept the Arazzo 1.1 literals and operators only: `true`, `false`, `null`, JSON numbers, single-quoted strings, direct runtime expressions, `==`, `!=`, `>`, `<`, `>=`, `<=`, `!`, `&&`, `||`, `()`, `[]`, and `.`. Numeric strings are coerced for comparisons, and ordinary string comparisons are case-insensitive. Use a typed `regex` criterion for pattern matching.
 
 ### Regex
 

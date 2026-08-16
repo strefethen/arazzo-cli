@@ -127,7 +127,7 @@ fn bench_condition_evaluation(c: &mut Criterion) {
     });
 
     group.bench_function("string_comparison", |b| {
-        b.iter(|| eval.evaluate_condition(black_box("$response.body.data.name == \"Alice\"")))
+        b.iter(|| eval.evaluate_condition(black_box("$response.body.data.name == 'Alice'")))
     });
 
     group.finish();

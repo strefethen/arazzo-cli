@@ -62,14 +62,14 @@ workflows:
             field: "patched-value"
         successCriteria:
           - condition: $statusCode == 200
-          - condition: $response.body.method == "PATCH"
+          - condition: "$response.body.method == 'PATCH'"
         outputs:
           method: $response.body.method
       - stepId: delete-item
         operationPath: DELETE /anything
         successCriteria:
           - condition: $statusCode == 200
-          - condition: $response.body.method == "DELETE"
+          - condition: "$response.body.method == 'DELETE'"
         outputs:
           method: $response.body.method
     outputs:
