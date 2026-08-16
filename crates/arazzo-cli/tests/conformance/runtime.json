@@ -1,0 +1,112 @@
+{
+  "area": "runtime",
+  "claims": [
+    {
+      "id": "runtime.xpath-version-dispatch",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#criterion-object", "spec/arazzo/v1.1.0.html#selector-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "XPath Criterion and Selector evaluation uses an explicit supported-version dispatch boundary.",
+      "status": "deviation",
+      "owner": "ac-46638",
+      "reason": "XPath 1.0 hardening and version dispatch are owned by ac-46638."
+    },
+    {
+      "id": "runtime.retry-limit-and-failure-fallthrough",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#failure-action-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "An omitted retryLimit performs one retry and exhausted retry actions fall through in declaration order.",
+      "status": "deviation",
+      "owner": "ac-f2160",
+      "reason": "Retry default and failure-action fall-through are scheduled in ac-f2160."
+    },
+    {
+      "id": "runtime.typed-criterion-interpolation-and-null",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#runtime-expressions-in-conditions", "spec/arazzo/v1.1.0.html#condition-evaluation"],
+      "normativeLevels": ["MUST"],
+      "claim": "Typed Criterion conditions interpolate braced runtime expressions and fail on null or undefined context.",
+      "status": "deviation",
+      "owner": "ac-50846",
+      "reason": "Typed Criterion interpolation and null-context handling are scheduled in ac-50846."
+    },
+    {
+      "id": "runtime.criterion-evaluation-error-reporting",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#condition-evaluation"],
+      "normativeLevels": ["SHOULD"],
+      "claim": "Criterion evaluation errors remain failed and are reported through ordinary runtime traces.",
+      "status": "deviation",
+      "owner": "ac-1946c",
+      "reason": "Runtime trace reporting for Criterion evaluation errors is scheduled in ac-1946c."
+    },
+    {
+      "id": "runtime.implicit-step-output-dependencies",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#tool-behavior"],
+      "normativeLevels": ["MUST"],
+      "claim": "Local $steps output references become implicit Step dependencies before execution.",
+      "status": "deviation",
+      "owner": "ac-89176",
+      "reason": "Implicit Step dependency analysis is scheduled in ac-89176."
+    },
+    {
+      "id": "runtime.cross-scope-step-dependencies",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#step-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "Cross-workflow and external Step dependency references are classified and handled safely.",
+      "status": "deviation",
+      "owner": "ac-da7a0",
+      "reason": "Cross-scope Step reference classification and fail-closed behavior are scheduled in ac-da7a0."
+    },
+    {
+      "id": "runtime.spec-operation-path-rejection",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#stepOperationPath", "spec/arazzo/v1.1.0.html#resolving-uri-fragments"],
+      "normativeLevels": ["MUST"],
+      "claim": "Specification-form operationPath values fail visibly before a request when document routing is unavailable.",
+      "status": "failClosed",
+      "owner": "ac-95df9",
+      "reason": "The document-routing design that enables this form is owned by ac-95df9.",
+      "evidence": {
+        "negative": [
+          "crates/arazzo-runtime/tests/operation_path_forms.rs#unsupported_forms_fail_with_a_stable_code_and_plan_no_request"
+        ],
+        "zeroSideEffect": [
+          "crates/arazzo-runtime/tests/operation_path_forms.rs#unsupported_forms_fail_with_a_stable_code_and_plan_no_request"
+        ]
+      }
+    },
+    {
+      "id": "document.identity-and-reference-resolution",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#identity-based-referencing", "spec/arazzo/v1.1.0.html#establishing-the-base-uri"],
+      "normativeLevels": ["MUST"],
+      "claim": "Arazzo document identity, base URI, fragments, and anchors resolve under one explicit contract.",
+      "status": "unsupported",
+      "owner": "ac-95df9",
+      "reason": "The document identity and reference-resolution design is owned by ac-95df9."
+    },
+    {
+      "id": "runtime.source-qualified-operation-id-routing",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#stepOperationId"],
+      "normativeLevels": ["MUST"],
+      "claim": "Multiple source descriptions require source-qualified operationId routing without ambiguity.",
+      "status": "deviation",
+      "owner": "ac-c5105",
+      "reason": "Source-qualified operationId routing is scheduled in ac-c5105."
+    }
+  ]
+}

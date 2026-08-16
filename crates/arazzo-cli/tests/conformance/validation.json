@@ -1,0 +1,45 @@
+{
+  "area": "validation",
+  "claims": [
+    {
+      "id": "validation.parameter-context-and-identity",
+      "area": "validation",
+      "authority": "arazzoSpec",
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#parameter-object",
+        "spec/arazzo/v1.1.0.html#workflow-object",
+        "spec/arazzo/v1.1.0.html#step-object"
+      ],
+      "normativeLevels": ["MUST", "MUST NOT"],
+      "claim": "Workflow, Step, and action Parameter lists enforce their target context and duplicate identity rules.",
+      "status": "deviation",
+      "owner": "ac-8f39b",
+      "reason": "Parameter context and identity validation are scheduled in ac-8f39b."
+    },
+    {
+      "id": "validation.success-failure-action-fixed-fields",
+      "area": "validation",
+      "authority": "arazzoSpec",
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#success-action-object",
+        "spec/arazzo/v1.1.0.html#failure-action-object"
+      ],
+      "normativeLevels": ["REQUIRED", "MUST"],
+      "claim": "Success and Failure Action Objects enforce their distinct required and permitted fixed fields.",
+      "status": "deviation",
+      "owner": "ac-2e941",
+      "reason": "Action fixed-field validation is scheduled in ac-2e941."
+    },
+    {
+      "id": "validation.duplicate-action-identity",
+      "area": "validation",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#success-action-object", "spec/arazzo/v1.1.0.html#failure-action-object"],
+      "normativeLevels": ["MUST NOT"],
+      "claim": "Success and failure action lists reject duplicate actions under a settled specification identity rule.",
+      "status": "unsupported",
+      "owner": "ac-68f7d",
+      "reason": "The duplicate-action identity decision is owned by ac-68f7d."
+    }
+  ]
+}

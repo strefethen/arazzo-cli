@@ -1,0 +1,16 @@
+{
+  "area": "surfaces",
+  "claims": [
+    {
+      "id": "surfaces.cli-test-tap-junit-contract",
+      "area": "surfaces",
+      "authority": "repositoryContract",
+      "contractId": "repository.cli.test-output.tap-junit.v1",
+      "surface": "crates/arazzo-cli/tests/cli_integration.rs",
+      "claim": "The CLI test command preserves its TAP 13 and JUnit output contracts.",
+      "status": "deviation",
+      "owner": "ac-e5cd7",
+      "reason": "TAP and JUnit contract coverage is scheduled in ac-e5cd7."
+    }
+  ]
+}

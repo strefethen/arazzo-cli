@@ -1,0 +1,52 @@
+{
+  "area": "model",
+  "claims": [
+    {
+      "id": "model.version-grammar-feature-set",
+      "area": "model",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#versions"],
+      "normativeLevels": ["SHALL", "SHOULD NOT"],
+      "claim": "Arazzo version declarations use the supported major.minor feature set and ignore patch differences.",
+      "status": "deviation",
+      "owner": "ac-d15a3",
+      "reason": "Version syntax and feature-set validation are scheduled in ac-d15a3."
+    },
+    {
+      "id": "model.source-descriptor-wire-rules",
+      "area": "model",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#source-description-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "Source Description URL values preserve the specified wire rules and type remains optional.",
+      "status": "deviation",
+      "owner": "ac-d15a3",
+      "reason": "Source URL and optional type handling are scheduled in ac-d15a3."
+    },
+    {
+      "id": "model.required-any-value-presence",
+      "area": "model",
+      "authority": "arazzoSpec",
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#parameter-object",
+        "spec/arazzo/v1.1.0.html#payload-replacement-object"
+      ],
+      "normativeLevels": ["REQUIRED"],
+      "claim": "Required Parameter and Payload Replacement values distinguish omission from explicitly present Any values.",
+      "status": "deviation",
+      "owner": "ac-1e003",
+      "reason": "Wire-presence preservation is scheduled in ac-1e003."
+    },
+    {
+      "id": "model.lossless-json-schema-2020-12-inputs",
+      "area": "model",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#workflow-object", "spec/arazzo/v1.1.0.html#components-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "Workflow and reusable input schemas retain the JSON Schema 2020-12 forms required by Arazzo.",
+      "status": "unsupported",
+      "owner": "ac-93d90",
+      "reason": "The lossless JSON Schema 2020-12 design is owned by ac-93d90."
+    }
+  ]
+}

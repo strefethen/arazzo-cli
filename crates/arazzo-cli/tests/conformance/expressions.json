@@ -1,0 +1,38 @@
+{
+  "area": "expressions",
+  "claims": [
+    {
+      "id": "expr.simple-criterion-grammar",
+      "area": "expressions",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#simple-conditions"],
+      "normativeLevels": ["MUST"],
+      "claim": "Simple Criterion conditions accept only the Arazzo 1.1 literals and operators.",
+      "status": "deviation",
+      "owner": "ac-67bf5",
+      "reason": "Simple Criterion grammar enforcement is scheduled in ac-67bf5."
+    },
+    {
+      "id": "expr.typed-jsonpath-rejects-gjson",
+      "area": "expressions",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#criterion-object", "spec/arazzo/v1.1.0.html#selector-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "Typed JSONPath Criterion and Selector reads reject GJSON-only syntax.",
+      "status": "deviation",
+      "owner": "ac-a983f",
+      "reason": "Typed JSONPath read rejection is scheduled in ac-a983f."
+    },
+    {
+      "id": "expr.decimal-retry-after-and-case-insensitive-simple-comparison",
+      "area": "expressions",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#failure-action-object", "spec/arazzo/v1.1.0.html#criterion-object"],
+      "normativeLevels": ["SHALL", "MUST"],
+      "claim": "retryAfter accepts decimal seconds and simple string comparisons are case insensitive.",
+      "status": "deviation",
+      "owner": "ac-80a8f",
+      "reason": "Decimal retryAfter and simple comparison semantics are owned by ac-80a8f."
+    }
+  ]
+}
