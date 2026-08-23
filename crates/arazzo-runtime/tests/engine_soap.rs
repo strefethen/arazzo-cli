@@ -446,3 +446,59 @@ async fn soap_xpath_criterion_failure() {
         "workflow should fail on XPath mismatch"
     );
 }
+
+/// Arazzo §5.8.11.4.4: an xpath criterion whose expression returns a boolean
+/// passes on `true` and fails on `false`. The failing half is the regression
+/// case — boolean results were stringified to "false" (a non-empty, truthy
+/// string) before the decision, so such criteria passed unconditionally.
+#[tokio::test]
+async fn soap_xpath_boolean_criterion_decides_step_outcome() {
+    let fault_response = r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <Fault><faultstring>Not found</faultstring></Fault>
+  </soap:Body>
+</soap:Envelope>"#;
+    let request = r#"<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><GetCustomer><CustomerId>999</CustomerId></GetCustomer></soap:Body>
+</soap:Envelope>"#;
+
+    let make_boolean_spec = |workflow_id: &str, criterion: &str| {
+        make_spec(vec![Workflow {
+            workflow_id: workflow_id.to_string(),
+            steps: vec![soap_step("get", "GetCustomer", request, criterion, vec![])],
+            ..Workflow::default()
+        }])
+    };
+
+    // The Fault response holds no GetCustomerResponse: the expression
+    // returns boolean false and the step must fail its criteria.
+    let server = start_server(move |_method, _url, _headers, _body| xml_response(fault_response));
+    let engine = new_test_engine(
+        &server.base_url,
+        make_boolean_spec("soap-bool-false", "count(//GetCustomerResponse) > 0"),
+    );
+    let result = engine
+        .execute_collect("soap-bool-false", BTreeMap::new())
+        .await;
+    assert!(
+        result.outputs.is_err(),
+        "a false boolean xpath criterion must fail the step"
+    );
+
+    // The same response satisfies a boolean expression over the Fault node.
+    let server = start_server(move |_method, _url, _headers, _body| xml_response(fault_response));
+    let engine = new_test_engine(
+        &server.base_url,
+        make_boolean_spec("soap-bool-true", "count(//Fault) = 1"),
+    );
+    let result = engine
+        .execute_collect("soap-bool-true", BTreeMap::new())
+        .await;
+    assert!(
+        result.outputs.is_ok(),
+        "a true boolean xpath criterion must pass the step: {:?}",
+        result.outputs
+    );
+}

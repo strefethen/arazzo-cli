@@ -14,6 +14,13 @@ static NS_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub(crate) struct XPathSelection {
     pub value: Value,
     pub match_count: usize,
+    /// Effective boolean value of the raw XPath result, taken before the
+    /// result is normalized into `value`. Arazzo §5.8.11.4.4 defines
+    /// criterion pass/fail in exactly these terms: a boolean is itself, a
+    /// number passes when non-zero (NaN fails), a string passes when
+    /// non-empty, and a node-set passes when it holds at least one node —
+    /// even if that node's text content is empty.
+    pub truthy: bool,
 }
 
 pub(crate) fn select_xpath(body: &[u8], expr: &str) -> Result<XPathSelection, String> {
@@ -28,15 +35,22 @@ pub(crate) fn select_xpath(body: &[u8], expr: &str) -> Result<XPathSelection, St
         .evaluate(&doc, root, expr)
         .map_err(|err| format!("invalid XPath selector {expr:?}: {err}"))?;
 
-    let selection = match selected {
-        uppsala::XPathValue::String(s) => XPathSelection {
-            match_count: usize::from(!s.is_empty()),
-            value: if s.is_empty() {
-                Value::Null
-            } else {
-                Value::String(s)
-            },
-        },
+    // XPath 1.0 boolean coercion matches the §5.8.11.4.4 truth table arm
+    // for arm; capture it from the typed result before normalization below
+    // erases the boolean/number distinction (both become strings).
+    let truthy = selected.to_boolean();
+    let (value, match_count) = match selected {
+        uppsala::XPathValue::String(s) => {
+            let match_count = usize::from(!s.is_empty());
+            (
+                if s.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(s)
+                },
+                match_count,
+            )
+        }
         uppsala::XPathValue::NodeSet(nodes) => {
             let match_count = nodes.len();
             let mut values = nodes
@@ -55,25 +69,16 @@ pub(crate) fn select_xpath(body: &[u8], expr: &str) -> Result<XPathSelection, St
                 1 => values.pop().unwrap_or(Value::Null),
                 _ => Value::Array(values),
             };
-            XPathSelection { value, match_count }
+            (value, match_count)
         }
-        uppsala::XPathValue::Number(n) => {
-            let s = n.to_string();
-            XPathSelection {
-                match_count: usize::from(!s.is_empty()),
-                value: if s.is_empty() {
-                    Value::Null
-                } else {
-                    Value::String(s)
-                },
-            }
-        }
-        uppsala::XPathValue::Boolean(b) => XPathSelection {
-            value: Value::String(b.to_string()),
-            match_count: 1,
-        },
+        uppsala::XPathValue::Number(n) => (Value::String(n.to_string()), 1),
+        uppsala::XPathValue::Boolean(b) => (Value::String(b.to_string()), 1),
     };
-    Ok(selection)
+    Ok(XPathSelection {
+        value,
+        match_count,
+        truthy,
+    })
 }
 
 pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
@@ -122,5 +127,51 @@ mod tests {
 
         let invalid_selector = selection_error(b"<items/>", "//[");
         assert!(invalid_selector.contains("invalid XPath selector"));
+    }
+
+    /// §5.8.11.4.4 truth table, arm by arm. The negative half of each pair is
+    /// the regression case: booleans and numbers used to be stringified before
+    /// the truthiness decision, so `false` and `0` (non-empty strings) passed.
+    #[test]
+    fn select_xpath_effective_boolean_value_follows_the_criterion_truth_table() {
+        let xml = b"<items><item>one</item><item>two</item><empty/></items>";
+
+        // boolean: itself
+        assert!(selected(xml, "count(//item) = 2").truthy);
+        assert!(!selected(xml, "count(//item) = 3").truthy);
+        assert!(!selected(xml, "not(//item)").truthy);
+
+        // number: non-zero passes, zero and NaN fail
+        assert!(selected(xml, "count(//item)").truthy);
+        assert!(!selected(xml, "count(//missing)").truthy);
+        assert!(!selected(xml, "number('not-a-number')").truthy);
+
+        // string: non-empty passes, empty fails
+        assert!(selected(xml, "string(//item[1])").truthy);
+        assert!(!selected(xml, "string(//missing)").truthy);
+
+        // node-set: at least one node passes, even with empty text content
+        assert!(selected(xml, "//item").truthy);
+        assert!(!selected(xml, "//missing").truthy);
+        let empty_text_node = selected(xml, "//empty");
+        assert_eq!(empty_text_node.value, Value::Null);
+        assert_eq!(empty_text_node.match_count, 1);
+        assert!(empty_text_node.truthy);
+    }
+
+    /// The normalized `value` deliberately keeps its stringly XPath 1.0
+    /// string() form for scalars — outputs, selectors, and debugger watches
+    /// consume it and their contract is unchanged by the truthiness fix.
+    #[test]
+    fn select_xpath_scalar_values_stay_stringly_after_the_truthiness_fix() {
+        let xml = b"<items><item>one</item><item>two</item></items>";
+
+        let boolean = selected(xml, "count(//item) = 3");
+        assert_eq!(boolean.value, json!("false"));
+        assert_eq!(boolean.match_count, 1);
+
+        let number = selected(xml, "count(//item)");
+        assert_eq!(number.value, json!("2"));
+        assert_eq!(number.match_count, 1);
     }
 }

@@ -101,7 +101,11 @@ pub(crate) fn evaluate_criterion_detailed(
             };
             context_value = Value::String(xml_text.clone());
             match select_xpath(xml_text.as_bytes(), &criterion.condition) {
-                Ok(selection) => is_truthy(&selection.value),
+                // §5.8.11.4.4: the criterion passes on the effective boolean
+                // value of the raw XPath result, not on the truthiness of the
+                // normalized selection value — `false` and `0` stringify to
+                // non-empty strings and must still fail.
+                Ok(selection) => selection.truthy,
                 Err(message) => {
                     error = Some(message);
                     false
@@ -255,5 +259,41 @@ mod tests {
         };
         assert!(!error.is_empty());
         assert!(error.contains("unsupported JSONPath"), "got: {error}");
+    }
+
+    /// §5.8.11.4.4 at the criterion decision point. The falsy boolean and
+    /// zero-number cases are the regression proof: both previously passed
+    /// unconditionally because the result was stringified ("false", "0")
+    /// before the truthiness check.
+    #[test]
+    fn xpath_criteria_follow_the_spec_truth_table() {
+        let xml = "<root><pets><pet>dog</pet></pets><empty/></root>";
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!(xml)),
+            ..EvalContext::default()
+        });
+        let cache = RegexCache::new();
+        let matched = |condition: &str| {
+            let criterion = SuccessCriterion {
+                condition: condition.to_string(),
+                context: "$response.body".to_string(),
+                type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+                ..SuccessCriterion::default()
+            };
+            evaluate_criterion_detailed(&criterion, &eval, None, &cache).matched
+        };
+
+        // boolean results decide the criterion directly
+        assert!(matched("count(//pet) = 1"));
+        assert!(!matched("count(//pet) > 1"));
+        assert!(!matched("not(//pet)"));
+
+        // number results: non-zero passes, zero fails
+        assert!(matched("count(//pet)"));
+        assert!(!matched("count(//missing)"));
+
+        // node-set with at least one node passes even when its text is empty
+        assert!(matched("//empty"));
+        assert!(!matched("//missing"));
     }
 }
