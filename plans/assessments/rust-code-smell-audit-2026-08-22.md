@@ -180,6 +180,20 @@ let method = if has_body { "POST" } else { "GET" };
   covers only the runtime and validate surfaces — neither copy is inside its scope.
 - **Notes / what to verify:** The MCP copy is the one an agent reads to decide what a
   workflow does, so the divergence is user-visible in the highest-trust surface.
+- **Remediated 2026-08-23 (working tree):** both private parsers are deleted.
+  `arazzo-spec::operation_path` gains `presented_method_and_target`, which
+  derives (method, target) the way the runtime does: case-sensitive method
+  token via `split_operation_method`, engine-identical `POST`/`GET` body
+  default, and — because the engine refuses the unsupported specification form
+  before deriving a method — no invented method for those values
+  (`method: null`, target shown verbatim; the schemas already declared
+  `method` nullable). CLI `parse_step_target` and MCP `parse_step_target`
+  both route through it. Pinned by a presentation table test in
+  `operation_path.rs`, `output.rs`'s first unit tests (`build_step_info`),
+  and an MCP `build_step_summary` test. `emit_step_list` now renders a
+  method-less target instead of `---`. Residual (accepted): the trivial
+  `ParsedStepTarget` variant-unpacking struct still exists in both crates —
+  it no longer contains parsing.
 
 ### F6 — Expression diagnostics inside `{$…}` interpolated strings are discarded, and bare `$Ident` text is deleted
 

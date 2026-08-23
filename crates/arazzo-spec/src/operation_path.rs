@@ -114,6 +114,31 @@ pub fn split_operation_method(operation_path: &str) -> (&str, &str) {
     ("", operation_path)
 }
 
+/// The method and target text a `describe`-style surface presents for an
+/// `operationPath` it will not resolve.
+///
+/// Derives the pair the way the runtime derives them instead of re-parsing:
+/// the method token comes from [`split_operation_method`] (case-sensitive —
+/// `get /pets` carries no method token and is all target), and an absent
+/// token falls back to `POST` when the step carries a request body and `GET`
+/// otherwise, exactly as the engine defaults. The runtime refuses the
+/// unsupported specification form before it derives a method, so for that
+/// form no default is invented — only an explicitly written token is
+/// reported. The target is the text after the method token, unresolved.
+pub fn presented_method_and_target(operation_path: &str, has_body: bool) -> (Option<&str>, &str) {
+    let (token, target) = split_operation_method(operation_path);
+    let explicit = (!token.is_empty()).then_some(token);
+    let method = if matches!(
+        classify_remainder(target),
+        OperationPathForm::Unsupported(_)
+    ) {
+        explicit
+    } else {
+        explicit.or(Some(if has_body { "POST" } else { "GET" }))
+    };
+    (method, target)
+}
+
 /// Classifies an `operationPath` into the method it names and the form it takes.
 pub fn classify_operation_path(operation_path: &str) -> ClassifiedOperationPath<'_> {
     let (method, remainder) = split_operation_method(operation_path);
@@ -325,5 +350,54 @@ mod tests {
             classify_operation_path("{petstore}/pets").form,
             OperationPathForm::BasePath("{petstore}/pets")
         );
+    }
+
+    /// One row per presentation shape. The lowercase-verb and specification
+    /// form rows are the negative cases: the CLI and MCP describe surfaces
+    /// used to carry their own uppercasing, method-inventing parser, so
+    /// `get /pets` displayed a target the runtime never resolves and the
+    /// unsupported form displayed a method the runtime never derives.
+    #[test]
+    fn presented_method_and_target_mirrors_runtime_derivation() {
+        const SPEC_FORM: &str = "{$sourceDescriptions.petstore.url}#/paths/~1pets/get";
+        let rows: &[(&str, bool, Option<&str>, &str)] = &[
+            // explicit method token
+            ("GET /pets", false, Some("GET"), "/pets"),
+            (
+                "POST {petstore}./pet",
+                true,
+                Some("POST"),
+                "{petstore}./pet",
+            ),
+            // absent token: the engine's body-presence default
+            ("/pets", false, Some("GET"), "/pets"),
+            ("/pets", true, Some("POST"), "/pets"),
+            ("{petstore}./pets", false, Some("GET"), "{petstore}./pets"),
+            (
+                "https://api.example.com/pets",
+                true,
+                Some("POST"),
+                "https://api.example.com/pets",
+            ),
+            // a lowercase verb is not a method token; the whole value is target
+            ("get /pets", false, Some("GET"), "get /pets"),
+            ("get /pets", true, Some("POST"), "get /pets"),
+            // the unsupported specification form never gets an invented method
+            (SPEC_FORM, false, None, SPEC_FORM),
+            (SPEC_FORM, true, None, SPEC_FORM),
+            (
+                "GET {$sourceDescriptions.petstore.url}#/paths/~1pets/get",
+                false,
+                Some("GET"),
+                SPEC_FORM,
+            ),
+        ];
+        for (input, has_body, method, target) in rows {
+            assert_eq!(
+                presented_method_and_target(input, *has_body),
+                (*method, *target),
+                "presentation for {input:?} (has_body: {has_body})"
+            );
+        }
     }
 }

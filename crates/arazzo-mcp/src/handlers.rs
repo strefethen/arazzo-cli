@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
-use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
+use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
 use crate::state::ServerState;
@@ -112,10 +112,10 @@ struct ParsedStepTarget {
 fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
-            let (method, url) = parse_operation_path(path, step.request_body.is_some());
+            let (method, target) = presented_method_and_target(path, step.request_body.is_some());
             ParsedStepTarget {
-                method: Some(method),
-                url: Some(url),
+                method: method.map(str::to_string),
+                url: Some(target.to_string()),
                 ..ParsedStepTarget::default()
             }
         }
@@ -133,20 +133,6 @@ fn parse_step_target(step: &Step) -> ParsedStepTarget {
         },
         None => ParsedStepTarget::default(),
     }
-}
-
-fn parse_operation_path(path: &str, has_body: bool) -> (String, String) {
-    let known = [
-        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE",
-    ];
-    if let Some((first, rest)) = path.split_once(' ') {
-        let upper = first.to_uppercase();
-        if known.contains(&upper.as_str()) {
-            return (upper, rest.to_string());
-        }
-    }
-    let method = if has_body { "POST" } else { "GET" };
-    (method.to_string(), path.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +502,76 @@ pub fn generate_example(args: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::{build_sources, build_step_summary};
+
+    fn step_with_operation_path(yaml_step: &str) -> arazzo_spec::Step {
+        let yaml = format!(
+            r#"
+arazzo: "1.1.0"
+info:
+  title: Target Summary
+  version: "1.0.0"
+sourceDescriptions:
+  - name: petstore
+    type: openapi
+    url: https://example.com/openapi.yaml
+workflows:
+  - workflowId: inspect
+    steps:
+{yaml_step}
+"#
+        );
+        let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
+            Ok(spec) => spec,
+            Err(err) => panic!("target summary fixture should parse: {err}"),
+        };
+        spec.workflows[0].steps[0].clone()
+    }
+
+    /// Step summaries derive method and target through the canonical
+    /// classifier, so what an MCP client reads is what the runtime resolves.
+    /// The lowercase-verb and specification-form rows are the regression
+    /// cases: a private parser here used to uppercase `get` into a method
+    /// and invent a method for values the runtime refuses to resolve.
+    #[test]
+    fn step_summary_method_and_url_agree_with_the_runtime() {
+        let lowercase = build_step_summary(&step_with_operation_path(
+            "      - stepId: s
+        operationPath: 'get /pets'",
+        ));
+        assert_eq!(
+            lowercase.get("method").and_then(serde_json::Value::as_str),
+            Some("GET")
+        );
+        assert_eq!(
+            lowercase.get("url").and_then(serde_json::Value::as_str),
+            Some("get /pets")
+        );
+
+        let spec_form = build_step_summary(&step_with_operation_path(
+            "      - stepId: s
+        operationPath: '{$sourceDescriptions.petstore.url}#/paths/~1pets/get'",
+        ));
+        assert_eq!(spec_form.get("method"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            spec_form.get("url").and_then(serde_json::Value::as_str),
+            Some("{$sourceDescriptions.petstore.url}#/paths/~1pets/get")
+        );
+
+        let source_routed = build_step_summary(&step_with_operation_path(
+            "      - stepId: s
+        operationPath: 'POST {petstore}./pets'",
+        ));
+        assert_eq!(
+            source_routed
+                .get("method")
+                .and_then(serde_json::Value::as_str),
+            Some("POST")
+        );
+        assert_eq!(
+            source_routed.get("url").and_then(serde_json::Value::as_str),
+            Some("{petstore}./pets")
+        );
+    }
 
     #[test]
     fn step_summary_exposes_async_metadata_without_http_defaults() {

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord, TransportWarning};
-use arazzo_spec::{ArazzoSpec, Step, StepTarget, Workflow};
+use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Diagnostic, Error as ValidateError};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -743,9 +743,9 @@ pub fn build_workflow_info(wf: &Workflow) -> WorkflowInfo {
 
 /// Extract method and URL from a step's target using static analysis only.
 ///
-/// `OperationPath` strings like `"POST /post"` are split on the first space.
-/// If no explicit HTTP verb is found, the method defaults to `GET` (no body)
-/// or `POST` (has body).
+/// `operationPath` values route through the canonical
+/// [`arazzo_spec::presented_method_and_target`], so the method and target
+/// shown here are the ones the runtime derives — never a private re-parse.
 #[derive(Default)]
 struct ParsedStepTarget {
     method: Option<String>,
@@ -758,10 +758,10 @@ struct ParsedStepTarget {
 fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
-            let (method, url) = parse_operation_path(path, step.request_body.is_some());
+            let (method, target) = presented_method_and_target(path, step.request_body.is_some());
             ParsedStepTarget {
-                method: Some(method),
-                url: Some(url),
+                method: method.map(str::to_string),
+                url: Some(target.to_string()),
                 ..ParsedStepTarget::default()
             }
         }
@@ -779,20 +779,6 @@ fn parse_step_target(step: &Step) -> ParsedStepTarget {
         },
         None => ParsedStepTarget::default(),
     }
-}
-
-fn parse_operation_path(path: &str, has_body: bool) -> (String, String) {
-    let known_methods = [
-        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE",
-    ];
-    if let Some((first, rest)) = path.split_once(' ') {
-        let upper = first.to_uppercase();
-        if known_methods.contains(&upper.as_str()) {
-            return (upper, rest.to_string());
-        }
-    }
-    let method = if has_body { "POST" } else { "GET" };
-    (method.to_string(), path.to_string())
 }
 
 pub fn build_step_info(step: &Step, position: usize) -> StepInfo {
@@ -851,6 +837,10 @@ pub fn emit_step_list(spec_file: &str, workflow: &Workflow, json: bool) -> Resul
     for info in &steps {
         let target = if let (Some(m), Some(u)) = (&info.method, &info.url) {
             format!("{m} {u}")
+        } else if let Some(u) = &info.url {
+            // The unsupported specification form has a target but no derived
+            // method; show the value rather than hiding the step.
+            u.clone()
         } else if let Some(wf) = &info.referenced_workflow {
             format!("workflow:{wf}")
         } else if let Some(channel) = &info.channel_path {
@@ -866,4 +856,42 @@ pub fn emit_step_list(spec_file: &str, workflow: &Workflow, json: bool) -> Resul
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(operation_path: &str, has_body: bool) -> Step {
+        Step {
+            step_id: "s".to_string(),
+            target: Some(StepTarget::OperationPath(operation_path.to_string())),
+            request_body: has_body.then(arazzo_spec::RequestBody::default),
+            ..Step::default()
+        }
+    }
+
+    /// `describe`/`list` derive method and target through the canonical
+    /// classifier. The lowercase-verb and specification-form rows are the
+    /// regression cases: a private parser here used to uppercase `get` into
+    /// a method and invent one for values the runtime refuses to resolve.
+    #[test]
+    fn step_info_method_and_url_agree_with_the_runtime() {
+        let info = build_step_info(&step("get /pets", false), 0);
+        assert_eq!(info.method.as_deref(), Some("GET"));
+        assert_eq!(info.url.as_deref(), Some("get /pets"));
+
+        let info = build_step_info(&step("get /pets", true), 0);
+        assert_eq!(info.method.as_deref(), Some("POST"));
+        assert_eq!(info.url.as_deref(), Some("get /pets"));
+
+        let spec_form = "{$sourceDescriptions.petstore.url}#/paths/~1pets/get";
+        let info = build_step_info(&step(spec_form, true), 0);
+        assert_eq!(info.method, None);
+        assert_eq!(info.url.as_deref(), Some(spec_form));
+
+        let info = build_step_info(&step("POST {petstore}./pets", false), 0);
+        assert_eq!(info.method.as_deref(), Some("POST"));
+        assert_eq!(info.url.as_deref(), Some("{petstore}./pets"));
+    }
 }
