@@ -122,16 +122,23 @@ fn evaluate_criterion_modes() {
 fn evaluate_criterion_xpath_uses_context_and_condition() {
     let cache = RegexCache::new();
     let criterion = xpath_criterion("$response.body", "//item[1]/title");
+    let xml =
+        r#"<?xml version="1.0"?><rss><channel><item><title>Hello</title></item></channel></rss>"#;
     let response = Response {
-            status_code: 200,
-            headers: BTreeMap::new(),
-            body: br#"<?xml version="1.0"?><rss><channel><item><title>Hello</title></item></channel></rss>"#
-                .to_vec(),
-            body_json: None,
-            content_type: ContentType::Xml,
-            redirects: Vec::new(),
-        };
-    let eval = ExpressionEvaluator::new(EvalContext::default());
+        status_code: 200,
+        headers: BTreeMap::new(),
+        body: xml.as_bytes().to_vec(),
+        body_json: None,
+        content_type: ContentType::Xml,
+        redirects: Vec::new(),
+    };
+    // Mirror engine wiring (state.rs eval_context): non-JSON bodies reach
+    // $response.body as raw text. A null context must fail per §5.8.11.4.4,
+    // so the context expression has to resolve for this criterion to pass.
+    let eval = ExpressionEvaluator::new(EvalContext {
+        response_body: Some(Value::String(xml.to_string())),
+        ..EvalContext::default()
+    });
 
     assert!(evaluate_criterion(
         &criterion,
