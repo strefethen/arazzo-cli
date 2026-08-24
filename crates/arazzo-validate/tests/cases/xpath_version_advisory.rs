@@ -134,6 +134,71 @@ fn criterion_declared_non_10_versions_warn_with_the_declared_token() {
     }
 }
 
+/// Selector Objects and `targetSelectorType` have no Arazzo 1.0.x
+/// vocabulary — the constructs arrived in 1.1 — so a pre-1.1 advisory at
+/// those sites names no versioning object (the "Criterion Expression Type
+/// Object" applies only to criteria) and claims no spec default, while
+/// still naming the rejection and the `xpath-10` remedy.
+#[test]
+fn pre_1_1_selector_sites_name_no_versioning_object() {
+    let yaml = r#"arazzo: 1.0.1
+info:
+  title: Pre-1.1 selector advisory
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: https://api.example.com/openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationId: doThing
+        requestBody:
+          contentType: application/xml
+          replacements:
+            - target: //id
+              targetSelectorType: xpath
+              value: '42'
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          node:
+            context: $response.body
+            selector: //node
+            type: xpath
+"#;
+
+    let (advisories, others) = advisories(yaml);
+    assert_eq!(others, vec![], "unrelated warnings must not appear");
+    assert_eq!(advisories.len(), 2, "{advisories:?}");
+
+    for warning in &advisories {
+        let message = &warning.message;
+        // "Criterion Expression Type Object" contains "Expression Type
+        // Object", so this single assertion excludes both object names.
+        assert!(
+            !message.contains("Expression Type Object"),
+            "a pre-1.1 selector-site advisory must name no versioning object: {message}"
+        );
+        assert!(
+            !message.contains("xpath-31") && !message.contains("XML Path Language 3.1"),
+            "a pre-1.1 selector-site advisory must claim no spec default: {message}"
+        );
+        for expected in [
+            "without a version",
+            "rejects the omitted form before evaluation",
+            "declare version \"xpath-10\"",
+            "XPath 1.0 engine",
+        ] {
+            assert!(
+                message.contains(expected),
+                "missing {expected:?} in: {message}"
+            );
+        }
+    }
+}
+
 /// Every declaration site funnels through the same advisory: step and
 /// workflow outputs (Selector Objects), step parameter values, request-body
 /// payload selectors, replacement `targetSelectorType` in both forms,

@@ -2669,6 +2669,8 @@ struct ExpressionTypeRules {
     allowed_object_types: &'static [&'static str],
     object_types_label: &'static str,
     kind: ValidationErrorKind,
+    /// Site identity for the xpath advisory's pre-1.1 wording.
+    advisory_site: xpath_advisory::XpathSite,
 }
 
 const SELECTOR_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
@@ -2677,6 +2679,7 @@ const SELECTOR_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
     allowed_object_types: &["jsonpath", "xpath", "jsonpointer"],
     object_types_label: "jsonpath, xpath, or jsonpointer",
     kind: ValidationErrorKind::InvalidSelectorType,
+    advisory_site: xpath_advisory::XpathSite::Selector,
 };
 
 const CRITERION_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
@@ -2685,6 +2688,7 @@ const CRITERION_TYPE_RULES: ExpressionTypeRules = ExpressionTypeRules {
     allowed_object_types: &["jsonpath", "xpath"],
     object_types_label: "jsonpath or xpath",
     kind: ValidationErrorKind::InvalidCriterionType,
+    advisory_site: xpath_advisory::XpathSite::Criterion,
 };
 
 /// Arazzo v1.1.0 §5.8.12.1 version table, one accepted set for every site
@@ -2729,6 +2733,7 @@ fn validate_expression_type(
                     base_path,
                     None,
                     arazzo_version,
+                    rules.advisory_site,
                 ));
             }
         }
@@ -2777,6 +2782,7 @@ fn validate_expression_type(
                     base_path,
                     Some(version),
                     arazzo_version,
+                    rules.advisory_site,
                 ));
             }
         }
@@ -3917,6 +3923,10 @@ workflows:
             (
                 ValidationErrorKind::UnsupportedOperationPath,
                 "unsupportedOperationPath",
+            ),
+            (
+                ValidationErrorKind::UnsupportedXpathVersion,
+                "unsupportedXpathVersion",
             ),
             (ValidationErrorKind::InvalidIdentifier, "invalidIdentifier"),
             (ValidationErrorKind::UnknownField, "unknownField"),
