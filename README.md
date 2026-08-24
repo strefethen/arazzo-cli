@@ -405,7 +405,7 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `reference: $components.parameters.<name>` on a Parameter | Named parameter component, via a Reusable Object's `reference` field |
 | `reference: $components.successActions\|failureActions.<name>` on an action | Resolves the named action component (the specification's Reusable Object form); `value` is ignored for actions |
 | `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; retained for compatibility and overridden by `reference` when both are present |
-| `//xpath/expression` (**arazzo-cli extension**, retained legacy form) | XML/HTML extraction — prefer the [Selector Object](#arazzo-11-selector-objects) form (`type: xpath`) for new workflows |
+| `//xpath/expression` (**arazzo-cli extension**, retained legacy form) | XML/HTML extraction — prefer the [Selector Object](#arazzo-11-selector-objects) form (`type: {type: xpath, version: xpath-10}`) for new workflows |
 
 **Not implemented:**
 - `$response.query.<name>` and `$response.path.<name>` are listed by the specification but not resolved by arazzo-cli — they evaluate to `null`. Only `$response.header.<name>` and `$response.body...` are supported on `$response`.
@@ -433,11 +433,11 @@ outputs:
       version: rfc9535
 ```
 
-`type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `10` / `20` / `30` / `31`. Runtime XPath execution currently supports XPath 1.0 (`10`); later XPath versions are preserved and validated but resolve to `null` with a visible unsupported-version diagnostic.
+`type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `xpath-10` / `xpath-20` / `xpath-30` / `xpath-31`. Runtime XPath execution requires an explicit `version: xpath-10`: every other declared version — and the bare `type: xpath` string form, whose omitted version the specification defaults to `xpath-31` — validates as document metadata but is rejected before evaluation. A rejected criterion fails its step with an error; a rejected selector resolves to `null` with one warning; a rejected replacement leaves the body unchanged with one warning. Note the cliff this creates: `validate` accepts a document whose XPath usage omits the version, and `run` then rejects that usage at evaluation time.
 
 All selector callers use the same selection engine. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in traversal/document order. Invalid syntax, unsupported runtime versions, and zero matches produce trace or dry-run warnings. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
 
-For XPath outputs specifically, prefer the Selector Object form (`type: xpath`) shown above over the bare `//xpath/expression` value in the table above — the Selector Object is the specification-conformant 1.1 form; the bare form is a retained arazzo-cli extension kept for compatibility with older workflows.
+For XPath outputs specifically, prefer the Selector Object form with an explicit version (`type: {type: xpath, version: xpath-10}`) over the bare `//xpath/expression` value in the table above — the Selector Object is the specification-conformant 1.1 form; the bare form is a retained arazzo-cli extension kept for compatibility with older workflows.
 
 ### Specification Conformance: Extensions and Gaps
 
@@ -448,7 +448,7 @@ arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.or
 | Construct | Specification-conformant alternative |
 |---|---|
 | `$env.VAR_NAME` | None — not a specification expression source. See the [security note](#env-file-support). |
-| Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: xpath` |
+| Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: {type: xpath, version: xpath-10}` |
 | `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
 | `sourceDescriptions[].url` read as an absolute request base URL | None implemented yet — fetching the document at that URL (the specification's reading of the field) is listed under "Not implemented" below |
 | `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's Reusable Object form; `name` is retained as an **arazzo-cli extension** for compatibility |
@@ -585,7 +585,7 @@ successCriteria:
 
 XPath criteria, Selector Objects, and payload replacements evaluate only with an explicit `version: xpath-10`. Every other §5.8.12.1 version token — and the omitted form, which the specification defaults to `xpath-31` — is rejected before evaluation, because this runtime implements XPath 1.0 and nothing else: a criterion fails with an error, a selector yields `null` with one warning, and a replacement leaves the body unchanged with one warning.
 
-Unprefixed XPath name tests match on local names, so `//customer/id` matches `<ns:customer><ns:id>` without namespace qualification — the response body is never rewritten. Prefixed expressions (`//ns:customer`) resolve against the document's root-scope namespace declarations, so two prefixes bound to different URIs are distinguishable; a document that uses an undeclared prefix is rejected as invalid XML.
+Unprefixed XPath name tests match on local names, so `//customer/id` matches `<ns:customer><ns:id>` without namespace qualification — the response body is never rewritten. Prefixed expressions (`//ns:customer`) resolve against the document's root-scope namespace declarations, so two prefixes bound to different URIs are distinguishable; a prefix not declared on the document element falls back to matching the prefix text literally. A document that uses an entirely undeclared prefix is rejected as invalid XML.
 
 ### JSONPath
 

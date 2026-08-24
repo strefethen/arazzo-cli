@@ -56,17 +56,22 @@ pub(crate) fn xpath_version_rejection(version: Option<&str>) -> Option<String> {
 /// element's non-empty in-scope prefix bindings are registered on the
 /// evaluator, so prefixed name tests resolve by namespace URI at root scope:
 /// equal local names under prefixes bound to different URIs are
-/// distinguishable, and two prefixes bound to one URI unify. XPath 1.0 has
-/// no default element namespace, so the empty prefix is never registered.
-fn xpath_backend(
-    body: &[u8],
+/// distinguishable, and two prefixes bound to one URI unify. A prefix that is
+/// not declared on the document element stays unregistered and falls back to
+/// uppsala's textual prefix matching. XPath 1.0 has no default element
+/// namespace, so the empty prefix is never registered.
+///
+/// The document borrows the caller's bytes — both entry points return only
+/// owned values, so nothing forces a deep-cloned `'static` document.
+fn xpath_backend<'a>(
+    body: &'a [u8],
     version: Option<&str>,
-) -> Result<(uppsala::Document<'static>, uppsala::XPathEvaluator), String> {
+) -> Result<(uppsala::Document<'a>, uppsala::XPathEvaluator), String> {
     if let Some(rejection) = xpath_version_rejection(version) {
         return Err(rejection);
     }
-    std::str::from_utf8(body).map_err(|err| format!("XML is not UTF-8: {err}"))?;
-    let mut doc = uppsala::parse_bytes(body).map_err(|err| format!("invalid XML: {err}"))?;
+    let text = std::str::from_utf8(body).map_err(|err| format!("XML is not UTF-8: {err}"))?;
+    let mut doc = uppsala::parse(text).map_err(|err| format!("invalid XML: {err}"))?;
     doc.prepare_xpath();
     let mut eval = uppsala::XPathEvaluator::new();
     if let Some(root) = doc.document_element() {
@@ -204,22 +209,20 @@ fn node_text(doc: &uppsala::Document<'_>, node: uppsala::NodeId) -> String {
 /// representation and fail visibly; the caller's EBV remains usable.
 fn finite_number_value(n: f64) -> Result<Value, String> {
     const MAX_LOSSLESS_INTEGER: f64 = 9_007_199_254_740_992.0; // 2^53
-    if !n.is_finite() {
-        return Err(format!(
-            "XPath number result {n} has no JSON representation"
-        ));
-    }
-    if n.fract() == 0.0 && n.abs() <= MAX_LOSSLESS_INTEGER {
+    if n.is_finite() && n.fract() == 0.0 && n.abs() <= MAX_LOSSLESS_INTEGER {
         return Ok(Value::from(n as i64));
     }
+    // `from_f64` returns `None` exactly for non-finite input, so this is the
+    // one decision point for the fail-visibly contract.
     serde_json::Number::from_f64(n)
         .map(Value::Number)
         .ok_or_else(|| format!("XPath number result {n} has no JSON representation"))
 }
 
 /// Bare `//…` output and debugger watch extension: routed explicitly to the
-/// XPath 1.0 operation (ac-46638). Errors and non-representable numbers
-/// degrade to null, which is this extension's existing contract.
+/// XPath 1.0 operation (ac-46638). Errors degrade to null, the extension's
+/// existing contract; non-representable numbers now degrade to null too
+/// (they previously stringified as `"inf"`/`"NaN"`).
 pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
     select_xpath(body, expr, Some("xpath-10")).map_or(Value::Null, |selection| {
         selection.value.unwrap_or(Value::Null)
@@ -407,6 +410,18 @@ mod tests {
   <b:item>aliased</b:item>
 </root>"#;
         assert_eq!(value_of(&selected(aliased, "//a:item")), json!("aliased"));
+
+        // The discriminating case for URI resolution: a descendant re-binds
+        // the same prefix text to a different URI. Textual matching would
+        // return both elements; root-scope URI resolution returns only the
+        // element in the root binding's namespace.
+        let rebound: &[u8] = br#"<root xmlns:a="urn:one">
+  <a:item>one</a:item>
+  <inner xmlns:a="urn:two"><a:item>two</a:item></inner>
+</root>"#;
+        let scoped = selected(rebound, "//a:item");
+        assert_eq!(value_of(&scoped), json!("one"));
+        assert_eq!(scoped.match_count, 1);
     }
 
     /// A document using an undeclared namespace prefix is namespace-malformed

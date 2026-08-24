@@ -238,6 +238,13 @@ fn bench_header_lookup(c: &mut Criterion) {
 }
 
 /// Benchmark XPath extraction — parse XML + evaluate XPath expression.
+///
+/// Deliberate seam (ac-46638 review): these cases drive uppsala directly
+/// rather than the production `select_xpath`, which is `pub(crate)` and not
+/// reachable from a bench target. They measure the raw library baseline —
+/// borrow-parse + prepare + evaluate — which the production backend also
+/// uses; the production path adds only the version match and the root-scope
+/// prefix registration loop on top.
 fn bench_xpath_extraction(c: &mut Criterion) {
     let mut group = c.benchmark_group("xpath_extraction");
 

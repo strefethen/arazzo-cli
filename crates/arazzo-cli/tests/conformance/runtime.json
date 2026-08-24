@@ -13,8 +13,8 @@
       "normativeLevels": ["MUST"],
       "claim": "XPath Criterion and Selector evaluation applies the declared version semantics and uses the default version when no Expression Type Object is present.",
       "status": "deviation",
-      "owner": "ac-46638",
-      "reason": "XPath 1.0 hardening and version dispatch are owned by ac-46638."
+      "owner": "ac-d45cd",
+      "reason": "Version dispatch is delivered by ac-46638: explicit xpath-10 evaluates and every other declared or omitted version is rejected before evaluation. The residual deviation is the absence of an XPath 3.1 engine for the specification's omitted-version default, owned by ac-d45cd behind the ac-4c05c backend decision (epic ac-aeca8)."
     },
     {
       "id": "runtime.retry-limit-and-failure-fallthrough",
