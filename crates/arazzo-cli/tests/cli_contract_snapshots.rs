@@ -175,6 +175,28 @@ fn snapshot_list_json_contract() {
     assert_snapshot("list.json", &body);
 }
 
+/// Process-level pin of the presentation contract for the unsupported
+/// specification-form `operationPath`: the runtime refuses the value before it
+/// derives a method, so the step row carries the target verbatim and no
+/// `method` key at all (a `None` method is omitted, not serialized as null).
+#[test]
+fn snapshot_steps_unsupported_operation_path_json_contract() {
+    let output = run([
+        "--json",
+        "steps",
+        "testdata/unsupported-operation-path.arazzo.yaml",
+        "probe",
+    ]
+    .as_slice());
+    assert!(
+        output.status.success(),
+        "steps on a warning-only spec must exit 0; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = stdout_json(&output);
+    assert_snapshot("steps-unsupported-operation-path.json", &body);
+}
+
 #[test]
 fn snapshot_run_dry_run_json_contract() {
     let output = run([

@@ -100,6 +100,11 @@ fn build_step_summary(step: &Step) -> Value {
     summary
 }
 
+/// Extract method and URL from a step's target using static analysis only.
+///
+/// `operationPath` values route through the canonical
+/// [`arazzo_spec::presented_method_and_target`], so the method and target
+/// shown here are the ones the runtime derives — never a private re-parse.
 #[derive(Default)]
 struct ParsedStepTarget {
     method: Option<String>,

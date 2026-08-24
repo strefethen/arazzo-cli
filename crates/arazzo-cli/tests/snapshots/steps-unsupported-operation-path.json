@@ -1,0 +1,7 @@
+[
+  {
+    "stepId": "list-pets",
+    "url": "{$sourceDescriptions.petstore.url}#/paths/~1pets/get",
+    "position": 0
+  }
+]
