@@ -9,7 +9,7 @@
 Eleven deviations in the original pass, F1–F11 below. Two cause a conformant
 document to fail outright or silently misbehave; the rest are unenforced
 constraints, ignored fields, non-conformant output, and undocumented
-extensions. Later passes added F12–F17 — see the addenda at the end, which also
+extensions. Later passes added F12–F23 — see the addenda at the end, which also
 record which findings have since been closed.
 
 The single most important structural fact: **our `operationPath` idiom and our
@@ -690,3 +690,124 @@ because the specification requires the field but does not impose an
 at-least-one constraint. Typed `null` values remain parse errors. The shared
 parse boundary applies the diagnostics to CLI, test-runner, MCP, DAP, and
 runtime consumers without surface-specific changes.
+
+## Addendum — 2026-08-23 (criterion null-context handling)
+
+One further deviation plus a sibling in the same clause, found while
+re-examining the typed criterion arms after `301174a` (`fix: decide xpath
+criteria by effective boolean value`). Grounded in the vendored
+`spec/arazzo/v1.1.0.html` §5.8.11.4.2–§5.8.11.4.4 and reproduced against the
+CLI at `301174a` (local server serving
+`<root><pets><pet>dog</pet></pets></root>` as `pets.xml`).
+
+| # | Deviation | Severity | Surface |
+|---|---|---|---|
+| F22 | XPath criterion with null context falls back to the raw response body | P2 | runtime |
+| F23 | Regex criterion null context coerced to `""`; empty-matching patterns pass | P2 | runtime |
+
+### F22. XPath criterion null context falls back to the raw response body
+
+**Spec** (§5.8.11.4.4 XPath Conditions): *"If the `context` evaluates to
+`null` or `undefined`, or if the XPath expression is syntactically invalid,
+the condition MUST evaluate to *fail*."* The JSONPath section carries the
+identical rule (§5.8.11.4.3): *"If the `context` evaluates to `null` or
+`undefined`, or if the JSONPath expression is syntactically invalid, the
+condition MUST evaluate to fail."*
+
+**We did:** the xpath arm of `evaluate_criterion_detailed`
+(`crates/arazzo-runtime/src/runtime_core/criteria.rs`) treated a
+`Value::Null` context as a signal to evaluate the XPath against the raw
+response body (`String::from_utf8_lossy(&resp.body)`), so a criterion whose
+explicitly provided `context` resolved to nothing could still pass. The
+jsonpath arm already failed on a null context. The fallback predates the
+module split (`3cb8a48`) and predates `eval_context` exposing non-JSON bodies
+to `$response.body` as raw text
+(`crates/arazzo-runtime/src/runtime_core/state.rs:149-155`) — once that
+landed, the fallback was load-bearing only for the exact case the
+specification says must fail.
+
+**Observed** at `301174a` — an xpath criterion with
+`context: $response.body.missing` (a dot path into a string body, resolving
+to null) and `condition: count(//pet) > 0`, which the raw body satisfies:
+
+```
+$ arazzo-cli run nullctx.arazzo.yaml probe
+Workflow completed (no outputs)
+$ echo $?
+0
+```
+
+The criterion passed on a null context. After the fix, the same document and
+server:
+
+```
+$ arazzo-cli run nullctx.arazzo.yaml probe
+step fetch: success criteria not met (status=200, body=<root><pets><pet>dog</pet></pets></root>)
+$ echo $?
+1
+```
+
+**Scope note — default context.** The empty-context lenience path
+(`default_criterion_context`) is a distinct, deliberate code path and is not
+governed by the quoted sentence: the sentence constrains the provided
+`context` expression, and an xpath/jsonpath/regex criterion without `context`
+is already non-conforming input (*"and `context` MUST be provided"*, all
+three sections). The null check is nonetheless applied uniformly — matching
+the jsonpath arm, whose null check has always covered both paths — because a
+null default context implies an absent response, an empty body, or a literal
+JSON `null` body, for which the old fallback produced `""` or `"null"` and
+failed XML parsing anyway. No default-path pass/fail outcome changes.
+
+**F22 is closed** by the change this addendum ships with: the xpath arm now
+mirrors the jsonpath arm — a null context fails the criterion with no body
+fallback, and `context_value` stays `null` in trace/debug output instead of
+being rewritten to the fallback text. The negative test
+`xpath_null_context_fails_even_when_raw_body_would_match` pins the
+spec-surface case (valid matching XML body, null context, must fail);
+`jsonpath_null_context_fails` pins the model arm. One pre-existing test
+(`evaluate_criterion_xpath_uses_context_and_condition`) had accidentally
+pinned the fallback by building an `EvalContext` without `response_body` —
+corrected to mirror engine wiring, which always populates it from the
+response.
+
+**Recorded consequence — non-UTF-8 bodies now fail closed.** `eval_context`
+decodes the raw body **strictly** (`String::from_utf8(...).ok()`,
+`state.rs:152-155`), so a body that is not valid UTF-8 — e.g. ISO-8859-1 XML
+with accented characters — never reaches `$response.body`, and an explicit
+`context: $response.body` xpath criterion over such a response resolves to
+null and fails. The removed fallback used to lossy-decode those bytes, so a
+structural condition (`count(//pet)`) could previously pass with `U+FFFD`
+corruption in text content. Fail-closed is the deliberate stance (the fresh
+review flagged the silent change; it is now pinned by
+`xpath_explicit_context_over_non_utf8_body_fails_closed`). The open
+follow-up is a product decision, not a patch: whether `$response.body`
+should become charset-aware (honor the XML declaration / `Content-Type`
+charset) or lossy for undecodable bodies — lossy would extend degraded-mode
+decoding to every expression position, which is barred without explicit
+approval.
+
+### F23. Regex criterion null context coerced to `""`
+
+**Spec** (§5.8.11.4.2 Regex Conditions): *"If the `context` evaluates to
+`null` or `undefined`, the condition MUST evaluate to *fail*."*
+
+**We do:** the regex arm stringifies the context through `value_to_string`
+(`crates/arazzo-runtime/src/runtime_core/payload.rs:5-13`), which maps
+`Value::Null` to the empty string, then matches the pattern against `""`. Any
+empty-matching pattern — `^$`, `.*`, `\d*` — therefore passes on a null
+context.
+
+**Observed** — the same probe with `type: regex`, `condition: '^$'`, and
+`context: $response.body.missing`, run after F22 was closed (so this is the
+regex arm alone):
+
+```
+$ arazzo-cli run nullctx-regex.arazzo.yaml probe
+Workflow completed (no outputs)
+$ echo $?
+0
+```
+
+Recorded rather than fixed: the closure is the same one-guard shape as F22 (a
+null check ahead of the stringification), left as a follow-up to keep the F22
+change atomic.

@@ -91,32 +91,38 @@ pub(crate) fn evaluate_criterion_detailed(
             }
         }
         "xpath" => {
-            let xml_text = match &context_value {
-                Value::String(text) => text.clone(),
-                Value::Null => match response {
-                    Some(resp) => String::from_utf8_lossy(&resp.body).to_string(),
-                    None => String::new(),
-                },
-                other => other.to_string(),
-            };
-            context_value = Value::String(xml_text.clone());
-            // The declared version routes the evaluation (ac-46638): only
-            // explicit `xpath-10` reaches the engine; the omitted form and
-            // every other version fail the criterion with an error before
-            // evaluation.
-            match select_xpath(
-                xml_text.as_bytes(),
-                &criterion.condition,
-                criterion.declared_type_version(),
-            ) {
-                // §5.8.11.4.4: the criterion passes on the effective boolean
-                // value of the raw XPath result, not on the truthiness of the
-                // normalized selection value — `false` and `0` stringify to
-                // non-empty strings and must still fail.
-                Ok(selection) => selection.truthy,
-                Err(message) => {
-                    error = Some(message);
-                    false
+            // §5.8.11.4.4: a null/undefined context MUST fail the criterion,
+            // same as the jsonpath arm. No fallback to the raw response body:
+            // eval_context resolves $response.body to the raw text for
+            // XML/non-JSON responses (strict UTF-8 — an undecodable body
+            // yields null and fails closed here), so a null context means the
+            // expression resolved to nothing to evaluate against.
+            if context_value.is_null() {
+                false
+            } else {
+                let xml_text = match &context_value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                context_value = Value::String(xml_text.clone());
+                // The declared version routes the evaluation (ac-46638): only
+                // explicit `xpath-10` reaches the engine; the omitted form and
+                // every other version fail the criterion with an error before
+                // evaluation.
+                match select_xpath(
+                    xml_text.as_bytes(),
+                    &criterion.condition,
+                    criterion.declared_type_version(),
+                ) {
+                    // §5.8.11.4.4: the criterion passes on the effective boolean
+                    // value of the raw XPath result, not on the truthiness of the
+                    // normalized selection value — `false` and `0` stringify to
+                    // non-empty strings and must still fail.
+                    Ok(selection) => selection.truthy,
+                    Err(message) => {
+                        error = Some(message);
+                        false
+                    }
                 }
             }
         }
@@ -281,6 +287,100 @@ mod tests {
         };
         assert!(!error.is_empty());
         assert!(error.contains("unsupported JSONPath"), "got: {error}");
+    }
+
+    /// §5.8.11.4.4: "If the `context` evaluates to `null` or `undefined`, or
+    /// if the XPath expression is syntactically invalid, the condition MUST
+    /// evaluate to *fail*." The response body here is valid XML that matches
+    /// the condition, so this test proves the null context is not silently
+    /// replaced by the raw body before evaluation.
+    #[test]
+    fn xpath_null_context_fails_even_when_raw_body_would_match() {
+        let xml = "<root><pets><pet>dog</pet></pets></root>";
+        let response = Response {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body: xml.as_bytes().to_vec(),
+            body_json: None,
+            content_type: ContentType::Xml,
+            redirects: Vec::new(),
+        };
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!(xml)),
+            ..EvalContext::default()
+        });
+        let criterion = SuccessCriterion {
+            // A dot path into a string body has no match, so the explicitly
+            // provided context resolves to null.
+            context: "$response.body.missing".to_string(),
+            condition: "count(//pet) > 0".to_string(),
+            type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+            ..SuccessCriterion::default()
+        };
+
+        let evaluation =
+            evaluate_criterion_detailed(&criterion, &eval, Some(&response), &RegexCache::new());
+
+        assert!(!evaluation.matched);
+        assert!(evaluation.context_value.is_null());
+    }
+
+    /// A body that is not valid UTF-8 never reaches `$response.body`
+    /// (eval_context decodes strictly), so an explicit context over it
+    /// resolves to null and the criterion fails closed per §5.8.11.4.4 —
+    /// it must not fall back to lossy-decoding the raw bytes.
+    #[test]
+    fn xpath_explicit_context_over_non_utf8_body_fails_closed() {
+        // ISO-8859-1 XML: 0xE9 is `é` in Latin-1 but is not valid UTF-8.
+        let mut body = b"<root><pet>caf".to_vec();
+        body.push(0xE9);
+        body.extend_from_slice(b"</pet></root>");
+        let response = Response {
+            status_code: 200,
+            headers: BTreeMap::new(),
+            body,
+            body_json: None,
+            content_type: ContentType::Xml,
+            redirects: Vec::new(),
+        };
+        // Mirror engine wiring (state.rs eval_context): strict UTF-8
+        // decoding fails, so no $response.body value exists.
+        let decoded = String::from_utf8(response.body.clone()).ok();
+        assert!(decoded.is_none());
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: decoded.map(Value::String),
+            ..EvalContext::default()
+        });
+        let criterion = SuccessCriterion {
+            context: "$response.body".to_string(),
+            condition: "count(//pet)".to_string(),
+            type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+            ..SuccessCriterion::default()
+        };
+
+        let evaluation =
+            evaluate_criterion_detailed(&criterion, &eval, Some(&response), &RegexCache::new());
+
+        assert!(!evaluation.matched);
+        assert!(evaluation.context_value.is_null());
+    }
+
+    /// §5.8.11.4.3 states the same null-context rule for JSONPath; the
+    /// jsonpath arm is the model the xpath arm mirrors.
+    #[test]
+    fn jsonpath_null_context_fails() {
+        let criterion = SuccessCriterion {
+            context: "$response.body.missing".to_string(),
+            condition: "$.pets[*]".to_string(),
+            type_: Some(arazzo_spec::CriterionType::Name("jsonpath".to_string())),
+            ..SuccessCriterion::default()
+        };
+        let eval = ExpressionEvaluator::new(EvalContext::default());
+
+        let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
+
+        assert!(!evaluation.matched);
+        assert!(evaluation.context_value.is_null());
     }
 
     /// §5.8.11.4.4 at the criterion decision point. The falsy boolean and
