@@ -70,6 +70,8 @@ use arazzo_spec::{
 };
 use iri_string::types::UriReferenceStr;
 
+mod xpath_advisory;
+
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
 pub enum Error {
@@ -206,6 +208,13 @@ pub enum ValidationErrorKind {
     /// A specification-valid `operationPath` that this runtime cannot resolve.
     /// Warning severity: the document is conformant, the executor is not.
     UnsupportedOperationPath,
+    /// A specification-valid XPath `type`/`version` declaration that this
+    /// runtime will not execute: only an explicit `xpath-10` reaches the
+    /// XPath 1.0 engine, while the §5.8.12.1 table also allows `xpath-31`
+    /// (the omitted-version default), `xpath-30`, and `xpath-20`. Warning
+    /// severity, promoted to error only under `--strict`: the document is
+    /// conformant, the executor is not. See [`xpath_advisory`].
+    UnsupportedXpathVersion,
     /// A workflow/step `outputs` key or Components map key that violates the
     /// specification's `^[a-zA-Z0-9\.\-_]+$` MUST-level regular expression
     /// (error severity), or a `workflowId`/`stepId`/`sourceDescriptions[].name`
@@ -243,6 +252,7 @@ impl ValidationErrorKind {
             Self::InvalidCriterionType => "invalidCriterionType",
             Self::InvalidSelectorType => "invalidSelectorType",
             Self::UnsupportedOperationPath => "unsupportedOperationPath",
+            Self::UnsupportedXpathVersion => "unsupportedXpathVersion",
             Self::InvalidIdentifier => "invalidIdentifier",
             Self::UnknownField => "unknownField",
         }
@@ -1705,7 +1715,7 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
             validate_querystring_exclusivity(&parameter_context, &mut diagnostics);
             for (name, output) in &step.outputs {
                 let output_path = format!("{step_path}.outputs.{name}");
-                validate_output_value(&output_path, output, &mut diagnostics);
+                validate_output_value(&output_path, output, &spec.arazzo, &mut diagnostics);
                 if let Some(diag) = check_identifier(&output_path, name, IdentifierClass::DottedKey)
                 {
                     diagnostics.push(diag);
@@ -1721,12 +1731,14 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                     validate_value_source(
                         &format!("{step_path}.requestBody.payload"),
                         payload,
+                        &spec.arazzo,
                         &mut diagnostics,
                     );
                 }
                 validate_replacements(
                     &format!("{step_path}.requestBody.replacements"),
                     &request_body.replacements,
+                    &spec.arazzo,
                     &mut diagnostics,
                 );
             }
@@ -1735,6 +1747,7 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                 validate_criterion(
                     &format!("{step_path}.successCriteria[{criterion_idx}]"),
                     criterion,
+                    &spec.arazzo,
                     &mut diagnostics,
                 );
             }
@@ -1791,7 +1804,7 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
 
         for (name, output) in &wf.outputs {
             let output_path = format!("{path}.outputs.{name}");
-            validate_output_value(&output_path, output, &mut diagnostics);
+            validate_output_value(&output_path, output, &spec.arazzo, &mut diagnostics);
             validate_output_step_reference(&output_path, output, &step_ids, &mut diagnostics);
             if let Some(diag) = check_identifier(&output_path, name, IdentifierClass::DottedKey) {
                 diagnostics.push(diag);
@@ -2462,7 +2475,12 @@ fn validate_parameter(
             message: format!("{param_path}.name is required (unless using reference)"),
         });
     }
-    validate_value_source(&format!("{param_path}.value"), &param.value, diagnostics);
+    validate_value_source(
+        &format!("{param_path}.value"),
+        &param.value,
+        arazzo_version,
+        diagnostics,
+    );
 }
 
 fn validate_parameters(
@@ -2535,9 +2553,14 @@ fn validate_parameter_identities(
     }
 }
 
-fn validate_output_value(path: &str, output: &OutputValue, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_output_value(
+    path: &str,
+    output: &OutputValue,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     if let OutputValue::Selector(selector) = output {
-        validate_selector(path, selector, diagnostics);
+        validate_selector(path, selector, arazzo_version, diagnostics);
     }
 }
 
@@ -2564,14 +2587,22 @@ fn validate_output_step_reference(
     }
 }
 
-fn validate_value_source(path: &str, value: &ValueSource, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_value_source(
+    path: &str,
+    value: &ValueSource,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match value {
-        ValueSource::Selector(selector) => validate_selector(path, selector, diagnostics),
+        ValueSource::Selector(selector) => {
+            validate_selector(path, selector, arazzo_version, diagnostics)
+        }
         ValueSource::Literal(serde_yaml_ng::Value::Sequence(values)) => {
             for (index, value) in values.iter().enumerate() {
                 validate_value_source(
                     &format!("{path}[{index}]"),
                     &value.clone().into(),
+                    arazzo_version,
                     diagnostics,
                 );
             }
@@ -2579,14 +2610,24 @@ fn validate_value_source(path: &str, value: &ValueSource, diagnostics: &mut Vec<
         ValueSource::Literal(serde_yaml_ng::Value::Mapping(values)) => {
             for (key, value) in values {
                 let key = key.as_str().unwrap_or("<non-string-key>");
-                validate_value_source(&format!("{path}.{key}"), &value.clone().into(), diagnostics);
+                validate_value_source(
+                    &format!("{path}.{key}"),
+                    &value.clone().into(),
+                    arazzo_version,
+                    diagnostics,
+                );
             }
         }
         ValueSource::Literal(_) => {}
     }
 }
 
-fn validate_selector(path: &str, selector: &SelectorObject, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_selector(
+    path: &str,
+    selector: &SelectorObject,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     check_unknown_fields(path, &selector.extensions, diagnostics);
     if selector.context.trim().is_empty() {
         diagnostics.push(Diagnostic {
@@ -2611,6 +2652,7 @@ fn validate_selector(path: &str, selector: &SelectorObject, diagnostics: &mut Ve
         &format!("{path}.type"),
         &selector.type_,
         &SELECTOR_TYPE_RULES,
+        arazzo_version,
         diagnostics,
     );
 }
@@ -2669,6 +2711,7 @@ fn validate_expression_type(
     base_path: &str,
     selector_type: &SelectorType,
     rules: &ExpressionTypeRules,
+    arazzo_version: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match selector_type {
@@ -2681,6 +2724,12 @@ fn validate_expression_type(
                     path: base_path.to_string(),
                     message: format!("{base_path} must be one of {}", rules.names_label),
                 });
+            } else if normalized == "xpath" {
+                diagnostics.extend(xpath_advisory::unexecutable_xpath_version(
+                    base_path,
+                    None,
+                    arazzo_version,
+                ));
             }
         }
         SelectorType::ExpressionType(expression_type) => {
@@ -2723,6 +2772,12 @@ fn validate_expression_type(
                         "{base_path}.version {version:?} is not supported for {normalized}"
                     ),
                 });
+            } else if normalized == "xpath" {
+                diagnostics.extend(xpath_advisory::unexecutable_xpath_version(
+                    base_path,
+                    Some(version),
+                    arazzo_version,
+                ));
             }
         }
     }
@@ -2731,6 +2786,7 @@ fn validate_expression_type(
 fn validate_replacements(
     path_prefix: &str,
     replacements: &[arazzo_spec::Replacement],
+    arazzo_version: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (replacement_idx, replacement) in replacements.iter().enumerate() {
@@ -2753,12 +2809,14 @@ fn validate_replacements(
                 &format!("{path_prefix}[{replacement_idx}].targetSelectorType"),
                 selector_type,
                 &SELECTOR_TYPE_RULES,
+                arazzo_version,
                 diagnostics,
             );
         }
         validate_value_source(
             &format!("{path_prefix}[{replacement_idx}].value"),
             &replacement.value,
+            arazzo_version,
             diagnostics,
         );
     }
@@ -2820,6 +2878,7 @@ fn validate_actions(
             validate_criterion(
                 &format!("{action_path}.criteria[{criterion_idx}]"),
                 criterion,
+                arazzo_version,
                 diagnostics,
             );
         }
@@ -3123,7 +3182,12 @@ fn validate_action_parameters(
     );
 }
 
-fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mut Vec<Diagnostic>) {
+fn validate_criterion(
+    path: &str,
+    criterion: &SuccessCriterion,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     check_unknown_fields(path, &criterion.extensions, diagnostics);
     if criterion.condition.trim().is_empty() {
         diagnostics.push(Diagnostic {
@@ -3151,6 +3215,7 @@ fn validate_criterion(path: &str, criterion: &SuccessCriterion, diagnostics: &mu
         &format!("{path}.type"),
         type_,
         &CRITERION_TYPE_RULES,
+        arazzo_version,
         diagnostics,
     );
 }
