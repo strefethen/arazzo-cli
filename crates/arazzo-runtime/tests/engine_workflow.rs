@@ -59,23 +59,21 @@ async fn execute_response_header_expression() {
 }
 
 #[tokio::test]
-async fn execute_env_expression() {
-    std::env::set_var("ARAZZO_RUNTIME_TEST_TOKEN", "secret-42");
+async fn execute_inputs_expression_header() {
     let server = start_server(|_method, _url, headers, _body| {
         let auth = header_value(&headers, "Authorization").unwrap_or_default();
         MockHttpResponse::json(200, &format!(r#"{{"auth":"{auth}"}}"#))
     });
 
     let spec = make_spec(vec![Workflow {
-        workflow_id: "env-test".to_string(),
+        workflow_id: "inputs-header-test".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
             target: Some(StepTarget::OperationPath("/protected".to_string())),
             parameters: vec![arazzo_spec::Parameter {
                 name: "Authorization".to_string(),
                 in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("$env.ARAZZO_RUNTIME_TEST_TOKEN".to_string())
-                    .into(),
+                value: serde_yaml_ng::Value::String("$inputs.token".to_string()).into(),
                 ..arazzo_spec::Parameter::default()
             }],
             success_criteria: success_200(),
@@ -94,7 +92,10 @@ async fn execute_env_expression() {
 
     let engine = new_test_engine(&server.base_url, spec);
     let result = engine
-        .execute_collect("env-test", BTreeMap::new())
+        .execute_collect(
+            "inputs-header-test",
+            BTreeMap::from([("token".to_string(), json!("secret-42"))]),
+        )
         .await
         .outputs;
     let outputs = match result {

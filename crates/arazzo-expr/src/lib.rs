@@ -22,7 +22,6 @@ fn conformance_simple_string_comparison_negative_evidence() {
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::env;
 use std::sync::Arc;
 
 use std::sync::LazyLock;
@@ -183,11 +182,6 @@ impl ExpressionEvaluator {
         };
 
         let value = match namespace {
-            "env" => {
-                let name = remainder.unwrap_or("");
-                Value::String(env::var(name).unwrap_or_default())
-            }
-
             "inputs" => {
                 let full = remainder.unwrap_or("");
                 if full.contains('#') || !full.contains('.') {
@@ -1884,10 +1878,41 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_env_var() {
-        std::env::set_var("ARAZZO_EXPR_TEST_ENV", "secret");
-        let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("$env.ARAZZO_EXPR_TEST_ENV"), json!("secret"));
+    fn evaluate_env_namespace_rejected() {
+        // $env is not part of the Arazzo 1.1.0 expression surface. Whether the
+        // variable exists in the process environment or not, the evaluator must
+        // return the unknown-namespace result and never leak the value.
+        const SENTINEL_NAME: &str = "ARAZZO_EXPR_TEST_ENV_SENTINEL";
+        const SENTINEL_VALUE: &str = "sentinel-secret-ac9c811";
+        let expr = format!("$env.{SENTINEL_NAME}");
+
+        let mut ctx = EvalContext::default();
+        ctx.inputs
+            .insert("secret".to_string(), json!("from-inputs"));
+        let eval = ExpressionEvaluator::new(ctx);
+
+        std::env::set_var(SENTINEL_NAME, SENTINEL_VALUE);
+        let present = eval.evaluate_with_diagnostics(&expr);
+        let present_interpolated = eval.interpolate_string(&format!("token={{{expr}}}"));
+        std::env::remove_var(SENTINEL_NAME);
+        let absent = eval.evaluate_with_diagnostics(&expr);
+
+        for (value, warnings) in [&present, &absent] {
+            assert_eq!(*value, Value::Null);
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].message.contains("unknown expression namespace"));
+            assert!(!warnings[0].message.contains(SENTINEL_VALUE));
+            assert!(!warnings[0].expression.contains(SENTINEL_VALUE));
+        }
+        assert_eq!(present_interpolated, "token=");
+
+        // Controls: explicit inputs remain the supported route, and an unknown
+        // non-env namespace takes the same rejection path.
+        assert_eq!(eval.evaluate("$inputs.secret"), json!("from-inputs"));
+        let (value, warnings) = eval.evaluate_with_diagnostics("$notaspace.secret");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("unknown expression namespace"));
     }
 
     #[test]
