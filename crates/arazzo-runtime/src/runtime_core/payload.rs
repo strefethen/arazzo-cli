@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use super::*;
 
 pub(super) fn value_to_string(value: &Value) -> String {
@@ -116,23 +114,22 @@ pub(super) fn resolve_selector(
                     .map_or((Value::Null, 0), |value| (value, 1)))
             }
         }
-        "xpath" => match xpath_capability_gap(version) {
-            Err(message) => Err(message),
-            Ok(capability_gap) => {
-                if let Some(gap) = capability_gap {
-                    warnings.push(selector_warning(selector, &gap));
-                }
-                if let Value::String(xml) = &context {
-                    select_xpath(xml.as_bytes(), &selector.selector)
-                        .map(|selection| (selection.value, selection.match_count))
-                } else {
-                    Err(format!(
-                        "XPath selector context must resolve to an XML string, got {}",
-                        json_type_name(&context)
-                    ))
-                }
+        "xpath" => {
+            // ac-46638 version routing: rejection precedes every other
+            // check so a bad version is reported for any context shape.
+            if let Some(rejection) = xpath_version_rejection(version) {
+                Err(rejection)
+            } else if let Value::String(xml) = &context {
+                select_xpath(xml.as_bytes(), &selector.selector, version).and_then(|selection| {
+                    selection.value.map(|value| (value, selection.match_count))
+                })
+            } else {
+                Err(format!(
+                    "XPath selector context must resolve to an XML string, got {}",
+                    json_type_name(&context)
+                ))
             }
-        },
+        }
         other => Err(format!("unsupported selector type {other:?}")),
     };
 
@@ -153,28 +150,6 @@ fn selector_warning(selector: &SelectorObject, message: &str) -> arazzo_expr::Ex
     arazzo_expr::ExpressionWarning {
         expression: selector.selector.clone(),
         message: message.to_string(),
-    }
-}
-
-/// Decision 3 (ac-bd441): every version token from the Arazzo v1.1.0 §5.8.12.1
-/// table is valid document metadata, but this runtime's engine is XPath 1.0.
-/// `xpath-10` executes silently; the omitted form (which §5.8.12 defaults to
-/// `xpath-31`), `xpath-20`, `xpath-30`, and `xpath-31` execute under XPath 1.0
-/// semantics with exactly one capability diagnostic naming the gap. Tokens
-/// outside the table are invalid metadata and do not execute.
-fn xpath_capability_gap(version: Option<&str>) -> Result<Option<String>, String> {
-    match version {
-        Some("xpath-10") => Ok(None),
-        None => Ok(Some(
-            "XPath target defaults to version \"xpath-31\" (XML Path Language 3.1), which is \
-             valid Arazzo metadata but executes under this runtime's XPath 1.0 engine"
-                .to_string(),
-        )),
-        Some(declared @ ("xpath-20" | "xpath-30" | "xpath-31")) => Ok(Some(format!(
-            "XPath version {declared:?} is valid Arazzo metadata but executes under this \
-             runtime's XPath 1.0 engine"
-        ))),
-        Some(other) => Err(format!("unsupported XPath version {other:?}")),
     }
 }
 
@@ -301,13 +276,11 @@ pub(super) fn apply_replacements(
                 }
             }
             TargetKind::XPath => {
-                match xpath_capability_gap(version) {
-                    Err(message) => {
-                        warnings.push(replacement_warning(index, &message));
-                        continue;
-                    }
-                    Ok(Some(gap)) => warnings.push(replacement_warning(index, &gap)),
-                    Ok(None) => {}
+                // ac-46638 version routing: an unsupported version leaves
+                // the body unchanged with exactly one warning.
+                if let Some(rejection) = xpath_version_rejection(version) {
+                    warnings.push(replacement_warning(index, &rejection));
+                    continue;
                 }
 
                 let Value::String(xml) = &body else {
@@ -329,7 +302,8 @@ pub(super) fn apply_replacements(
                     ));
                 }
 
-                match apply_xpath_replacement(xml, target, resolved) {
+                let replacement_text = value_to_string(&resolved);
+                match replace_xpath(xml, target, version, &replacement_text) {
                     Ok(mutated) => body = Value::String(mutated),
                     Err(message) => warnings.push(replacement_warning(index, &message)),
                 }
@@ -434,66 +408,6 @@ fn parse_replace_array_index(token: &str) -> Result<usize, String> {
 
 fn unescape_json_pointer_token(token: &str) -> String {
     token.replace("~1", "/").replace("~0", "~")
-}
-
-fn apply_xpath_replacement(xml: &str, target: &str, replacement: Value) -> Result<String, String> {
-    let mut doc = uppsala::parse_bytes(xml.as_bytes())
-        .map_err(|err| format!("invalid XML payload: {err}"))?;
-    doc.prepare_xpath();
-
-    let nodes = {
-        let eval = uppsala::XPathEvaluator::new();
-        let root = doc.root();
-        match eval.evaluate(&doc, root, target) {
-            Ok(uppsala::XPathValue::NodeSet(nodes)) => nodes,
-            Ok(_) => return Err("xpath did not resolve to a node set".to_string()),
-            Err(err) => return Err(format!("invalid XPath target: {err}")),
-        }
-    };
-
-    if nodes.is_empty() {
-        return Err("xpath target matched no nodes".to_string());
-    }
-
-    let replacement_text = value_to_string(&replacement);
-    for node in nodes {
-        let Some(kind) = doc.node_kind(node).cloned() else {
-            return Err("xpath target node no longer exists".to_string());
-        };
-        match kind {
-            uppsala::NodeKind::Element(_) => {
-                for child in doc.children(node) {
-                    doc.remove_child(node, child);
-                }
-                let text = doc.create_text(replacement_text.clone());
-                doc.append_child(node, text);
-            }
-            uppsala::NodeKind::Attribute(name, _) => {
-                let parent = doc
-                    .parent(node)
-                    .ok_or_else(|| "xpath attribute target has no parent element".to_string())?;
-                let element = doc
-                    .element_mut(parent)
-                    .ok_or_else(|| "xpath attribute parent is not an element".to_string())?;
-                element.set_attribute(name, Cow::Owned(replacement_text.clone()));
-            }
-            uppsala::NodeKind::Text(_) => {
-                let Some(uppsala::NodeKind::Text(text)) = doc.node_kind_mut(node) else {
-                    return Err("xpath text target no longer exists".to_string());
-                };
-                *text = Cow::Owned(replacement_text.clone());
-            }
-            uppsala::NodeKind::CData(_) => {
-                let Some(uppsala::NodeKind::CData(text)) = doc.node_kind_mut(node) else {
-                    return Err("xpath cdata target no longer exists".to_string());
-                };
-                *text = Cow::Owned(replacement_text.clone());
-            }
-            _ => return Err("xpath target node kind is not replaceable".to_string()),
-        }
-    }
-
-    Ok(doc.to_xml())
 }
 
 pub(super) fn json_type_name(value: &Value) -> &'static str {
@@ -819,8 +733,9 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String("<root><CustomerId>old</CustomerId></root>".to_string()),
             "text/xml",
-            &[replacement(
+            &[typed_replacement(
                 "//*[local-name()='CustomerId']",
+                object_type("xpath", "xpath-10"),
                 serde_yaml_ng::Value::String("C-99".to_string()),
             )],
             &eval,
@@ -828,10 +743,7 @@ mod tests {
 
         let xml = body.as_str().unwrap_or_default();
         assert!(xml.contains("<CustomerId>C-99</CustomerId>"), "{xml}");
-        // Decision 3: an omitted targetSelectorType on an XML payload means
-        // the spec's xpath-31 default, one capability diagnostic per entry.
-        assert_eq!(capability_warnings(&warnings), 1, "{warnings:?}");
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -840,8 +752,9 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String(r#"<root><Customer id="old"/></root>"#.to_string()),
             "text/xml",
-            &[replacement(
+            &[typed_replacement(
                 "//*[local-name()='Customer']/@id",
+                object_type("xpath", "xpath-10"),
                 serde_yaml_ng::Value::String("X-1".to_string()),
             )],
             &eval,
@@ -849,8 +762,7 @@ mod tests {
 
         let xml = body.as_str().unwrap_or_default();
         assert!(xml.contains(r#"<Customer id="X-1"/>"#), "{xml}");
-        assert_eq!(capability_warnings(&warnings), 1, "{warnings:?}");
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -860,8 +772,9 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String(original.to_string()),
             "text/xml",
-            &[replacement(
+            &[typed_replacement(
                 "//tns:CustomerId",
+                object_type("xpath", "xpath-10"),
                 serde_yaml_ng::Value::String("C-99".to_string()),
             )],
             &eval,
@@ -873,8 +786,7 @@ mod tests {
             xml.contains("<tns:CustomerId>C-99</tns:CustomerId>"),
             "{xml}"
         );
-        assert_eq!(capability_warnings(&warnings), 1, "{warnings:?}");
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -884,8 +796,9 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String(original.to_string()),
             "text/xml",
-            &[replacement(
+            &[typed_replacement(
                 "//bogus",
+                object_type("xpath", "xpath-10"),
                 serde_yaml_ng::Value::String("new".to_string()),
             )],
             &eval,
@@ -902,8 +815,9 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String(original.to_string()),
             "text/xml",
-            &[replacement(
+            &[typed_replacement(
                 "count(//x)",
+                object_type("xpath", "xpath-10"),
                 serde_yaml_ng::Value::String("new".to_string()),
             )],
             &eval,
@@ -919,7 +833,11 @@ mod tests {
         let (body, warnings) = apply_replacements(
             Value::String("<root><x>old</x></root>".to_string()),
             "text/xml",
-            &[replacement("//x", yaml(json!({"a": 1})))],
+            &[typed_replacement(
+                "//x",
+                object_type("xpath", "xpath-10"),
+                yaml(json!({"a": 1})),
+            )],
             &eval,
         );
 
@@ -1110,11 +1028,13 @@ mod tests {
     }
 
     #[test]
-    fn expression_type_object_xpath_30_is_honored_with_capability_diagnostic() {
-        // §5.8.15.2's own Expression Type Object shape.
+    fn expression_type_object_xpath_30_is_rejected_before_evaluation() {
+        // §5.8.15.2's own Expression Type Object shape, but a version this
+        // runtime does not implement (ac-46638): unchanged body, one warning.
         let eval = evaluator();
+        let original = Value::String("<root><x>old</x></root>".to_string());
         let (body, warnings) = apply_replacements(
-            Value::String("<root><x>old</x></root>".to_string()),
+            original.clone(),
             "application/xml",
             &[typed_replacement(
                 "//x",
@@ -1124,9 +1044,9 @@ mod tests {
             &eval,
         );
 
-        let xml = body.as_str().unwrap_or_default();
-        assert!(xml.contains("<x>new</x>"), "{xml}");
+        assert_eq!(body, original);
         assert_eq!(capability_warnings(&warnings), 1, "{warnings:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
     }
 
     #[test]
@@ -1149,34 +1069,31 @@ mod tests {
     }
 
     #[test]
-    fn xpath_capability_diagnostic_fires_once_per_accepted_version_gap() {
-        // Decision 3: plain `xpath`, xpath-20/-30/-31, and the omitted field
-        // each execute under XPath 1.0 with exactly one capability
-        // diagnostic; xpath-10 is covered by the silent test above.
+    fn xpath_versions_other_than_explicit_10_reject_with_one_warning_each() {
+        // ac-46638, superseding Decision 3: plain `xpath`, xpath-20/-30/-31,
+        // and the omitted field are each rejected before evaluation with
+        // exactly one warning and an unchanged body; explicit xpath-10 is
+        // covered by the silent tests above.
         let eval = evaluator();
-        let gapped = [
+        let rejected = [
             Some(name_type("xpath")),
             Some(object_type("xpath", "xpath-20")),
             Some(object_type("xpath", "xpath-30")),
             Some(object_type("xpath", "xpath-31")),
             None,
         ];
-        for type_ in gapped {
+        for type_ in rejected {
             let entry = Replacement {
                 target: "//x".to_string(),
                 target_selector_type: type_.clone(),
                 value: serde_yaml_ng::Value::String("new".to_string()).into(),
                 ..Replacement::default()
             };
-            let (body, warnings) = apply_replacements(
-                Value::String("<root><x>old</x></root>".to_string()),
-                "application/xml",
-                &[entry],
-                &eval,
-            );
+            let original = Value::String("<root><x>old</x></root>".to_string());
+            let (body, warnings) =
+                apply_replacements(original.clone(), "application/xml", &[entry], &eval);
 
-            let xml = body.as_str().unwrap_or_default();
-            assert!(xml.contains("<x>new</x>"), "{type_:?}: {xml}");
+            assert_eq!(body, original, "{type_:?}: {warnings:?}");
             assert_eq!(capability_warnings(&warnings), 1, "{type_:?}: {warnings:?}");
             assert_eq!(warnings.len(), 1, "{type_:?}: {warnings:?}");
         }
@@ -1258,13 +1175,36 @@ mod tests {
     #[test]
     fn omitted_type_on_xml_media_with_structured_body_warns_xpath() {
         // Media-type-keyed routing: an XML content type dispatches to XPath
-        // even when the resolved payload is structured JSON.
+        // even when the resolved payload is structured JSON. The omitted
+        // targetSelectorType carries no version, so the version rejection
+        // fires first (ac-46638) — the XPath-flavored warning still proves
+        // the dispatch.
         let eval = evaluator();
         let original = json!({"a": 1});
         let (body, warnings) = apply_replacements(
             original.clone(),
             "application/xml",
             &[replacement("/a", yaml(json!(2)))],
+            &eval,
+        );
+
+        assert_eq!(body, original);
+        assert_warning_contains(&warnings, "xpath-31");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn explicit_xpath_10_with_structured_body_warns_payload_type() {
+        let eval = evaluator();
+        let original = json!({"a": 1});
+        let (body, warnings) = apply_replacements(
+            original.clone(),
+            "application/xml",
+            &[typed_replacement(
+                "/a",
+                object_type("xpath", "xpath-10"),
+                yaml(json!(2)),
+            )],
             &eval,
         );
 

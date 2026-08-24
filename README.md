@@ -578,10 +578,14 @@ XPath 1.0 queries for XML/SOAP responses:
 successCriteria:
   - condition: //customer/id
     context: $response.body
-    type: xpath
+    type:
+      type: xpath
+      version: xpath-10
 ```
 
-Unprefixed XPath name tests match on local names, so `//customer/id` matches `<ns:customer><ns:id>` without namespace qualification — the response body is never rewritten. Prefixed expressions (`//ns:customer`) also work when the document declares the prefix; a document that uses an undeclared prefix is rejected as invalid XML.
+XPath criteria, Selector Objects, and payload replacements evaluate only with an explicit `version: xpath-10`. Every other §5.8.12.1 version token — and the omitted form, which the specification defaults to `xpath-31` — is rejected before evaluation, because this runtime implements XPath 1.0 and nothing else: a criterion fails with an error, a selector yields `null` with one warning, and a replacement leaves the body unchanged with one warning.
+
+Unprefixed XPath name tests match on local names, so `//customer/id` matches `<ns:customer><ns:id>` without namespace qualification — the response body is never rewritten. Prefixed expressions (`//ns:customer`) resolve against the document's root-scope namespace declarations, so two prefixes bound to different URIs are distinguishable; a document that uses an undeclared prefix is rejected as invalid XML.
 
 ### JSONPath
 

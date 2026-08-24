@@ -134,8 +134,14 @@ workflows:
             </soap:Envelope>
           replacements:
             - target: "//*[local-name()='CustomerId']"
+              targetSelectorType:
+                type: xpath
+                version: xpath-10
               value: "$steps.create-customer.outputs.new_id"
             - target: "//*[local-name()='UpdateCustomer']/@mode"
+              targetSelectorType:
+                type: xpath
+                version: xpath-10
               value: patch
         successCriteria:
           - condition: $statusCode == 200

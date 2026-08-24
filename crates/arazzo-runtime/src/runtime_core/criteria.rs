@@ -100,7 +100,15 @@ pub(crate) fn evaluate_criterion_detailed(
                 other => other.to_string(),
             };
             context_value = Value::String(xml_text.clone());
-            match select_xpath(xml_text.as_bytes(), &criterion.condition) {
+            // The declared version routes the evaluation (ac-46638): only
+            // explicit `xpath-10` reaches the engine; the omitted form and
+            // every other version fail the criterion with an error before
+            // evaluation.
+            match select_xpath(
+                xml_text.as_bytes(),
+                &criterion.condition,
+                criterion.declared_type_version(),
+            ) {
                 // §5.8.11.4.4: the criterion passes on the effective boolean
                 // value of the raw XPath result, not on the truthiness of the
                 // normalized selection value — `false` and `0` stringify to
@@ -148,15 +156,29 @@ pub(crate) fn evaluate_output_expression_detailed(
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
     if expr.starts_with('/') {
         if let Some(resp) = response {
-            return match select_xpath(&resp.body, expr) {
-                Ok(selection) if selection.match_count > 0 => (selection.value, Vec::new()),
-                Ok(selection) => (
-                    selection.value,
-                    vec![arazzo_expr::ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: "XPath matched no values".to_string(),
-                    }],
-                ),
+            // Bare `//…` outputs are a repository extension routed
+            // explicitly to XPath 1.0 (ac-46638).
+            return match select_xpath(&resp.body, expr, Some("xpath-10")) {
+                Ok(selection) => {
+                    let warnings = if selection.match_count > 0 {
+                        Vec::new()
+                    } else {
+                        vec![arazzo_expr::ExpressionWarning {
+                            expression: expr.to_string(),
+                            message: "XPath matched no values".to_string(),
+                        }]
+                    };
+                    match selection.value {
+                        Ok(value) => (value, warnings),
+                        Err(message) => (
+                            Value::Null,
+                            vec![arazzo_expr::ExpressionWarning {
+                                expression: expr.to_string(),
+                                message,
+                            }],
+                        ),
+                    }
+                }
                 Err(message) => (
                     Value::Null,
                     vec![arazzo_expr::ExpressionWarning {
@@ -277,7 +299,13 @@ mod tests {
             let criterion = SuccessCriterion {
                 condition: condition.to_string(),
                 context: "$response.body".to_string(),
-                type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+                type_: Some(arazzo_spec::CriterionType::ExpressionType(
+                    arazzo_spec::CriterionExpressionType {
+                        type_: "xpath".to_string(),
+                        version: "xpath-10".to_string(),
+                        ..arazzo_spec::CriterionExpressionType::default()
+                    },
+                )),
                 ..SuccessCriterion::default()
             };
             evaluate_criterion_detailed(&criterion, &eval, None, &cache).matched
@@ -295,5 +323,32 @@ mod tests {
         // node-set with at least one node passes even when its text is empty
         assert!(matched("//empty"));
         assert!(!matched("//missing"));
+    }
+
+    /// ac-46638 version routing at the criterion surface: an xpath criterion
+    /// without an explicit `xpath-10` version fails with an error before
+    /// evaluation instead of silently executing under XPath 1.0.
+    #[test]
+    fn xpath_criterion_without_explicit_version_10_fails_with_error() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!("<root><pet>dog</pet></root>")),
+            ..EvalContext::default()
+        });
+        let criterion = SuccessCriterion {
+            condition: "//pet".to_string(),
+            context: "$response.body".to_string(),
+            type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+            ..SuccessCriterion::default()
+        };
+
+        let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
+
+        assert!(!evaluation.matched);
+        let error = match &evaluation.error {
+            Some(error) => error,
+            None => panic!("an omitted xpath version must surface an error"),
+        };
+        assert!(error.contains("xpath-31"), "got: {error}");
+        assert!(error.contains("xpath-10"), "got: {error}");
     }
 }

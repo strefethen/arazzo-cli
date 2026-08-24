@@ -98,7 +98,7 @@ use state::{
 };
 pub(crate) use url::parse_method;
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
-pub(crate) use xpath::{extract_xpath, select_xpath};
+pub(crate) use xpath::{extract_xpath, replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{
     is_sensitive_key, redact_dry_run_request, redact_headers, redact_json_object,

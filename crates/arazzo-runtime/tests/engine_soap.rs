@@ -21,6 +21,13 @@ fn xml_response(body: &str) -> MockHttpResponse {
 fn replacement(target: &str, value: &str) -> Replacement {
     Replacement {
         target: target.to_string(),
+        // ac-46638: only explicit xpath-10 evaluates; these fixtures are
+        // intentional XPath 1.0 usage.
+        target_selector_type: Some(CriterionType::ExpressionType(CriterionExpressionType {
+            type_: "xpath".to_string(),
+            version: "xpath-10".to_string(),
+            ..CriterionExpressionType::default()
+        })),
         value: serde_yaml_ng::Value::String(value.to_string()).into(),
         ..Replacement::default()
     }
@@ -71,7 +78,9 @@ fn soap_step(
                 condition: xpath_criterion.to_string(),
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                     type_: "xpath".to_string(),
-                    version: String::new(),
+                    // ac-46638: an empty version is the omitted form, which
+                    // is rejected; these fixtures declare XPath 1.0.
+                    version: "xpath-10".to_string(),
                     ..CriterionExpressionType::default()
                 })),
                 ..SuccessCriterion::default()

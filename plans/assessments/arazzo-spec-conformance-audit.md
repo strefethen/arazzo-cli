@@ -541,6 +541,16 @@ XPath path (`crates/arazzo-runtime/src/runtime_core/criteria.rs`) executes any
 declared version silently, with no version gate at all — pre-existing, and now
 the only XPath surface without the Decision 3 diagnostic.
 
+**Update 2026-08-23 (ac-46638):** Decision 3's warn-and-run stance is
+superseded. Explicit `version: xpath-10` alone evaluates; the omitted form
+and every other §5.8.12.1 token are rejected before evaluation on all three
+surfaces — a criterion fails with an error, a selector yields null with one
+warning, a replacement leaves the body unchanged with one warning. Validation
+still accepts every table token as document metadata. The runtime no longer
+executes 3.1-defaulted documents under wrong semantics; the finding remains
+open only in the sense that an XPath 3.1 engine does not exist, which stays a
+workspace feature.
+
 ### F20. GJSON forms accepted by typed JSONPath read surfaces
 
 **Spec** (§5.8.11.4.3 and §5.8.12): a criterion with `type: jsonpath` *"MUST
