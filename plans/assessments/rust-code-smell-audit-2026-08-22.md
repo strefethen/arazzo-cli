@@ -96,6 +96,19 @@ let mut doc = uppsala::parse(&text)...
 - **Notes / what to verify:** Whether `uppsala` 0.3 offers namespace-aware evaluation that
   would make the pre-pass unnecessary; the crate is a single external dependency on a
   0.x version sitting on the response-parsing path.
+- **Remediated 2026-08-23 (working tree):** it does — the prepass is deleted and
+  the document is parsed as sent. uppsala resolves namespaces natively and its
+  unprefixed XPath name tests match on local names, so `//Body` finds
+  `<soap:Body>` with no preprocessing (`payload.rs` replacements already relied
+  on exactly this). Fixes all three modes: (a) text/CDATA content is no longer
+  rewritten, (b) quoting style no longer matters, (c) the two full-document
+  `replace_all` allocations per evaluation are gone. Two deliberate behavior
+  changes, both pinned by tests: a document using an *undeclared* prefix is now
+  reported as invalid XML instead of being silently rewritten into something
+  parseable, and a prefixed XPath expression (`//f:x`) can now match when the
+  document declares the prefix. Found in passing, filed separately: attribute
+  selections (`//x/@id`) return `Null` values because `text_content_deep`
+  ignores attribute nodes — pre-existing, unrelated to the prepass.
 
 ### F3 — `$env.*` resolves arbitrary process environment into outbound requests
 

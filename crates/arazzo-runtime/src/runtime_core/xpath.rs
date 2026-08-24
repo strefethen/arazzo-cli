@@ -1,15 +1,5 @@
 use super::*;
 
-static XMLNS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"xmlns(?::\w+)?="[^"]*""#)
-        .unwrap_or_else(|err| panic!("failed to compile xmlns regex: {err}"))
-});
-
-static NS_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<(/?)[\w-]+:")
-        .unwrap_or_else(|err| panic!("failed to compile ns-prefix regex: {err}"))
-});
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct XPathSelection {
     pub value: Value,
@@ -24,10 +14,15 @@ pub(crate) struct XPathSelection {
 }
 
 pub(crate) fn select_xpath(body: &[u8], expr: &str) -> Result<XPathSelection, String> {
+    // The document is parsed as the server sent it. Namespace handling is
+    // uppsala's: prefixes resolve natively, and an unprefixed XPath name test
+    // matches on local names, so `//Body` finds `<soap:Body>` without any
+    // preprocessing. (A regex prepass used to strip xmlns declarations and
+    // element prefixes from the raw text; it also rewrote text content, CDATA
+    // sections, and comments that merely looked namespaced, and it missed
+    // single-quoted xmlns declarations entirely.)
     let text = std::str::from_utf8(body).map_err(|err| format!("XML is not UTF-8: {err}"))?;
-    let text = XMLNS_RE.replace_all(text, "");
-    let text = NS_PREFIX_RE.replace_all(&text, "<$1");
-    let mut doc = uppsala::parse(&text).map_err(|err| format!("invalid XML: {err}"))?;
+    let mut doc = uppsala::parse(text).map_err(|err| format!("invalid XML: {err}"))?;
     doc.prepare_xpath();
     let eval = uppsala::XPathEvaluator::new();
     let root = doc.root();
@@ -118,6 +113,49 @@ mod tests {
         let zero = selected(xml, "//missing");
         assert_eq!(zero.value, Value::Null);
         assert_eq!(zero.match_count, 0);
+    }
+
+    /// The body is evaluated as the server sent it. A regex prepass used to
+    /// strip namespace syntax from the raw text, rewriting text content and
+    /// CDATA sections that merely contained namespace-shaped characters —
+    /// these are the regression cases.
+    #[test]
+    fn select_xpath_leaves_text_and_cdata_content_untouched() {
+        let text = selected(br#"<note>declare xmlns="urn:x" here</note>"#, "//note");
+        assert_eq!(text.value, json!("declare xmlns=\"urn:x\" here"));
+
+        let cdata = selected(br#"<code><![CDATA[<f:x> and xmlns="u"]]></code>"#, "//code");
+        assert_eq!(cdata.value, json!("<f:x> and xmlns=\"u\""));
+    }
+
+    /// Unprefixed XPath name tests match on local names, so namespaced
+    /// documents need no preprocessing, whatever the server's xmlns quoting
+    /// style. The prefixed-expression assertions are the regression cases:
+    /// the old prepass stripped prefixes out of the document while leaving
+    /// them in the expression, so `//f:item` could never match.
+    #[test]
+    fn select_xpath_matches_local_names_in_namespaced_documents() {
+        let soap = br#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><Reply><Id>7</Id></Reply></soap:Body>
+</soap:Envelope>"#;
+        assert_eq!(selected(soap, "//Body//Id").value, json!("7"));
+
+        let single_quoted: &[u8] = b"<f:root xmlns:f='urn:x'><f:item>one</f:item></f:root>";
+        assert_eq!(selected(single_quoted, "//item").value, json!("one"));
+        assert_eq!(selected(single_quoted, "//f:item").value, json!("one"));
+
+        let prefixed_expr = selected(br#"<f:root xmlns:f="u"><f:x>1</f:x></f:root>"#, "//f:x");
+        assert_eq!(prefixed_expr.value, json!("1"));
+    }
+
+    /// A document using an undeclared namespace prefix is namespace-malformed
+    /// XML: it is reported as invalid rather than silently rewritten into a
+    /// parseable document, as the old regex prepass did.
+    #[test]
+    fn select_xpath_reports_undeclared_namespace_prefixes() {
+        let error = selection_error(b"<f:root><f:x>1</f:x></f:root>", "//x");
+        assert!(error.contains("invalid XML"), "got: {error}");
+        assert!(error.contains("prefix"), "got: {error}");
     }
 
     #[test]

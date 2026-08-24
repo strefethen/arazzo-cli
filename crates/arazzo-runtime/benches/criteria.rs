@@ -291,15 +291,13 @@ fn bench_xpath_extraction(c: &mut Criterion) {
         })
     });
 
-    // Benchmark: namespaced XML with regex stripping (full pipeline)
-    group.bench_function("namespaced_full_pipeline", |b| {
-        let xmlns_re = regex::Regex::new(r#"xmlns(?::\w+)?="[^"]*""#).unwrap();
-        let ns_prefix_re = regex::Regex::new(r"<(/?)[\w-]+:").unwrap();
+    // Benchmark: namespaced XML parsed as sent — unprefixed name tests match
+    // on local names, so no preprocessing happens (the regex-stripping prepass
+    // this case used to measure was removed 2026-08-23).
+    group.bench_function("namespaced_document", |b| {
         b.iter(|| {
             let xml = std::str::from_utf8(black_box(namespaced_xml.as_slice())).unwrap();
-            let stripped = xmlns_re.replace_all(xml, "");
-            let stripped = ns_prefix_re.replace_all(&stripped, "<$1");
-            let mut doc = uppsala::parse(&stripped).unwrap();
+            let mut doc = uppsala::parse(xml).unwrap();
             doc.prepare_xpath();
             let eval = uppsala::XPathEvaluator::new();
             let root = doc.root();

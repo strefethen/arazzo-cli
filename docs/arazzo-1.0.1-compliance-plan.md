@@ -385,7 +385,7 @@ pub(super) fn apply_replacements(
 ) -> (Value, Vec<String>);
 ```
 
-JSON Pointer replacements mutate resolved JSON bodies without auto-creating missing intermediate objects or array entries. XPath replacements mutate raw XML/text string bodies without the namespace-stripping used by read-only XPath extraction. Replacement warnings use the existing `StepTraceData.warnings` surface with `requestBody.replacements[{i}]:` prefixes.
+JSON Pointer replacements mutate resolved JSON bodies without auto-creating missing intermediate objects or array entries. XPath replacements mutate raw XML/text string bodies; like read-only XPath extraction, they parse the document as sent — no namespace stripping on either path (the stripping this sentence once contrasted against was removed 2026-08-23). Replacement warnings use the existing `StepTraceData.warnings` surface with `requestBody.replacements[{i}]:` prefixes.
 
 4d. Call `apply_replacements` in `engine_http.rs:prepare_http_request` after `resolve_payload`, before content-type-aware request serialization and trace request capture.
 

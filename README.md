@@ -581,7 +581,7 @@ successCriteria:
     type: xpath
 ```
 
-The engine automatically strips `xmlns` declarations and namespace prefixes from the response body before evaluating, so you can write simple XPath expressions without namespace qualification.
+Unprefixed XPath name tests match on local names, so `//customer/id` matches `<ns:customer><ns:id>` without namespace qualification — the response body is never rewritten. Prefixed expressions (`//ns:customer`) also work when the document declares the prefix; a document that uses an undeclared prefix is rejected as invalid XML.
 
 ### JSONPath
 
