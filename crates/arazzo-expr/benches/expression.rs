@@ -201,6 +201,41 @@ fn bench_evaluate_condition(c: &mut Criterion) {
     group.finish();
 }
 
+/// The ` matches ` operator resolves its pattern at evaluation time, so it is
+/// the one operator whose cost is dominated by regex compilation rather than by
+/// expression resolution. `uncached_baseline` is what the operator cost before
+/// the compiled-pattern cache; the gap between it and `cached_pattern` is the
+/// per-evaluation win, and it is the reason this bench exists.
+fn bench_matches_operator(c: &mut Criterion) {
+    let eval = ExpressionEvaluator::new(rich_context());
+    let pattern = r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$";
+    let subject = "alice@example.com";
+
+    let mut group = c.benchmark_group("matches_operator");
+
+    group.bench_function("cached_pattern", |b| {
+        let condition =
+            format!(r#"$steps.getUser.outputs.body.data.user.email matches "{pattern}""#);
+        b.iter(|| eval.evaluate_condition(black_box(&condition)))
+    });
+
+    group.bench_function("uncached_baseline", |b| {
+        b.iter(|| {
+            let re = regex::Regex::new(black_box(pattern)).unwrap();
+            re.is_match(black_box(subject))
+        })
+    });
+
+    // A pattern that does not compile is memoized as a failure, so a retried
+    // step does not re-parse it on every attempt.
+    group.bench_function("uncompilable_pattern", |b| {
+        let condition = r#"$steps.getUser.outputs.body.data.user.email matches "[invalid""#;
+        b.iter(|| eval.evaluate_condition(black_box(condition)))
+    });
+
+    group.finish();
+}
+
 fn bench_interpolate_string(c: &mut Criterion) {
     let eval = ExpressionEvaluator::new(rich_context());
 
@@ -265,6 +300,7 @@ criterion_group!(
     bench_evaluate,
     bench_resolve_value,
     bench_evaluate_condition,
+    bench_matches_operator,
     bench_interpolate_string,
     bench_path_depth_scaling,
 );

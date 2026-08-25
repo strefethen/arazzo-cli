@@ -29,6 +29,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{json, Number, Value};
 
+mod matches_operator;
+
 /// Error produced when evaluating an Arazzo dot-notation path against a JSON value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathError {
@@ -613,11 +615,7 @@ impl ExpressionEvaluator {
             " matches " => {
                 let (rv, w) = resolve_operand_with_diagnostics(self, right);
                 warnings.extend(w);
-                let pattern = to_string_value(&rv);
-                match Regex::new(&pattern) {
-                    Ok(re) => re.is_match(&to_string_value(&left)),
-                    Err(_) => false,
-                }
+                matches_operator::evaluate(condition, &left, &rv, &mut warnings)
             }
             " in " => {
                 let (result, w) = eval_in_with_diagnostics(self, &left, right);
@@ -1007,7 +1005,7 @@ fn to_f64(value: &Value) -> Option<f64> {
     }
 }
 
-fn to_string_value(value: &Value) -> Cow<'_, str> {
+pub(crate) fn to_string_value(value: &Value) -> Cow<'_, str> {
     match value {
         Value::String(v) => Cow::Borrowed(v.as_str()),
         Value::Number(n) => Cow::Owned(n.to_string()),
