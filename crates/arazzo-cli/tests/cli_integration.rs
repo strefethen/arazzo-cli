@@ -517,6 +517,92 @@ workflows:
     assert!(strict_body.get("warnings").is_none());
 }
 
+/// The ac-46638 runtime executes only an explicit `version: xpath-10`; every
+/// other schema-valid XPath declaration used to validate clean and then fail
+/// at run time. `validate` now names that cliff ahead of execution as an
+/// `unsupportedXpathVersion` warning, and `--strict` promotes it.
+#[test]
+fn validate_xpath_version_advisory_warns_and_strict_rejects() {
+    let temp = TempDir::new("arazzo-xpath-version-advisory");
+    let spec = temp.path().join("xpath-version-advisory.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: "1.1.0"
+info:
+  title: XPath version advisory
+  version: "1.0.0"
+sourceDescriptions:
+  - name: api
+    url: https://example.com
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: s1
+        operationPath: /s1
+        successCriteria:
+          - context: $response.body
+            condition: //ok
+            type: xpath
+"#,
+    );
+    let spec_path = spec.to_string_lossy().to_string();
+
+    let normal = run(["--json", "validate", &spec_path].as_slice(), None);
+    assert!(
+        normal.status.success(),
+        "the advisory must not fail validation: {}",
+        combined_text(&normal)
+    );
+    let normal_body = stdout_json(&normal);
+    assert_eq!(normal_body.get("valid"), Some(&Value::Bool(true)));
+    let messages = validate_issue_messages(&normal_body, "warnings");
+    assert_eq!(messages.len(), 1, "body={normal_body}");
+    for expected in [
+        "\"xpath-31\"",
+        "declare an Expression Type Object",
+        "\"xpath-10\"",
+    ] {
+        assert!(
+            messages[0].contains(expected),
+            "missing {expected:?} in: {}",
+            messages[0]
+        );
+    }
+    let warning = match normal_body.get("warnings").and_then(Value::as_array) {
+        Some(warnings) => warnings[0].clone(),
+        None => panic!("expected warnings array in validate JSON; body={normal_body}"),
+    };
+    assert_eq!(
+        warning.get("kind"),
+        Some(&Value::String("unsupportedXpathVersion".to_string()))
+    );
+    assert_eq!(
+        warning.get("path"),
+        Some(&Value::String(
+            "workflow \"wf\" > step \"s1\".successCriteria[0].type".to_string()
+        ))
+    );
+
+    let strict = run(
+        ["--json", "--strict", "validate", &spec_path].as_slice(),
+        None,
+    );
+    assert!(
+        !strict.status.success(),
+        "--strict must reject the advisory: {}",
+        combined_text(&strict)
+    );
+    let strict_body = stdout_json(&strict);
+    assert_eq!(strict_body.get("valid"), Some(&Value::Bool(false)));
+    assert_eq!(
+        validate_issue_messages(&strict_body, "errors"),
+        messages,
+        "--strict must report the same finding as an error; body={strict_body}"
+    );
+    assert!(strict_body.get("warnings").is_none());
+}
+
 #[test]
 fn validate_former_action_presence_markers_warn_and_strict_promotes() {
     let temp = TempDir::new("arazzo-action-presence-marker");
