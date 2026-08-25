@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-25
+
+### Added
+
+#### Validation
+- Severity-carrying diagnostics: `validate` distinguishes errors from
+  warnings in text and `--json`, and `--strict` promotes warnings to errors
+  for CI gates.
+- MUST-level identifier and `successCriteria` enforcement, SHOULD-level
+  identifier recommendations as warnings, and warnings on unknown
+  non-`x-` fields.
+- Workflow `dependsOn` enforcement — unknown and cyclic dependencies are
+  rejected at validate time instead of surfacing at run time.
+- XPath version advisory: every schema-valid XPath declaration the runtime
+  will reject — anything but an explicit `version: xpath-10`, including the
+  bare `type: xpath` form whose omitted version the specification defaults
+  to `xpath-31` — now warns at validate time, naming the declared version
+  and the `xpath-10` remedy. This closes the cliff where `validate`
+  accepted a document that `run` then rejected. `--strict` promotes these
+  like every other warning.
+- Golden baselines pinned over every `examples/` and `testdata/` spec, and
+  a machine-validated Arazzo 1.1 conformance manifest with a trust gate
+  wired into the test suite.
+
+#### Workflow Engine
+- Arazzo 1.1 `in: querystring` parameter location: serialized per the
+  specification, rejected in documents declaring `arazzo: 1.0.x`, limited
+  to one per operation, and a non-string value fails the step instead of
+  silently dropping the query.
+- `targetSelectorType` honored on Payload Replacement Objects.
+- Retry actions referencing a `stepId`/`workflowId` execute call-and-return
+  per the specification, and success/failure action `parameters` are passed
+  to workflow targets.
+
+### Changed
+
+#### Workflow Engine
+- XPath criteria are decided by XPath 1.0 effective boolean value, evaluate
+  against the bytes the server actually sent, and fail on a null context
+  per specification §5.8.11.4.4.
+- One XPath 1.0 version boundary: only an explicit `version: xpath-10`
+  reaches the XPath engine; every other declared version and the
+  omitted-version form are rejected before evaluation with a diagnostic
+  naming the remedy.
+- Retry limits are honored exactly at numeric boundaries, decimal retry
+  delays are supported, and failure actions fall through per the
+  specification.
+- The simple-condition parser is constrained to the specification's
+  grammar and hardened against malformed input.
+- The ` matches ` operator (a tracked non-conformance pending the grammar
+  decision) caches compiled patterns in a bounded process-wide cache and
+  warns loudly when a pattern does not compile, instead of recompiling on
+  every evaluation and silently evaluating to `false`.
+- Unresolvable `operationPath` values fail loudly at engine build instead
+  of producing a wrong URL, and `describe`/`steps` derive method and target
+  from the one canonical classifier.
+
+#### Validation
+- Reusable Object handling matches the specification: action `reference`
+  shapes are preserved, null references are rejected, typed null action
+  overrides are rejected, action fixed fields are enforced, and parameter
+  validation carries structural provenance, context, and identity rules.
+- Required Arazzo collections are validated, bare `null` success criteria
+  are rejected, reusable values enforce the string contract, and required
+  `Any` values distinguish presence from absence.
+
+#### Generator
+- `generate` emits a document-pointing, relative `sourceDescriptions[].url`
+  for generated workflows instead of an absolute base URL.
+
+#### Quality
+- JSONPath replacement paths reject GJSON `#` syntax.
+- CI runs on current-major action runtimes (off deprecated Node 20).
+
+### Removed
+- The `$env.*` expression namespace, an arazzo-cli extension the Arazzo
+  specification does not define. `$env` expressions now resolve as an
+  unknown namespace — `null`, with a warning — and variable values never
+  appear in diagnostics. `.env` files still load into the process
+  environment at startup. Migration: declare workflow inputs and pass
+  values with `-i`/`--input-json`, referencing `{$inputs.name}`.
+
+### Fixed
+- Debug adapter: engine failures surface to the DAP client as errors
+  instead of a bare `terminated` event.
+
 ## [0.3.0] - 2026-08-03
 
 ### Added

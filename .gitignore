@@ -50,6 +50,9 @@ docs/vscode-marketplace-release-plan.md
 # Rust
 target/
 
+# Agent bookkeeping (repo-local, never published)
+god-files.md
+
 # VSCode extension build artifacts
 /vscode-arazzo-debug/node_modules/
 /vscode-arazzo-debug/dist/

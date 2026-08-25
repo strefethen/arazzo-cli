@@ -12,11 +12,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
-description = "Standalone Arazzo 1.0 workflow executor and debugger"
+description = "Standalone Arazzo workflow executor and debugger"
 keywords = ["arazzo", "openapi", "workflow", "api", "cli"]
 categories = ["command-line-utilities", "web-programming"]
 repository = "https://github.com/strefethen/arazzo-cli"
