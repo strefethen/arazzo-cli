@@ -48,7 +48,7 @@ docs/vscode-marketplace-release-plan.md
 .DS_Store
 
 # Rust
-/target/
+target/
 
 # VSCode extension build artifacts
 /vscode-arazzo-debug/node_modules/
