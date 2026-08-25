@@ -5,6 +5,17 @@
 **Method:** `rust-code-smell` skill — find and enumerate only. No fixes applied.
 **Build state at audit time:** `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0.
 
+> **Status at `596ef9e` (2026-08-24).** Read the per-finding "Remediated" notes
+> before trusting any finding body — the bodies describe `04ee287`, not current
+> code. Re-verified against HEAD: **F1, F2, F3, and F5 are closed** (commits
+> `301174a`, `9296f30`, `1f15ff3`, `92d3058`, `f90dda2`, `596ef9e`). **F4 and F6
+> remain live and accurate as written.** F7–F22 have not been re-verified since
+> the audit date.
+>
+> F1's closure surfaced its sibling in the JSONPath arm — same collapse-then-test
+> defect, still live — now tracked as
+> [ac-58896](https://sonos.scapedeck.com/docs/ac-tickets/ac-58896).
+
 ## Summary
 
 - **Total findings:** 22
@@ -136,6 +147,12 @@ let mut doc = uppsala::parse(&text)...
   `plans/assessments/arazzo-spec-conformance-audit.md` and as R3 in
   `plans/current/code-audit-remediation-plan.md` (§8.3 proposes an allowlist).
   Listed here because it is live in shipped code, not to re-open the decision.
+- **Remediated 2026-08-23 (commit `1f15ff3`):** the `"env"` dispatch arm is deleted
+  rather than allowlisted, so `$env.*` now falls through to the unknown-namespace
+  arm — `Value::Null` plus an `unknown expression namespace "$env…"` warning. No
+  `env::var` call survives anywhere in the evaluator, and a sentinel-based
+  regression test asserts nothing leaks. Closing the namespace outright, instead of
+  gating it, also closes conformance-audit F9 rather than narrowing it.
 
 ### F4 — `.env` in the working directory silently overwrites real process environment
 

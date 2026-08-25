@@ -3,7 +3,7 @@
 **Created:** 2026-06-14
 **Reconciled:** 2026-06-24 against `main` @ `d0015f1` (plan baseline was `e5dfede`; `main` is 9 commits ahead)
 **Source:** Full workspace code audit (runtime, expr/spec/validate/generate, CLI/DAP/MCP/extension, project health)
-**Status:** In progress — item 2 partially landed (tags + release tooling); items 1, 3–8 outstanding
+**Status:** Items 1–6 done (2026-07-27, per the tracker below); item 7 outstanding; item 8 replanned — implementation gated on the MCP security-policy decision (ac-950a8). Header reconciled 2026-08-25.
 **Audience:** Future agents and maintainers picking up remediation work
 
 ---
@@ -37,7 +37,7 @@ and consistent with existing conventions (no `unwrap`/`expect`/`todo`; these are
 | 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Done (2026-07-27)** — `6048931`, epic ac-83365 / ticket ac-e19d1 | — |
 | 6 | Missing `$ref` cycle guards in generator | Medium (crash/DoS) | **Done (2026-07-27)** — `d4899b3`, epic ac-83365 / ticket ac-53232 | — |
 | 7 | Finish the VS Code extension | Feature completion | **Outstanding** — stubs + trivial smoke test unchanged; DAP backend split, so 7a `dap.rs` line refs are stale (see §7 note) | — |
-| 8 | MCP security hardening | Security | **Outstanding** — only the pre-existing path allowlist is present; 8.2–8.5 (SSRF/env/quota/error-hygiene) not started | — |
+| 8 | MCP security hardening | Security | **Replanned** — stale path, DNS, concurrency, and error premises were removed; implementation is gated by the security-policy decision and the dedicated epic | — |
 
 > Verification baseline (captured at `e5dfede`): `cargo build --workspace
 > --all-targets`, `cargo clippy --workspace --all-targets`, and `cargo fmt
@@ -604,117 +604,53 @@ node:test runner already in use so CI stays fast. Wire the new tests into the
 
 ---
 
-## 8. MCP security hardening (fleshed-out plan)
+## 8. MCP security hardening
 
-**Context:** `crates/arazzo-mcp` exposes a hand-rolled JSON-RPC MCP server (no
-SDK; framing in `crates/arazzo-mcp/src/protocol.rs`) with seven tools:
-`list_workflows`, `describe_workflow`, `run_workflow`, `validate_spec`,
-`generate_workflow`, `describe_openapi`, `generate_example`. It runs locally over
-stdio with user consent. The existing notes
-(`docs/future/mcp-security.md`, 8 lines) acknowledge three risks but defer all
-hardening. This section is the concrete plan; it supersedes that stub (replace the
-stub's body with a pointer to this document when implementing).
+**Superseded planning detail:** the earlier workstream in this document was
+invalidated by source-level adversarial review. It named a fourth file-taking
+tool that does not take a path, assumed unsupported external `$ref` and `file://`
+loaders, proposed a DNS-rebinding-vulnerable pre-resolution check, and prescribed
+a concurrency semaphore even though the MCP dispatcher is serial. Those claims
+must not be used as implementation authority.
 
-### Threat model
+[epic:ac-852d1](https://sonos.scapedeck.com/docs/ac-tickets/ac-852d1) is the
+durable owner. [ac-950a8](https://sonos.scapedeck.com/docs/ac-tickets/ac-950a8)
+must first produce the accepted `plans/current/mcp-security-hardening.md`
+contract for filesystem capability/race posture, root composition, legacy API
+semantics, exact byte/queue/result limits, restricted network ranges and
+exceptions, timeout ceilings, and output/error exposure. The policy-neutral
+foundations [ac-30661](https://sonos.scapedeck.com/docs/ac-tickets/ac-30661) and
+[ac-6f63b](https://sonos.scapedeck.com/docs/ac-tickets/ac-6f63b) are exempt from
+this policy gate after exact-ticket frontier review: they add only the byte-parser
+and injectable-loader seams specified in their ticket bodies and choose no
+filesystem, network, limit, timeout, or projection policy. No other lower-cost
+security implementation is dispatchable until the decisions are accepted and
+its ticket is rewritten against them.
 
-MCP servers run locally, but the **client driving them is an AI agent** that can
-choose tool arguments. The trust boundary is therefore: a user explicitly loads
-specs and starts the server; the agent then decides *which* tools to call with
-*which* arguments. The risks below all stem from the agent (or a malicious spec)
-steering execution in ways the user did not intend.
+The verified current surface is narrower and more specific:
 
-| Risk | Surface | Today |
-|------|---------|-------|
-| **R1 — Path traversal / arbitrary file read** | `validate_spec`, `generate_workflow`, `describe_openapi`, `generate_example` accept file paths | `check_path_allowed` (`crates/arazzo-mcp/src/state.rs:62-88`) canonicalizes + checks an allowlist, but it is **not applied to every file-taking tool**, nor to OpenAPI `$ref`/source files pulled in *transitively* by a loaded spec |
-| **R2 — SSRF / internal network access** | `run_workflow` executes real HTTP to URLs from specs | No URL policy. The runtime `ClientConfig` (`crates/arazzo-runtime/src/runtime_core/client.rs:23-27`) has timeout + rate limit but **no host allow/deny list**; a spec can target `http://169.254.169.254/…`, `localhost`, RFC-1918 ranges |
-| **R3 — Env var / secret exfiltration** | `$env.VAR` expressions resolve host env; outputs flow back to the agent | No env allowlist; any `$env.SECRET` can surface in returned outputs |
-| **R4 — Resource exhaustion / DoS** | `run_workflow` accepts arbitrary inputs | Hard-coded 30s HTTP / 300s execution timeouts exist, but no concurrency cap or per-session quota |
-| **R5 — Information disclosure via errors** | parse/validation error messages | May reveal file existence / partial contents |
+- `validate_spec`, `generate_workflow`, and `describe_openapi` accept direct file
+  paths; `generate_example` does not.
+- The actual transitive filesystem read is a relative `type: openapi`
+  `sourceDescriptions[].url` consumed by the runtime builder. There is no
+  supported external OpenAPI `$ref` or `file://` document loader to secure.
+- Canonicalize-then-reopen pathname checks reject ordinary symlink escapes but
+  do not prove race-free containment under concurrent ancestor mutation.
+- The HTTP restriction must bind vetted DNS addresses to the actual client
+  connection, disable environment proxies, classify literals, and reapply policy
+  at every explicit redirect hop. A separate preflight lookup is insufficient.
+- Protocol risk is unbounded framing/backlog/output and timeout override/watchdog
+  behavior. Serial dispatch must remain serial; a semaphore would not bound the
+  current path.
+- `$env` removal remains owned by the Arazzo conformance initiative. MCP does not
+  add an allowlist, fallback, or compatibility mode.
+- Successful tool results intentionally expose some paths, source URLs, and
+  redacted request data. Failure projection must be bounded by semantic class;
+  documentation must not claim the whole surface is path- or content-free.
 
-### Workstream 8.1 — Unified path sandbox (R1)
-
-1. Add an `--allowed-dirs <dir>[,<dir>...]` server flag (and an env fallback,
-   e.g. `ARAZZO_MCP_ALLOWED_DIRS`). Default: the directory of each spec loaded at
-   startup, plus an explicit opt-in for anything broader.
-2. Route **every** filesystem access through `check_path_allowed`
-   (`state.rs:62-88`), including:
-   - all four file-taking tools (audit `crates/arazzo-mcp/src/handlers.rs` for
-     each path argument),
-   - transitive reads: OpenAPI `$ref` to external files and
-     `sourceDescriptions[*].url` that are `file://`/relative paths resolved during
-     `validate_spec`/`generate_workflow`/`describe_openapi`.
-3. Canonicalize before the check and reject symlink escapes (canonicalize already
-   resolves symlinks; add a test that a symlink pointing outside the allowlist is
-   denied).
-
-### Workstream 8.2 — Outbound URL policy / SSRF guard (R2)
-
-1. Extend `ClientConfig` (`crates/arazzo-runtime/src/runtime_core/client.rs:23`)
-   with an optional URL policy, e.g.:
-   ```rust
-   pub struct UrlPolicy {
-       pub allow_hosts: Option<Vec<String>>,   // None = allow all (current behavior)
-       pub deny_private_ranges: bool,           // block RFC1918 / loopback / link-local / ULA
-   }
-   ```
-   Default for the **library/CLI** stays permissive (no behavior change; the CLI
-   runs user-authored specs by hand). Default for the **MCP server** is
-   `deny_private_ranges: true` and an optional `allow_hosts`.
-2. Enforce in `HttpClient::request` *before* sending
-   (`client.rs:140`/`:166`): parse `cfg.url`, resolve the host, and reject when it
-   is loopback/link-local/private (unless explicitly allow-listed). Be careful to
-   check the **resolved IP**, not just the hostname, to avoid DNS-rebinding and
-   `localhost`-alias bypasses; reject on resolution failure.
-3. Surface a distinct `RuntimeErrorKind` (e.g. `BlockedByUrlPolicy`) so the denial
-   is observable in traces and MCP responses.
-4. Wire an `--allow-host`/`--allow-private-network` flag on the MCP server (and CLI
-   `run`, for parity) so users can opt back in deliberately.
-
-### Workstream 8.3 — Environment variable allowlist (R3)
-
-1. Add `--allowed-env <NAME>[,<NAME>...]` (and `ARAZZO_MCP_ALLOWED_ENV`) to the
-   MCP server. When set, `$env.X` resolves only allow-listed names; others resolve
-   to `Null` and emit a diagnostic (not the secret).
-2. Find the env resolution path in `arazzo-expr` (the `$env.` handling) and thread
-   an optional allowlist from the runtime/engine builder down to the evaluator.
-   Default for the MCP server: deny all `$env` unless explicitly allowed; default
-   for the CLI: unchanged (loads `.env`).
-3. Ensure redaction already covers any allow-listed secret that legitimately flows
-   into a trace (cross-check `crates/arazzo-runtime/src/runtime_core/redaction.rs`).
-
-### Workstream 8.4 — Quotas and concurrency caps (R4)
-
-1. Cap concurrent `run_workflow` executions per server (a semaphore in the MCP
-   session state, `crates/arazzo-mcp/src/state.rs`).
-2. Keep the existing 30s/300s timeouts; make them configurable via flags and
-   document the defaults.
-3. Optionally add a per-session execution count / wall-clock budget.
-
-### Workstream 8.5 — Error hygiene (R5)
-
-Review `validate_spec`/`generate_*` error construction in
-`crates/arazzo-mcp/src/handlers.rs` so messages returned to the agent do not echo
-absolute paths or file contents beyond what is necessary; prefer the structured
-`ValidateError {kind, path, message}` shape already used elsewhere.
-
-### Documentation
-
-Replace the body of `docs/future/mcp-security.md` with: the threat model table
-above, the implemented controls, and the default posture per surface
-(CLI = permissive/by-hand, MCP = sandboxed-by-default). Add an
-`MCP Server` security subsection to `README.md` and stop documenting the MCP
-server as unconditionally safe.
-
-### Acceptance
-
-- Every file-taking MCP tool enforces the path sandbox, including transitive refs;
-  symlink-escape test passes.
-- `run_workflow` blocks loopback/link-local/private targets by default on the MCP
-  server (resolved-IP check), with an explicit opt-in flag; a test asserts a
-  `169.254.169.254` / `127.0.0.1` spec is denied.
-- `$env` resolution is deny-by-default on the MCP server with an allowlist flag.
-- Concurrency cap and configurable timeouts in place.
-- `docs/future/mcp-security.md` and `README.md` reflect the real posture.
+Implementation membership, dependency order, focused tests, and final posture
+documentation belong to the security epic and its accepted plan rather than
+this historical audit document.
 
 ---
 
@@ -831,11 +767,8 @@ misfiled bullets `CHANGELOG.md:24-25`.
 - [ ] 7b DAP transcript + `debugConfigProvider` / `adapterClient` unit tests; add `npm test` to the CI job **and** provision the Rust binary in that job (see automation gap).
 - [ ] 7c per-platform VSIX + checksum. 7d docs, drop `preview`, bump `1.0.0`.
 
-**Item 8 — MCP security** (only baseline path allowlist present). `check_path_allowed`
-`state.rs:62` at `handlers.rs:298/357/392`; `allowed_dirs` `lib.rs:27`. Confirmed absent:
-`UrlPolicy`, `deny_private`, `allow_hosts`, `allowed_env`, `Semaphore`. `ClientConfig`
-`client.rs:23`; `HttpClient::request` `client.rs:139` (send after rate-limit `:159` —
-insert SSRF check before send).
-- [ ] 8.1 `--allowed-dirs` CLI flag + transitive-ref coverage + symlink-escape test.
-- [ ] 8.2 `UrlPolicy` + resolved-IP block in `request()` + `BlockedByUrlPolicy` + opt-in flags.
-- [ ] 8.3 env allowlist into `arazzo-expr` `$env`. 8.4 concurrency semaphore + configurable timeouts. 8.5 error hygiene. Update `docs/future/mcp-security.md` + `README.md`.
+**Item 8 — MCP security:** this appendix entry is superseded by
+[epic:ac-852d1](https://sonos.scapedeck.com/docs/ac-tickets/ac-852d1) and the
+maintainer gate [ac-950a8](https://sonos.scapedeck.com/docs/ac-tickets/ac-950a8).
+Do not implement the former path/ref, pre-resolve SSRF, semaphore, or generic
+error-hygiene prescriptions from this audit snapshot.
