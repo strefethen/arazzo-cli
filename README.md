@@ -51,18 +51,17 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
 | **JSON output** | `--json` on every command for scripting and CI integration |
-| **Expression language** | `$inputs`, `$steps`, `$response`, `$env`, XPath, JSON Pointer, interpolation |
+| **Expression language** | `$inputs`, `$steps`, `$response`, XPath, JSON Pointer, interpolation |
 | **Arazzo 1.1 selectors** | Typed JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and JSONPath criterion types |
 | **Control flow** | `onSuccess`/`onFailure` actions with goto, retry (with backoff), and end |
 | **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
 | **SOAP support** | Execute SOAP workflows with XPath-based success criteria |
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec default, configurable burst) |
-| **`.env` loading** | Automatic `.env` file loading — reference secrets as `$env.VAR_NAME` |
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
-Some of the above (`$env`, bare XPath outputs, and the `operationPath`/`sourceDescriptions[].url` routing idiom) are arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+Some of the above (bare XPath outputs and the `operationPath`/`sourceDescriptions[].url` routing idiom) are arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
 ## Contents
 
@@ -389,7 +388,6 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `$steps.<id>.outputs.<name>` | Previous step output |
 | `$outputs.name` | Workflow outputs map (inside `workflow.outputs`) |
 | `$workflows.<id>.inputs.<name>` / `.outputs.<name>` | Another workflow's inputs/outputs |
-| `$env.VAR_NAME` (**arazzo-cli extension**) | Environment variable (`.env` auto-loaded) — see [security note](#env-file-support) |
 | `$statusCode` | HTTP response status code |
 | `$method` | HTTP method (GET, POST, etc.) |
 | `$url` | Fully constructed request URL |
@@ -447,7 +445,6 @@ arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.or
 
 | Construct | Specification-conformant alternative |
 |---|---|
-| `$env.VAR_NAME` | None — not a specification expression source. See the [security note](#env-file-support). |
 | Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: {type: xpath, version: xpath-10}` |
 | `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
 | `sourceDescriptions[].url` read as an absolute request base URL | None implemented yet — fetching the document at that URL (the specification's reading of the field) is listed under "Not implemented" below |
@@ -494,25 +491,23 @@ The engine streams events as it runs. CLI output, traces, verbose logging, and t
 
 ### .env File Support
 
-`$env.VAR_NAME` is an **arazzo-cli extension** — the Arazzo specification does not define an environment-variable expression source, so a workflow that relies on it is not portable to another Arazzo tool. It also has a security consequence worth stating plainly: any environment variable the arazzo-cli process can see is readable from workflow text through this expression, not only the ones the workflow author intended to expose — treat `$env` as read access to the whole process environment, not a scoped secrets store.
+On startup, arazzo-cli loads a `.env` file from the current directory (if one exists) into the process environment. Values from the file overwrite variables that already exist in the environment, so treat `.env` as authoritative for every name it defines.
 
-On startup, arazzo-cli automatically loads a `.env` file from the current directory (if one exists). Values become available as `$env.VAR_NAME` in expressions:
-
-```bash
-# .env
-API_KEY=sk-test-12345
-BASE_URL=https://api.example.com
-```
+The `$env.VAR_NAME` expression namespace that used to expose those values inside workflow text was removed in 0.4.0. It was an arazzo-cli extension the Arazzo specification does not define, and it handed workflow text read access to the entire process environment. `$env.*` now resolves like any other unknown namespace — `null`, with a warning — and the variable's value never appears in diagnostics. To get a secret or environment-specific value into a workflow, declare a workflow input and pass it at invocation:
 
 ```yaml
 # In your Arazzo spec
 parameters:
   - name: Authorization
     in: header
-    value: "Bearer {$env.API_KEY}"
+    value: "Bearer {$inputs.apiKey}"
 ```
 
-This keeps secrets out of your spec files and makes the same workflow portable across environments.
+```bash
+arazzo-cli run workflow.arazzo.yaml my-workflow -i apiKey="$API_KEY"
+```
+
+Inputs keep secrets out of spec files, are declared per workflow rather than ambient, and are portable to other Arazzo tools.
 
 ## Parallel Execution
 
