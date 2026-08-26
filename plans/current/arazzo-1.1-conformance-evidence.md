@@ -472,6 +472,18 @@ implicit dependency completion precedes cross-scope fail-closed dependency
 handling. The final cross-surface guard depends on every behavior member and
 the source-owned `operationId` routing ticket.
 
+2026-08-26, Steve-directed: the source-owned `operationId` routing ticket
+([ac-c5105](https://sonos.scapedeck.com/docs/ac-tickets/ac-c5105)) was split.
+It now owns the runtime half only — the `arazzo-spec` classifier, the
+origin-aware operation index, per-source base selection, and pre-HTTP
+ambiguity rejection — and no longer depends on the validator train, making it
+ready immediately (driven by GitHub issue #5 and sonos-hub's first-party
+multi-source requirement). Its validate-time diagnostics half is
+[ac-fd667](https://sonos.scapedeck.com/docs/ac-tickets/ac-fd667), which
+carries the former ac-d15a3 dependency and follows the validator
+decomposition. When the final cross-surface guard's edges are drawn, both
+halves count as the routing prerequisite.
+
 For the Runtime Expression slice, `$env` evaluator removal and the syntax-only
 parser are independent roots; the evaluator migration follows both, and
 interpolation follows evaluator migration. Validator field enforcement follows
