@@ -108,7 +108,7 @@
         "spec/arazzo/v1.1.0.html#parsing-documents"
       ],
       "normativeLevels": ["MUST"],
-      "claim": "A non-arazzo Source Description url resolves against the base URI established from an absolute $self, from a relative $self resolved against the retrieval URI, or from the retrieval URI when no $self is declared, and binds by document identity to a document already provided to the implementation once the whole provided set is parsed.",
+      "claim": "A type: openapi Source Description url resolves against the base URI established from an absolute $self, from a relative $self resolved against the retrieval URI, or from the retrieval URI when no $self is declared, and binds by document identity to a document already provided to the implementation once the whole provided set is parsed.",
       "status": "covered",
       "evidence": {
         "positive": [
@@ -135,7 +135,7 @@
       "claim": "References to an Arazzo Description resolve by that document's identity, and reference fragments resolve as JSON Pointer and JSON Schema anchor forms.",
       "status": "unsupported",
       "owner": "ac-83ty",
-      "reason": "Source Description url resolution and identity binding for non-arazzo sources are delivered by document.source-reference-base-uri-and-identity. What remains is references to an Arazzo Description, owned by ac-83ty, JSON Pointer fragment resolution against a bound document, owned by ac-ff633, and the JSON Schema $anchor form carried by ac-93d90."
+      "reason": "Source Description url resolution and identity binding for type: openapi sources are delivered by document.source-reference-base-uri-and-identity. What remains is references to an Arazzo Description, owned by ac-83ty, JSON Pointer fragment resolution against a bound document, owned by ac-ff633, and the JSON Schema $anchor form carried by ac-93d90."
     },
     {
       "id": "runtime.source-qualified-operation-id-routing",

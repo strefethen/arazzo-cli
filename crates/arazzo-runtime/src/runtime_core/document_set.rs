@@ -86,10 +86,12 @@ pub(super) struct DocumentSet {
     /// caller supplied no directory to resolve against, which leaves relative
     /// references unresolvable.
     base: Option<Url>,
-    /// The `$self` the Arazzo document declared, kept only so a refusal can
-    /// say when that value — rather than a missing directory — is why there is
-    /// no base URI.
+    /// The `$self` the Arazzo document declared, and whether a retrieval URI
+    /// was available to resolve it against. Kept only so a refusal can tell
+    /// the two causes of a missing base URI apart: a `$self` that cannot be
+    /// resolved at all, and a relative one with nothing to resolve against.
     declared_self: Option<String>,
+    had_retrieval_base: bool,
     members: Vec<SetMember>,
 }
 
@@ -120,6 +122,7 @@ impl DocumentSet {
             })
             .collect();
         Ok(Self {
+            had_retrieval_base: retrieval_base.is_some(),
             base: base_uri(spec.self_uri.as_deref(), retrieval_base),
             declared_self: spec.self_uri.clone(),
             members,
@@ -233,15 +236,19 @@ impl DocumentSet {
             return Ok(Url::parse(&sd.url).ok());
         }
         let Some(base) = self.base.as_ref() else {
-            // Naming the declared `$self` matters: when one is present and
-            // unusable, supplying a directory would not help, and the generic
-            // remedy would send the operator after the wrong thing.
+            // Which cause is named decides whether the remedy works. A `$self`
+            // that had a retrieval URI to resolve against and still produced no
+            // base is itself the fault, and supplying a directory would not
+            // help. Every other way to arrive here — no `$self`, or a relative
+            // one with nothing to resolve it against — is answered by the
+            // directory, so do not blame a `$self` that is merely relative.
             let cause = match self.declared_self.as_deref() {
-                Some(declared) => {
-                    format!("its $self \"{declared}\" is not a URI this runtime can resolve")
-                }
-                None => "declare an absolute $self, or provide the Arazzo document's directory \
-                         via EngineBuilder::source_base_dir"
+                Some(declared) if self.had_retrieval_base => format!(
+                    "its $self \"{declared}\" is not a URI this runtime can resolve against the \
+                     document's retrieval URI"
+                ),
+                _ => "declare an absolute $self, or provide the Arazzo document's directory via \
+                      EngineBuilder::source_base_dir"
                     .to_string(),
             };
             return Err(RuntimeError::new(

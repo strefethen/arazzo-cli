@@ -455,6 +455,31 @@ async fn a_declared_self_that_cannot_be_resolved_is_named_as_the_cause() {
     );
 }
 
+#[tokio::test]
+async fn a_relative_self_with_nothing_to_resolve_it_against_still_asks_for_the_directory() {
+    // The mirror of the case above. `workflows/purchase.arazzo.yaml` is a
+    // perfectly good URI-reference — Appendix §9.5's own — and blaming it here
+    // would be the misdiagnosis: what is missing is the retrieval URI to
+    // resolve it against.
+    let err = build_error(
+        spec_with(
+            Some("workflows/purchase.arazzo.yaml"),
+            "./petstore.openapi.yaml",
+        ),
+        None,
+        vec![],
+    );
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionLoad);
+    assert_names(&err.message, "source_base_dir", "remedy that applies");
+    assert!(
+        !err.message
+            .contains("is not a URI this runtime can resolve"),
+        "a relative $self is not the fault when there is nothing to resolve it against: {}",
+        err.message
+    );
+}
+
 // ── Absolute `file` references ──────────────────────────────────────
 
 #[tokio::test]
