@@ -37,6 +37,10 @@ if [ "$PUSH_FLAG" = "--push" ]; then
   echo "Pushing tag $TAG to $REMOTE..."
   git -C "$ROOT_DIR" push "$REMOTE" "$TAG"
   echo "Tag pushed. Internal release workflow should now run for $TAG."
+
+  echo "Installing $TAG locally..."
+  (cd "$ROOT_DIR" && cargo install --path "$ROOT_DIR/crates/arazzo-cli" --locked --force)
+  echo "Local arazzo-cli install updated."
 else
   echo "Tag created locally."
   echo "To push and trigger release workflow:"
