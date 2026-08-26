@@ -146,7 +146,7 @@ Global flags:
 
 ## Examples
 
-The `examples/` directory contains 17 runnable specs:
+The `examples/` directory contains 18 runnable specs (see [`examples/README.md`](examples/README.md) for the full catalog):
 
 | Spec | Demonstrates |
 |---|---|
@@ -161,6 +161,7 @@ The `examples/` directory contains 17 runnable specs:
 | `httpbin-components.arazzo.yaml` | Reusable parameters and actions via components |
 | `httpbin-chained-posts.arazzo.yaml` | Multi-step POST body chaining, onSuccess goto |
 | `httpbin-reusable-inputs.arazzo.yaml` | `$ref` in workflow inputs, component schema reuse |
+| `httpbin-replacements.arazzo.yaml` | `requestBody.replacements` JSON Pointer overlays |
 | `multi-api-orchestration.arazzo.yaml` | Multiple source descriptions, cross-API routing |
 | `error-handling-retry.arazzo.yaml` | Retry logic with configurable delay and limits |
 | `sub-workflow.arazzo.yaml` | Parent/child workflow composition with input/output passing |
@@ -184,7 +185,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --dry-run --input c
 arazzo-cli run examples/httpbin-parallel.arazzo.yaml independent-steps --parallel --verbose
 
 # Run a single step (auto-resolves its dependencies)
-arazzo-cli run examples/httpbin-data-flow.arazzo.yaml chain-outputs --step use-uuid
+arazzo-cli run examples/httpbin-data-flow.arazzo.yaml chained-outputs --step echo-origin
 
 # Generate CRUD workflows from an OpenAPI spec
 arazzo-cli generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
@@ -864,7 +865,7 @@ crates/
   arazzo-mcp               MCP server (Model Context Protocol) for AI agents
   arazzo-debug-adapter     DAP server (Debug Adapter Protocol)
 vscode-arazzo-debug/       VS Code debugger extension (TypeScript)
-examples/                  17 runnable workflow specs
+examples/                  18 runnable workflow specs
 testdata/                  Test fixtures
 docs/schemas/              JSON Schemas for --json output formats
 ```
