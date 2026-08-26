@@ -433,6 +433,62 @@ async fn a_relative_reference_without_any_base_uri_is_refused() {
     assert_names(&err.message, "./petstore.openapi.yaml", "authored url");
 }
 
+#[tokio::test]
+async fn a_declared_self_that_cannot_be_resolved_is_named_as_the_cause() {
+    // Not "you forgot the directory" — the directory is right here. When a
+    // `$self` is present and unusable, saying so is the difference between a
+    // remedy that works and one that sends the operator after the wrong thing.
+    let dir = TempDir::new();
+
+    let err = build_error(
+        spec_with(Some("http://["), "./petstore.openapi.yaml"),
+        Some(dir.path()),
+        vec![],
+    );
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionLoad);
+    assert_names(&err.message, "http://[", "unusable $self");
+    assert!(
+        !err.message.contains("source_base_dir"),
+        "the directory was supplied, so it is not the remedy: {}",
+        err.message
+    );
+}
+
+// ── Absolute `file` references ──────────────────────────────────────
+
+#[tokio::test]
+async fn an_absolute_file_url_is_read_like_any_other_local_reference() {
+    // The resolved scheme decides, not the shape of the authored string: an
+    // absolute `file://` url names a document to load, not a request base.
+    let dir = TempDir::new();
+    let path = dir.write(
+        "petstore.openapi.yaml",
+        &openapi_document("http://on-disk.invalid", None),
+    );
+    let authored = format!("file://{}", path.display());
+
+    let url = resolved_request_url(spec_with(None, &authored), Some(dir.path()), vec![]).await;
+
+    assert_eq!(url, "http://on-disk.invalid/pet");
+}
+
+#[test]
+fn an_absolute_file_url_is_vetted_like_any_other_disk_read() {
+    // Because the build opens it, the filesystem gate has to see it.
+    let dir = TempDir::new();
+    let path = dir.write(
+        "petstore.openapi.yaml",
+        &openapi_document("http://on-disk.invalid", None),
+    );
+    let authored = format!("file://{}", path.display());
+
+    let paths = relative_openapi_source_paths(&spec_with(None, &authored), dir.path());
+
+    assert_eq!(paths.len(), 1, "the read must be vetted: {paths:?}");
+    assert_eq!(paths[0].1, path);
+}
+
 // ── The filesystem gate ─────────────────────────────────────────────
 
 #[test]

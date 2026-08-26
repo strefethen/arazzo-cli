@@ -86,6 +86,10 @@ pub(super) struct DocumentSet {
     /// caller supplied no directory to resolve against, which leaves relative
     /// references unresolvable.
     base: Option<Url>,
+    /// The `$self` the Arazzo document declared, kept only so a refusal can
+    /// say when that value — rather than a missing directory — is why there is
+    /// no base URI.
+    declared_self: Option<String>,
     members: Vec<SetMember>,
 }
 
@@ -117,6 +121,7 @@ impl DocumentSet {
             .collect();
         Ok(Self {
             base: base_uri(spec.self_uri.as_deref(), retrieval_base),
+            declared_self: spec.self_uri.clone(),
             members,
         })
     }
@@ -228,12 +233,22 @@ impl DocumentSet {
             return Ok(Url::parse(&sd.url).ok());
         }
         let Some(base) = self.base.as_ref() else {
+            // Naming the declared `$self` matters: when one is present and
+            // unusable, supplying a directory would not help, and the generic
+            // remedy would send the operator after the wrong thing.
+            let cause = match self.declared_self.as_deref() {
+                Some(declared) => {
+                    format!("its $self \"{declared}\" is not a URI this runtime can resolve")
+                }
+                None => "declare an absolute $self, or provide the Arazzo document's directory \
+                         via EngineBuilder::source_base_dir"
+                    .to_string(),
+            };
             return Err(RuntimeError::new(
                 RuntimeErrorKind::SourceDescriptionLoad,
                 format!(
                     "sourceDescription \"{}\": relative url \"{}\" has no base URI to resolve \
-                     against; declare an absolute $self or provide the Arazzo document's \
-                     directory via EngineBuilder::source_base_dir",
+                     against: {cause}",
                     sd.name, sd.url
                 ),
             ));
@@ -365,6 +380,13 @@ fn absolute_path(path: &Path) -> std::io::Result<PathBuf> {
 /// URI and §6.2.2.3 requires before two URIs are compared. Without it a
 /// document reached through `../` would carry a different identity than the
 /// same document named directly, and no reference to it would ever match.
+///
+/// This is a URI operation, not a filesystem one, and the two disagree in one
+/// place: for `/a/link/../b` where `link` is a symlink, the kernel would
+/// answer relative to the link's target and this answers `/a/b`. Resolving
+/// symlinks instead would be the wrong trade — it needs the path to exist,
+/// which a reference being resolved need not, and §5.6.1 asks for RFC 3986
+/// resolution, not for whatever the filesystem would have done.
 fn remove_dot_segments(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
