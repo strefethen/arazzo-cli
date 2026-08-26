@@ -651,13 +651,73 @@ async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
     };
     assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
     assert!(
-        err.message
-            .contains("cannot be named by the qualified form"),
-        "the remedy must not point at a form that cannot resolve it; message was: {err}"
+        err.message.contains("absolute-URL operationPath"),
+        "the remedy must name a form that can actually reach it; message was: {err}"
     );
     assert!(
-        err.message.contains("{<name>}./<path>"),
+        err.message.contains("neither of those forms can reach it"),
         "message was: {err}"
+    );
+}
+
+/// The converse branch: with no separately provided spec there is nothing to
+/// warn about, and the note must not appear.
+#[tokio::test]
+async fn the_explicit_spec_note_appears_only_when_a_spec_was_provided() {
+    let fixture = TwoSources::new();
+    let err = refusal(spec_with(fixture.sources(), "getPet"), fixture.dir.path()).await;
+    assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
+    assert!(
+        !err.message.contains("separately provided OpenAPI spec"),
+        "message was: {err}"
+    );
+}
+
+/// One document defining the same operationId under two paths is a real
+/// document error, and both definitions carry the same origin. The count stays
+/// truthful while the origin is named once — naming it twice reads as a bug in
+/// the message rather than a clash inside the document.
+#[tokio::test]
+async fn an_ambiguity_within_one_document_names_that_document_once() {
+    let fixture = TwoSources::new();
+    fixture.dir.write(
+        "twice.openapi.yaml",
+        &[
+            "openapi: \"3.0.0\"",
+            "info:",
+            "  title: fixture",
+            "  version: \"1.0.0\"",
+            "servers:",
+            "  - url: https://twice.example.com",
+            "paths:",
+            "  /first:",
+            "    get:",
+            "      operationId: getPet",
+            "  /second:",
+            "    get:",
+            "      operationId: getPet",
+            "",
+        ]
+        .join("\n"),
+    );
+
+    let err = refusal(
+        spec_with(
+            vec![openapi_source("twice", "twice.openapi.yaml")],
+            "getPet",
+        ),
+        fixture.dir.path(),
+    )
+    .await;
+    assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
+    assert!(
+        err.message.contains("defined 2 times"),
+        "the count must stay truthful; message was: {err}"
+    );
+    assert_eq!(
+        err.message.matches("sourceDescription \"twice\"").count(),
+        1,
+        "the one origin must be named once; message was: {err}"
     );
 }
 

@@ -155,15 +155,20 @@ impl Engine {
                     ),
                 )
             })?;
-        // The declared `type` decides this, never the url text: only an
-        // OpenAPI source describes operations for an operationId to name.
+        // The declared `type` decides this, never the url text.
+        //
+        // The refusal is this runtime's limit, not the specification's: v1.1.0
+        // shows `operationId: $sourceDescriptions.asyncOrderApi.placeOrder` in
+        // its own async step example, so an asyncapi source naming an
+        // operation is conformant Arazzo. Nothing here implements AsyncAPI
+        // transport, and the message says whose limit it is.
         if source.type_ != SourceType::OpenApi {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::UnsupportedSourceDescriptionType,
                 format!(
                     "operationId \"{target}\" names sourceDescription \"{source_name}\", whose \
-                     type is \"{declared}\"; an operationId resolves only against a source of \
-                     type \"{expected}\"",
+                     type is \"{declared}\"; this runtime resolves an operationId only against a \
+                     source of type \"{expected}\"",
                     declared = source.type_,
                     expected = SourceType::OpenApi,
                 ),
@@ -229,8 +234,13 @@ impl Engine {
             let explicit_note = if index.openapi_specs_raw.is_empty() {
                 String::new()
             } else {
+                // Naming only the two forms above would be worse than saying
+                // nothing: `{<name>}./<path>` joins that source's host to a
+                // path the source does not define, which is the silently-wrong
+                // host this refusal exists to prevent.
                 ". An operation from a separately provided OpenAPI spec belongs to no \
-                 sourceDescription and cannot be named by the qualified form; address it by path"
+                 sourceDescription, so neither of those forms can reach it — give that step an \
+                 absolute-URL operationPath instead"
                     .to_string()
             };
             return Err(RuntimeError::new(

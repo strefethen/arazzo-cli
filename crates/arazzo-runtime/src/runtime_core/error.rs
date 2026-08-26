@@ -22,7 +22,11 @@ pub enum RuntimeErrorKind {
     /// without being it.
     UnsupportedOperationIdForm,
     /// A source-qualified `operationId` names a source description whose
-    /// declared `type` describes no operations.
+    /// declared `type` this runtime cannot resolve operations from.
+    ///
+    /// A runtime limitation, not a specification rule: v1.1.0's own async step
+    /// example is `operationId: $sourceDescriptions.asyncOrderApi.placeOrder`.
+    /// Nothing here implements AsyncAPI transport, so only `openapi` resolves.
     UnsupportedSourceDescriptionType,
     UnsupportedAsyncApiTransport,
     UnsupportedOperationPathForm,
