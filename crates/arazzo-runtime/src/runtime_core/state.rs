@@ -59,11 +59,119 @@ pub(crate) enum OperationOrigin {
     ExplicitSpec { ordinal: usize },
 }
 
+impl OperationOrigin {
+    /// The Source Description that owns the operation. `None` for an
+    /// explicitly provided spec, which belongs to no source description and
+    /// therefore has no server base of its own.
+    pub(super) fn source_name(&self) -> Option<&str> {
+        match self {
+            Self::Source { name, .. } => Some(name),
+            Self::ExplicitSpec { .. } => None,
+        }
+    }
+
+    /// Phrase naming where the operation came from, for ambiguity messages.
+    pub(super) fn describe(&self) -> String {
+        match self {
+            Self::Source { name, path } => format!("sourceDescription \"{name}\" ({path})"),
+            Self::ExplicitSpec { ordinal } => {
+                format!("explicitly provided OpenAPI spec #{ordinal}")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct OperationEntry {
     pub(super) method: String,
     pub(super) path: String,
     pub(super) origin: OperationOrigin,
+}
+
+/// Every indexed operation, keyed by `operationId`, retaining every definition
+/// rather than the last one indexed.
+///
+/// The plain `BTreeMap<String, OperationEntry>` this replaces could not express
+/// what the specification assumes: two Source Descriptions may each define
+/// `getPet`, and under last-insert-wins a step naming it was routed to
+/// whichever document happened to be indexed last — silently, and to the
+/// engine-wide base rather than that document's server.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OperationIndex {
+    by_id: BTreeMap<String, Vec<OperationEntry>>,
+}
+
+/// What an `operationId` lookup matched.
+pub(crate) enum OperationMatch<'a> {
+    /// Nothing defines it.
+    Missing,
+    One(&'a OperationEntry),
+    /// Two or more definitions of equal precedence, in index order. This
+    /// runtime refuses to pick between them instead of resolving by insertion
+    /// order.
+    Ambiguous(Vec<&'a OperationEntry>),
+}
+
+impl OperationIndex {
+    pub(super) fn push(&mut self, operation_id: String, entry: OperationEntry) {
+        self.by_id.entry(operation_id).or_default().push(entry);
+    }
+
+    /// The origin most recently indexed under `operation_id`, which is the
+    /// entry a last-insert-wins map would have replaced. Used only to keep the
+    /// build-time override warning firing exactly when it used to.
+    pub(super) fn last_origin(&self, operation_id: &str) -> Option<&OperationOrigin> {
+        self.by_id
+            .get(operation_id)
+            .and_then(|entries| entries.last())
+            .map(|entry| &entry.origin)
+    }
+
+    /// The operation the named Source Description defines under this id.
+    ///
+    /// Explicit specs are never consulted: they belong to no source, so a
+    /// source-qualified target neither resolves from one nor is overridden
+    /// by one.
+    pub(super) fn in_source(&self, source_name: &str, operation_id: &str) -> OperationMatch<'_> {
+        self.select(operation_id, |entry| {
+            entry.origin.source_name() == Some(source_name)
+        })
+    }
+
+    /// The operation an unqualified `operation_id` names.
+    ///
+    /// An explicitly provided spec outranks a Source Description document,
+    /// which is the direction the build-time override warning already
+    /// announces; source documents are consulted only when no explicit spec
+    /// defines the id.
+    pub(super) fn bare(&self, operation_id: &str) -> OperationMatch<'_> {
+        match self.select(operation_id, |entry| entry.origin.source_name().is_none()) {
+            OperationMatch::Missing => self.select(operation_id, |_| true),
+            matched => matched,
+        }
+    }
+
+    fn select<'a>(
+        &'a self,
+        operation_id: &str,
+        keep: impl Fn(&OperationEntry) -> bool,
+    ) -> OperationMatch<'a> {
+        let Some(entries) = self.by_id.get(operation_id) else {
+            return OperationMatch::Missing;
+        };
+        let mut matched = entries.iter().filter(|entry| keep(entry));
+        let Some(first) = matched.next() else {
+            return OperationMatch::Missing;
+        };
+        let rest: Vec<&OperationEntry> = matched.collect();
+        if rest.is_empty() {
+            return OperationMatch::One(first);
+        }
+        let mut all = Vec::with_capacity(rest.len() + 1);
+        all.push(first);
+        all.extend(rest);
+        OperationMatch::Ambiguous(all)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -169,11 +277,11 @@ pub(crate) struct WorkflowIndex {
     /// Effective request base per source name (`{name}.` operationPath routing).
     pub(super) source_bases: BTreeMap<String, String>,
     /// Operations indexed from `sourceDescriptions[]` documents at build time.
-    pub(super) source_ops: BTreeMap<String, OperationEntry>,
+    pub(super) source_ops: OperationIndex,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
     pub(super) openapi_specs_raw: Vec<Vec<u8>>,
-    pub(super) op_index: OnceLock<BTreeMap<String, OperationEntry>>,
+    pub(super) op_index: OnceLock<OperationIndex>,
 }
 
 /// Shared immutable core of the engine, wrapped in `Arc`.

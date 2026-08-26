@@ -12,6 +12,18 @@ pub enum RuntimeErrorKind {
     WorkflowDependencyUnsatisfied,
     StepNotFound,
     OperationIdNotFound,
+    /// An `operationId` names more than one indexed operation, or is
+    /// unqualified in a document that defines multiple non-`arazzo` source
+    /// descriptions (Step Object: the qualified Runtime Expression is a MUST
+    /// there). Refused before any request is sent, never resolved by
+    /// insertion order.
+    OperationIdAmbiguous,
+    /// An `operationId` reaches for `$sourceDescriptions.<name>.<operationId>`
+    /// without being it.
+    UnsupportedOperationIdForm,
+    /// A source-qualified `operationId` names a source description whose
+    /// declared `type` describes no operations.
+    UnsupportedSourceDescriptionType,
     UnsupportedAsyncApiTransport,
     UnsupportedOperationPathForm,
     MaxCallDepthExceeded,
@@ -61,6 +73,9 @@ impl RuntimeErrorKind {
             Self::WorkflowDependencyUnsatisfied => "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED",
             Self::StepNotFound => "RUNTIME_STEP_NOT_FOUND",
             Self::OperationIdNotFound => "RUNTIME_OPERATION_ID_NOT_FOUND",
+            Self::OperationIdAmbiguous => "RUNTIME_OPERATION_ID_AMBIGUOUS",
+            Self::UnsupportedOperationIdForm => "RUNTIME_UNSUPPORTED_OPERATION_ID_FORM",
+            Self::UnsupportedSourceDescriptionType => "RUNTIME_UNSUPPORTED_SOURCE_DESCRIPTION_TYPE",
             Self::UnsupportedAsyncApiTransport => "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT",
             Self::UnsupportedOperationPathForm => "RUNTIME_UNSUPPORTED_OPERATION_PATH_FORM",
             Self::MaxCallDepthExceeded => "RUNTIME_MAX_CALL_DEPTH_EXCEEDED",

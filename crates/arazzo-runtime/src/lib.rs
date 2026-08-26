@@ -394,7 +394,7 @@ mod tests {
         };
 
         let url_result = engine
-            .build_url_from_path("/api", &step, &vars)
+            .build_url_from_path("/api", None, &step, &vars)
             .unwrap_or_else(|err| panic!("build_url_from_path failed: {err}"));
         // Standard exploded format is ?ids=a&ids=b.
         assert!(
@@ -483,7 +483,7 @@ mod tests {
             ..Step::default()
         };
 
-        let url_result = match engine.build_url_from_path("/search", &step, &vars) {
+        let url_result = match engine.build_url_from_path("/search", None, &step, &vars) {
             Ok(v) => v,
             Err(err) => panic!("building URL for query encoding test: {err}"),
         };
@@ -508,7 +508,7 @@ mod tests {
             ..Step::default()
         };
 
-        let url_result = match engine.build_url_from_path("/users", &step, &vars) {
+        let url_result = match engine.build_url_from_path("/users", None, &step, &vars) {
             Ok(v) => v,
             Err(err) => panic!("building URL for slash normalization test: {err}"),
         };
@@ -525,7 +525,7 @@ mod tests {
             ..Step::default()
         };
 
-        let err = match engine.build_url_from_path("{missing}./users", &step, &vars) {
+        let err = match engine.build_url_from_path("{missing}./users", None, &step, &vars) {
             Ok(result) => panic!(
                 "expected unknown sourceDescription error, got URL {}",
                 result.url

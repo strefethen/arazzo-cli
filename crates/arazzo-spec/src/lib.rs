@@ -6,9 +6,13 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod operation_id;
 mod operation_path;
 mod workflow_dependency;
 
+pub use operation_id::{
+    classify_operation_id, MalformedOperationId, OperationIdTarget, SUPPORTED_OPERATION_ID_FORMS,
+};
 pub use operation_path::{
     classify_operation_path, presented_method_and_target, split_operation_method,
     ClassifiedOperationPath, OperationPathForm, UnsupportedOperationPath,

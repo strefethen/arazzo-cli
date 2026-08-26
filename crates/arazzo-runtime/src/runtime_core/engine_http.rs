@@ -63,17 +63,29 @@ impl Engine {
             .await;
     }
 
+    /// Resolves an `operationId` to the `(method, path)` it names, discarding
+    /// the source description that owns it. Preserved for callers that need
+    /// only the pair; the engine itself uses
+    /// [`Self::resolve_operation_target`], because the owning source is what
+    /// decides which server the request is sent to.
     pub fn resolve_operation_id(
         &self,
         operation_id: &str,
     ) -> Result<(String, String), RuntimeError> {
+        let resolved = self.resolve_operation_target(operation_id)?;
+        Ok((resolved.method, resolved.path))
+    }
+
+    /// The operation index, parsed on first access.
+    ///
+    /// Lazy-init: parse OpenAPI specs on first access (stable OnceLock pattern).
+    /// If two threads race, both compute the same deterministic index and one
+    /// `set()` silently no-ops — OnceLock guarantees a single stored value.
+    /// Source-description documents (indexed eagerly at build) go first, then
+    /// explicitly provided specs, so the build-time override warning keeps
+    /// announcing the same direction it always has.
+    fn operation_index(&self) -> Result<&OperationIndex, RuntimeError> {
         let index = &self.inner.index;
-        // Lazy-init: parse OpenAPI specs on first access (stable OnceLock pattern).
-        // If two threads race, both compute the same deterministic index and one
-        // `set()` silently no-ops — OnceLock guarantees a single stored value.
-        // Source-description documents (indexed eagerly at build) go first, then
-        // explicitly provided specs, so explicit specs win duplicate operationIds
-        // under last-insert-wins.
         if index.op_index.get().is_none() {
             let mut idx = index.source_ops.clone();
             for (ordinal, spec_data) in index.openapi_specs_raw.iter().enumerate() {
@@ -84,21 +96,159 @@ impl Engine {
             }
             let _ = index.op_index.set(idx);
         }
-        let op_index = index.op_index.get().ok_or_else(|| {
+        index.op_index.get().ok_or_else(|| {
             RuntimeError::new(
                 RuntimeErrorKind::InternalError,
                 "operation index initialization failed unexpectedly",
             )
-        })?;
-        op_index
-            .get(operation_id)
-            .map(|entry| (entry.method.clone(), entry.path.clone()))
+        })
+    }
+
+    /// Resolves a step's `operationId` — bare or source-qualified — to the
+    /// request it names and the server base that request belongs to.
+    ///
+    /// Every value the specification does not let this runtime resolve to
+    /// exactly one operation is refused here, before a URL is built and
+    /// therefore before anything is sent.
+    pub(crate) fn resolve_operation_target(
+        &self,
+        operation_id: &str,
+    ) -> Result<ResolvedOperation, RuntimeError> {
+        match classify_operation_id(operation_id) {
+            OperationIdTarget::SourceQualified {
+                source_name,
+                operation_id: name,
+            } => self.resolve_in_source(operation_id, source_name, name),
+            OperationIdTarget::Bare(name) => self.resolve_bare(operation_id, name),
+            OperationIdTarget::Malformed(reason) => Err(RuntimeError::new(
+                RuntimeErrorKind::UnsupportedOperationIdForm,
+                format!(
+                    "operationId \"{operation_id}\" {reason}; supported forms are \
+                     {SUPPORTED_OPERATION_ID_FORMS}"
+                ),
+            )),
+        }
+    }
+
+    /// Resolves `$sourceDescriptions.<name>.<operationId>` against that one
+    /// Source Description and no other — an explicitly provided spec belongs
+    /// to no source, so it can neither satisfy a qualified target nor
+    /// override one.
+    fn resolve_in_source(
+        &self,
+        target: &str,
+        source_name: &str,
+        operation_id: &str,
+    ) -> Result<ResolvedOperation, RuntimeError> {
+        let index = &self.inner.index;
+        let source = index
+            .spec
+            .source_descriptions
+            .iter()
+            .find(|sd| sd.name == source_name)
             .ok_or_else(|| {
                 RuntimeError::new(
-                    RuntimeErrorKind::OperationIdNotFound,
-                    format!("operationId \"{operation_id}\" not found in loaded OpenAPI specs"),
+                    RuntimeErrorKind::SourceDescriptionNotFound,
+                    format!(
+                        "sourceDescription \"{source_name}\" referenced by operationId \
+                         \"{target}\" was not found"
+                    ),
                 )
-            })
+            })?;
+        // The declared `type` decides this, never the url text: only an
+        // OpenAPI source describes operations for an operationId to name.
+        if source.type_ != SourceType::OpenApi {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::UnsupportedSourceDescriptionType,
+                format!(
+                    "operationId \"{target}\" names sourceDescription \"{source_name}\", whose \
+                     type is \"{declared}\"; an operationId resolves only against a source of \
+                     type \"{expected}\"",
+                    declared = source.type_,
+                    expected = SourceType::OpenApi,
+                ),
+            ));
+        }
+        let base = index
+            .source_bases
+            .get(source_name)
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::InternalError,
+                    format!("sourceDescription \"{source_name}\" has no effective request base"),
+                )
+            })?;
+        match self.operation_index()?.in_source(source_name, operation_id) {
+            OperationMatch::One(entry) => Ok(ResolvedOperation {
+                method: entry.method.clone(),
+                path: entry.path.clone(),
+                base: Some(base),
+            }),
+            OperationMatch::Missing => Err(RuntimeError::new(
+                RuntimeErrorKind::OperationIdNotFound,
+                format!(
+                    "operationId \"{operation_id}\" was not found in sourceDescription \
+                     \"{source_name}\", named by \"{target}\""
+                ),
+            )),
+            OperationMatch::Ambiguous(entries) => Err(ambiguous_operation_id(target, &entries)),
+        }
+    }
+
+    /// Resolves an unqualified `operationId`.
+    ///
+    /// Step Object, `operationId`: *"If multiple (non arazzo type)
+    /// sourceDescriptions are defined, then the operationId MUST be specified
+    /// using a Runtime Expression […] to avoid ambiguity or potential
+    /// clashes."* The refusal below counts the sources the document declares
+    /// rather than checking whether this particular id happens to be unique in
+    /// the documents indexed today — otherwise a step keeps working until a
+    /// second document starts defining the same name, and then silently
+    /// changes which server it targets.
+    fn resolve_bare(
+        &self,
+        target: &str,
+        operation_id: &str,
+    ) -> Result<ResolvedOperation, RuntimeError> {
+        let index = &self.inner.index;
+        let sources: Vec<&str> = index
+            .spec
+            .source_descriptions
+            .iter()
+            .filter(|sd| sd.type_ != SourceType::Arazzo)
+            .map(|sd| sd.name.as_str())
+            .collect();
+        if sources.len() > 1 {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::OperationIdAmbiguous,
+                format!(
+                    "operationId \"{target}\" is unqualified, but {count} non-arazzo \
+                     sourceDescriptions are defined ({names}); name the source with \
+                     \"$sourceDescriptions.<name>.{target}\", or address the operation by path \
+                     with an operationPath of \"{{<name>}}./<path>\"",
+                    count = sources.len(),
+                    names = sources.join(", "),
+                ),
+            ));
+        }
+        match self.operation_index()?.bare(operation_id) {
+            OperationMatch::One(entry) => Ok(ResolvedOperation {
+                method: entry.method.clone(),
+                path: entry.path.clone(),
+                // An operation from an explicitly provided spec belongs to no
+                // source description, so it keeps the engine-wide base.
+                base: entry
+                    .origin
+                    .source_name()
+                    .and_then(|name| index.source_bases.get(name).cloned()),
+            }),
+            OperationMatch::Missing => Err(RuntimeError::new(
+                RuntimeErrorKind::OperationIdNotFound,
+                format!("operationId \"{operation_id}\" not found in loaded OpenAPI specs"),
+            )),
+            OperationMatch::Ambiguous(entries) => Err(ambiguous_operation_id(target, &entries)),
+        }
     }
 
     pub(crate) fn prepare_http_request(
@@ -116,17 +266,24 @@ impl Engine {
             ));
         }
 
-        let operation_path = match &step.target {
-            Some(StepTarget::OperationPath(path)) => path.clone(),
-            Some(StepTarget::OperationId(id)) => {
-                let (method, path) = self.resolve_operation_id(id)?;
-                format!("{method} {path}")
+        // A resolved `operationId` carries the effective request base of the
+        // source description that owns it. Formatting the resolution back into
+        // a `"<METHOD> <path>"` string and re-classifying that, as this used
+        // to, is what discarded the owning source and sent every resolved
+        // operation to the first source description's host.
+        let (explicit_method, op_path, source_base) = match &step.target {
+            Some(StepTarget::OperationPath(path)) => {
+                let (method, remainder) = parse_method(path);
+                (method.to_string(), remainder.to_string(), None)
             }
-            _ => String::new(),
+            Some(StepTarget::OperationId(id)) => {
+                let resolved = self.resolve_operation_target(id)?;
+                (resolved.method, resolved.path, resolved.base)
+            }
+            _ => (String::new(), String::new(), None),
         };
 
-        let (explicit_method, op_path) = parse_method(&operation_path);
-        let url_result = self.build_url_from_path(op_path, step, vars)?;
+        let url_result = self.build_url_from_path(&op_path, source_base.as_deref(), step, vars)?;
 
         let method = if explicit_method.is_empty() {
             if step.request_body.is_some() {
@@ -135,7 +292,7 @@ impl Engine {
                 "GET".to_string()
             }
         } else {
-            explicit_method.to_string()
+            explicit_method
         };
 
         let mut prep_warnings = url_result.warnings.clone();
@@ -514,9 +671,16 @@ impl Engine {
         })
     }
 
+    /// Builds the request URL for a step's already-resolved target.
+    ///
+    /// `source_base` is the effective request base of the source description
+    /// that owns a resolved `operationId`. When it is present, `op_path` is
+    /// that document's own path and carries no `operationPath` syntax to
+    /// classify — `/pets/{petId}` is a path, not a `{sourceName}.` reference.
     pub(crate) fn build_url_from_path(
         &self,
         op_path: &str,
+        source_base: Option<&str>,
         step: &Step,
         vars: &VarStore,
     ) -> Result<UrlBuildResult, RuntimeError> {
@@ -527,36 +691,39 @@ impl Engine {
         //
         // Classification happens here, before any string is joined, so no
         // caller can construct a URL out of a value this runtime cannot resolve.
-        let (resolved_base, resolved_path) = match classify_operation_path(op_path).form {
-            OperationPathForm::Unsupported(reason) => {
-                return Err(RuntimeError::new(
-                    RuntimeErrorKind::UnsupportedOperationPathForm,
-                    format!(
-                        "step \"{}\": operationPath \"{op_path}\" carries {reason}; \
-                         resolving the specification form (source reference plus JSON \
-                         Pointer) is not implemented. Supported forms are \
-                         {SUPPORTED_OPERATION_PATH_FORMS}.",
-                        step.step_id
-                    ),
-                ));
-            }
-            OperationPathForm::SourceRouted { source_name, path } => {
-                match self.inner.index.source_bases.get(source_name) {
-                    Some(base) => (base.as_str(), path),
-                    None => {
-                        return Err(RuntimeError::new(
-                            RuntimeErrorKind::SourceDescriptionNotFound,
-                            format!(
-                                "sourceDescription \"{source_name}\" referenced by operationPath \"{op_path}\" was not found"
-                            ),
-                        ));
+        let (resolved_base, resolved_path) = match source_base {
+            Some(base) => (base, op_path),
+            None => match classify_operation_path(op_path).form {
+                OperationPathForm::Unsupported(reason) => {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::UnsupportedOperationPathForm,
+                        format!(
+                            "step \"{}\": operationPath \"{op_path}\" carries {reason}; \
+                             resolving the specification form (source reference plus JSON \
+                             Pointer) is not implemented. Supported forms are \
+                             {SUPPORTED_OPERATION_PATH_FORMS}.",
+                            step.step_id
+                        ),
+                    ));
+                }
+                OperationPathForm::SourceRouted { source_name, path } => {
+                    match self.inner.index.source_bases.get(source_name) {
+                        Some(base) => (base.as_str(), path),
+                        None => {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::SourceDescriptionNotFound,
+                                format!(
+                                    "sourceDescription \"{source_name}\" referenced by operationPath \"{op_path}\" was not found"
+                                ),
+                            ));
+                        }
                     }
                 }
-            }
-            // An absolute URL keeps the base only to satisfy the tuple; the
-            // `starts_with("http")` test below discards it, as it always has.
-            OperationPathForm::AbsoluteUrl(url) => (self.inner.index.base_url.as_str(), url),
-            OperationPathForm::BasePath(path) => (self.inner.index.base_url.as_str(), path),
+                // An absolute URL keeps the base only to satisfy the tuple; the
+                // `starts_with("http")` test below discards it, as it always has.
+                OperationPathForm::AbsoluteUrl(url) => (self.inner.index.base_url.as_str(), url),
+                OperationPathForm::BasePath(path) => (self.inner.index.base_url.as_str(), path),
+            },
         };
 
         let mut target =
@@ -782,4 +949,37 @@ pub(crate) struct PreparedRequest {
     pub body_json: Option<Value>,
     pub trace_request: TraceRequest,
     pub warnings: Vec<String>,
+}
+
+/// An `operationId` resolved to the request it names.
+pub(crate) struct ResolvedOperation {
+    pub method: String,
+    pub path: String,
+    /// Effective request base of the source description that defines the
+    /// operation. `None` when it came from an explicitly provided OpenAPI
+    /// spec, which belongs to no source description and so keeps the
+    /// engine-wide base.
+    pub base: Option<String>,
+}
+
+/// The refusal for an `operationId` that more than one indexed document
+/// defines.
+///
+/// Naming every definition is the point: the previous index kept only the last
+/// one indexed, so a clash between two documents was invisible until the
+/// request arrived at the wrong host.
+fn ambiguous_operation_id(target: &str, entries: &[&OperationEntry]) -> RuntimeError {
+    let origins: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.origin.describe())
+        .collect();
+    RuntimeError::new(
+        RuntimeErrorKind::OperationIdAmbiguous,
+        format!(
+            "operationId \"{target}\" is defined {count} times ({origins}); it does not name one \
+             operation",
+            count = entries.len(),
+            origins = origins.join(", "),
+        ),
+    )
 }

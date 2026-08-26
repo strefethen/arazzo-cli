@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use arazzo_spec::{SourceDescription, SourceType};
 
-use state::OperationOrigin;
+use state::{OperationIndex, OperationOrigin};
 
 pub struct EngineBuilder {
     spec: ArazzoSpec,
@@ -145,7 +145,7 @@ impl EngineBuilder {
         // url, loaded eagerly here) derive it from the document's `servers`;
         // legacy sources (absolute url) keep the literal url, exactly as before.
         let mut source_bases = BTreeMap::new();
-        let mut source_ops: BTreeMap<String, OperationEntry> = BTreeMap::new();
+        let mut source_ops = OperationIndex::default();
         let mut base_url = String::new();
         for (idx, sd) in self.spec.source_descriptions.iter().enumerate() {
             let effective_base = if is_relative_document_source(sd) {
@@ -241,7 +241,7 @@ pub fn relative_openapi_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<
 fn load_document_source(
     sd: &SourceDescription,
     base_dir: Option<&Path>,
-    source_ops: &mut BTreeMap<String, OperationEntry>,
+    source_ops: &mut OperationIndex,
 ) -> Result<String, RuntimeError> {
     let Some(base_dir) = base_dir else {
         return Err(RuntimeError::new(
@@ -345,7 +345,7 @@ fn derive_servers_base(
 pub(super) fn parse_openapi_into_index(
     data: &[u8],
     origin: &OperationOrigin,
-    op_index: &mut BTreeMap<String, OperationEntry>,
+    op_index: &mut OperationIndex,
 ) -> Result<(), RuntimeError> {
     let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(data).map_err(|err| {
         RuntimeError::new(
@@ -361,7 +361,7 @@ pub(super) fn parse_openapi_into_index(
 fn index_operations(
     root: &serde_yaml_ng::Value,
     origin: &OperationOrigin,
-    op_index: &mut BTreeMap<String, OperationEntry>,
+    op_index: &mut OperationIndex,
 ) {
     let Some(paths) = root.get("paths") else {
         return;
@@ -406,9 +406,13 @@ fn index_operations(
                 path: path.to_string(),
                 origin: origin.clone(),
             };
-            if let Some(previous) = op_index.insert(op_id.clone(), entry) {
-                warn_on_source_override(&op_id, &previous.origin, origin);
+            // Every definition is retained, so an operationId defined by two
+            // documents is a lookup-time ambiguity rather than whichever one
+            // this loop reached last.
+            if let Some(previous) = op_index.last_origin(&op_id) {
+                warn_on_source_override(&op_id, previous, origin);
             }
+            op_index.push(op_id, entry);
         }
     }
 }
