@@ -107,9 +107,10 @@ impl Engine {
     /// Resolves a step's `operationId` — bare or source-qualified — to the
     /// request it names and the server base that request belongs to.
     ///
-    /// Every value the specification does not let this runtime resolve to
-    /// exactly one operation is refused here, before a URL is built and
-    /// therefore before anything is sent.
+    /// Every value that cannot be resolved to exactly one operation is refused
+    /// here, before a URL is built and therefore before anything is sent. Each
+    /// refusal says whose limit it is — the specification's or this runtime's —
+    /// because the remedy differs.
     pub(crate) fn resolve_operation_target(
         &self,
         operation_id: &str,
@@ -155,13 +156,36 @@ impl Engine {
                     ),
                 )
             })?;
-        // The declared `type` decides this, never the url text.
+        // The declared `type` decides this, never the url text. The two
+        // non-openapi types are refused for different reasons, so they get
+        // different messages.
         //
-        // The refusal is this runtime's limit, not the specification's: v1.1.0
-        // shows `operationId: $sourceDescriptions.asyncOrderApi.placeOrder` in
-        // its own async step example, so an asyncapi source naming an
-        // operation is conformant Arazzo. Nothing here implements AsyncAPI
-        // transport, and the message says whose limit it is.
+        // An arazzo source is the specification's own limit. Step Object,
+        // `operationId`: *"The name of an existing, resolvable operation"*,
+        // while `workflowId` is what *"MUST be specified using a Runtime
+        // Expression"* when *"the referenced workflow is contained within an
+        // arazzo type sourceDescription"*. An arazzo document holds workflows,
+        // so no operationId can name one and the remedy is a different field,
+        // not a different runtime.
+        if source.type_ == SourceType::Arazzo {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::UnsupportedSourceDescriptionType,
+                format!(
+                    "operationId \"{target}\" names sourceDescription \"{source_name}\", whose \
+                     type is \"{declared}\"; an arazzo source describes workflows rather than \
+                     operations, so the specification does not let an operationId reference one \
+                     — name it from workflowId as \
+                     \"$sourceDescriptions.{source_name}.<workflowId>\" instead",
+                    declared = source.type_,
+                ),
+            ));
+        }
+        // Any other non-openapi type is this runtime's limit, not the
+        // specification's: v1.1.0 shows `operationId:
+        // $sourceDescriptions.asyncOrderApi.placeOrder` in its own async step
+        // example, so an asyncapi source naming an operation is conformant
+        // Arazzo. Nothing here implements AsyncAPI transport, and the message
+        // says whose limit it is.
         if source.type_ != SourceType::OpenApi {
             return Err(RuntimeError::new(
                 RuntimeErrorKind::UnsupportedSourceDescriptionType,
@@ -238,9 +262,22 @@ impl Engine {
                 // nothing: `{<name>}./<path>` joins that source's host to a
                 // path the source does not define, which is the silently-wrong
                 // host this refusal exists to prevent.
+                //
+                // The conformant remedy leads: declaring that document as a
+                // sourceDescription is what puts its operations in reach of
+                // the qualified form, and a relative url resolves through the
+                // `source_base_dir` the CLI already passes. The absolute-URL
+                // operationPath named after it is F1 debt in
+                // `plans/assessments/arazzo-spec-conformance-audit.md`, not a
+                // specification form, so it never stands alone — and it takes
+                // the optional method token, without which a PUT or DELETE
+                // step would silently inherit the GET/POST default.
                 ". An operation from a separately provided OpenAPI spec belongs to no \
-                 sourceDescription, so neither of those forms can reach it — give that step an \
-                 absolute-URL operationPath instead"
+                 sourceDescription, so neither of those forms can reach it — declare that \
+                 document as a sourceDescription of type \"openapi\" and use the qualified form \
+                 above, or give that step an absolute-URL operationPath, written \
+                 \"<METHOD> <url>\" unless the default of POST with a requestBody and GET \
+                 without is the method the step wants"
                     .to_string()
             };
             return Err(RuntimeError::new(

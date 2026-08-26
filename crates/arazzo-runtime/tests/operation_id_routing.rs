@@ -420,9 +420,11 @@ async fn qualified_target_naming_an_unknown_source_is_refused() {
 
 /// Only an `openapi` source describes operations. An `arazzo` source holds
 /// workflows, so naming one from `operationId` is a document error, not an
-/// operation this runtime should go looking for.
+/// operation this runtime should go looking for — and the specification is
+/// what says so, which the message must not soften into a runtime limit the
+/// way the asyncapi refusal legitimately does.
 #[tokio::test]
-async fn qualified_target_naming_a_non_openapi_source_is_refused() {
+async fn qualified_target_naming_an_arazzo_source_is_refused_as_non_conformant() {
     let fixture = TwoSources::new();
     let mut sources = fixture.sources();
     sources.push(SourceDescription {
@@ -440,7 +442,55 @@ async fn qualified_target_naming_a_non_openapi_source_is_refused() {
     assert_eq!(err.code(), "RUNTIME_UNSUPPORTED_SOURCE_DESCRIPTION_TYPE");
     assert!(err.message.contains("\"flows\""), "message was: {err}");
     assert!(err.message.contains("\"arazzo\""), "message was: {err}");
-    assert!(err.message.contains("\"openapi\""), "message was: {err}");
+    assert!(
+        err.message
+            .contains("the specification does not let an operationId reference one"),
+        "an arazzo source is forbidden by the specification, not by this runtime; message was: \
+         {err}"
+    );
+    assert!(
+        err.message
+            .contains("$sourceDescriptions.flows.<workflowId>"),
+        "the remedy is the workflowId field; message was: {err}"
+    );
+    assert!(
+        !err.message.contains("this runtime resolves"),
+        "message was: {err}"
+    );
+}
+
+/// The other half of the split: an asyncapi source naming an operation is
+/// conformant Arazzo — v1.1.0's own async step example does it — so this
+/// refusal must keep claiming only this runtime's missing transport, and must
+/// not borrow the specification's authority the arazzo case has.
+#[tokio::test]
+async fn qualified_target_naming_an_asyncapi_source_is_refused_as_a_runtime_limit() {
+    let fixture = TwoSources::new();
+    let mut sources = fixture.sources();
+    sources.push(SourceDescription {
+        name: "events".to_string(),
+        url: "other.asyncapi.yaml".to_string(),
+        type_: SourceType::AsyncApi,
+        ..SourceDescription::default()
+    });
+    let err = refusal(
+        spec_with(sources, "$sourceDescriptions.events.getPet"),
+        fixture.dir.path(),
+    )
+    .await;
+    assert_eq!(err.kind, RuntimeErrorKind::UnsupportedSourceDescriptionType);
+    assert_eq!(err.code(), "RUNTIME_UNSUPPORTED_SOURCE_DESCRIPTION_TYPE");
+    assert!(err.message.contains("\"events\""), "message was: {err}");
+    assert!(err.message.contains("\"asyncapi\""), "message was: {err}");
+    assert!(
+        err.message
+            .contains("this runtime resolves an operationId only"),
+        "message was: {err}"
+    );
+    assert!(
+        !err.message.contains("the specification does not let"),
+        "an asyncapi operationId is conformant; message was: {err}"
+    );
 }
 
 /// `betaOnly` exists — in the other document. The refusal names the source
@@ -657,6 +707,24 @@ async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
     assert!(
         err.message.contains("neither of those forms can reach it"),
         "message was: {err}"
+    );
+    let conformant = err
+        .message
+        .find("declare that document as a sourceDescription")
+        .unwrap_or_else(|| panic!("the conformant remedy must be offered; message was: {err}"));
+    let debt = err
+        .message
+        .find("absolute-URL operationPath")
+        .unwrap_or_else(|| panic!("message was: {err}"));
+    assert!(
+        conformant < debt,
+        "the sourceDescription remedy is the conformant one and must lead the F1 absolute-URL \
+         form; message was: {err}"
+    );
+    assert!(
+        err.message.contains("<METHOD> <url>"),
+        "without the method token a PUT or DELETE step silently takes the GET/POST default; \
+         message was: {err}"
     );
 }
 
