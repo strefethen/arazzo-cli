@@ -146,28 +146,9 @@ Global flags:
 
 ## Examples
 
-The `examples/` directory contains 18 runnable specs (see [`examples/README.md`](examples/README.md) for the full catalog):
-
-| Spec | Demonstrates |
-|---|---|
-| `httpbin-get.arazzo.yaml` | Basic GET, headers, status codes, inputs |
-| `httpbin-methods.arazzo.yaml` | POST, PUT, PATCH, DELETE with JSON bodies |
-| `httpbin-auth.arazzo.yaml` | Basic auth, bearer tokens, auth failure handling |
-| `httpbin-conditions.arazzo.yaml` | Comparison operators, contains, compound conditions |
-| `httpbin-data-flow.arazzo.yaml` | Output chaining, interpolation, cookies, sub-workflows |
-| `httpbin-error-handling.arazzo.yaml` | Retry, criteria-based goto, workflow-level failure actions |
-| `httpbin-parallel.arazzo.yaml` | Parallel execution, diamond dependencies |
-| `httpbin-response-headers.arazzo.yaml` | Reading and forwarding response headers |
-| `httpbin-components.arazzo.yaml` | Reusable parameters and actions via components |
-| `httpbin-chained-posts.arazzo.yaml` | Multi-step POST body chaining, onSuccess goto |
-| `httpbin-reusable-inputs.arazzo.yaml` | `$ref` in workflow inputs, component schema reuse |
-| `httpbin-replacements.arazzo.yaml` | `requestBody.replacements` JSON Pointer overlays |
-| `multi-api-orchestration.arazzo.yaml` | Multiple source descriptions, cross-API routing |
-| `error-handling-retry.arazzo.yaml` | Retry logic with configurable delay and limits |
-| `sub-workflow.arazzo.yaml` | Parent/child workflow composition with input/output passing |
-| `auth-flow.arazzo.yaml` | Authentication workflow patterns |
-| `swagger-petstore-crud.arazzo.yaml` | Full CRUD lifecycle against the Swagger Petstore API |
-| `soap-customer-crud.arazzo.yaml` | SOAP XML workflows with XPath success criteria |
+Runnable specs live in `examples/`. See
+[`examples/README.md`](examples/README.md) for the catalog: what each spec
+demonstrates, its workflow IDs, and a dry-run command per scenario.
 
 Try them:
 
@@ -865,7 +846,7 @@ crates/
   arazzo-mcp               MCP server (Model Context Protocol) for AI agents
   arazzo-debug-adapter     DAP server (Debug Adapter Protocol)
 vscode-arazzo-debug/       VS Code debugger extension (TypeScript)
-examples/                  18 runnable workflow specs
+examples/                  Runnable workflow specs (see examples/README.md)
 testdata/                  Test fixtures
 docs/schemas/              JSON Schemas for --json output formats
 ```
