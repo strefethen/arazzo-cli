@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-26
+
+### Changed
+
+#### Workflow Engine
+- **BREAKING** — a bare `operationId` is refused when the document declares
+  more than one non-`arazzo` `sourceDescription`, even when the identifier is
+  unique. Arazzo 1.1 Step Object: *"If multiple (non arazzo type)
+  sourceDescriptions are defined, then the operationId MUST be specified using
+  a Runtime Expression."* Such a step previously sent its request to the first
+  source's host. Rewrite it as `$sourceDescriptions.<name>.<operationId>` — the
+  error names the rewrite. Single-source documents and `--openapi` specs are
+  unaffected.
+
+### Added
+
+#### Workflow Engine
+- `$sourceDescriptions.<name>.<operationId>` resolves against the named source
+  and builds the request URL from that source's `servers` base. Per the
+  vendored `source-reference` grammar the source name is `[A-Za-z0-9_-]+` and
+  the operation is everything after the first dot, so a dotted `operationId`
+  such as `svc.v1.getPet` is addressable.
+- Three `RUNTIME_*` codes reach `--json`: `RUNTIME_OPERATION_ID_AMBIGUOUS`,
+  `RUNTIME_UNSUPPORTED_OPERATION_ID_FORM`, and
+  `RUNTIME_UNSUPPORTED_SOURCE_DESCRIPTION_TYPE`. No existing code changed.
+
+### Fixed
+
+#### Workflow Engine
+- A step resolving an `operationId` defined by a second `sourceDescription`
+  sent its request to the first source's host, and the source-qualified form
+  failed as `RUNTIME_OPERATION_ID_NOT_FOUND`. Dry runs and live runs now both
+  route to the source that defines the operation. (#5)
+- Duplicate `operationId`s across documents are reported rather than resolved
+  by index order. The 0.4.0 rule that an explicitly passed `--openapi` spec
+  wins a duplicate still holds; two source documents clashing no longer
+  resolve silently.
+- A parameter whose value could not be resolved reported its warning twice
+  when it was `in: header` or `in: cookie`.
+
+#### Quality
+- 973 hermetic tests, up from 931.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added
