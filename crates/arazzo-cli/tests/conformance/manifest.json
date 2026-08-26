@@ -57,6 +57,7 @@
     { "id": "runtime.implicit-step-output-dependencies", "area": "runtime" },
     { "id": "runtime.cross-scope-step-dependencies", "area": "runtime" },
     { "id": "runtime.spec-operation-path-rejection", "area": "runtime" },
+    { "id": "document.source-reference-base-uri-and-identity", "area": "runtime" },
     { "id": "document.identity-and-reference-resolution", "area": "runtime" },
     { "id": "runtime.source-qualified-operation-id-routing", "area": "runtime" },
     { "id": "surfaces.cli-test-tap-junit-contract", "area": "surfaces" }

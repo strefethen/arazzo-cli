@@ -99,19 +99,43 @@
       }
     },
     {
+      "id": "document.source-reference-base-uri-and-identity",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#establishing-the-base-uri",
+        "spec/arazzo/v1.1.0.html#identity-based-referencing",
+        "spec/arazzo/v1.1.0.html#parsing-documents"
+      ],
+      "normativeLevels": ["MUST"],
+      "claim": "A Source Description url resolves against the base URI established from an absolute $self, from a relative $self resolved against the retrieval URI, or from the retrieval URI when no $self is declared, and binds by document identity to a document already provided to the implementation once the whole provided set is parsed.",
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/document_identity.rs#absolute_self_resolves_source_urls_away_from_the_document_directory",
+          "crates/arazzo-runtime/tests/document_identity.rs#a_relative_self_is_resolved_before_it_becomes_the_base_uri",
+          "crates/arazzo-runtime/tests/document_identity.rs#a_resolved_reference_binds_the_provided_document_that_owns_that_identity",
+          "crates/arazzo-runtime/tests/document_identity.rs#a_reference_resolves_to_a_document_provided_after_an_unrelated_one"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/tests/document_identity.rs#an_unprovided_reference_is_refused_rather_than_read_from_the_document_directory",
+          "crates/arazzo-runtime/tests/document_identity.rs#the_vetting_list_excludes_a_reference_that_resolves_off_the_filesystem"
+        ]
+      }
+    },
+    {
       "id": "document.identity-and-reference-resolution",
       "area": "runtime",
       "authority": "arazzoSpec",
       "specAnchors": [
         "spec/arazzo/v1.1.0.html#identity-based-referencing",
-        "spec/arazzo/v1.1.0.html#establishing-the-base-uri",
         "spec/arazzo/v1.1.0.html#resolving-uri-fragments"
       ],
       "normativeLevels": ["MUST", "SHOULD"],
-      "claim": "Arazzo references use document identity and base-URI rules and resolve fragments, including JSON Pointer and JSON Schema anchor forms.",
+      "claim": "References to an Arazzo Description resolve by that document's identity, and reference fragments resolve as JSON Pointer and JSON Schema anchor forms.",
       "status": "unsupported",
-      "owner": "ac-95df9",
-      "reason": "The document identity and reference-resolution design is owned by ac-95df9."
+      "owner": "ac-83ty",
+      "reason": "Source Description url resolution and identity binding are delivered by document.source-reference-base-uri-and-identity. What remains is references to an Arazzo Description, owned by ac-83ty, and fragment resolution including the $anchor form carried by ac-93d90."
     },
     {
       "id": "runtime.source-qualified-operation-id-routing",

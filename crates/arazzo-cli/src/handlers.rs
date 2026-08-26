@@ -135,7 +135,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 };
             }
         };
-        builder = builder.openapi_spec(bytes);
+        builder = builder.openapi_spec(bytes, Some(PathBuf::from(openapi_path)));
     }
 
     let engine = builder
@@ -349,7 +349,7 @@ pub async fn replay_trace(
                 );
             }
         };
-        builder = builder.openapi_spec(bytes);
+        builder = builder.openapi_spec(bytes, Some(PathBuf::from(openapi_path)));
     }
 
     let engine = match builder.build() {
@@ -862,7 +862,7 @@ pub async fn run_tests(
     for openapi_path in &openapi {
         let bytes = fs::read(openapi_path)
             .map_err(|err| format!("reading OpenAPI file \"{openapi_path}\": {err}"))?;
-        openapi_bytes.push(bytes);
+        openapi_bytes.push((PathBuf::from(openapi_path), bytes));
     }
 
     // Compile filter regex.

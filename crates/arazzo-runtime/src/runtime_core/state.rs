@@ -280,7 +280,10 @@ pub(crate) struct WorkflowIndex {
     pub(super) source_ops: OperationIndex,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
-    pub(super) openapi_specs_raw: Vec<Vec<u8>>,
+    /// Provided OpenAPI documents no Source Description claimed by identity,
+    /// each with the 1-based position it was supplied in so diagnostics keep
+    /// naming the same document however many earlier ones were claimed.
+    pub(super) openapi_specs_raw: Vec<(usize, Vec<u8>)>,
     pub(super) op_index: OnceLock<OperationIndex>,
 }
 

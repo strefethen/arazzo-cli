@@ -33,6 +33,7 @@ mod client;
 mod control;
 mod criteria;
 mod deps;
+mod document_set;
 mod engine_actions;
 mod engine_http;
 #[cfg(test)]

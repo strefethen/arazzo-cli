@@ -628,7 +628,7 @@ async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
         "getPet",
     ))
     .source_base_dir(fixture.dir.path())
-    .openapi_spec(explicit.clone().into_bytes())
+    .openapi_spec(explicit.clone().into_bytes(), None)
     .dry_run(true)
     .build()
     {
@@ -653,7 +653,7 @@ async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
         "$sourceDescriptions.alpha.explicitOnly",
     ))
     .source_base_dir(fixture.dir.path())
-    .openapi_spec(explicit.into_bytes())
+    .openapi_spec(explicit.into_bytes(), None)
     .dry_run(true)
     .build()
     {
@@ -684,7 +684,7 @@ async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
 
     let engine = match EngineBuilder::new(spec_with(fixture.sources(), "explicitOnly"))
         .source_base_dir(fixture.dir.path())
-        .openapi_spec(explicit.into_bytes())
+        .openapi_spec(explicit.into_bytes(), None)
         .dry_run(true)
         .build()
     {
@@ -851,8 +851,8 @@ async fn duplicate_ids_across_explicit_specs_are_refused_rather_than_ordered() {
         "getPet",
     ))
     .source_base_dir(fixture.dir.path())
-    .openapi_spec(first.into_bytes())
-    .openapi_spec(second.into_bytes())
+    .openapi_spec(first.into_bytes(), None)
+    .openapi_spec(second.into_bytes(), None)
     .dry_run(true)
     .build()
     {

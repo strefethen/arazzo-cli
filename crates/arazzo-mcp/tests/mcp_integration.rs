@@ -792,6 +792,158 @@ fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
     );
 }
 
+/// `path` with its `.` and `..` segments removed, which is the form RFC 3986
+/// §5.2.4 leaves a resolved reference in.
+fn normalized(path: &Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+#[test]
+fn test_relative_source_vetting_list_names_the_file_the_engine_reads() {
+    // The gate's coverage property, stated directly: every source the engine
+    // will open is offered to check_path_allowed first. The dry run above
+    // proves this same file is the one the request base came from.
+    let spec = match arazzo_validate::parse(testdata_path("petstore-relative.arazzo.yaml")) {
+        Ok(spec) => spec,
+        Err(err) => panic!("parsing spec: {err}"),
+    };
+    let dir = std::path::PathBuf::from(testdata_path(""));
+
+    let vetted = arazzo_runtime::relative_openapi_source_paths(&spec, &dir);
+
+    assert_eq!(vetted.len(), 1, "one source is read from disk: {vetted:?}");
+    assert_eq!(vetted[0].0, "petstore");
+    // The vetted path is the resolved one: RFC 3986 §5.2.4 leaves no `.` or
+    // `..` segments for the gate to reason about.
+    assert_eq!(
+        vetted[0].1,
+        normalized(&dir).join("petstore.openapi.yaml"),
+        "the gate is handed the file the engine opens"
+    );
+}
+
+/// A directory built for one test and removed with it. The fixtures below are
+/// written at run time rather than checked into `testdata/`, which the golden
+/// baseline sweeps: a document that only exists to be refused belongs to its
+/// test, not to the corpus.
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_else(|err| panic!("system time must be after the Unix epoch: {err}"))
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("arazzo-mcp-{label}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path)
+            .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        Self { path }
+    }
+
+    fn write(&self, name: &str, contents: &str) -> std::path::PathBuf {
+        let target = self.path.join(name);
+        fs::write(&target, contents)
+            .unwrap_or_else(|err| panic!("writing {}: {err}", target.display()));
+        target
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn test_run_workflow_self_based_source_is_refused_not_read() {
+    // The spec's absolute $self makes its relative source url resolve to an
+    // https URI. A file of that name sits beside the spec inside the allowed
+    // dir, so the pre-resolution behavior would have read it and succeeded.
+    // The engine must refuse — and refuse at build, never by fetching.
+    let dir = TempDir::new("self-base");
+    dir.write(
+        "spec.arazzo.yaml",
+        concat!(
+            "arazzo: 1.1.0\n",
+            "$self: https://workflows.example.com/canonical/self-base.arazzo.yaml\n",
+            "info:\n",
+            "  title: Self-Based Source Reference\n",
+            "  version: 1.0.0\n",
+            "sourceDescriptions:\n",
+            "  - name: petstore\n",
+            "    url: ./petstore.openapi.yaml\n",
+            "    type: openapi\n",
+            "workflows:\n",
+            "  - workflowId: list-pets-self-base\n",
+            "    steps:\n",
+            "      - stepId: list\n",
+            "        operationId: listPets\n",
+            "        successCriteria:\n",
+            "          - condition: $statusCode == 200\n",
+        ),
+    );
+    let sibling = fs::read_to_string(testdata_path("petstore.openapi.yaml"))
+        .unwrap_or_else(|err| panic!("reading the petstore fixture: {err}"));
+    dir.write("petstore.openapi.yaml", &sibling);
+    let spec_path = dir
+        .path
+        .join("spec.arazzo.yaml")
+        .to_string_lossy()
+        .to_string();
+    let allowed = dir.path.to_string_lossy().to_string();
+
+    let state = match ServerState::load(&[spec_path], Some(vec![allowed])) {
+        Ok(state) => state,
+        Err(err) => panic!("loading server state: {err}"),
+    };
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"list-pets-self-base","dry_run":true}}}),
+    ]);
+
+    let reader = Cursor::new(messages);
+    let mut output = Vec::new();
+    protocol::serve(reader, &mut output, &state).ok();
+
+    let responses = parse_responses(&output);
+    assert!(
+        responses.len() >= 2,
+        "expected 2 responses, got {responses:?}"
+    );
+    assert!(
+        is_tool_error(&responses[1]),
+        "run_workflow should be refused, got: {}",
+        responses[1]
+    );
+
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("https://workflows.example.com/canonical/petstore.openapi.yaml"),
+        "the refusal should name the resolved URI, got: {text}"
+    );
+    assert!(
+        !text.contains("path not allowed"),
+        "the source never reaches the filesystem gate, so it is not a path denial: {text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // generate_workflow: document-pointing sourceDescriptions url (ac-91284)
 // ---------------------------------------------------------------------------

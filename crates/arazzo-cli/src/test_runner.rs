@@ -20,7 +20,10 @@ pub struct TestRunOptions {
     pub http_timeout: Duration,
     pub execution_timeout: Duration,
     pub headers: BTreeMap<String, String>,
-    pub openapi_bytes: Vec<Vec<u8>>,
+    /// Each provided OpenAPI document with the path it was read from, so
+    /// a sourceDescription reference resolving to that path binds to these
+    /// bytes instead of reading the file again.
+    pub openapi_bytes: Vec<(PathBuf, Vec<u8>)>,
     pub expr_diagnostics: ExpressionDiagnosticsMode,
     pub parallel: bool,
     pub strict_inputs: bool,
@@ -177,8 +180,8 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         if let Some(max_bytes) = opts.max_response_size {
             builder = builder.max_response_bytes(max_bytes);
         }
-        for openapi in &opts.openapi_bytes {
-            builder = builder.openapi_spec(openapi.clone());
+        for (openapi_path, openapi) in &opts.openapi_bytes {
+            builder = builder.openapi_spec(openapi.clone(), Some(openapi_path.clone()));
         }
 
         let engine = match builder.build() {

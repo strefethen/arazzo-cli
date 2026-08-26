@@ -1,10 +1,10 @@
 use super::*;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use arazzo_spec::{SourceDescription, SourceType};
+use arazzo_spec::SourceDescription;
 
+use document_set::{BoundDocument, DocumentSet, ProvidedDocument};
 use state::{OperationIndex, OperationOrigin};
 
 pub struct EngineBuilder {
@@ -20,7 +20,7 @@ pub struct EngineBuilder {
     trace_hook: Option<Arc<dyn TraceHook>>,
     observer: Option<Arc<dyn ExecutionObserver>>,
     debug_controller: Option<Arc<DebugController>>,
-    openapi_specs: Vec<Vec<u8>>,
+    openapi_specs: Vec<ProvidedDocument>,
     source_base_dir: Option<PathBuf>,
 }
 
@@ -46,10 +46,12 @@ impl EngineBuilder {
         }
     }
 
-    /// Sets the directory against which relative `sourceDescriptions[].url`
-    /// references are resolved — typically the Arazzo document's parent
-    /// directory. Required whenever a `type: openapi` source uses a relative
-    /// url; building without it fails for such sources.
+    /// Sets the directory the Arazzo document was read from. It supplies the
+    /// retrieval URI that relative `sourceDescriptions[].url` references
+    /// resolve against when the document declares no absolute `$self`
+    /// (Arazzo 1.1 §5.6.1). Required whenever a `type: openapi` source uses a
+    /// relative url and no absolute `$self` establishes a base URI; building
+    /// without either fails for such sources.
     pub fn source_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.source_base_dir = Some(dir.into());
         self
@@ -125,10 +127,19 @@ impl EngineBuilder {
         self
     }
 
-    /// Adds an OpenAPI spec to be parsed and indexed during build.
-    /// Call multiple times for multiple specs. Replaces `Engine::load_openapi_spec`.
-    pub fn openapi_spec(mut self, data: Vec<u8>) -> Self {
-        self.openapi_specs.push(data);
+    /// Adds an OpenAPI document to the set provided to this engine. Call
+    /// multiple times for multiple documents. Replaces
+    /// `Engine::load_openapi_spec`.
+    ///
+    /// `retrieval_path` is where the document was read from, when the caller
+    /// knows. Together with an absolute `$self` inside the document it gives
+    /// the document an identity, so a `sourceDescriptions[].url` resolving to
+    /// that identity binds to these bytes instead of reading the filesystem
+    /// (Arazzo 1.1 §5.5.2). A document with neither is still indexed; it is
+    /// simply not reachable by reference.
+    pub fn openapi_spec(mut self, data: Vec<u8>, retrieval_path: Option<PathBuf>) -> Self {
+        self.openapi_specs
+            .push(ProvidedDocument::new(data, retrieval_path));
         self
     }
 
@@ -141,23 +152,35 @@ impl EngineBuilder {
         let config = self.client_config.unwrap_or_default();
         let client = HttpClient::new(&config, self.max_response_bytes, self.replay_trace_steps)?;
 
-        // Each source gets an effective request base: document sources (relative
-        // url, loaded eagerly here) derive it from the document's `servers`;
-        // legacy sources (absolute url) keep the literal url, exactly as before.
+        // Resolution runs before any source is bound: every provided document
+        // is parsed for its identity first, because Arazzo 1.1 §5.5 forbids
+        // calling a reference unresolvable "before completely parsing all
+        // documents provided to the implementation".
+        let mut documents = DocumentSet::new(
+            &self.spec,
+            self.source_base_dir.as_deref(),
+            self.openapi_specs,
+        )?;
+
+        // Each source gets an effective request base: document sources (bound
+        // to provided bytes or read from a resolved `file://` url, eagerly
+        // here) derive it from the document's `servers`; legacy sources
+        // (absolute non-`file` url no provided document answers to) keep the
+        // literal url, exactly as before.
         let mut source_bases = BTreeMap::new();
         let mut source_ops = OperationIndex::default();
         let mut base_url = String::new();
         for (idx, sd) in self.spec.source_descriptions.iter().enumerate() {
-            let effective_base = if is_relative_document_source(sd) {
-                load_document_source(sd, self.source_base_dir.as_deref(), &mut source_ops)?
-            } else {
-                sd.url.clone()
+            let effective_base = match documents.bind(sd)? {
+                Some(bound) => index_bound_document(sd, &bound, &mut source_ops)?,
+                None => sd.url.clone(),
             };
             if idx == 0 {
                 base_url = effective_base.clone();
             }
             source_bases.insert(sd.name.clone(), effective_base);
         }
+        let openapi_specs_raw = documents.unclaimed();
 
         let mut source_descriptions_map = BTreeMap::new();
         for sd in &self.spec.source_descriptions {
@@ -191,7 +214,7 @@ impl EngineBuilder {
                     source_ops,
                     workflow_index,
                     step_indexes,
-                    openapi_specs_raw: self.openapi_specs,
+                    openapi_specs_raw,
                     op_index: OnceLock::new(),
                 },
                 client,
@@ -209,77 +232,43 @@ impl EngineBuilder {
     }
 }
 
-/// Returns `true` when a source description uses document semantics: a
-/// `type: openapi` source whose url is a scheme-less URI reference pointing at
-/// an OpenAPI file to load. Classification depends only on the url text, never
-/// on filesystem state.
-fn is_relative_document_source(sd: &SourceDescription) -> bool {
-    sd.type_ == SourceType::OpenApi
-        && !sd.url.is_empty()
-        && matches!(
-            url_crate::Url::parse(&sd.url),
-            Err(url_crate::ParseError::RelativeUrlWithoutBase)
-        )
-}
-
-/// Resolved file paths of `type: openapi` source descriptions with relative
-/// urls (document semantics), paired with their source names. Callers that
-/// gate filesystem access (e.g. the MCP server) can vet these paths before
-/// building an engine with [`EngineBuilder::source_base_dir`].
+/// Local files a build will read for `type: openapi` source descriptions,
+/// paired with their source names. Callers that gate filesystem access (e.g.
+/// the MCP server) can vet these paths before building an engine with
+/// [`EngineBuilder::source_base_dir`].
+///
+/// Each url is resolved the way the build resolves it — against the Arazzo
+/// document's `$self` when it declares an absolute one, otherwise against
+/// `base_dir` — and only a reference that lands on a `file://` URI appears
+/// here. A reference that lands anywhere else is refused at build rather than
+/// read, so this list still covers every disk read the engine can perform.
 pub fn relative_openapi_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<(String, PathBuf)> {
-    spec.source_descriptions
-        .iter()
-        .filter(|sd| is_relative_document_source(sd))
-        .map(|sd| (sd.name.clone(), base_dir.join(&sd.url)))
-        .collect()
+    document_set::local_source_paths(spec, base_dir)
 }
 
-/// Loads a document-semantics source: reads the file relative to the Arazzo
-/// document's directory, indexes its operations, and derives the request base
-/// from `servers[0].url`. Every failure is a build error naming the source and
-/// the resolved path — never a silent fallback.
-fn load_document_source(
+/// Indexes a bound document's operations and derives its request base from
+/// `servers[0].url`. Every failure is a build error naming the source and the
+/// document it was bound to — never a silent fallback.
+fn index_bound_document(
     sd: &SourceDescription,
-    base_dir: Option<&Path>,
+    bound: &BoundDocument,
     source_ops: &mut OperationIndex,
 ) -> Result<String, RuntimeError> {
-    let Some(base_dir) = base_dir else {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionLoad,
-            format!(
-                "sourceDescription \"{}\": relative url \"{}\" requires the Arazzo document's \
-                 directory; provide it via EngineBuilder::source_base_dir",
-                sd.name, sd.url
-            ),
-        ));
-    };
-    let resolved = base_dir.join(&sd.url);
-    let data = fs::read(&resolved).map_err(|err| {
-        RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionLoad,
-            format!(
-                "sourceDescription \"{}\": reading OpenAPI document \"{}\": {err}",
-                sd.name,
-                resolved.display()
-            ),
-        )
-    })?;
-    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&data).map_err(|err| {
+    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&bound.data).map_err(|err| {
         RuntimeError::new(
             RuntimeErrorKind::SourceDescriptionParse,
             format!(
                 "sourceDescription \"{}\": parsing OpenAPI document \"{}\": {err}",
-                sd.name,
-                resolved.display()
+                sd.name, bound.label
             ),
         )
     })?;
     let origin = OperationOrigin::Source {
         name: sd.name.clone(),
-        path: resolved.display().to_string(),
+        path: bound.label.clone(),
     };
     index_operations(&root, &origin, source_ops);
-    derive_servers_base(&root, sd, &resolved)
+    derive_servers_base(&root, sd, &bound.label)
 }
 
 /// Derives the request base URL from `servers[0].url`, substituting server
@@ -287,16 +276,15 @@ fn load_document_source(
 fn derive_servers_base(
     root: &serde_yaml_ng::Value,
     sd: &SourceDescription,
-    resolved: &Path,
+    document: &str,
 ) -> Result<String, RuntimeError> {
     let no_servers = || {
         RuntimeError::new(
             RuntimeErrorKind::SourceDescriptionParse,
             format!(
-                "sourceDescription \"{}\": OpenAPI document \"{}\" declares no servers[0].url; \
-                 an absolute server URL is required to derive the request base",
+                "sourceDescription \"{}\": OpenAPI document \"{document}\" declares no \
+                 servers[0].url; an absolute server URL is required to derive the request base",
                 sd.name,
-                resolved.display()
             ),
         )
     };
@@ -331,10 +319,10 @@ fn derive_servers_base(
         return Err(RuntimeError::new(
             RuntimeErrorKind::SourceDescriptionParse,
             format!(
-                "sourceDescription \"{}\": server URL \"{url}\" in OpenAPI document \"{}\" is \
-                 relative; an absolute URL is required to derive the request base",
+                "sourceDescription \"{}\": server URL \"{url}\" in OpenAPI document \
+                 \"{document}\" is relative; an absolute URL is required to derive the request \
+                 base",
                 sd.name,
-                resolved.display()
             ),
         ));
     }

@@ -3116,7 +3116,7 @@ paths:
 "#;
 
     let engine = match EngineBuilder::new(spec)
-        .openapi_spec(openapi.to_vec())
+        .openapi_spec(openapi.to_vec(), None)
         .build()
     {
         Ok(e) => e,
@@ -3156,7 +3156,7 @@ paths:
 "#;
 
     let engine = match EngineBuilder::new(spec)
-        .openapi_spec(openapi.to_vec())
+        .openapi_spec(openapi.to_vec(), None)
         .build()
     {
         Ok(e) => e,
@@ -3215,6 +3215,7 @@ async fn execute_operation_id_and_path_params() {
         .openapi_spec(
             br#"{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"getUser"}}}}"#
                 .to_vec(),
+            None,
         )
         .build()
     {
@@ -4777,6 +4778,23 @@ fn testdata_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata")
 }
 
+/// The path a `./<name>` source url under `testdata_dir()` resolves to once
+/// RFC 3986 §5.2.4 has removed its dot segments — the file the runtime reads
+/// and the name its diagnostics carry.
+fn resolved_testdata_path(name: &str) -> std::path::PathBuf {
+    let mut resolved = std::path::PathBuf::new();
+    for component in testdata_dir().components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    resolved.join(name)
+}
+
 fn relative_source_spec(url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {
     let mut spec = make_spec(workflows);
     spec.source_descriptions = vec![SourceDescription {
@@ -4850,7 +4868,7 @@ async fn relative_source_missing_file_fails_build() {
 
     assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionLoad);
     assert_eq!(err.code(), "RUNTIME_SOURCE_DESCRIPTION_LOAD");
-    let expected_path = testdata_dir().join("./no-such-file.openapi.yaml");
+    let expected_path = resolved_testdata_path("no-such-file.openapi.yaml");
     assert!(
         err.message.contains("petstore"),
         "error should name the source: {}",
@@ -4876,7 +4894,7 @@ async fn relative_source_unparseable_file_fails_build() {
     };
 
     assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse);
-    let expected_path = testdata_dir().join("./unparseable.openapi.yaml");
+    let expected_path = resolved_testdata_path("unparseable.openapi.yaml");
     assert!(
         err.message.contains("petstore"),
         "error should name the source: {}",
@@ -4917,7 +4935,7 @@ async fn explicit_openapi_spec_overrides_source_operation() {
     let engine = match EngineBuilder::new(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
-        .openapi_spec(override_bytes)
+        .openapi_spec(override_bytes, None)
         .build()
     {
         Ok(e) => e,

@@ -88,10 +88,8 @@ impl Engine {
         let index = &self.inner.index;
         if index.op_index.get().is_none() {
             let mut idx = index.source_ops.clone();
-            for (ordinal, spec_data) in index.openapi_specs_raw.iter().enumerate() {
-                let origin = OperationOrigin::ExplicitSpec {
-                    ordinal: ordinal + 1,
-                };
+            for (ordinal, spec_data) in &index.openapi_specs_raw {
+                let origin = OperationOrigin::ExplicitSpec { ordinal: *ordinal };
                 parse_openapi_into_index(spec_data, &origin, &mut idx)?;
             }
             let _ = index.op_index.set(idx);
