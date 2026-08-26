@@ -89,6 +89,11 @@ fn openapi_document(base: &str, pet_path: &str, unique_op: &str) -> String {
         format!("  /{unique_op}:"),
         "    get:".to_string(),
         format!("      operationId: {unique_op}"),
+        // A dotted operationId. `source-reference-id` is `1*CHAR`, so this is
+        // reachable as `$sourceDescriptions.<name>.svc.v1.getPet`.
+        "  /dotted:".to_string(),
+        "    get:".to_string(),
+        "      operationId: svc.v1.getPet".to_string(),
         String::new(),
     ]
     .join("\n")
@@ -225,6 +230,18 @@ async fn plan(spec: ArazzoSpec, base_dir: &Path) -> Result<String, RuntimeError>
     Ok(planned[0].clone())
 }
 
+/// The error a refused `operationId` produces on a **live** engine, panicking
+/// if it resolves.
+///
+/// Distinct from [`refusal`] on purpose: a dry run sends nothing whatever the
+/// outcome, so only this helper can witness that a refusal reaches no server.
+async fn live_refusal(spec: ArazzoSpec, base_dir: &Path) -> RuntimeError {
+    match send(spec, base_dir).await {
+        Ok(url) => panic!("expected a refusal, sent a request to {url}"),
+        Err(err) => err,
+    }
+}
+
 /// The error kind a refused `operationId` produces, panicking if it resolves.
 async fn refusal(spec: ArazzoSpec, base_dir: &Path) -> RuntimeError {
     match plan(spec, base_dir).await {
@@ -271,6 +288,29 @@ async fn qualified_operation_id_routes_to_the_named_source_base() {
     let (alpha_hits, beta_hits) = fixture.hits();
     assert_eq!(alpha_hits, vec!["/pets".to_string()]);
     assert_eq!(beta_hits, vec!["/animals".to_string()]);
+}
+
+/// `source-reference-id` is `1*CHAR`, and §5.9 spells out why: *"operationIds
+/// have no character restrictions in OpenAPI/AsyncAPI"*. So the split is at
+/// the first dot and a dotted operationId — what protobuf and gRPC-gateway
+/// generators emit — stays reachable through the very form the MUST demands.
+#[tokio::test]
+async fn a_dotted_operation_id_routes_through_its_named_source() {
+    let fixture = TwoSources::new();
+    let url = match send(
+        spec_with(fixture.sources(), "$sourceDescriptions.beta.svc.v1.getPet"),
+        fixture.dir.path(),
+    )
+    .await
+    {
+        Ok(url) => url,
+        Err(err) => panic!("resolving a dotted operationId: {err}"),
+    };
+    assert_eq!(url, format!("{}/dotted", fixture.beta.base_url));
+
+    let (alpha_hits, beta_hits) = fixture.hits();
+    assert!(alpha_hits.is_empty(), "alpha was reached: {alpha_hits:?}");
+    assert_eq!(beta_hits, vec!["/dotted".to_string()]);
 }
 
 /// A dry run plans exactly what a live run sends, so `--dry-run` can be
@@ -338,6 +378,27 @@ async fn unqualified_operation_id_is_refused_when_two_sources_are_defined() {
         alpha_hits.is_empty() && beta_hits.is_empty(),
         "a refused operationId must send nothing; alpha={alpha_hits:?} beta={beta_hits:?}"
     );
+}
+
+/// The refusal reaches no server — proved on a **live** engine, because a dry
+/// run would satisfy this assertion no matter where the refusal happened.
+#[tokio::test]
+async fn a_refused_operation_id_reaches_no_server_on_a_live_engine() {
+    let fixture = TwoSources::new();
+    for target in [
+        "getPet",
+        "$sourceDescriptions.gamma.getPet",
+        "$sourceDescriptions.alpha.betaOnly",
+        "$sourceDescriptions.alpha.get{Pet}",
+    ] {
+        let err = live_refusal(spec_with(fixture.sources(), target), fixture.dir.path()).await;
+        assert!(err.message.contains(target), "message was: {err}");
+        let (alpha_hits, beta_hits) = fixture.hits();
+        assert!(
+            alpha_hits.is_empty() && beta_hits.is_empty(),
+            "{target} reached a server; alpha={alpha_hits:?} beta={beta_hits:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -411,8 +472,10 @@ async fn malformed_qualified_forms_are_refused_with_the_supported_shape() {
         "$sourceDescriptions.",
         "$sourceDescriptions.alpha.",
         "$sourceDescriptions..getPet",
-        "$sourceDescriptions.alpha.v2.getPet",
-        "{$sourceDescriptions.alpha.getPet}",
+        // `source-name` is `identifier-strict`.
+        "$sourceDescriptions.al pha.getPet",
+        // `source-reference-id` is `CHAR`, which excludes braces.
+        "$sourceDescriptions.alpha.get{Pet}",
     ];
     for target in MALFORMED {
         let err = refusal(spec_with(fixture.sources(), target), fixture.dir.path()).await;
@@ -557,6 +620,45 @@ async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
     };
     assert_eq!(err.kind, RuntimeErrorKind::OperationIdNotFound);
     assert!(err.message.contains("\"alpha\""), "message was: {err}");
+}
+
+/// An explicitly provided spec does not exempt a document from the MUST: the
+/// refusal counts declared sourceDescriptions, so `--openapi` plus two sources
+/// is still refused. The message must not then recommend the qualified form on
+/// its own, because `in_source` deliberately cannot see an explicit spec — the
+/// operator would follow the advice and land on OperationIdNotFound.
+#[tokio::test]
+async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
+    let fixture = TwoSources::new();
+    let explicit = openapi_document("https://explicit.example.com", "/override", "explicitOnly");
+
+    let engine = match EngineBuilder::new(spec_with(fixture.sources(), "explicitOnly"))
+        .source_base_dir(fixture.dir.path())
+        .openapi_spec(explicit.into_bytes())
+        .dry_run(true)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building an engine with an explicit spec: {err}"),
+    };
+    let err = match engine
+        .execute_collect(WORKFLOW, BTreeMap::new())
+        .await
+        .outputs
+    {
+        Ok(outputs) => panic!("expected a refusal, got outputs {outputs:?}"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
+    assert!(
+        err.message
+            .contains("cannot be named by the qualified form"),
+        "the remedy must not point at a form that cannot resolve it; message was: {err}"
+    );
+    assert!(
+        err.message.contains("{<name>}./<path>"),
+        "message was: {err}"
+    );
 }
 
 /// Two explicit specs defining the same id used to resolve to whichever was

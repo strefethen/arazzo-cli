@@ -11,6 +11,15 @@
 //! [`classify_operation_id`]. `operation_path.rs` is the precedent, and the
 //! reason for it: two independently written prefix parsers for one field is
 //! exactly how that surface drifted.
+//!
+//! The qualified form is §5.9's `source-reference` production, which
+//! [`crate::source_reference`] owns for this field and for `dependsOn` alike.
+//! Its one counter-intuitive rule matters here: `source-reference-id` is
+//! `1*CHAR`, annotated *"operationIds have no character restrictions in
+//! OpenAPI/AsyncAPI"*, so `$sourceDescriptions.alpha.svc.v1.getPet` names the
+//! operation `svc.v1.getPet` and is perfectly legal.
+
+use crate::source_reference::{parse_source_reference, SourceReferenceError};
 
 /// The runtime-expression namespace the source-qualified form names.
 ///
@@ -18,42 +27,54 @@
 /// so `$sourcedescriptions.alpha.getPet` names no source.
 const QUALIFIED_NAMESPACE: &str = "$sourceDescriptions";
 
-/// The same namespace as it appears inside a `{$…}` interpolation.
-const BRACED_NAMESPACE: &str = "{$sourceDescriptions";
-
 /// The `operationId` forms this runtime resolves, phrased for error text so
 /// every surface points at the same set.
 pub const SUPPORTED_OPERATION_ID_FORMS: &str =
-    "a bare \"operationId\", or \"$sourceDescriptions.<name>.<operationId>\" naming exactly one \
-     source description and one operation";
+    "a bare \"operationId\", or \"$sourceDescriptions.<name>.<operationId>\" where <name> matches \
+     [A-Za-z0-9_-]+";
 
-/// Why an `operationId` that reaches for the source-qualified form is not one.
+/// Which rule of the `source-reference` production a qualified `operationId`
+/// broke.
 ///
 /// Every variant is a refusal, never a fallback to bare lookup: a value that
-/// names `$sourceDescriptions` and then fails to name a source and an
-/// operation is a typo, and looking it up as a literal operation name would
-/// report the wrong problem.
+/// names `$sourceDescriptions` and then breaks the production is a typo, and
+/// looking it up as a literal operation name would report the wrong problem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MalformedOperationId {
-    /// A required segment is absent or empty — `$sourceDescriptions.getPet`,
-    /// `$sourceDescriptions.alpha.`, `$sourceDescriptions..getPet`.
-    MissingSegment,
-    /// More than one source segment and one operation segment follow the
-    /// namespace — `$sourceDescriptions.alpha.v2.getPet`.
-    ExtraSegment,
-    /// Written as a `{$…}` interpolation — `{$sourceDescriptions.alpha.getPet}`.
-    /// The field carries the expression itself, not a template embedding one.
-    Braced,
+    /// No `.<operationId>` follows the source name — `$sourceDescriptions`,
+    /// `$sourceDescriptions.alpha`.
+    MissingOperationId,
+    /// The source name is empty or is not `identifier-strict` —
+    /// `$sourceDescriptions..getPet`, `$sourceDescriptions.a b.getPet`.
+    SourceName,
+    /// The operation name is empty or leaves the `CHAR` rule, which excludes
+    /// braces, quotes, lone backslashes, and controls —
+    /// `$sourceDescriptions.alpha.`, `{$sourceDescriptions.alpha.getPet}`.
+    OperationId,
 }
 
 impl MalformedOperationId {
     /// Phrase naming what is wrong with the value, for message interpolation.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::MissingSegment => "does not name both a source description and an operation",
-            Self::ExtraSegment => "names more than one source description segment",
-            Self::Braced => "is wrapped in string-interpolation braces",
+            Self::MissingOperationId => "names a source description but no operation",
+            Self::SourceName => {
+                "names a source description that is empty or uses characters outside [A-Za-z0-9_-]"
+            }
+            Self::OperationId => {
+                "names an operation that is empty or uses characters the reference grammar excludes"
+            }
+        }
+    }
+}
+
+impl From<SourceReferenceError> for MalformedOperationId {
+    fn from(err: SourceReferenceError) -> Self {
+        match err {
+            SourceReferenceError::MissingSeparator => Self::MissingOperationId,
+            SourceReferenceError::SourceName => Self::SourceName,
+            SourceReferenceError::ReferenceId => Self::OperationId,
         }
     }
 }
@@ -100,42 +121,26 @@ impl<'a> OperationIdTarget<'a> {
 
 /// Classifies a step's `operationId` into the target it names.
 pub fn classify_operation_id(operation_id: &str) -> OperationIdTarget<'_> {
-    // Braces are decided first, and by scanning the whole value rather than
-    // only its prefix, for the reason `operation_path.rs` learned: a prefix
-    // test alone lets `{$sourceDescriptions.alpha.getPet}` fall through to
-    // bare lookup, where it is reported as a missing operation name instead
-    // of as the brace typo it is.
-    if operation_id.contains(BRACED_NAMESPACE) {
-        return OperationIdTarget::Malformed(MalformedOperationId::Braced);
-    }
     let Some(rest) = operation_id.strip_prefix(QUALIFIED_NAMESPACE) else {
         return OperationIdTarget::Bare(operation_id);
     };
-    let Some(segments) = rest.strip_prefix('.') else {
+    let Some(reference) = rest.strip_prefix('.') else {
         // `$sourceDescriptions` alone reaches for the qualified form and names
         // nothing. `$sourceDescriptionsAlpha` is an operation whose name merely
         // starts with the namespace text — the separating dot is what makes a
         // value a reference.
         return if rest.is_empty() {
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment)
+            OperationIdTarget::Malformed(MalformedOperationId::MissingOperationId)
         } else {
             OperationIdTarget::Bare(operation_id)
         };
     };
-
-    let mut parts = segments.split('.');
-    let (Some(source_name), Some(operation)) = (parts.next(), parts.next()) else {
-        return OperationIdTarget::Malformed(MalformedOperationId::MissingSegment);
-    };
-    if parts.next().is_some() {
-        return OperationIdTarget::Malformed(MalformedOperationId::ExtraSegment);
-    }
-    if source_name.is_empty() || operation.is_empty() {
-        return OperationIdTarget::Malformed(MalformedOperationId::MissingSegment);
-    }
-    OperationIdTarget::SourceQualified {
-        source_name,
-        operation_id: operation,
+    match parse_source_reference(reference) {
+        Ok(parsed) => OperationIdTarget::SourceQualified {
+            source_name: parsed.source_name,
+            operation_id: parsed.reference_id,
+        },
+        Err(err) => OperationIdTarget::Malformed(err.into()),
     }
 }
 
@@ -178,42 +183,55 @@ mod tests {
                 operation_id: "b",
             },
         ),
-        // Malformed: one segment where two are required.
+        // Source-qualified: `source-reference-id` is `1*CHAR`, annotated in
+        // the grammar as "operationIds have no character restrictions", so the
+        // split is at the *first* dot and everything after it is the operation
+        // — `svc.v1.getPet` is one name, not three segments.
+        (
+            "$sourceDescriptions.alpha.svc.v1.getPet",
+            OperationIdTarget::SourceQualified {
+                source_name: "alpha",
+                operation_id: "svc.v1.getPet",
+            },
+        ),
+        // Malformed: a source description named, but no operation after it.
         (
             "$sourceDescriptions.getPet",
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment),
+            OperationIdTarget::Malformed(MalformedOperationId::MissingOperationId),
         ),
         (
             "$sourceDescriptions",
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment),
+            OperationIdTarget::Malformed(MalformedOperationId::MissingOperationId),
         ),
         (
             "$sourceDescriptions.",
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment),
+            OperationIdTarget::Malformed(MalformedOperationId::MissingOperationId),
         ),
-        // Malformed: an empty segment is a missing one.
-        (
-            "$sourceDescriptions.alpha.",
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment),
-        ),
+        // Malformed: `source-name` is `identifier-strict`, so it can be
+        // neither empty nor spaced.
         (
             "$sourceDescriptions..getPet",
-            OperationIdTarget::Malformed(MalformedOperationId::MissingSegment),
+            OperationIdTarget::Malformed(MalformedOperationId::SourceName),
         ),
-        // Malformed: a dotted operation name is an extra segment, not a
-        // source named `alpha.v2`.
         (
-            "$sourceDescriptions.alpha.v2.getPet",
-            OperationIdTarget::Malformed(MalformedOperationId::ExtraSegment),
+            "$sourceDescriptions.al pha.getPet",
+            OperationIdTarget::Malformed(MalformedOperationId::SourceName),
         ),
-        // Malformed: the field carries the expression, never a `{$…}` template.
+        // Malformed: the operation segment is empty, or leaves `CHAR` — which
+        // is where a `{$…}` template lands, since `CHAR` excludes braces.
+        (
+            "$sourceDescriptions.alpha.",
+            OperationIdTarget::Malformed(MalformedOperationId::OperationId),
+        ),
+        (
+            "$sourceDescriptions.alpha.get{Pet}",
+            OperationIdTarget::Malformed(MalformedOperationId::OperationId),
+        ),
+        // Bare: braces before the namespace mean the value never reaches the
+        // qualified form at all. It resolves — and fails — as a literal name.
         (
             "{$sourceDescriptions.alpha.getPet}",
-            OperationIdTarget::Malformed(MalformedOperationId::Braced),
-        ),
-        (
-            "{$sourceDescriptions.alpha.getPet}extra",
-            OperationIdTarget::Malformed(MalformedOperationId::Braced),
+            OperationIdTarget::Bare("{$sourceDescriptions.alpha.getPet}"),
         ),
     ];
 

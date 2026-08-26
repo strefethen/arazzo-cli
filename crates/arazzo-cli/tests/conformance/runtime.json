@@ -124,11 +124,13 @@
       "evidence": {
         "positive": [
           "crates/arazzo-runtime/tests/operation_id_routing.rs#qualified_operation_id_routes_to_the_named_source_base",
+          "crates/arazzo-runtime/tests/operation_id_routing.rs#a_dotted_operation_id_routes_through_its_named_source",
           "crates/arazzo-cli/tests/cli_operation_id_routing.rs#dry_run_plans_a_distinct_host_per_qualified_source"
         ],
         "negative": [
           "crates/arazzo-runtime/tests/operation_id_routing.rs#unqualified_operation_id_is_refused_when_two_sources_are_defined",
           "crates/arazzo-runtime/tests/operation_id_routing.rs#malformed_qualified_forms_are_refused_with_the_supported_shape",
+          "crates/arazzo-runtime/tests/operation_id_routing.rs#a_refused_operation_id_reaches_no_server_on_a_live_engine",
           "crates/arazzo-cli/tests/cli_operation_id_routing.rs#refused_operation_ids_carry_their_stable_code_in_json"
         ]
       }

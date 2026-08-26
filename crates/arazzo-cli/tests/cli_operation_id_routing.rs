@@ -211,14 +211,22 @@ fn refused_operation_ids_carry_their_stable_code_in_json() {
             "$sourceDescriptions.alpha.listPets",
             "RUNTIME_OPERATION_ID_NOT_FOUND",
         ),
-        // Reaching for the qualified form without being it.
+        // Reaching for the qualified form without satisfying the
+        // `source-reference` production: no operation segment, and an
+        // operation segment outside the `CHAR` rule.
         (
             "$sourceDescriptions.getPet",
             "RUNTIME_UNSUPPORTED_OPERATION_ID_FORM",
         ),
         (
-            "$sourceDescriptions.alpha.v2.getPet",
+            "$sourceDescriptions.alpha.get{Pet}",
             "RUNTIME_UNSUPPORTED_OPERATION_ID_FORM",
+        ),
+        // A dotted operation name is legal grammar naming a real source, so it
+        // reaches lookup and fails there — not at the form.
+        (
+            "$sourceDescriptions.alpha.v2.getPet",
+            "RUNTIME_OPERATION_ID_NOT_FOUND",
         ),
     ];
 

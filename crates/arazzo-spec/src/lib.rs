@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod operation_id;
 mod operation_path;
+mod source_reference;
 mod workflow_dependency;
 
 pub use operation_id::{

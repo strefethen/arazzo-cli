@@ -1,5 +1,7 @@
 //! Classification of workflow-level `dependsOn` references.
 
+use crate::source_reference::parse_source_reference;
+
 /// A workflow-level dependency reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowDependency<'a> {
@@ -30,54 +32,15 @@ pub fn classify_workflow_dependency(value: &str) -> WorkflowDependency<'_> {
     let Some(reference) = value.strip_prefix("$sourceDescriptions.") else {
         return WorkflowDependency::Invalid;
     };
-    let Some((source_name, workflow_id)) = reference.split_once('.') else {
-        return WorkflowDependency::Invalid;
-    };
-    if source_name.is_empty()
-        || !source_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        || !is_source_reference_id(workflow_id)
-    {
-        return WorkflowDependency::Invalid;
+    // The `source-reference` production itself lives in `source_reference.rs`;
+    // a step's `operationId` reads the same one.
+    match parse_source_reference(reference) {
+        Ok(parsed) => WorkflowDependency::External {
+            source_name: parsed.source_name,
+            workflow_id: parsed.reference_id,
+        },
+        Err(_) => WorkflowDependency::Invalid,
     }
-    WorkflowDependency::External {
-        source_name,
-        workflow_id,
-    }
-}
-
-/// Validates the vendored `CHAR` rule used by `source-reference-id`.
-///
-/// The rule permits Unicode characters except `{`, `}`, `"`, and `\\`, with
-/// JSON-style escapes for those characters and for controls. The
-/// source-reference-id itself must contain at least one CHAR token.
-fn is_source_reference_id(value: &str) -> bool {
-    let mut chars = value.chars();
-    let mut token_count = 0;
-    while let Some(ch) = chars.next() {
-        token_count += 1;
-        if ch == '\\' {
-            let Some(escaped) = chars.next() else {
-                return false;
-            };
-            match escaped {
-                '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' => {}
-                'u' => {
-                    if (0..4).any(|_| chars.next().is_none_or(|hex| !hex.is_ascii_hexdigit())) {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        } else if !matches!(
-            ch as u32,
-            0x20..=0x21 | 0x23..=0x5b | 0x5d..=0x7a | 0x7c | 0x7e..=0x10ffff
-        ) {
-            return false;
-        }
-    }
-    token_count > 0
 }
 
 #[cfg(test)]

@@ -220,13 +220,26 @@ impl Engine {
             .map(|sd| sd.name.as_str())
             .collect();
         if sources.len() > 1 {
+            // The refusal covers operations supplied through
+            // `EngineBuilder::openapi_spec` too — the MUST is about the
+            // document's own sourceDescriptions, whatever this engine happens
+            // to have indexed. Those operations belong to no source
+            // description, so the qualified form cannot reach them and naming
+            // it alone would be a remedy that fails.
+            let explicit_note = if index.openapi_specs_raw.is_empty() {
+                String::new()
+            } else {
+                ". An operation from a separately provided OpenAPI spec belongs to no \
+                 sourceDescription and cannot be named by the qualified form; address it by path"
+                    .to_string()
+            };
             return Err(RuntimeError::new(
                 RuntimeErrorKind::OperationIdAmbiguous,
                 format!(
                     "operationId \"{target}\" is unqualified, but {count} non-arazzo \
                      sourceDescriptions are defined ({names}); name the source with \
                      \"$sourceDescriptions.<name>.{target}\", or address the operation by path \
-                     with an operationPath of \"{{<name>}}./<path>\"",
+                     with an operationPath of \"{{<name>}}./<path>\"{explicit_note}",
                     count = sources.len(),
                     names = sources.join(", "),
                 ),
@@ -969,10 +982,15 @@ pub(crate) struct ResolvedOperation {
 /// one indexed, so a clash between two documents was invisible until the
 /// request arrived at the wrong host.
 fn ambiguous_operation_id(target: &str, entries: &[&OperationEntry]) -> RuntimeError {
-    let origins: Vec<String> = entries
-        .iter()
-        .map(|entry| entry.origin.describe())
-        .collect();
+    // Deduplicated, because one document defining the same operationId under
+    // two paths is a real case and naming that document twice reads as a bug
+    // in the message rather than a clash inside the document.
+    let mut origins: Vec<String> = Vec::with_capacity(entries.len());
+    for origin in entries.iter().map(|entry| entry.origin.describe()) {
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
+    }
     RuntimeError::new(
         RuntimeErrorKind::OperationIdAmbiguous,
         format!(
