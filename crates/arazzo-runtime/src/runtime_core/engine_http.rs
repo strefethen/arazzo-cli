@@ -802,21 +802,34 @@ impl Engine {
         let mut querystring: Option<(String, String)> = None;
         let mut warnings = Vec::<String>::new();
 
-        for param in &step.parameters {
+        // Resolution happens in the arm that owns the location, never once for
+        // every parameter up front. Resolving a header or cookie value here as
+        // well as where the request headers are built is what emitted each of
+        // their value-source warnings twice: `prepare_http_request` seeds its
+        // own warning list from this result and then resolves those two
+        // locations again.
+        let resolve = |param: &Parameter| {
             let (value, param_warnings) = resolve_value_source(&param.value, &eval);
-            warnings.extend(
-                param_warnings
-                    .into_iter()
-                    .map(|warning| format!("parameter {:?}: {warning}", param.name)),
-            );
+            let named: Vec<String> = param_warnings
+                .into_iter()
+                .map(|warning| format!("parameter {:?}: {warning}", param.name))
+                .collect();
+            (value, named)
+        };
+
+        for param in &step.parameters {
             // No catch-all, and no guarded arm: a new `ParamLocation` variant
             // must be a compile error here, not a parameter this runtime
             // silently drops out of the request it sends.
             match param.in_ {
                 Some(ParamLocation::Path) => {
+                    let (value, named) = resolve(param);
+                    warnings.extend(named);
                     path_params.insert(param.name.clone(), value_to_string(&value));
                 }
                 Some(ParamLocation::Query) => {
+                    let (value, named) = resolve(param);
+                    warnings.extend(named);
                     if !value.is_null() {
                         match &value {
                             Value::Array(arr) => {
@@ -840,51 +853,61 @@ impl Engine {
                         }
                     }
                 }
-                Some(ParamLocation::Querystring) => match &value {
-                    // Null is skipped in silence, exactly as an unset `query`
-                    // parameter is.
-                    Value::Null => {}
-                    Value::String(text) => {
-                        if let Some((discarded, _)) = &querystring {
-                            // The specification forbids a second `querystring`
-                            // parameter and `arazzo-validate` rejects it;
-                            // `merge_workflow_params` only lets distinct names
-                            // get this far. An unvalidated spec reaching here
-                            // still gets a defined URL — last one wins, which
-                            // is what makes the same-name workflow/step
-                            // override work — and the loser is named.
-                            warnings.push(format!(
-                                "parameter {:?}: in: querystring supplies the entire query \
-                                 component and cannot appear more than once, so the earlier \
-                                 in: querystring parameter {discarded:?} was dropped",
-                                param.name
+                Some(ParamLocation::Querystring) => {
+                    let (value, named) = resolve(param);
+                    warnings.extend(named);
+                    match &value {
+                        // Null is skipped in silence, exactly as an unset `query`
+                        // parameter is.
+                        Value::Null => {}
+                        Value::String(text) => {
+                            if let Some((discarded, _)) = &querystring {
+                                // The specification forbids a second `querystring`
+                                // parameter and `arazzo-validate` rejects it;
+                                // `merge_workflow_params` only lets distinct names
+                                // get this far. An unvalidated spec reaching here
+                                // still gets a defined URL — last one wins, which
+                                // is what makes the same-name workflow/step
+                                // override work — and the loser is named.
+                                warnings.push(format!(
+                                    "parameter {:?}: in: querystring supplies the entire query \
+                                     component and cannot appear more than once, so the earlier \
+                                     in: querystring parameter {discarded:?} was dropped",
+                                    param.name
+                                ));
+                            }
+                            querystring = Some((param.name.clone(), text.clone()));
+                        }
+                        other => {
+                            // A structure cannot be a query component. Stringifying
+                            // it would send `{"a":1}` as the query and call it
+                            // resolved; dropping it would send the request with no
+                            // query at all. Both send the wrong request, so the
+                            // step fails instead.
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::InvalidParameterValue,
+                                format!(
+                                    "step \"{}\": parameter {:?} (in: querystring) requires a \
+                                     string value (the entire already-encoded query component); \
+                                     got {}",
+                                    step.step_id,
+                                    param.name,
+                                    json_type_name(other)
+                                ),
                             ));
                         }
-                        querystring = Some((param.name.clone(), text.clone()));
                     }
-                    other => {
-                        // A structure cannot be a query component. Stringifying
-                        // it would send `{"a":1}` as the query and call it
-                        // resolved; dropping it would send the request with no
-                        // query at all. Both send the wrong request, so the
-                        // step fails instead.
-                        return Err(RuntimeError::new(
-                            RuntimeErrorKind::InvalidParameterValue,
-                            format!(
-                                "step \"{}\": parameter {:?} (in: querystring) requires a \
-                                 string value (the entire already-encoded query component); \
-                                 got {}",
-                                step.step_id,
-                                param.name,
-                                json_type_name(other)
-                            ),
-                        ));
-                    }
-                },
+                }
                 // Header and cookie parameters are resolved where the request
-                // headers are built, not in URL assembly.
+                // headers are built, not in URL assembly — so they are not
+                // resolved here either, or every warning they raise would be
+                // reported once from each site.
                 Some(ParamLocation::Header) | Some(ParamLocation::Cookie) => {}
-                None => {}
+                // No location names no part of the request, so there is nothing
+                // to bind. The value is still resolved so that an unresolvable
+                // one is reported: `arazzo-validate` only advises on a missing
+                // `in`, so such a parameter does reach this loop.
+                None => warnings.extend(resolve(param).1),
             }
         }
 

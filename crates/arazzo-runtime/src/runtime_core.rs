@@ -35,6 +35,8 @@ mod criteria;
 mod deps;
 mod engine_actions;
 mod engine_http;
+#[cfg(test)]
+mod engine_http_tests;
 mod engine_impl;
 mod engine_parallel;
 mod engine_trace;

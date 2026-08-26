@@ -789,6 +789,55 @@ async fn an_ambiguity_within_one_document_names_that_document_once() {
     );
 }
 
+/// Naming the source does not resolve a clash that lives *inside* that source.
+/// The qualified form narrows resolution to one document; when that one
+/// document defines the id twice it still names no single operation, so the
+/// refusal is the same one the bare form gets rather than a silent pick.
+#[tokio::test]
+async fn a_qualified_operation_id_ambiguous_within_its_own_source_is_refused() {
+    let fixture = TwoSources::new();
+    fixture.dir.write(
+        "twice.openapi.yaml",
+        &[
+            "openapi: \"3.0.0\"",
+            "info:",
+            "  title: fixture",
+            "  version: \"1.0.0\"",
+            "servers:",
+            "  - url: https://twice.example.com",
+            "paths:",
+            "  /first:",
+            "    get:",
+            "      operationId: getPet",
+            "  /second:",
+            "    get:",
+            "      operationId: getPet",
+            "",
+        ]
+        .join("\n"),
+    );
+
+    let err = refusal(
+        spec_with(
+            vec![openapi_source("twice", "twice.openapi.yaml")],
+            "$sourceDescriptions.twice.getPet",
+        ),
+        fixture.dir.path(),
+    )
+    .await;
+    assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
+    assert_eq!(err.code(), "RUNTIME_OPERATION_ID_AMBIGUOUS");
+    assert!(
+        err.message.contains("defined 2 times"),
+        "the count must stay truthful; message was: {err}"
+    );
+    assert!(
+        err.message
+            .contains("\"$sourceDescriptions.twice.getPet\" is defined"),
+        "the refusal must name the target as the author wrote it; message was: {err}"
+    );
+}
+
 /// Two explicit specs defining the same id used to resolve to whichever was
 /// passed last. Insertion order is not an answer, so the clash is reported.
 #[tokio::test]
