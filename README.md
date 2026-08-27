@@ -429,17 +429,27 @@ arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.or
 |---|---|
 | Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: {type: xpath, version: xpath-10}` |
 | `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
-| `sourceDescriptions[].url` read as an absolute request base URL | None implemented yet — fetching the document at that URL (the specification's reading of the field) is listed under "Not implemented" below |
+| `sourceDescriptions[].url` read as an absolute request base URL | Identity-based referencing: provide the document the url names and the reference binds to it, resolving requests against that document's own `servers`. An absolute url binds to a provided document whose `$self` matches it; a relative url binds to the file it resolves to. The base-URL reading applies only when nothing provided answers to the url. See "Not implemented" below |
 | `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's Reusable Object form; `name` is retained as an **arazzo-cli extension** for compatibility |
 
-The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows, but the runtime's extension reading of an absolute `url` as a base URL still applies to existing documents. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4) and the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
+The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows. An absolute `url` now resolves by document identity first — a provided document whose identity matches it wins — and the extension reading of that `url` as a base URL applies only when no provided document answers to it. Tracked in the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
 
 **Specification features not implemented:**
 
 - `$response.query.<name>` and `$response.path.<name>` — listed by the specification's Runtime Expressions grammar; arazzo-cli resolves only `$response.header.<name>` and `$response.body...`, so both evaluate to `null` rather than the request-matched query/path value.
 - `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
 - The specification's `operationPath` form (source reference + JSON Pointer), described above.
-- Fetching a remote document from `sourceDescriptions[].url` — the specification's reading of that field — is not implemented; arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. Tracked in [GitHub issue #4](https://github.com/strefethen/arazzo-cli/issues/4).
+- Fetching a remote document from `sourceDescriptions[].url` over the network. This is a deliberate decision, not a gap: arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. The specification's own answer for a `url` pointing at a hosted document is identity-based referencing (§9.6) — *provide* the document and the reference binds to it without a request. Vendor a local copy, give it a `$self` matching the url, and hand it over:
+
+  ```json
+  { "$self": "https://example.com/v1/openapi/spec.json", "openapi": "3.1.0", "...": "..." }
+  ```
+
+  ```bash
+  arazzo-cli run spec.arazzo.yaml my-workflow --openapi ./vendored.openapi.json
+  ```
+
+  The `$self` is what binds it, and the request then resolves against that document's own `servers` base — the conformant result. `--openapi` alone is not enough for an absolute url: a provided document with no `$self` answers only to the path it was read from, which is what binds a *relative* url. A `url` nothing provided answers to falls back to the base-URL reading in the table above.
 
 ## How It Works
 

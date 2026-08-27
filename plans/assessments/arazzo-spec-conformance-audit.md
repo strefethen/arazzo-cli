@@ -137,8 +137,11 @@ document.
 
 **We do:** `crates/arazzo-generate/src/crud.rs:59-64` writes the API server URL
 extracted by `extract_server_url` (`:98-129`). Already ticketed as **ac-91284**;
-the runtime side is the compatibility rule protecting existing files and is
-tracked in GitHub issue #4.
+the runtime side is the compatibility rule protecting existing files. It now
+applies only as a fallback: `f0adfeb` resolves an absolute url by document
+identity first (§9.6), and network fetching of a `url` was answered rather than
+deferred — GitHub issue #4 is closed as completed, identity-based referencing
+being the answer.
 
 ### F5. `generate` emits non-conformant `operationPath`
 
@@ -601,8 +604,11 @@ document-pointing relative `sourceDescriptions[].url` (URI-reference rebased
 against the output directory, `./`-guarded when the first segment carries a
 colon); the MCP generate tool uses the document file name. Generated documents
 now declare `arazzo: 1.1.0`. The runtime's url-as-base-URL reading of absolute
-urls is unchanged — that compatibility rule remains part of the F1/F5 decision
-and GitHub issue #4.
+urls survives as a fallback only: since `f0adfeb` an absolute url binds by
+document identity when a provided document answers to it (§9.6), and that
+compatibility rule remains part of the F1/F5 decision. Network fetching of a
+`url` was answered rather than deferred — GitHub issue #4 is closed as completed,
+identity-based referencing being the answer.
 
 **F9, F10, and F13 are accepted-as-extension and labeled.** `bc2ae04`
 (ac-fb9dc) adds README's "Specification Conformance: Extensions and Gaps"
