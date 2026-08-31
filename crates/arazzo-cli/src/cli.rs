@@ -100,7 +100,7 @@ pub enum Commands {
         #[arg(long = "dry-run")]
         dry_run: bool,
 
-        /// Make input validation errors fatal (missing required fields, type mismatches)
+        /// Make input validation errors fatal (missing required fields, type mismatches, enum assertions)
         #[arg(long = "strict-inputs")]
         strict_inputs: bool,
 
@@ -298,7 +298,7 @@ pub enum Commands {
         #[arg(long)]
         parallel: bool,
 
-        /// Make input validation errors fatal
+        /// Make input validation errors fatal (missing required fields, type mismatches, enum assertions)
         #[arg(long = "strict-inputs")]
         strict_inputs: bool,
 

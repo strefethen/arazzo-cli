@@ -89,8 +89,9 @@ impl EngineBuilder {
     }
 
     /// Enables or disables strict input validation. When enabled, missing required
-    /// inputs and type mismatches cause a fatal `InputValidation` error. When
-    /// disabled (default), validation issues are printed as warnings to stderr.
+    /// inputs, type mismatches, and property enum assertion failures cause a fatal
+    /// `InputValidation` error. When disabled (default), validation issues are
+    /// printed as warnings to stderr.
     pub fn strict_inputs(mut self, enabled: bool) -> Self {
         self.strict_inputs = enabled;
         self

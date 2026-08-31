@@ -45,7 +45,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Validate specs** | Parse and structurally validate Arazzo YAML before running |
 | **Parallel execution** | Run independent steps concurrently with DAG-based scheduling (`--parallel`) |
 | **Dry-run mode** | Resolve all requests without sending them (`--dry-run`) |
-| **Input validation** | Type-check and require workflow inputs, with strict mode (`--strict-inputs`) |
+| **Input validation** | Require, type-check, and enforce top-level property enums for workflow inputs, with strict mode (`--strict-inputs`) |
 | **Execution traces** | Write detailed `trace.v1` JSON artifacts with automatic sensitive value redaction |
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
@@ -114,7 +114,7 @@ Global flags:
 - `--header Name=value` — HTTP header applied to all requests (repeatable)
 - `--step <step-id>` — execute a single step (auto-resolves upstream dependencies)
 - `--no-deps` — skip dependency resolution when using `--step` (isolated execution)
-- `--strict-inputs` — make input validation errors fatal (missing required fields, type mismatches)
+- `--strict-inputs` — make input validation errors fatal (missing required fields, type mismatches, property enum assertions)
 - `--http-timeout <duration>` — per-request timeout (default `30s`)
 - `--execution-timeout <duration>` — overall workflow deadline (default `5m`)
 - `--max-response-size <bytes>` — response body size limit (default `10485760` = 10 MiB)
@@ -639,7 +639,8 @@ Workflow inputs are validated before execution begins:
 1. **Default injection** — missing inputs are populated from schema defaults
 2. **Required check** — required inputs that are missing or null produce an error
 3. **Type check** — values are validated against their declared JSON Schema type (string, integer, boolean, number)
-4. **Undeclared input warning** — inputs not defined in the workflow schema are flagged
+4. **Top-level property enum check** — present values, including injected defaults, must match a declared top-level property `enum` member
+5. **Undeclared input warning** — inputs not defined in the workflow schema are flagged
 
 By default, validation issues are reported as warnings and execution continues. With `--strict-inputs`, all validation errors are fatal:
 
