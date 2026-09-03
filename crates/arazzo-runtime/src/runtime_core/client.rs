@@ -481,9 +481,15 @@ impl HttpClient {
             )
         })?;
 
-        // Baseline header semantics: defaults appended first, then
-        // per-request headers appended (duplicate names send both
-        // values, exactly as reqwest's RequestBuilder::header did).
+        // Header names are case-insensitive (RFC 9110, cited by Arazzo
+        // 1.1.0 for the `header` parameter location), so a run-wide
+        // default and a step parameter naming the same field are the
+        // same field. Defaults land first; per-request headers then
+        // *replace* them rather than adding a second field line —
+        // combining duplicate lines is only valid for comma-list
+        // fields, and singletons like User-Agent are not among them.
+        // `HeaderMap::insert` keyed by `HeaderName` does both the
+        // case-insensitive match and the replacement.
         let mut current_headers = reqwest::header::HeaderMap::new();
         for (k, v) in self.default_headers.iter().chain(cfg.headers.iter()) {
             let name = reqwest::header::HeaderName::from_bytes(k.as_bytes()).map_err(|err| {
@@ -498,7 +504,7 @@ impl HttpClient {
                     format!("executing request: invalid value for header \"{k}\": {err}"),
                 )
             })?;
-            current_headers.append(name, value);
+            current_headers.insert(name, value);
         }
 
         let mut current_method = method;
