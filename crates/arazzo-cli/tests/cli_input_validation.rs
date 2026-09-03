@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -11,12 +12,21 @@ struct TempDir {
     path: PathBuf,
 }
 
+/// Distinguishes fixtures created within one test binary. The tests here
+/// run as parallel threads of a single process, so the pid is shared and
+/// the clock is too coarse to separate two directories created in the same
+/// instant -- two tests would take the same path, and whichever finished
+/// first would delete the other's fixture on drop.
+static TEMP_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
 impl TempDir {
     fn new(prefix: &str) -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_nanos());
-        let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+        let seq = TEMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{seq}", std::process::id()));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
         Self { path }
