@@ -722,6 +722,29 @@
         }
       }
     },
+    "examples/self-base-referencing.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "list-then-read": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "list-pets",
+              "url": "https://petstore.example.com/v1/pets"
+            },
+            {
+              "method": "GET",
+              "stepId": "read-pet",
+              "url": "https://petstore.example.com/v1/pets/1"
+            }
+          ]
+        }
+      }
+    },
     "examples/soap-customer-crud.arazzo.yaml": {
       "validate": {
         "diagnostics": [],

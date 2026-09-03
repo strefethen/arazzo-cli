@@ -24,6 +24,7 @@ actually call the endpoint — the `httpbin-*` specs target `https://httpbin.org
 | `sub-workflow.arazzo.yaml` | `parent-flow`, `child-create` | Parent/child workflow composition with input/output passing | `cargo run -p arazzo-cli -- run examples/sub-workflow.arazzo.yaml parent-flow --dry-run --input item_name=widget` |
 | `swagger-petstore-crud.arazzo.yaml` | `crud-pet`, `crud-order`, `crud-user` | Generated CRUD lifecycles against the Swagger Petstore | `cargo run -p arazzo-cli -- run examples/swagger-petstore-crud.arazzo.yaml crud-pet --dry-run` |
 | `soap-customer-crud.arazzo.yaml` | `soap-crud` | SOAP envelopes as `text/xml` bodies, XPath success criteria | `cargo run -p arazzo-cli -- run examples/soap-customer-crud.arazzo.yaml soap-crud --dry-run` |
+| `self-base-referencing.arazzo.yaml` | `list-then-read` | `$self` as the base URI for a relative `sourceDescriptions` url; requests resolve against the bound document's own `servers` | `cargo run -p arazzo-cli -- run examples/self-base-referencing.arazzo.yaml list-then-read --dry-run` |
 
 ## Deep-Dive Examples
 
@@ -51,6 +52,14 @@ Arazzo document. It is the input that produced
 ```bash
 cargo run -p arazzo-cli -- generate --spec examples/swagger-petstore.openapi.json --scenario crud
 ```
+
+`descriptions/petstore.openapi.yaml` is the document
+`self-base-referencing.arazzo.yaml` binds to. It is deliberately *not* beside
+that file: the Arazzo document is read from `examples/`, but its `$self`
+identifies it as living in `descriptions/`, and Arazzo 1.1 §5.6.1 resolves
+relative references against the identity rather than the retrieval location.
+Delete the `$self` line and the run fails, naming the file it looked for in
+`examples/` instead — which is the whole point of the example.
 
 ## Notes
 

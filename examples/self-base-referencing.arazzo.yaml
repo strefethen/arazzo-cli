@@ -1,0 +1,43 @@
+arazzo: '1.1.0'
+# This file is read from `examples/`, but `$self` says its canonical identity
+# is `examples/descriptions/`. Per Arazzo 1.1 5.6.1 the base URI for relative
+# references is that identity, not the directory the file happened to arrive
+# in — so `./petstore.openapi.yaml` below resolves to
+# `examples/descriptions/petstore.openapi.yaml`, the document sitting next to
+# the identity. Move this file anywhere and the reference still resolves to the
+# same document.
+$self: ./descriptions/self-base-referencing.arazzo.yaml
+info:
+  title: Identity-Based Source Referencing
+  summary: A $self base URI decides where a relative sourceDescriptions url resolves
+  version: '1.0.0'
+  description: >-
+    The source description names a document, not a request base. Once it is
+    bound, requests resolve against that document's own `servers` entry —
+    `https://petstore.example.com/v1` — which is the conformant reading of the
+    field. Nothing is retrieved over the network to make this work.
+sourceDescriptions:
+  - name: petstore
+    url: ./petstore.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: list-then-read
+    summary: Resolve two operations through the bound OpenAPI document
+    steps:
+      - stepId: list-pets
+        description: Base comes from the bound document's servers, not from the url
+        operationId: listPets
+        successCriteria:
+          - condition: $statusCode == 200
+      - stepId: read-pet
+        description: Path parameters serialize against the same bound document
+        operationId: getPet
+        parameters:
+          - name: petId
+            in: path
+            value: '1'
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs:
+      sourceUrl: $sourceDescriptions.petstore.url
+      documentIdentity: $self
