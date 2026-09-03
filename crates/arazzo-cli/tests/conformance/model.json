@@ -57,7 +57,7 @@
       "claim": "Workflow and reusable input schemas use JSON Schema 2020-12 and are fully parsed under its requirements.",
       "status": "unsupported",
       "owner": "ac-93d90",
-      "reason": "The lossless JSON Schema 2020-12 design is owned by ac-93d90."
+      "reason": "The Rust 1.85 design, disposable codec/backend qualification, and synchronous in-process first-error execution contract are recorded under ac-93d90, but the embedded-schema reference adapter, workspace-wide precision activation boundary (including OpenAPI ingestion and MCP request fields), and plan acceptance remain open. No lossless schema implementation or complete runtime-validation evidence exists."
     }
   ]
 }
