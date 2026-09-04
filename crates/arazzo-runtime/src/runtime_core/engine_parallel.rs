@@ -246,7 +246,7 @@ impl Engine {
 
         // Parallel steps don't get a full ExecutionContext with event_tx because
         // they run independently. Create a minimal context for the HTTP call.
-        // Events from parallel steps are collected after join and emitted by the
+        // Events from parallel steps are collected locally and emitted by the
         // caller (execute_parallel) which has access to the real exec_ctx.
         let (tx, mut rx) = mpsc::channel(64);
         let minimal_ctx = ExecutionContext {
@@ -260,17 +260,25 @@ impl Engine {
         };
 
         let start = Instant::now();
-        let execution = self
-            .execute_http_step(&minimal_ctx, workflow_id, step, vars, 0)
-            .await?;
+        let execution = self.execute_http_step(&minimal_ctx, workflow_id, step, vars, 0);
+        tokio::pin!(execution);
+        let mut events = Vec::new();
+        let execution = loop {
+            tokio::select! {
+                biased;
+                result = &mut execution => break result,
+                Some(event) = rx.recv() => events.push(event),
+            }
+        };
         let duration = start.elapsed();
 
-        // Drain intra-step events so they can be replayed through the parent context.
-        let mut events = Vec::new();
+        // Stop accepting new events after the producer finishes, then retain every
+        // buffered event for source-index-stable replay by the parent context.
         rx.close();
         while let Some(event) = rx.recv().await {
             events.push(event);
         }
+        let execution = execution?;
 
         Ok(ParallelStepExecution {
             execution,
