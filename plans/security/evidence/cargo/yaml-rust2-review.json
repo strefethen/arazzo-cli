@@ -1,0 +1,100 @@
+{
+  "package": "cargo:yaml-rust2",
+  "reviewedAt": "2026-08-31",
+  "status": "disposable-qualified-substrate-not-schema-codec-approved",
+  "candidate": {
+    "version": "0.11.1",
+    "published": "2026-08-18",
+    "rustVersion": "1.65.0",
+    "license": "MIT OR Apache-2.0",
+    "buildScript": false
+  },
+  "registryChecksum": "b36710ce3a279cfce8465dbab826f161675a262950b922cb2c3663852dfe9eb0",
+  "latestNotEvaluated": {
+    "version": "0.12.0",
+    "rustVersion": "1.85"
+  },
+  "registryOwners": ["Ethiraric", "davvid"],
+  "historicalOwnerContinuity": "not-established",
+  "maintenance": "basic maintenance; new features move to Saphyr",
+  "qualifiedBoundary": {
+    "storage": "Arazzo-owned exact JSON tree and exact-number lexeme",
+    "jsonInput": "serde_json RawValue token dispatch with duplicate-detecting objects",
+    "yamlInput": "yaml-rust2 event conversion with strict JSON boundary and alias limits",
+    "yamlOutput": "private checked ExactNumber to Yaml::Real(String) conversion and YamlEmitter",
+    "genericSerdeValueConversion": "outside lossless guarantee"
+  },
+  "qualification": {
+    "toolchain": "cargo 1.85.0 (d73d2caf9 2024-12-31)",
+    "passingTests": 14,
+    "passed": [
+      "exact-huge-integer-fraction-and-exponents",
+      "boolean-and-object-schema-roots",
+      "private-number-marker-object-preservation",
+      "duplicate-and-non-string-key-rejection",
+      "map-order-preservation",
+      "non-finite-number-and-tag-rejection",
+      "alias-cycle-and-bomb-limits",
+      "multiple-document-rejection",
+      "exact-number-and-numeric-like-string-yaml-emission"
+    ],
+    "remainingProductionGates": [
+      "conformance-corpora-fuzzing-unicode-escapes-and-byte-encodings",
+      "mathematical-number-semantics",
+      "full-yaml-json-ruleset",
+      "pre-scan-byte-and-before-clone-alias-bounds",
+      "workspace-build-and-binary-cost",
+      "package-adoption-decision"
+    ],
+    "temporaryReport": "/tmp/ac-93d90-yaml-qual/REPORT.md",
+    "temporaryReportSha256": "04176e754e7a6c044311ad423fc7db036ea4fc83f16372b1d0d501cf1063330c"
+  },
+  "activeGraph": {
+    "thirdPartyPackages": 13,
+    "activeProcMacros": 0,
+    "activeBuildScripts": ["serde", "serde_core", "serde_json", "zmij"]
+  },
+  "resolvedLock": {
+    "dependencyPackages": 18,
+    "rustsecDatabaseCommit": "ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5",
+    "vulnerabilityCount": 0,
+    "warningCount": 0
+  },
+  "coldWarmCacheBuilds": {
+    "debug": {
+      "wallSeconds": 2.70,
+      "maximumRssBytes": 251133952,
+      "binaryBytes": 1660624,
+      "targetKibibytes": 60208
+    },
+    "release": {
+      "wallSeconds": 4.56,
+      "maximumRssBytes": 246677504,
+      "binaryBytes": 744992,
+      "targetKibibytes": 34112
+    },
+    "helloReleaseBaseline": {
+      "wallSeconds": 0.17,
+      "maximumRssBytes": 74072064,
+      "binaryBytes": 414704,
+      "targetKibibytes": 848
+    }
+  },
+  "approvedFetchPopulatedUserCargoRegistryCache": true,
+  "workspacePresence": {
+    "packageFamilyPresent": true,
+    "resolvedVersion": "0.11.0",
+    "consumer": "arazzo-debug-adapter",
+    "candidateVersionInstalled": false,
+    "candidateSchemaCodecUseApproved": false
+  },
+  "cargoVetLedgerFound": false,
+  "repositorySupplyChainPolicyFound": false,
+  "sources": [
+    "https://crates.io/api/v1/crates/yaml-rust2",
+    "https://crates.io/api/v1/crates/yaml-rust2/0.11.1/download",
+    "https://github.com/Ethiraric/yaml-rust2/blob/v0.11.1/src/parser.rs",
+    "https://github.com/Ethiraric/yaml-rust2",
+    "https://github.com/RustSec/advisory-db"
+  ]
+}

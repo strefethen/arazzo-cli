@@ -1,0 +1,215 @@
+{
+  "package": "cargo:jsonschema",
+  "reviewedAt": "2026-08-31",
+  "status": "disposable-qualified-selected-in-process-contract-workspace-adoption-deferred",
+  "candidate": {
+    "version": "0.52.1",
+    "published": "2026-08-30",
+    "rustVersion": "1.85.0",
+    "license": "MIT",
+    "buildScript": false
+  },
+  "registryChecksum": "93e842fa72fd1e50ca4676a527641c13f5ee0d423ac699bfe1cd2afa3a4fdbac",
+  "approvedDesignRustVersion": "1.85.0",
+  "evaluatedFeatures": {
+    "defaultFeatures": false,
+    "features": ["arbitrary-precision"],
+    "retrieval": "explicit-deny-unknown-registry-only"
+  },
+  "featureTransition": {
+    "arbitraryPrecisionOptional": true,
+    "dormantCompilerFeatureOffPassed": true,
+    "exactValidationRequiresFeature": true,
+    "workspaceActivation": "coordinated final cutover only",
+    "workspaceReachabilityGate": "required-before-activation"
+  },
+  "selectedExecutionContract": {
+    "decisionDate": "2026-09-02",
+    "mode": "synchronous-in-process-first-error",
+    "compile": "once-per-immutable-document-snapshot",
+    "admissionLimits": [
+      "bytes",
+      "nodes",
+      "depth",
+      "scalar-size",
+      "resources",
+      "aliases",
+      "regex"
+    ],
+    "instanceMeter": "optional-defense-in-depth",
+    "hardDeadlineRequired": false,
+    "residualNonPreemptibleWorkAccepted": true,
+    "productionProof": [
+      "calibrated-admission-limits",
+      "representative-large-document-latency-and-rss",
+      "maximum-admitted-adversarial-latency-and-rss",
+      "stable-pre-compilation-admission-limit-errors"
+    ]
+  },
+  "workspaceArbitraryPrecisionReachability": {
+    "status": "blocked-pending-openapi-owner-mcp-fields-and-feature-enabled-drift-guard",
+    "confirmedProductionHazards": [
+      "openapiv3-typed-ingestion-with-embedded-serde-json-values",
+      "mcp-jsonrpc-id-and-params-generic-typed-decode"
+    ],
+    "affectedEntrypoints": [
+      "arazzo-generate-parse-openapi-file-used-by-mcp",
+      "duplicate-cli-generate-openapi-parser",
+      "mcp-jsonrpc-request-id-and-params"
+    ],
+    "requiredBeforeActivation": [
+      "accepted-precision-safe-openapi-3.0-ingestion-owner",
+      "collision-safe-parser-adoption-by-cli-and-mcp",
+      "collision-safe-mcp-id-and-params-decode-with-current-id-contract-preserved",
+      "exact-openapi-and-standalone-example-numeric-consumers",
+      "resolved-feature-graph-and-generic-serde-site-allowlist-drift-guard",
+      "marker-shaped-and-exact-number-production-surface-tests-with-feature-enabled"
+    ],
+    "temporaryReports": [
+      {
+        "path": "/tmp/ac-93d90-openapi-value-matrix/REPORT.md",
+        "sha256": "31e30af51a3fb3d5c9fd42c751f79f8ea575d99b9155c11dbc8f29a6caa5d454"
+      },
+      {
+        "path": "/tmp/ac-93d90-global-ap-audit/REPORT.md",
+        "sha256": "bc49d20d53be5c0e4f407e2d272433f0d199923ff115948b608e9c5fe3bea536"
+      },
+      {
+        "path": "/tmp/ac-93d90-openapi-precision/REPORT.md",
+        "sha256": "e797f36c1fc2aba26e43f608421a7d9aac9064737ad5b16e89901c85caf9796a"
+      }
+    ]
+  },
+  "registryOwners": ["Stranger6667"],
+  "historicalOwnerContinuity": "not-established",
+  "selectedMacosGraph": {
+    "dependencyPackagesExcludingHarness": 66,
+    "selectedDirectDependencies": 20,
+    "selectedTransitiveBuildTargets": 14
+  },
+  "resolvedLock": {
+    "dependencyPackagesExcludingHarness": 87,
+    "rustsecDatabaseCommit": "ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5",
+    "vulnerabilityCount": 0,
+    "warningCount": 0
+  },
+  "qualification": {
+    "toolchain": "cargo 1.85.0 (d73d2caf9 2024-12-31)",
+    "passingTests": 14,
+    "passed": [
+      "draft-2020-12-keywords",
+      "exact-huge-integers",
+      "exact-long-fractions",
+      "exact-extreme-exponents-and-multipleOf",
+      "supplied-registry-resources-and-anchors",
+      "denied-http-and-file-retrieval",
+      "dynamicRef-and-dynamicAnchor",
+      "finite-recursion",
+      "malformed-schema-rejection",
+      "regex-backtrack-limit",
+      "feature-off-compiler-build"
+    ],
+    "remainingAcceptanceGates": [
+      "workspace-global-arbitrary-precision-openapi-ingestion-owner-unresolved",
+      "workspace-global-arbitrary-precision-mcp-id-and-params-migration-incomplete",
+      "exact-arazzo-document-registration-does-not-index-anchors-below-container-keys",
+      "container-reference-diagnostic-provenance-and-resource-semantics-incomplete",
+      "backend-display-and-kind-operands-require-safe-diagnostic-mapping"
+    ],
+    "knownLimitations": [
+      "no-native-general-work-budget-deadline-or-cancellation",
+      "schema-side-applicator-and-compilation-work-bypasses-custom-instance-budget",
+      "backend-error-collection-materializes-before-adapter-truncation",
+      "backend-display-and-kind-operands-are-not-safe-diagnostics"
+    ],
+    "temporaryReport": "/tmp/ac-93d90-jsonschema-qual/report.md"
+  },
+  "workBudgetQualification": {
+    "verdict": "fail-for-hard-total-work-or-cancellation-contract",
+    "toolchain": "cargo 1.85.0 (d73d2caf9 2024-12-31)",
+    "totalPassingTests": 25,
+    "budgetTests": 11,
+    "instanceMeter": "passed-as-defense-in-depth",
+    "decisiveProbes": {
+      "booleanAllOfBranches": 200000,
+      "compileSeconds": 1.04,
+      "validateMilliseconds": 2.388,
+      "instanceBudgetCharges": 0,
+      "missingRequiredErrorsMaterialized": 4096,
+      "exhaustedBudgetUnits": 64,
+      "chargesBeforeOrDuringErrorCollection": 15
+    },
+    "hardPreemptionQualified": false,
+    "productHardPreemptionRequired": false,
+    "disposition": "historical-stronger-contract-not-selected",
+    "directRepresentationDependency": "jsonschema-value 0.52.1",
+    "temporaryReport": "/tmp/ac-93d90-jsonschema-qual/work-budget-report.md",
+    "temporaryReportSha256": "5d01398e48ec71aa0392ec0f953f3c1579e485373549bba8d7d9e3254443f18c"
+  },
+  "synchronousFirstErrorQualification": {
+    "verdict": "selected-design-contract-production-calibration-pending",
+    "toolchain": "cargo 1.85.0 (d73d2caf9 2024-12-31)",
+    "fullHarnessPassingTests": 31,
+    "focusedTestsPerProfile": 6,
+    "profiles": ["debug", "release"],
+    "illustrativeAdmissionCaps": {
+      "schemaBytes": 16384,
+      "decodedNodes": 1000,
+      "depth": 32,
+      "scalarBytes": 1024
+    },
+    "observations": [
+      "900-missing-required-names-returned-one-error-without-eager-collection",
+      "admitted-nested-applicator-unique-evaluated-and-recursive-ref-cases-completed-or-exhausted-visibly",
+      "900-boolean-allOf-branches-remained-schema-side-and-unmetered"
+    ],
+    "hardCancellationProvided": false,
+    "hardCancellationRequired": false,
+    "residualNonPreemptibleWorkAccepted": true,
+    "temporaryReport": "/tmp/ac-93d90-jsonschema-qual/validate-first-error-report.md",
+    "temporaryReportSha256": "87a869063ad0fb0812eeae162f54fb67cebda067c1a1e762dab8c54a736a50e7",
+    "temporaryResultsSha256": "866f8bdfb958890769a3bbeb16581adef1c4a2a747526753fda7f56b081dc05b"
+  },
+  "arazzoContainerReferenceQualification": {
+    "verdict": "layered-pointer-and-anchor-adapter-qualified-diagnostic-provenance-needs-proof",
+    "toolchain": "cargo 1.85.0 (d73d2caf9 2024-12-31)",
+    "passingCharacterizationTests": 5,
+    "exactDocumentRegistration": {
+      "absoluteComponentsInputPointer": "resolved-from-distinct-compiler-entry",
+      "workflowInputPointerWithSiblingAnchor": "pointer-resolves-anchor-does-not",
+      "embeddedPlainAnchor": "unresolved"
+    },
+    "preliminaryPrivateProjection": "translated-pointer-plain-anchor-and-recursive-dynamic-ref-probes-pass",
+    "layeredRegistry": {
+      "focusedPassingTests": 6,
+      "lowerResource": "private-defs-anchor-catalog-at-containing-document-uri",
+      "upperResource": "exact-arazzo-document-at-containing-document-uri",
+      "compilerEntry": "distinct-internal-uri-with-absolute-authored-workflow-pointer",
+      "authoredReferencesRewritten": false,
+      "privatePointerReachableThroughDocumentUri": false
+    },
+    "requiredNextProof": "diagnostic-provenance-duplicate-anchor-rejection-and-id-dynamic-scope-siblings-external-base-preservation",
+    "temporaryReport": "/tmp/ac-93d90-container-ref-qual/REPORT.md",
+    "temporaryReportSha256": "cbd17c44159b688067bac0ea9e88c2af77da9f3bc0e671d1a839c5d9eb7b4093"
+  },
+  "cleanLinkedReleaseBuild": {
+    "wallSeconds": 22.64,
+    "userSeconds": 117.36,
+    "sysSeconds": 5.21,
+    "maximumRssBytes": 928874496,
+    "binaryBytes": 6496176,
+    "unlinkedHarnessBaselineBytes": 414704,
+    "linkedDeltaBytes": 6081472
+  },
+  "workspaceInstalled": false,
+  "workspaceDependencyApproved": false,
+  "cargoVetLedgerFound": false,
+  "repositorySupplyChainPolicyFound": false,
+  "coolingOff": "warning: under seven days old",
+  "sources": [
+    "https://crates.io/api/v1/crates/jsonschema",
+    "https://crates.io/api/v1/crates/jsonschema/0.52.1/download",
+    "https://docs.rs/jsonschema/0.52.1/jsonschema/",
+    "https://github.com/RustSec/advisory-db"
+  ]
+}
