@@ -3,6 +3,9 @@ use super::*;
 impl Engine {
     pub(super) async fn handle_step_result(&self, ctx: StepDecisionContext<'_>) -> RoutedDecision {
         let step = &ctx.workflow.steps[ctx.step_idx];
+        if ctx.cancel.is_cancelled() {
+            return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+        }
 
         if ctx.result.success {
             let success_actions = if step.on_success.is_empty() {
@@ -19,6 +22,8 @@ impl Engine {
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
                         depth: ctx.depth,
+                        cancel: ctx.cancel,
+                        is_timeout: ctx.is_timeout,
                     },
                     success_actions,
                 )
@@ -27,6 +32,9 @@ impl Engine {
                 Ok(action) => action,
                 Err(err) => return RoutedDecision::error(err),
             };
+            if ctx.cancel.is_cancelled() {
+                return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+            }
             if let Some(action) = action {
                 let decision = self
                     .execute_action(
@@ -54,6 +62,9 @@ impl Engine {
                         }),
                     )
                     .await;
+                if ctx.cancel.is_cancelled() {
+                    return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+                }
                 return match decision {
                     ActionExecution::Routed(decision) => decision,
                     ActionExecution::RetryExhausted(exhausted) => {
@@ -79,6 +90,9 @@ impl Engine {
         let mut next_action_index = 0;
         let mut exhausted_retry = None;
         loop {
+            if ctx.cancel.is_cancelled() {
+                return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+            }
             let action = match self
                 .find_matching_action_with_debug_from(
                     ActionSelectionContext {
@@ -88,6 +102,8 @@ impl Engine {
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
                         depth: ctx.depth,
+                        cancel: ctx.cancel,
+                        is_timeout: ctx.is_timeout,
                     },
                     failure_actions,
                     next_action_index,
@@ -97,6 +113,9 @@ impl Engine {
                 Ok(action) => action,
                 Err(err) => return RoutedDecision::error(err),
             };
+            if ctx.cancel.is_cancelled() {
+                return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+            }
             let Some(action) = action else {
                 return match exhausted_retry {
                     Some(exhausted) => Self::retry_limit_exceeded_decision(step, exhausted),
@@ -130,6 +149,9 @@ impl Engine {
                     }),
                 )
                 .await;
+            if ctx.cancel.is_cancelled() {
+                return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
+            }
 
             match decision {
                 ActionExecution::Routed(decision) => return decision,
@@ -200,6 +222,9 @@ impl Engine {
         actions: &'a [OnAction],
         start_index: usize,
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
+        if ctx.cancel.is_cancelled() {
+            return Err(control::cancellation_error(ctx.is_timeout));
+        }
         let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
         let gate = DebugGateContext {
@@ -213,8 +238,14 @@ impl Engine {
         };
 
         for (action_index, action) in actions.iter().enumerate().skip(start_index) {
+            if ctx.cancel.is_cancelled() {
+                return Err(control::cancellation_error(ctx.is_timeout));
+            }
             self.debug_gate_action(&gate, ctx.branch, action_index, action)
                 .await?;
+            if ctx.cancel.is_cancelled() {
+                return Err(control::cancellation_error(ctx.is_timeout));
+            }
             if action.criteria.is_empty() {
                 return Ok(Some(MatchedActionRef {
                     index: action_index,
@@ -224,6 +255,9 @@ impl Engine {
 
             let mut all_match = true;
             for (criterion_index, criterion) in action.criteria.iter().enumerate() {
+                if ctx.cancel.is_cancelled() {
+                    return Err(control::cancellation_error(ctx.is_timeout));
+                }
                 let evaluation = evaluate_criterion_detailed(
                     criterion,
                     &eval,
@@ -238,6 +272,9 @@ impl Engine {
                     &evaluation,
                 )
                 .await?;
+                if ctx.cancel.is_cancelled() {
+                    return Err(control::cancellation_error(ctx.is_timeout));
+                }
                 if !evaluation.matched {
                     all_match = false;
                     break;
@@ -259,6 +296,9 @@ impl Engine {
         action: &OnAction,
         debug_ctx: Option<SelectedActionDebugContext<'_>>,
     ) -> ActionExecution {
+        if ctx.cancel.is_cancelled() {
+            return RoutedDecision::error(control::cancellation_error(ctx.is_timeout)).into();
+        }
         match action.action_type() {
             ActionType::End => {
                 if ctx.is_failure_path {
@@ -397,6 +437,12 @@ impl Engine {
                         {
                             return RoutedDecision::error(err).into();
                         }
+                        if ctx.cancel.is_cancelled() {
+                            return RoutedDecision::error(control::cancellation_error(
+                                ctx.is_timeout,
+                            ))
+                            .into();
+                        }
                     }
                     return ActionExecution::RetryExhausted(ExhaustedRetry {
                         effective_limit: limit,
@@ -428,8 +474,16 @@ impl Engine {
                     {
                         return RoutedDecision::error(err).into();
                     }
+                    if ctx.cancel.is_cancelled() {
+                        return RoutedDecision::error(control::cancellation_error(ctx.is_timeout))
+                            .into();
+                    }
                 }
                 if !effective_delay.is_zero() {
+                    if ctx.cancel.is_cancelled() {
+                        return RoutedDecision::error(control::cancellation_error(ctx.is_timeout))
+                            .into();
+                    }
                     if let Some(debug) = debug_ctx {
                         if let Err(err) = self
                             .debug_gate_retry_delay(
@@ -442,6 +496,12 @@ impl Engine {
                             .await
                         {
                             return RoutedDecision::error(err).into();
+                        }
+                        if ctx.cancel.is_cancelled() {
+                            return RoutedDecision::error(control::cancellation_error(
+                                ctx.is_timeout,
+                            ))
+                            .into();
                         }
                     }
                     if let Err(err) =
@@ -458,6 +518,10 @@ impl Engine {
                         }
                         .into();
                     }
+                }
+                if ctx.cancel.is_cancelled() {
+                    return RoutedDecision::error(control::cancellation_error(ctx.is_timeout))
+                        .into();
                 }
                 RoutedDecision {
                     flow: FlowDecision::Retry {
@@ -637,6 +701,8 @@ struct ActionSelectionContext<'a> {
     vars: &'a VarStore,
     response: Option<&'a Response>,
     depth: usize,
+    cancel: &'a CancellationToken,
+    is_timeout: &'a AtomicBool,
 }
 
 #[derive(Debug)]

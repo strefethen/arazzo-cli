@@ -209,6 +209,7 @@ impl Engine {
     ) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Value>, RuntimeError>> + Send + 'a>>
     {
         Box::pin(async move {
+            exec_ctx.check_cancelled()?;
             let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
                 RuntimeError::new(
                     RuntimeErrorKind::WorkflowNotFound,
@@ -304,7 +305,7 @@ impl Engine {
                 let duration = start.elapsed();
                 let step_outputs = vars.step_outputs(&step.step_id);
 
-                let action = self
+                let mut action = self
                     .handle_step_result(StepDecisionContext {
                         workflow_id,
                         workflow: &workflow,
@@ -317,6 +318,9 @@ impl Engine {
                         is_timeout: &exec_ctx.is_timeout,
                     })
                     .await;
+                if exec_ctx.cancel.is_cancelled() {
+                    action = engine_actions::RoutedDecision::error(exec_ctx.cancelled_error());
+                }
 
                 let trace_err = match &action.flow {
                     FlowDecision::Error(err) => Some(err.message.clone()),
@@ -336,6 +340,7 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
+                exec_ctx.check_cancelled()?;
                 match action.flow {
                     FlowDecision::Done => {
                         break;
@@ -363,6 +368,7 @@ impl Engine {
                     } => {
                         // Retry targets the current step; find it in our filtered set.
                         if let Some(pos) = steps_to_run.iter().position(|&i| i == retry_idx) {
+                            exec_ctx.check_cancelled()?;
                             if let Some(reference) = reference {
                                 self.execute_retry_reference(
                                     exec_ctx,
@@ -376,6 +382,7 @@ impl Engine {
                                     &mut vars,
                                 )
                                 .await?;
+                                exec_ctx.check_cancelled()?;
                             }
                             let value = retry_count.entry(retry_site).or_insert(0);
                             *value += 1;
@@ -391,6 +398,7 @@ impl Engine {
                                 },
                             )
                             .await;
+                            exec_ctx.check_cancelled()?;
                             run_cursor = pos;
                         } else {
                             return Err(RuntimeError::new(
@@ -405,6 +413,7 @@ impl Engine {
                         workflow_id,
                         inputs,
                     } => {
+                        exec_ctx.check_cancelled()?;
                         let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
                         return self.execute_inner(exec_ctx, &workflow_id, inputs, 1).await;
                     }
@@ -414,6 +423,7 @@ impl Engine {
                 }
             }
 
+            exec_ctx.check_cancelled()?;
             Ok(vars.step_outputs(step_id))
         })
     }
@@ -462,7 +472,11 @@ impl Engine {
                 // Record terminal failures too: this invocation was admitted
                 // and therefore completed, even when one of its steps failed.
                 exec_ctx.mark_workflow_completed(workflow_id);
-                return result;
+                return if exec_ctx.cancel.is_cancelled() {
+                    Err(exec_ctx.cancelled_error())
+                } else {
+                    result
+                };
             }
 
             let workflow_start = Instant::now();
@@ -486,9 +500,11 @@ impl Engine {
                 };
                 self.debug_gate_step(exec_ctx, workflow_id, &step, &vars, depth)
                     .await?;
+                exec_ctx.check_cancelled()?;
 
                 self.emit_before_step_event(exec_ctx, workflow_id, &step)
                     .await;
+                exec_ctx.check_cancelled()?;
 
                 let attempt = if self.inner.trace_enabled {
                     Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
@@ -552,7 +568,7 @@ impl Engine {
                 )
                 .await;
 
-                let action = self
+                let mut action = self
                     .handle_step_result(StepDecisionContext {
                         workflow_id,
                         workflow: &workflow,
@@ -565,6 +581,9 @@ impl Engine {
                         is_timeout: &exec_ctx.is_timeout,
                     })
                     .await;
+                if exec_ctx.cancel.is_cancelled() {
+                    action = engine_actions::RoutedDecision::error(exec_ctx.cancelled_error());
+                }
 
                 let trace_err = match &action.flow {
                     FlowDecision::Error(err) => Some(err.message.clone()),
@@ -584,6 +603,7 @@ impl Engine {
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
                 }
+                exec_ctx.check_cancelled()?;
                 match action.flow {
                     FlowDecision::Done => {
                         completed = true;
@@ -599,6 +619,7 @@ impl Engine {
                         delay_seconds,
                         reference,
                     } => {
+                        exec_ctx.check_cancelled()?;
                         if let Some(reference) = reference {
                             if let Err(err) = self
                                 .execute_retry_reference(
@@ -627,6 +648,7 @@ impl Engine {
                                 .await;
                                 return Err(err);
                             }
+                            exec_ctx.check_cancelled()?;
                         }
                         let value = retry_count.entry(retry_site).or_insert(0);
                         *value += 1;
@@ -642,12 +664,14 @@ impl Engine {
                             },
                         )
                         .await;
+                        exec_ctx.check_cancelled()?;
                         step_index = idx;
                     }
                     FlowDecision::GotoWorkflow {
                         workflow_id: target_workflow_id,
                         inputs,
                     } => {
+                        exec_ctx.check_cancelled()?;
                         let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
                         let result = self
                             .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
@@ -685,6 +709,7 @@ impl Engine {
                 ));
             }
 
+            exec_ctx.check_cancelled()?;
             let workflow_outputs = self.build_outputs(&workflow, &vars);
             self.emit_observer_event(
                 exec_ctx,
@@ -813,6 +838,7 @@ impl Engine {
                 workflow_id: target,
                 inputs,
             } => {
+                exec_ctx.check_cancelled()?;
                 let sub_inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
                 self.emit_observer_event(
                     exec_ctx,
@@ -824,24 +850,24 @@ impl Engine {
                     },
                 )
                 .await;
-                let outputs = self
+                exec_ctx.check_cancelled()?;
+                let output_result = self
                     .execute_inner(exec_ctx, &target, sub_inputs.clone(), depth + 1)
-                    .await
-                    .map_err(|err| {
-                        if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
-                            err
-                        } else {
-                            let msg = format!(
-                                "step {retried_step_id}: retry reference workflow \"{target}\": {}",
-                                err.message
-                            );
-                            RuntimeError::with_source(
-                                RuntimeErrorKind::RetryReferenceFailed,
-                                msg,
-                                err,
-                            )
-                        }
-                    })?;
+                    .await;
+                if exec_ctx.cancel.is_cancelled() {
+                    return Err(exec_ctx.cancelled_error());
+                }
+                let outputs = output_result.map_err(|err| {
+                    if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
+                        err
+                    } else {
+                        let msg = format!(
+                            "step {retried_step_id}: retry reference workflow \"{target}\": {}",
+                            err.message
+                        );
+                        RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
+                    }
+                })?;
                 // Register completed reference state for $workflows.<id>.* —
                 // the "context is returned" half of the spec sentence. The
                 // retried step's own outputs are not touched.
@@ -849,6 +875,7 @@ impl Engine {
                 Ok(())
             }
             RetryReference::Step { step_id } => {
+                exec_ctx.check_cancelled()?;
                 let Some(idx) = self.find_step_index(workflow, &step_id) else {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RetryReferenceFailed,
@@ -862,16 +889,19 @@ impl Engine {
                     merge_workflow_params(&workflow.parameters, &mut s);
                     s
                 };
-                let execution = self
+                let execution_result = self
                     .execute_step_with_result(exec_ctx, workflow_id, &step, vars, depth)
-                    .await
-                    .map_err(|err| {
-                        let msg = format!(
-                            "step {retried_step_id}: retry reference step \"{step_id}\": {}",
-                            err.message
-                        );
-                        RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
-                    })?;
+                    .await;
+                if exec_ctx.cancel.is_cancelled() {
+                    return Err(exec_ctx.cancelled_error());
+                }
+                let execution = execution_result.map_err(|err| {
+                    let msg = format!(
+                        "step {retried_step_id}: retry reference step \"{step_id}\": {}",
+                        err.message
+                    );
+                    RuntimeError::with_source(RuntimeErrorKind::RetryReferenceFailed, msg, err)
+                })?;
                 if !execution.result.success {
                     let detail = execution
                         .result
@@ -934,17 +964,20 @@ impl Engine {
             Some(StepTarget::WorkflowId(id)) => id.as_str(),
             _ => "",
         };
-        let outputs = self
+        let output_result = self
             .execute_inner(exec_ctx, wf_id, sub_inputs.clone(), depth + 1)
-            .await
-            .map_err(|err| {
-                if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
-                    err
-                } else {
-                    let msg = format!("sub-workflow {wf_id}: {}", err.message);
-                    RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
-                }
-            })?;
+            .await;
+        if exec_ctx.cancel.is_cancelled() {
+            return Err(exec_ctx.cancelled_error());
+        }
+        let outputs = output_result.map_err(|err| {
+            if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
+                err
+            } else {
+                let msg = format!("sub-workflow {wf_id}: {}", err.message);
+                RuntimeError::with_source(RuntimeErrorKind::SubWorkflowFailed, msg, err)
+            }
+        })?;
 
         // Register completed sub-workflow state for $workflows.<id>.* expressions.
         vars.register_workflow_state(wf_id, sub_inputs, outputs.clone());

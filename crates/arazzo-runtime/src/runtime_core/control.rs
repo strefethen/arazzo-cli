@@ -1,5 +1,16 @@
 use super::*;
 
+pub(super) fn cancellation_error(is_timeout: &AtomicBool) -> RuntimeError {
+    if is_timeout.load(Ordering::Acquire) {
+        RuntimeError::new(
+            RuntimeErrorKind::ExecutionTimeout,
+            "execution timeout exceeded",
+        )
+    } else {
+        RuntimeError::new(RuntimeErrorKind::ExecutionCancelled, "execution cancelled")
+    }
+}
+
 pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeError {
     if let Some(err) = &result.err {
         let kind = result
@@ -45,24 +56,16 @@ pub(super) async fn sleep_with_cancel(
     cancel: &CancellationToken,
     is_timeout: &AtomicBool,
 ) -> Result<(), RuntimeError> {
+    if cancel.is_cancelled() {
+        return Err(cancellation_error(is_timeout));
+    }
     if delay.is_zero() {
         return Ok(());
     }
 
     tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(cancellation_error(is_timeout)),
         () = tokio::time::sleep(delay) => Ok(()),
-        () = cancel.cancelled() => {
-            if is_timeout.load(Ordering::Acquire) {
-                Err(RuntimeError::new(
-                    RuntimeErrorKind::ExecutionTimeout,
-                    "execution timeout exceeded",
-                ))
-            } else {
-                Err(RuntimeError::new(
-                    RuntimeErrorKind::ExecutionCancelled,
-                    "execution cancelled",
-                ))
-            }
-        },
     }
 }

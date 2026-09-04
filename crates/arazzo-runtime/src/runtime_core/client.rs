@@ -288,15 +288,15 @@ fn lock_recovering<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 
-/// Maps a fired cancellation token to the timeout or cancelled error.
-fn cancel_error(is_timeout: &AtomicBool) -> RuntimeError {
-    if is_timeout.load(Ordering::Acquire) {
-        RuntimeError::new(
-            RuntimeErrorKind::ExecutionTimeout,
-            "execution timeout exceeded",
-        )
-    } else {
-        RuntimeError::new(RuntimeErrorKind::ExecutionCancelled, "execution cancelled")
+async fn await_transport<T>(
+    future: impl std::future::Future<Output = T>,
+    cancel: &CancellationToken,
+    is_timeout: &AtomicBool,
+) -> Result<T, RuntimeError> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(control::cancellation_error(is_timeout)),
+        result = future => Ok(result),
     }
 }
 
@@ -516,7 +516,7 @@ impl HttpClient {
 
         let mut resp = loop {
             if cancel.is_cancelled() {
-                return Err(cancel_error(is_timeout));
+                return Err(control::cancellation_error(is_timeout));
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 return Err(RuntimeError::new(
@@ -535,7 +535,8 @@ impl HttpClient {
             if let Some(body) = &current_body {
                 req = req.body(body.clone());
             }
-            let resp = req.send().await.map_err(|err| {
+            let send_result = await_transport(req.send(), cancel, is_timeout).await?;
+            let resp = send_result.map_err(|err| {
                 let mut message = format!("executing request: {err}");
                 if error_chain_mentions_certificate(&err) {
                     let host = host_port_label(&current_url);
@@ -668,13 +669,18 @@ impl HttpClient {
         // Stream body in chunks, enforcing the size limit.
         let max = self.max_response_bytes;
         let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|err| {
-            RuntimeError::with_source(
-                RuntimeErrorKind::HttpResponseRead,
-                format!("reading response body: {err}"),
-                err,
-            )
-        })? {
+        loop {
+            let chunk_result = await_transport(resp.chunk(), cancel, is_timeout).await?;
+            let Some(chunk) = chunk_result.map_err(|err| {
+                RuntimeError::with_source(
+                    RuntimeErrorKind::HttpResponseRead,
+                    format!("reading response body: {err}"),
+                    err,
+                )
+            })?
+            else {
+                break;
+            };
             if body.len() + chunk.len() > max {
                 return Err(RuntimeError::new(
                     RuntimeErrorKind::ResponseTooLarge,
@@ -806,7 +812,7 @@ impl HttpClient {
     ) -> Result<(), RuntimeError> {
         loop {
             if cancel.is_cancelled() {
-                return Err(cancel_error(is_timeout));
+                return Err(control::cancellation_error(is_timeout));
             }
             let wait = {
                 let now = Instant::now();
@@ -1003,5 +1009,19 @@ mod tests {
         assert_eq!(split_host_port("[::1]"), None);
         assert_eq!(split_host_port("::1"), None);
         assert_eq!(split_host_port("host:notaport"), None);
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_when_transport_is_already_ready() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let is_timeout = AtomicBool::new(false);
+
+        let err = match await_transport(std::future::ready(7_u8), &cancel, &is_timeout).await {
+            Ok(value) => panic!("ready transport value {value} must lose to cancellation"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
     }
 }

@@ -241,10 +241,7 @@ impl Engine {
         is_timeout: &Arc<AtomicBool>,
     ) -> Result<ParallelStepExecution, RuntimeError> {
         if cancel.is_cancelled() {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::ExecutionCancelled,
-                "execution cancelled",
-            ));
+            return Err(control::cancellation_error(is_timeout));
         }
 
         // Parallel steps don't get a full ExecutionContext with event_tx because

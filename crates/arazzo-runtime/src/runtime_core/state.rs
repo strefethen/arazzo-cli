@@ -25,14 +25,7 @@ impl ExecutionContext {
     }
 
     pub(super) fn cancelled_error(&self) -> RuntimeError {
-        if self.is_timeout.load(Ordering::Acquire) {
-            RuntimeError::new(
-                RuntimeErrorKind::ExecutionTimeout,
-                "execution timeout exceeded",
-            )
-        } else {
-            RuntimeError::new(RuntimeErrorKind::ExecutionCancelled, "execution cancelled")
-        }
+        control::cancellation_error(&self.is_timeout)
     }
 
     pub(super) fn workflow_is_completed(&self, workflow_id: &str) -> bool {
