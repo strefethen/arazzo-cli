@@ -8,7 +8,16 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
         return RuntimeError::new(kind, format!("step {step_id}: {err}"));
     }
     if let Some(resp) = &result.response {
-        let mut body_preview = String::from_utf8_lossy(&resp.body).to_string();
+        let mut body_preview = if let Some(mut body_json) = resp
+            .body_json
+            .clone()
+            .or_else(|| serde_json::from_slice(&resp.body).ok())
+        {
+            redact_json_value(&mut body_json);
+            body_json.to_string()
+        } else {
+            redact_text_patterns(&String::from_utf8_lossy(&resp.body))
+        };
         if body_preview.len() > 500 {
             let mut end = 500;
             while !body_preview.is_char_boundary(end) {
