@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-03
+
+### Changed
+
+#### Workflow Engine
+- A document that declares `$self` resolves a relative
+  `sourceDescriptions[].url` against that identity rather than against the
+  directory the document was read from (Arazzo 1.1 §5.6.1). Documents that
+  declare no `$self` take a `file://` base from their own directory and bind
+  the files they always bound.
+
+### Added
+
+#### Workflow Engine
+- Source references bind by identity: a provided document whose `$self` or
+  retrieval URI matches the resolved URI wins, then a `file://` URI is read
+  from disk, then the reference is refused — naming the source, the authored
+  url, the base URI, and the resolved URI. Nothing on this path reaches the
+  network; §9.6 presents identity-based referencing as how an implementation
+  locates documents in a provided collection without making requests.
+- `EngineBuilder::openapi_spec` takes the retrieval path of the document it
+  is handed, which is what gives that document an identity to be referenced
+  by.
+- `examples/self-base-referencing.arazzo.yaml` demonstrates the rule: the
+  document is read from `examples/`, its `$self` places it in
+  `descriptions/`, and the relative url resolves next to the identity.
+
+#### Validation
+- Top-level property `enum` assertions on workflow inputs are enforced. A
+  present value, including an injected default, must match a declared member;
+  `--strict-inputs` makes the failure fatal.
+
+### Fixed
+
+#### Workflow Engine
+- A step's `in: header` parameter replaces a same-named run-wide default
+  header instead of adding a second field line. A step declaring
+  `User-Agent` sent both `arazzo-cli/0.1` and its own value, which recipients
+  fold into `arazzo-cli/0.1, <yours>`. RFC 9110 permits combining repeated
+  field lines only where the entire field value is a comma-separated list,
+  and `User-Agent` is not such a field.
+- The same path duplicated any header a step and a `-H` flag both named. Two
+  `Authorization` field lines meant the operator's flag could silently beat
+  the document's declared credential, while `--json`, `--dry-run`, and
+  `$request.header.*` all reported the step's value alone — the trace pointed
+  away from the cause.
+- Header names now match case-insensitively, as RFC 9110 requires and Arazzo
+  1.1.0 cites for the `header` parameter location, so `-H "user-agent: …"`
+  replaces the default agent the way `-H "User-Agent: …"` already did.
+  Replacement is per field: a default the step does not name is still sent.
+  `in: cookie` parameters were never affected — they are folded into a single
+  `Cookie` header before this point.
+- A relative `$self` with no retrieval directory to resolve it against is
+  reported as a missing directory rather than blamed on `$self`.
+
+#### Conformance
+- The `operationPath` and source-reference claims name `type: openapi` rather
+  than "non-arazzo". An `asyncapi` source is no more resolved or
+  identity-bound than an `arazzo` one, and the broader wording asserted
+  coverage that does not exist.
+
+#### Documentation
+- The README no longer says the `sourceDescriptions` url reading is "None
+  implemented yet". An absolute url binds to a provided document whose
+  `$self` matches it, and network fetching is a decision rather than a gap.
+
+#### Quality
+- 1010 hermetic tests, up from 973.
+- Input-validation fixtures no longer share a temp directory when two of
+  them are created in the same instant, which could delete one test's spec
+  out from under another.
+
 ## [0.5.0] - 2026-08-26
 
 ### Changed
