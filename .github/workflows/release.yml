@@ -102,9 +102,34 @@ jobs:
           cd dist
           sha256sum * > SHA256SUMS.txt
 
+      # The release body is the CHANGELOG section for this tag, never
+      # GitHub's generated summary alone -- with no PRs in the range that
+      # collapses to a bare "Full Changelog" link, which is what v0.6.0
+      # first published. A tag with no section is a hard failure here
+      # rather than a silently empty release page.
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { capture = 1; next }
+            capture && index($0, "## [") == 1 { exit }
+            capture { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "ERROR: CHANGELOG.md has no entry for ${RELEASE_TAG}." >&2
+            echo "Expected a section headed '## [${version}] - <date>'." >&2
+            echo "Add it before tagging; a release must not publish empty notes." >&2
+            exit 1
+          fi
+          echo "Release notes for ${RELEASE_TAG}:"
+          cat release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist/*
+          body_path: release-notes.md
           generate_release_notes: true

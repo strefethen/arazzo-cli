@@ -27,6 +27,22 @@ if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   exit 1
 fi
 
+# The release workflow publishes this section as the release body. Catch a
+# missing entry here, while the tag is still uncreated and unpushed, rather
+# than after CI has built three binaries for a release page with no notes.
+VERSION="${TAG#v}"
+NOTES="$(awk -v ver="$VERSION" '
+  index($0, "## [" ver "]") == 1 { capture = 1; next }
+  capture && index($0, "## [") == 1 { exit }
+  capture { print }
+' "$ROOT_DIR/CHANGELOG.md")"
+if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+  echo "ERROR: CHANGELOG.md has no entry for $TAG." >&2
+  echo "Expected a section headed '## [$VERSION] - <date>'." >&2
+  echo "Add it before cutting the tag; a release must not publish empty notes." >&2
+  exit 1
+fi
+
 echo "Running release preflight checks..."
 bash "$ROOT_DIR/scripts/release/verify-readiness.sh"
 
