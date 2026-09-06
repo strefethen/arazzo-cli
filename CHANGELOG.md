@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-09-06
 
+Header parameters stop duplicating, `$self` becomes the base URI for relative
+source references, and workflow inputs enforce `enum` members.
+
+**Upgrade if** you set headers on steps — especially `Authorization` alongside
+`-H`, where two field lines meant the wrong credential could reach the server.
+
+- **Headers** — a step's `in: header` parameter replaces the same-named default
+  instead of emitting a second field line
+- **Credentials** — failure previews sanitize response bodies before showing
+  them in traces and errors
+- **`$self`** — a relative `sourceDescriptions[].url` resolves against the
+  document's identity, per Arazzo 1.1 §5.6.1
+- **Inputs** — top-level property `enum` assertions are enforced, fatal under
+  `--strict-inputs`
+- **Cancellation** — a terminal cancellation can no longer be reinterpreted as
+  a retry or a selected action
+- **Parallel steps** — a full event channel no longer deadlocks criterion
+  emission
+
 ### Changed
 
 #### Workflow Engine

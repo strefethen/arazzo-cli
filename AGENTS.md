@@ -128,6 +128,11 @@ fix — new ticket, not an inline decision.
 - Spec-surface tests need a negative case rejecting the non-conformant shape,
   not just a positive one.
 - Planning docs live in `plans/`, never `docs/` (user-facing).
+- The release workflow publishes a version's CHANGELOG section verbatim as the
+  GitHub release body, so that section *is* the release page. Open each
+  `## [x.y.z]` entry with a one-line lede, an "**Upgrade if**" line, and a
+  bulleted highlight list before the `###` sections. `cut-tag.sh` refuses a tag
+  whose version has no section; it cannot tell a terse one from a good one.
 - **Never** pipe a verification command in a background task — redirect to a file and echo $?; or set set -o pipefail in the harness's background shell.
 
 `tests/` holds four drift guards: `golden_spec_baseline`, `schema_drift`,
