@@ -59,6 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cookie` header before this point.
 - A relative `$self` with no retrieval directory to resolve it against is
   reported as a missing directory rather than blamed on `$self`.
+- Cancelling an execution terminates routing. Live HTTP sends and
+  response-body waits race the execution token, timeout classification is
+  centralized, and the action, continuation, nested, recovery, and parallel
+  boundaries each recheck it — so a terminal cancellation can no longer be
+  reinterpreted as a retry, a wrapper error, or a selected action.
+- A parallel step whose bounded event channel filled could deadlock criterion
+  emission. The receiver is now polled while the HTTP producer runs, then
+  closed and drained before either producer result propagates, preserving
+  FIFO event order for source-index replay without detached tasks or a
+  larger buffer.
+
+#### Security
+- Parsed JSON and text response bodies are sanitized before a
+  success-criteria failure previews them, so trace output and CLI error
+  consumers no longer receive credentials carried in a failing response.
 
 #### Conformance
 - The `operationPath` and source-reference claims name `type: openapi` rather
@@ -72,10 +87,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$self` matches it, and network fetching is a decision rather than a gap.
 
 #### Quality
-- 1010 hermetic tests, up from 973.
+- 1030 hermetic tests, up from 973.
 - Input-validation fixtures no longer share a temp directory when two of
   them are created in the same instant, which could delete one test's spec
   out from under another.
+- The parallel event-drain regression runs on conformant Arazzo input: bare
+  `operationPath` targets gave way to `operationId`s resolved from a
+  temporary OpenAPI document declaring its server, paths, operations, and
+  responses, preserving the volume, order, failure, and sequential
+  assertions.
 
 ## [0.5.0] - 2026-08-26
 
