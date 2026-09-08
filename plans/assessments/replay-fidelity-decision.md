@@ -19,9 +19,10 @@ workflow with different outputs must never be a successful equivalence check.
 
 Recommend `trace.v2`, explicitly requested by a new `run --record <path>` option.
 Keep `run --trace` and its 2048-byte diagnostic policy on v1. The new recorder
-either retains complete eligible evidence or records an explicit ineligibility
-reason; it cannot silently downgrade to a preview. `--record` and `--trace` are
-mutually exclusive initially. Numeric retention limits belong to
+publishes only complete eligible evidence. Classified secret-bearing or
+unclassifiable data fails recording with a fixed error and no v2 artifact;
+it cannot silently downgrade to a preview or redacted projection. `--record`
+and `--trace` are mutually exclusive initially. Numeric retention limits belong to
 [ac-e8235](https://sonos.scapedeck.com/docs/ac-tickets/ac-e8235); acceptance of that
 contract is a prerequisite to enabling the recorder.
 
@@ -94,9 +95,10 @@ real remote execution; hashes establish binding, not authenticity.
 `completeness = complete | truncated | unknown`,
 independent `redacted` and `lossy` transformation facts, and
 `representation = bytesBase64 | diagnosticText | none`.
-Record original/retained byte lengths when known, explicit withholding/limit
-reasons, and redaction-policy version plus affected locations. Absent means no
-protocol body; empty means known zero bytes; neither means missing evidence.
+Record original/retained byte lengths when known and the classification-policy
+version. The in-memory evidence model and reader can represent ineligibility;
+the MVP writer never publishes an ineligible run or its affected locations.
+Absent means no protocol body; empty means known zero bytes; neither means missing evidence.
 Both transformation facts must be known false for exact fidelity; they may both
 be true for a diagnostic payload. Reject contradictory field combinations.
 Only complete exact bytes, known empty, or known absence can reconstruct an
@@ -104,9 +106,9 @@ authoritative response. Previews never become execution data. A partial body
 followed by a read error is a failed transport outcome, not a complete response.
 
 Base64 supplies a lossless representation, not permission to persist opaque
-content. The first release withholds binary/invalid-UTF-8 payloads whose secret
-classification cannot be established, marks them unavailable, and refuses
-equivalence. Text/JSON redaction must run on complete data before previewing.
+content. The first release rejects recording binary/invalid-UTF-8 payloads whose
+secret classification cannot be established and publishes no v2 artifact.
+Classification must inspect complete text/JSON before any serialization.
 Do not persist raw classified credentials, reversible encodings of them, or
 unkeyed digests of withheld secret values. Use one response-decoding owner for
 live and injected bytes; do not repeat today's content-type parsing split.
@@ -120,12 +122,15 @@ invocation identity rather than claiming wall-clock ordering is deterministic.
 Record every attempted step, including failures before request preparation;
 distinguish `notPrepared`, `preparedNotSent`, and `sent` from missing request
 evidence. Transport outcomes identify failure phase and stable runtime kind;
-human error text is sanitized, non-authoritative context. Redirect exchanges,
+human error text is non-authoritative context subject to the publication gate
+below, not an exception to it. Redirect exchanges,
 when present, belong to that attempt; first-release authority rejects incomplete
 hop evidence instead of pretending a final response proves all exchanges.
 
 Recording captures facts from existing execution; it must not change retry,
-cancellation, or action semantics. Replay injects the original failure kind so
+cancellation, or action semantics. A publication rejection is separate from the
+workflow result; it never retries or reruns the workflow to obtain another
+artifact. Replay injects the original failure kind so
 the engine recomputes failure actions and retry decisions. Consume each identity
 exactly once, reject duplicates/gaps/unconsumed records, and compare decisions
 and outputs at their owning boundaries. A transport-failed attempt still counts
@@ -156,15 +161,67 @@ document’s $self URI if the $self field is present in that document”
 File relocation is permitted only when content and resulting semantic bindings
 match; even a metadata-only content change rejects strict equivalence. Eligible
 non-sensitive input values are persisted; source documents remain separately
-supplied. There is no embedded source copy or
-secret sidecar. Sources containing classified literal credentials cannot publish
-an unkeyed content digest: mark binding unavailable and return inconclusive.
+supplied. There is no embedded source copy or secret sidecar. Classified literal
+credentials in a source, retrieval context, or manifest field reject the entire
+recording before any digest or metadata is published; an unavailable binding
+does not license a partial artifact.
 Supporting exact secret-bearing source identity requires another accepted
 binding mechanism. Missing documents are not fetched. Source/workflow overrides
 must satisfy the same manifest; arbitrary changed-spec comparison is a future
 mode, not strict replay.
 
-**Secrets and comparison.** Reuse the single location-aware projection planned
+**Secret publication gate.** Without provenance, selective redaction cannot
+prove that another field does not alias a detected secret. For example,
+`{token: sentinel, label: sentinel}` leaves `label` intact under current
+[redaction.rs](../../crates/arazzo-runtime/src/runtime_core/redaction.rs),
+`redact_json_value`; `trace.rs::redact_trace_file` independently sanitizes
+outputs by key. A later `{display: $steps.login.outputs.token}` has the same
+problem. The v1 artifact is not alias-safe, and this assessment does not claim
+the existing projection repair will make it so.
+
+The MVP uses one monotonic, whole-run publication gate. Before execution, inspect
+the actual input values, root and every referenced/provided document, retrieval
+and semantic identities, resolved configuration, and candidate manifest fields.
+During execution, inspect each prepared request (including headers, URL and
+body), response, criterion/decision data, outputs, errors/diagnostics, and final
+result. Classification uses the canonical key, header, text-pattern and URL
+rules, including the userinfo prerequisite. The runtime recorder reports
+classification facts; the CLI writer cannot independently declare a projection
+safe. If classified secret material is present or discovered at **any** point,
+permanently reject publication of **all** value-bearing data for that run,
+including material collected before discovery. No per-field cleansing, alias
+search, hashes of original values, or claim of unused secrets can clear the gate.
+Failure to classify required data also rejects recording. Preflight rejection
+starts no workflow; discovery during an already running workflow marks recording
+failed while that workflow follows its existing control semantics.
+
+Consequently, `--record` must retain candidate evidence only in bounded memory
+until the complete run and every proposed serialized field pass the gate. It
+must not stream, spool, checkpoint, or serialize value-bearing evidence to a
+temporary file first. After validation, atomic publication is the only disk
+write path. A late discovery publishes **no v2 artifact**, no partial manifest,
+no diagnostic sidecar, and no supposedly safe request/response projection. An
+existing destination remains untouched; no fallback v1 file is written. Resource
+exhaustion follows the same no-publication rule under the resource contract.
+The publication layer must also gate `--record` stdout/stderr/verbose reports:
+do not emit buffered workflow results or diagnostics after rejection, even if
+the workflow itself succeeded. Network effects already performed by the live
+workflow are not undone; publication rejection never initiates re-execution.
+
+The sole rejection report is fixed program text: `kind: error`,
+`code: RECORD_SECRET_MATERIAL`, `error: Recording rejected: classified secret material`.
+For unclassifiable content use the fixed code `RECORD_DATA_UNCLASSIFIABLE` and
+fixed message `Recording rejected: data cannot be classified`; return exit 1.
+Include no user-derived path, identifier, key name, URI, count, length, digest,
+error detail, output, or manifest field. These fixed enum/literal fields reveal
+only the rejection category and cannot contain an alias. This is a CLI failure
+report, not an inspection artifact. Projection-only v2 inspection and projected
+re-execution are deferred entirely. The guarantee covers classified material and
+every alias once it is encountered; it is not a claim that the existing rules
+discover every possible secret. Wider classification/provenance requires a
+separately accepted security design.
+
+**Legacy comparison ownership.** Reuse the single location-aware projection planned
 by [ac-72ba1](https://sonos.scapedeck.com/docs/ac-tickets/ac-72ba1), including the
 userinfo rule owned by [ac-d95a9](https://sonos.scapedeck.com/docs/ac-tickets/ac-d95a9).
 Classified header/query/body values compare through that projection; retain
@@ -174,21 +231,13 @@ existing ticket's ambiguous “exact method” wording accordingly. A literal
 `[REDACTED]` outside a classified location never becomes a wildcard. Mismatch
 messages report locations/kinds, not actual sensitive URL/header contents.
 
-Projection proves equality only outside the excluded values. A removed token
-may control a branch, output, or later non-sensitive request; supplying the
-marker as an ordinary value cannot reproduce it. The MVP does not execute with
-redacted inputs/responses or assert that masked outputs are equal. Without
-dependency provenance, conservatively mark such runs inconclusive, withhold
-derived outputs and diagnostic expression/error text that might alias the
-secret, and do not persist raw intermediate records. Key-name redaction alone
-does not establish absence of aliased secrets; see
-[redaction.rs](../../crates/arazzo-runtime/src/runtime_core/redaction.rs),
-`redact_json_value`, and `trace.rs::redact_trace_file`. For request-only excluded
-credentials, a separately requested projection comparison may check available
-non-sensitive dimensions; it remains inconclusive about full equivalence and
-never silently becomes the default replay path. If required execution data is
-unavailable, stop before re-execution. General secret provenance is not smuggled
-into this repair.
+Projection proves request equality only outside excluded values; it grants no
+publication eligibility, alias-safety or faithful-execution guarantee. A removed
+token may control a branch, output, or later non-sensitive request. Neither v1
+nor a rejected v2 recording may be re-executed with a redaction marker as an
+ordinary value. Preserve the projection work as the existing ticket's bounded
+legacy comparison responsibility, not a v2 bypass. Broader v1 alias remediation
+and general secret provenance remain separately accepted work.
 
 ## Compatibility, verdicts, and migration
 
@@ -203,21 +252,33 @@ does not reinterpret v1 `body`, `error`, or `bodyBytes`.
 Likewise [runtime `api_v1`](../../crates/arazzo-runtime/src/lib.rs) explicitly
 freezes trace/runtime-facing models. Keep them intact. Publish separately
 versioned evidence/replay-session types and explicit adapters; do not add
-mandatory fields to v1 structs or reinterpret their errors. A v1-to-v2 adapter
-may label evidence unknown for inspection, never promote it to authoritative.
+mandatory fields to v1 structs or reinterpret their errors. A v1 adapter may
+classify evidence as unknown in memory, never publish a converted v2 artifact
+or promote it to authoritative.
 Recapturing an authorized live run is the migration to complete evidence; replay
-itself never performs that run. Old binaries reject v2. New readers retain v1
-inspection and emit an inconclusive verdict for its missing guarantees. Existing
+itself never performs that run. Old binaries reject v2. New readers report v1
+as inconclusive without re-execution or displaying its value-bearing contents:
+only fixed `kind: inconclusive` and `reason: REPLAY_LEGACY_EVIDENCE` fields.
+Legacy `--trace` retains its current format and behavior, including the known
+alias gap; format compatibility is not a new safety guarantee. Existing
 external consumers are unknown; release notes must advertise the stricter CLI
 success/exit contract before rollout. Rollback can still inspect v1 but cannot
 make an old reader understand v2.
+
+Before replay, independently apply the publication classifier to all supplied
+sources/configuration and the complete artifact, regardless of its eligibility
+claim. Classified secret data returns the same fixed rejection shape as
+recording, with code `REPLAY_SECRET_MATERIAL` and fixed message
+`Replay rejected: classified secret material`, before re-execution or any
+value-bearing report. Missing classification evidence is inconclusive without
+re-execution. A fabricated completion flag cannot bypass this gate.
 
 Proposed new replay output contract, to accept explicitly:
 
 | Result | Guarantee and CLI behavior |
 |---|---|
 | `kind: success`, `equivalence: verified`, exit 0 | All bindings and evidence eligible; every observable comparison passes. Include recorded/replayed terminal status separately, so reproducing a recorded workflow failure can be successful verification. `requestsChecked` includes failed sent attempts; add attempts/decisions/outputs checked counts. |
-| `kind: inconclusive`, exit 2 | Well-formed diagnostic/legacy, incomplete, lossy, redacted-dependent, unsupported, or projection-only evidence. Include stable reason codes, checked dimensions and limitations; no verified-equivalence label or ordinary successful workflow outputs. No required data is guessed. |
+| `kind: inconclusive`, exit 2 | Well-formed legacy, incomplete, lossy, redacted-dependent, or unsupported evidence. Report only `kind` and a fixed reason enum; no user-derived values, checked-value previews or re-execution. The MVP writer does not publish such v2 recordings. |
 | `kind: error`, exit 1 | Malformed/inconsistent artifact, actual binding/request/decision/output mismatch, missing required supplied file, or replay infrastructure failure. Include a safe location and stable code. |
 
 Keep existing `RUNTIME_REPLAY_REQUEST_MISMATCH`,
@@ -229,8 +290,8 @@ Keep existing `RUNTIME_REPLAY_REQUEST_MISMATCH`,
 `REPLAY_OUTPUT_MISMATCH`, and `REPLAY_OUTCOME_MISMATCH` for observed divergence.
 Inconclusive reasons are `REPLAY_LEGACY_EVIDENCE`, `REPLAY_PAYLOAD_INCOMPLETE`,
 `REPLAY_PAYLOAD_LOSSY`, `REPLAY_SECRET_DEPENDENCY`,
-`REPLAY_PROJECTION_ONLY`, and `REPLAY_SEMANTICS_UNSUPPORTED`. New names are
-proposals, not shipped codes. Missing data and an actual mismatch must remain
+and `REPLAY_SEMANTICS_UNSUPPORTED`. These names and the publication-gate codes
+above are proposals, not shipped codes. Missing data and an actual mismatch must remain
 different outcomes. No stable existing code is repurposed.
 
 The CLI verdict owner updates `ReplayOutput`,
@@ -255,16 +316,17 @@ owners. Contracts between units must be settled before their tickets dispatch.
 |---|---|
 | Prerequisite: existing URL redaction | Keep [ac-d95a9](https://sonos.scapedeck.com/docs/ac-tickets/ac-d95a9) as the userinfo owner. No duplicate sanitizer. |
 | 1. Runtime comparison | Rewrite [ac-72ba1](https://sonos.scapedeck.com/docs/ac-tickets/ac-72ba1) around its one `replay_projection.rs` Create and validator. Retain classified comparison, drift negatives and v1 wire preservation. Move CLI persistence/verdict integration to its owners. |
-| 2. Runtime recording | One evidence model/collector module owns versioned payload facts, invocation/attempt IDs, typed outcomes and terminal evidence. Narrow wiring in existing HTTP/engine/parallel paths retains failed attempts; no replay branch in ordinary execution. Requires the accepted resource-limit policy. |
+| 2. Runtime recording | One evidence model/collector module owns versioned payload facts, invocation/attempt IDs, typed outcomes, terminal evidence and monotonic classification facts. No value-bearing spool or early publication. Narrow wiring in existing HTTP/engine/parallel paths retains failed attempts; no replay branch in ordinary execution. Requires the accepted resource-limit policy. |
 | 3. Runtime document observations | Existing `document_set.rs`/builder own manifest observations and configuration provenance; zero new resolver modules. Expose a consumable observation surface, including all supplied documents. |
-| 4. CLI persistence | One `trace_v2.rs` owner serializes runtime evidence, applies the shared projection/withholding policy, validates eligibility and publishes atomically. Owns v2 artifact schema, v1 compatibility fixtures and migration docs; depends on 1–3 and the resource contract. |
+| 4. CLI persistence | One `trace_v2.rs` owner enforces the whole-run publication gate, then serializes eligible evidence atomically. Rejected runs write nothing, including temporary evidence or projections. Owns v2 artifact schema, v1 compatibility fixtures and migration docs; depends on 1–3 and the resource contract. |
 | 5. Runtime replay | One versioned replay-session owner accepts evidence in memory, checks eligibility, consumes exact attempts, injects outcomes and returns structured comparison results. Existing client connects that session to the shared response decoder; no filesystem or network fallback in this owner. Depends on 1–3; 4 supplies persisted round-trip verification. |
-| 6. CLI verdict | One `replay_verdict.rs` owner integrates loading/binding/results, new flags, exit policy and output schema, with narrow handler wiring. Depends on 4–5 and proves the full matrix below. |
+| 6. CLI verdict | One `replay_verdict.rs` owner integrates loading/binding/results, new flags, exit policy and output schema, including gating all value-bearing `--record`/replay reports. Depends on 4–5 and proves the full matrix below. |
 
 This explicitly changes the two unconditional authenticated-success commitments
 in [ac-72ba1](https://sonos.scapedeck.com/docs/ac-tickets/ac-72ba1): passing its
-request projection can no longer mean faithful execution with redacted inputs.
-Steve must accept verified versus inconclusive behavior before those criteria
+request projection can no longer mean faithful execution with redacted inputs
+or permission to publish a v2 artifact. Steve must accept the whole-run rejection
+and verified versus inconclusive behavior before those criteria
 are rewritten. Its unchanged-v1-schema commitment remains valid for the
 projection repair; new authoritative schema work belongs to unit 4. None of
 these proposed units is implementation-ready.
@@ -280,21 +342,25 @@ checks; absence of an in-repository consumer is not proof of external absence.
 
 ## End-to-end acceptance matrix
 
-Capture with the CLI, validate the persisted artifact, stop the fixture server,
-then replay. Assert both bytes/secret absence and the structured verdict/exit;
-an in-memory runtime-only test is insufficient.
+Capture with the CLI; eligible cases validate the persisted artifact, stop the
+fixture server, then replay. Rejected captures assert that no destination,
+temporary evidence or sidecar is created, a pre-existing destination is
+byte-identical, and stdout/stderr contain only the fixed rejection report.
+An in-memory runtime-only test is insufficient.
 
 | Scenario | Required result |
 |---|---|
 | >2048-byte JSON, including a marker beyond the preview | v2 retains complete eligible bytes and verifies identical marker; v1/default preview is inconclusive. A cap hit is explicit recording failure/ineligibility, never null success. |
 | Complete JSON under JSON, text/plain and missing content type | Same live/injected decode and outputs; exact original bytes preserved before parsing. Include whitespace minification and invalid-JSON negatives. |
-| Authorization/Cookie, sensitive query and nested request fields, userinfo | Synthetic sentinels absent from all artifact/error bytes; projection passes only classified locations. Exact equivalence remains unavailable when credentials or their dependencies are excluded. |
-| Input/response token used in branch, alias output or later request | Inconclusive before using a redaction marker as execution data; derived aliases cannot leak into the artifact. Include a non-sensitive `[REDACTED]` literal that must fail real drift. |
-| Binary/invalid UTF-8, known empty body, missing body | Unsupported binary is explicitly withheld/inconclusive; known empty is eligible; missing/truncated/lossy data cannot reconstruct a response. A future approved binary mode must round-trip every byte. |
+| Authorization/Cookie, sensitive query and nested request fields, userinfo | `--record` fails with the fixed secret-material report and no v2 artifact. Legacy projection unit tests still pass only classified locations; a non-sensitive `[REDACTED]` literal never permits drift. |
+| Same-payload alias: `{token: sentinel, label: sentinel}` | Detecting `token` rejects the whole capture, including `label`, all earlier records and diagnostics. No redacted partial response or manifest survives. |
+| Later-request/output alias: token copied into `display`, a request key, criterion, decision, step/final output or error | Detection at the original source permanently rejects publication, regardless of aliases' later keys or encodings. Check every artifact/report sink and late discovery after several otherwise eligible steps. No re-execution follows rejection. |
+| Secret in inputs, root/referenced docs, retrieval URI, config or manifest | Reject before publishing any source digest, identifier or manifest field. Exercise each surface independently, including a secret discovered only in the final result. |
+| Binary/invalid UTF-8, known empty body, missing body | Unclassifiable binary fails recording with no v2 artifact; known empty is eligible; missing/truncated/lossy reader evidence is inconclusive without re-execution. A future approved binary mode must round-trip every byte. |
 | Connection failure then retry; terminal network failure; body-read failure | Every attempted/sent request and original error kind accounted for; retry decision and terminal outcome match. Delete, reorder, duplicate, or renumber evidence and require rejection. |
 | Root and referenced docs, provided unclaimed docs, relocation | Matching bytes and bindings pass offline; same-URL changed bytes reject. Missing files reject without retrieval. Relocation preserves semantic bindings or rejects. |
 | Request, criteria/decision, step output, final output and terminal drift | Independent mutations each reject with the owning code; equal request counts never excuse drift. Include repeated child invocations and eligible parallel execution identities. |
-| v1/new/unknown versions and tampered completion markers | v1 inspection is inconclusive; old reader rejects v2; unknown versions and inconsistent v2 reject. A v1 conversion cannot claim completeness. |
+| v1/new/unknown versions and tampered completion markers | v1 emits only the fixed legacy-inconclusive report; old reader rejects v2; unknown versions and inconsistent v2 reject. Secret-bearing v2 rejects before re-execution even when labeled complete. No v1 conversion is published. |
 
 Future implementation must run repository build/drift gates and focused surface
 proof, then independent review of each immutable candidate. This documentation
@@ -308,11 +374,12 @@ full Cargo suite. Proposed verdicts have not been implemented or verified.
 2. Accept the stricter default success contract, exit-2 inconclusive result,
    failure-reproduction success semantics, proposed codes, and preserving
    case-insensitive method comparison.
-3. Accept conservative withholding/rejection for secret-dependent execution,
-   secret-bearing source bindings, and opaque binary data. Decide whether an
-   explicit projection-only inspection mode is worth shipping initially;
-   recommendation: ship inspection, defer projected re-execution until its
-   required-data boundary is separately settled.
+3. **Accept or reject the whole-run publication rule:** classified secret-bearing
+   or unclassifiable data makes `--record` fail with no v2 artifact and only the
+   fixed rejection report; no partial projection, inspection artifact or
+   re-execution is offered. Recommendation: accept this bounded MVP. Rejection
+   leaves v2 blocked on a separately accepted security/provenance design; it
+   does not authorize selective redaction as a substitute.
 4. Accept the owner partition and reconcile the two existing redaction tickets,
    resource prerequisites, schemas and public API contracts before rewritten
    tickets receive transfer review and warning-level lint.
