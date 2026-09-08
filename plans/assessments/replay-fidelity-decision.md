@@ -1,6 +1,6 @@
 # Recording and replay fidelity decision
 
-**Disposition: assessment; pending Steve's decisions, not implementation authority.**
+**Disposition: accepted authority for implementation planning.**
 Prepared 2026-09-08 against `1dc4731122c00c83eaed66a16485b4faaa848814` for
 [ac-adb32](https://sonos.scapedeck.com/docs/ac-tickets/ac-adb32), contract revision
 `1c4631ba88961794d17d3a1f8b15100607c7b3a407c5ca94b2b344626e371c59`.
@@ -9,6 +9,13 @@ per-unit decomposition that makes replay's evidence limits explicit, while
 reusing the existing redacted-comparison work.” Warning-level lint fails solely
 with `plan-not-set`; the authorized planning-stage exception permits this
 assessment, not a fabricated plan or an implementation-ready handoff.
+
+**Acceptance recorded 2026-09-08:** Steve explicitly accepted all four choices
+listed below, selecting the reviewed contract at
+`87724f190556e1a3bac2e8bcce2e763fbf310d82`. Recommendation/proposal wording now
+records the selected direction, not a pending approval request. Implementation
+is not delivered; affected tickets still require rewrite, warning-level lint,
+transfer review, and the implementation/review gates stated here.
 
 ## Recommendation and alternatives
 
@@ -273,7 +280,7 @@ recording, with code `REPLAY_SECRET_MATERIAL` and fixed message
 value-bearing report. Missing classification evidence is inconclusive without
 re-execution. A fabricated completion flag cannot bypass this gate.
 
-Proposed new replay output contract, to accept explicitly:
+Accepted new replay output contract, not yet implemented:
 
 | Result | Guarantee and CLI behavior |
 |---|---|
@@ -307,8 +314,8 @@ return recording success. Preserve v1 behavior independently.
 
 ## Owners and smallest implementation sequence
 
-After acceptance, reconcile existing tickets through `tkt`; this assessment
-creates none and changes no ticket. Each unit below has at most one new
+With these decisions accepted, reconcile existing tickets through `tkt`; this
+assessment creates none and changes no ticket. Each unit below has at most one new
 behavior-owning module; focused test targets are verification, not new runtime
 owners. Contracts between units must be settled before their tickets dispatch.
 
@@ -325,9 +332,9 @@ owners. Contracts between units must be settled before their tickets dispatch.
 This explicitly changes the two unconditional authenticated-success commitments
 in [ac-72ba1](https://sonos.scapedeck.com/docs/ac-tickets/ac-72ba1): passing its
 request projection can no longer mean faithful execution with redacted inputs
-or permission to publish a v2 artifact. Steve must accept the whole-run rejection
-and verified versus inconclusive behavior before those criteria
-are rewritten. Its unchanged-v1-schema commitment remains valid for the
+or permission to publish a v2 artifact. Steve accepted the whole-run rejection
+and verified versus inconclusive behavior; those criteria still require rewrite,
+lint and review. Its unchanged-v1-schema commitment remains valid for the
 projection repair; new authoritative schema work belongs to unit 4. None of
 these proposed units is implementation-ready.
 
@@ -367,22 +374,21 @@ proof, then independent review of each immutable candidate. This documentation
 deliverable needs link/diff/scope checks and independent decision review, not a
 full Cargo suite. Proposed verdicts have not been implemented or verified.
 
-## Decisions still required from Steve
+## Decisions accepted by Steve on 2026-09-08
 
-1. Accept the separate v2 artifact/runtime surface and `--record` migration,
+1. Accepted the separate v2 artifact/runtime surface and `--record` migration,
    instead of additive-v1 authority or a diagnostic-only product.
-2. Accept the stricter default success contract, exit-2 inconclusive result,
+2. Accepted the stricter default success contract, exit-2 inconclusive result,
    failure-reproduction success semantics, proposed codes, and preserving
    case-insensitive method comparison.
-3. **Accept or reject the whole-run publication rule:** classified secret-bearing
+3. **Accepted the whole-run publication rule:** classified secret-bearing
    or unclassifiable data makes `--record` fail with no v2 artifact and only the
    fixed rejection report; no partial projection, inspection artifact or
-   re-execution is offered. Recommendation: accept this bounded MVP. Rejection
-   leaves v2 blocked on a separately accepted security/provenance design; it
-   does not authorize selective redaction as a substitute.
-4. Accept the owner partition and reconcile the two existing redaction tickets,
-   resource prerequisites, schemas and public API contracts before rewritten
+   re-execution is offered. Broader security/provenance remains separately
+   deferred; selective redaction is not an authorized substitute.
+4. Accepted the owner partition and reconciliation of the two existing redaction
+   tickets, resource prerequisites, schemas and public API contracts before rewritten
    tickets receive transfer review and warning-level lint.
 
-Independent review may establish that this decision package is sound; it cannot
-accept these choices on Steve's behalf or certify replay fidelity as delivered.
+Independent review verifies the accepted decision package and each resulting
+candidate; acceptance alone does not certify replay fidelity as delivered.
