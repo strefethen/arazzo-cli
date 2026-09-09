@@ -1,6 +1,6 @@
 # Runtime resource contract
 
-**Disposition: proposed; Steve's acceptance is pending.** Prepared 2026-09-08
+**Disposition: accepted authority for implementation planning.** Prepared 2026-09-08
 against `f1ab35f978330a86db57e025a5b78a48839076a9` for
 [ac-e8235](https://sonos.scapedeck.com/docs/ac-tickets/ac-e8235), retained revision
 `93eeefbc66e1f2646f23ed9e029bac8959044f73f08243225c8af043000d7c06`.
@@ -10,19 +10,28 @@ Live requirements match that snapshot. Warning-level lint fails solely with
 `plan-not-set`; Steve authorized this planning assessment despite that warning.
 That exception does not make the future implementation ready.
 
-## Recommendation
+**Acceptance recorded 2026-09-08:** Steve selected the reviewed contract at
+`95abd56f624a9da7fcb8b91b7b45d3afcbd0a6c7`, accepting all five choices:
+concurrency/rate/response limits; aggregate charged-memory and artifact limits;
+the versioned bounded API and CLI migration with legacy compatibility; terminal
+cancellation and no-partial-publication semantics; and logical-retention scope
+with the separately tracked residual-resource work. The direction below is
+selected, not pending approval. Implementation is not delivered; resulting
+tickets still require reconciliation, warning-level lint and transfer review.
+
+## Selected direction
 
 Introduce an explicitly versioned bounded execution session, using the existing
 engine, with two cooperating controls: bounded admission of independent work
 and one charged-memory ledger for retained execution data and evidence. Move CLI
-execution to that surface after acceptance. Preserve the frozen runtime v1
+execution to that surface during implementation. Preserve the frozen runtime v1
 surface through explicit adapters; do not retrofit new error meanings into it.
 
 An accepted [recording/replay decision](replay-fidelity-decision.md) already
 requires complete candidate evidence to remain in bounded memory for the whole
 run. A cap failure must terminate bounded execution and reject publication; it
 cannot truncate evidence, spill to disk, emit a partial artifact, or silently
-switch modes. This proposal selects resource policy, not Arazzo syntax or new
+switch modes. This contract selects resource policy, not Arazzo syntax or new
 scheduler eligibility.
 
 ## Current evidence and owners
@@ -57,7 +66,7 @@ revision `4ea766211f248431c61cabccbf98215dc2fb991045a66282062f6fe9edebe0da`,
 owns the later six-family benchmark methodology and regression budgets. This
 assessment provides calibration, not a competing benchmark framework.
 
-## Measurements and proposed envelope
+## Measurements and selected envelope
 
 The corrected loopback probe uses validated Arazzo 1.1.0 documents, unique
 `operationId` values in local OpenAPI 3.1.0 documents, text/plain bodies, and a
@@ -151,7 +160,7 @@ above retains the decision-relevant observations in the repository. This is one
 host, three samples per main case, with no warmup, allocator instrumentation or
 implemented-cap comparison; it cannot select statistical regression budgets.
 
-| Proposed bounded-session control | Default | Hard maximum / application |
+| Selected bounded-session control | Default | Hard maximum / application |
 |---|---:|---|
 | Admitted HTTP requests and launched-but-unretired parallel steps | 8 | 32 per engine HTTP pool; the same configured count limits each invocation's window. Valid overrides 1–32. |
 | Aggregate charged retained execution/evidence and recorder working memory | 128 MiB (134,217,728 bytes) | 512 MiB (536,870,912 bytes) per root invocation, shared by its nested work and publication. |
@@ -281,7 +290,7 @@ Tokio/HTTP/TLS/kernel buffers and other engines are outside this ledger. RSS
 measurements include some of these costs and cannot prove the logical invariant.
 Recording's classifier/parser/serialization allocations are explicitly inside,
 even though general pre-session document parsing and evaluation are outside.
-Do not advertise the proposal as a hostile-input process-memory sandbox.
+Do not advertise the contract as a hostile-input process-memory sandbox.
 
 ## Public configuration and safe reports
 
@@ -296,7 +305,7 @@ guarantee; conversion to v1 is deliberate and cannot convert a resource failure
 to success or publish partial recording evidence. Deprecating legacy unbounded
 collection can be a later compatibility decision, not an accidental break.
 
-Proposed CLI options are `--max-concurrency`, `--execution-memory-bytes` and
+Selected CLI options are `--max-concurrency`, `--execution-memory-bytes` and
 `--record-max-bytes`; the last applies only to `--record`. Decimal integer bytes
 avoid unit ambiguity. Reject zero, negative, fractional, malformed, overflowing
 or above-ceiling explicit values before workflow side effects; never clamp or
@@ -311,7 +320,7 @@ CLI `run`, execute-step, test and replay adapters consume the bounded surface;
 authoritative record/replay require it. Record/replay preflight and all reports
 participate in the same publication gate. For ordinary bounded runs, return a
 fixed resource failure and optional bounded effective-policy/high-water counters;
-never include rejected values or upstream messages. Proposed fixed reports are:
+never include rejected values or upstream messages. Selected fixed reports are:
 
 | Surface | Failure contract |
 |---|---|
@@ -326,14 +335,14 @@ versioned runtime report supplies effective mode/reasons, configured limits and
 charged high-water values; the replay manifest records effective resource and
 rate settings through its existing accepted configuration owner. CLI output
 schemas, help and contract snapshots change together. New code names and defaults
-are proposals; existing `RUNTIME_*` meanings stay intact.
+are accepted for implementation; existing `RUNTIME_*` meanings stay intact.
 
 MCP remains serial. Its existing security decision owns trusted startup ceilings,
 tool-argument validation, bounded framing/backlog, result construction and report
-projection. Recommend the same runtime defaults as an integration input, with
-no agent-requested increase above the server's accepted ceiling; reject an
-explicit excess before execution instead of clamping. There is no new MCP
-dispatcher semaphore. Its final JSON value, escaped text envelope and wire frame
+projection. The selected direction supplies the same runtime defaults as an
+integration input, with no agent-requested increase above the server's accepted
+ceiling; reject an explicit excess before execution instead of clamping. There
+is no new MCP dispatcher semaphore. Its final JSON value, escaped text envelope and wire frame
 need their owner's budget as well as the runtime ledger; reserve before handoff
 or copying and release source reservations only when ownership truly ends. MCP
 integration waits for that decision's exact limits and timeout policy, including
@@ -341,16 +350,16 @@ its proposed 30/300-second maxima. This document does not accept those policies.
 
 ## Smallest implementation sequence and proof
 
-After acceptance, reconcile tickets through `tkt`, obtain fresh transfer review
-and warning-level lint, then dispatch these contained slices. None is currently
-implementation-ready. Each has one owning Rust crate; focused tests are native
-test targets, not new production abstractions.
+With resource direction accepted, reconcile tickets through `tkt`, obtain fresh
+transfer review and warning-level lint, then dispatch these contained slices.
+None is currently implementation-ready. Each has one owning Rust crate;
+focused tests are native test targets, not new production abstractions.
 
 | Order / unit | One coherent outcome and dependency |
 |---|---|
 | 1. `arazzo-runtime`, one `resources.rs` owner | Versioned limits, reservations, terminal cause and report/session surface; charge/move/clone/overflow tests. Freeze public contracts before consumers. |
 | 2. `arazzo-runtime`, existing parallel/client owners | Bounded admission/transport permits using slice 1; integrate the scheduler owner's accepted dependency plan after its prerequisite lands. Prove shared-engine concurrency and unchanged eligibility/ordinary-error semantics. |
-| 3. `arazzo-runtime`, existing events/decoder/state plus accepted recorder owner | Account retained events, reorder data, decoded responses, outputs and recorder scratch with slice 1. Extend the already-proposed recording owner; do not add another evidence collector. Prove tiny-event, parsed-node and late-cap failures. |
+| 3. `arazzo-runtime`, existing events/decoder/state plus accepted recorder owner | Account retained events, reorder data, decoded responses, outputs and recorder scratch with slice 1. Extend the already-selected recording owner; do not add another evidence collector. Prove tiny-event, parsed-node and late-cap failures. |
 | 4. `arazzo-cli`, accepted v2 persistence/verdict owners | Bounded adapters, options, safe reports, schemas and publication using slices 1–3. Enforce exact serialized size and all-or-nothing destination semantics. Preserve v1 artifact compatibility. |
 | 5. `arazzo-mcp`, existing security/result owners | Integrate the runtime surface only after its own decision is accepted; prove final result and framing accounting, override rejection and serial dispatch. |
 
@@ -387,17 +396,20 @@ pass, isomorphic proof, approximate change or performance gain is being shipped.
 
 ## Maintainer disposition and separate scope
 
-Steve must accept or revise the proposed finite defaults/maxima, versioned API
-and CLI migration, cap-as-terminal-error policy and fixed reports. Accepting this
-assessment will settle direction; it will not imply implementation, measured v2
-memory compliance or accepted MCP security policy. Fresh architecture review of
-the documentation candidate remains a gate before handoff completion.
+Steve accepted all five resource-contract decisions on 2026-09-08 as recorded
+above. Acceptance settles implementation direction; it does not establish
+delivered implementation, measured v2 memory compliance or accepted MCP security
+policy. Fresh architecture review of each documentation candidate and the
+implementation gates above remain required.
 
-A separate **whole-process hostile-input resource isolation** epic is warranted
-only if a hard RSS/CPU/cancellation guarantee is desired: pre-session document
-graph construction and general synchronous evaluator intermediates currently
-escape retained-evidence accounting. It must first reuse the existing loader,
-expression-specific limit and callback ownership work, then decide remaining
-admission/isolation boundaries. This assessment records the gap without creating
-or mutating tickets. Durable scheduling, distributed workers, crash recovery,
-disk-backed evidence and performance micro-optimization remain outside scope.
+The separate **whole-process hostile-input resource isolation** follow-up is now
+tracked by [epic:ac-c2849](https://sonos.scapedeck.com/docs/ac-tickets/ac-c2849),
+with [ac-38c60](https://sonos.scapedeck.com/docs/ac-tickets/ac-38c60) for
+document-loading/graph-construction admission and
+[ac-7a6ba](https://sonos.scapedeck.com/docs/ac-tickets/ac-7a6ba) for synchronous
+evaluation resource and cancellation guarantees. Pre-session document graph
+construction and general evaluator intermediates still escape retained-evidence
+accounting. That work must reuse existing loader, expression-specific limit and
+callback ownership before deciding remaining admission/isolation boundaries.
+Durable scheduling, distributed workers, crash recovery, disk-backed evidence
+and performance micro-optimization remain outside this contract's scope.
