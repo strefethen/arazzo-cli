@@ -12,6 +12,8 @@ logical request's resolved initial origin. Retain them on same-origin redirects
 and strip them on an origin change. Permit only explicit, directed, per-header
 HTTPS transfer grants. Never infer trust from a source name, DNS equivalence,
 TLS exception, redirect, or successful destination authorization.
+The effective URL also exclusively determines HTTP authority on every hop;
+caller or workflow headers cannot select a different virtual host.
 
 The initial-binding guarantee assumes a trusted workflow author for values
 supplied through workflow inputs/expressions. A step occurrence identifies the
@@ -37,6 +39,7 @@ claim that existing behavior was approved as security policy.
 |---|---|
 | [client.rs](../../crates/arazzo-runtime/src/runtime_core/client.rs), `ClientConfig`, `HttpClient::request` | `default_headers` is an unscoped map applied to every logical request. HTTP names merge case-insensitively, defaults first and step headers replacing them. Redirects mutate this merged map; defaults are not re-added within a chain. |
 | Same file, `is_cross_host_hop` | Exactly `prev.host_str() != next.host_str() \|\| prev.port_or_known_default() != next.port_or_known_default()`. Scheme is absent. Cross-host/port stripping removes only `Authorization`, `Cookie`, `Proxy-Authorization`, `WWW-Authenticate`, and `cookie2`. `X-API-Key` survives. |
+| Same file, `HttpClient::request`, header merge and per-hop request construction | Caller/default/step `Host` is accepted into the mutable header map, which is cloned into each request. The runtime neither reserves authority nor removes Host across redirects, so URL-origin authorization alone cannot establish the effective HTTP virtual-host audience. |
 | Same file, `HttpClient::new`, `request`, `make_referer` | Both reqwest clients disable automatic following; the manual loop builds each hop afresh. `Location` is joined to the previous URL. Referer drops userinfo and fragment but keeps the complete query. On HTTPS→HTTP the helper returns `None`; the caller leaves any existing Referer in the map. |
 | [engine_http.rs](../../crates/arazzo-runtime/src/runtime_core/engine_http.rs), `prepare_http_request`, `build_url_from_path`, `warn_cleartext_credentials` | Target/source resolution and query assembly precede transport. Header parameters become headers; cookie parameters form `Cookie`. Cleartext warnings inspect initial prepared/default header names for only Authorization/Cookie, exempt URL-text loopback hosts, and deduplicate by host. They do not inspect subsequent hops, query/userinfo, or custom secret headers. |
 | [redaction.rs](../../crates/arazzo-runtime/src/runtime_core/redaction.rs), `is_sensitive_key`, `redact_headers`, `redact_url_query` | Evidence classification uses four exact names plus substring stems. It recognizes `X-API-Key` but is not used by transport. URL redaction rewrites matching literal query keys only; it does not remove userinfo. |
@@ -77,13 +80,31 @@ userinfo, query, or fragment. No wildcard, suffix, port range, source-name
 alias, or scheme-less spelling is allowed. Invalid entries reject the
 invocation before network activity; no permissive interpretation is attempted.
 
+**HTTP authority is transport-owned.** Reject caller-, default-, or
+workflow-supplied `Host` case-insensitively, even when its value matches the
+URL. `:authority` is likewise reserved/invalid as a normal supplied header,
+including case variants. Validate configured/default and workflow header-name
+sources during invocation preflight, before network activity, and guard each
+prepared request before send. This check precedes merging, so a step override
+cannot hide a prohibited default. A caller cannot exempt either name through
+a secret declaration, origin binding, or transfer grant.
+
+For every initial send and redirect, derive HTTP/1.1 Host (and HTTP/2 authority
+if HTTP/2 is supported later) from that hop's effective URL using the transport's normal host/port/IPv6
+serialization. No supplied authority enters the active map or survives a hop.
+Thus an ordinary A→B redirect contacts A with A's authority, then B with B's
+authority. Explicit virtual-host routing is unsupported; any future trusted
+feature must settle URL destination, HTTP authority, and TLS/SNI together.
+This assessment adds no policy for unrelated control headers.
+
 | Carrier | Classification and initial binding |
 |---|---|
+| HTTP authority | `Host` and normal-header `:authority` are reserved transport input, not ordinary custom headers or credentials eligible for bindings. Any supplied occurrence rejects before network activity; only the effective URL supplies their wire values. |
 | Headers | Case-insensitive exact built-ins: `authorization`, `cookie`, `cookie2`, `x-api-key`, `api-key`, `set-cookie`, `www-authenticate`; the latter legacy protocol fields remain protected on redirects. `proxy-authorization` is classified but rejected in origin requests: its intended audience is a proxy, for which this API provides no authentication contract. |
 | Other headers | Trusted configuration declares exact additional secret names, e.g. `X-Vendor-Key`. Do not use the evidence redactor's substring heuristic as the sending rule. `X-Custom`, `X-Request-ID`, and an undeclared non-secret `X-Session-Mode` remain ordinary headers. Unknown secret names need an explicit declaration; this is not automatic secret detection. |
 | Query | Built-in ASCII-case-insensitive decoded names: `access_token`, `refresh_token`, `id_token`, `token`, `api_key`, `api-key`, `apikey`, `password`, `passwd`, `secret`, `client_secret`, `credential`, `session`, `sessionid`, `pwd`. Add exact trusted declarations or declare the entire query confidential for opaque/signed query formats. Inspect every occurrence after one form-url-decoding of the key; preserve original query bytes/order for sending. Values and response `Location` parameters do not grant authority. |
 | Userinfo | Both username and password, including username-only token syntax, are confidential. Percent-decode each once as UTF-8; invalid decoded text rejects. Initial nonempty userinfo becomes one explicit Basic Authorization value using reqwest's Basic encoding, bound as an initial credential; remove userinfo from the URL before constructing any hop request or resolving relative Location. Reject a simultaneous effective merged Authorization value as ambiguous. Empty username with an explicit password delimiter still supplies a Basic credential; absent/empty userinfo without a password supplies none and is removed. |
-| Host defaults | A classified default requires an explicit per-name allowed-origin set. An absent binding rejects configuration even if a step would override it. At each independent initial request, omit a default outside that set; otherwise apply it before step headers. Public defaults retain their current run-wide behavior. |
+| Host defaults | A classified default requires an explicit per-name allowed-origin set. An absent binding rejects configuration even if a step would override it. At each independent initial request, omit a default outside that set; otherwise apply it before step headers. Ordinary non-authority public defaults retain their current run-wide behavior. |
 | Workflow/step values | After existing inheritance and resolution, classified explicit headers/query/userinfo bind to the resolved initial origin under the trusted-author assumption. A default Authorization bound to A does not forbid a separately authored step Authorization for B: they are different credentials. An override discards the default identity and cannot inherit its transfer grant. Case-insensitive duplicate names within one input layer reject as ambiguous; cross-layer step-over-default replacement remains. |
 | Source descriptions | Neither a document identity URL, its name, nor its server URL is a credential grant. Resolve the effective request URL first and apply the same rules. Credentials in an effective server URL follow query/userinfo rules. A future remote document loader must separately design its own credentials; do not forward execution defaults to it. |
 
@@ -117,12 +138,18 @@ conversion versus 307/308 preservation.
 
 | Case | Secret headers | URL credentials | Referer |
 |---|---|---|---|
+| Initial request with any supplied Host or `:authority` | Reject before any send, including matching values, case variants, and an override hidden by header replacement. No default, workflow value, or grant bypasses the guard. | The URL remains the authority source; no virtual-host override is supported. | No request is sent. |
 | Initial request A | Send explicit secrets bound to A and defaults authorized for A; omit defaults bound elsewhere; reject unbound defaults. Proxy-Authorization rejects. | Send initial query unchanged; convert initial userinfo once as above. | For an explicit/default Referer, parse as an absolute HTTP(S) URL; reject malformed input, remove userinfo/query/fragment. If its origin equals A, retain its path; otherwise send only its origin plus `/`. HTTPS→HTTP Referer is omitted. |
 | A→A | Retain active secrets. | Same-origin `Location` query, including a new secret query, is accepted. Never invent a query that URL joining removed. Any credential-bearing `Location` userinfo rejects, even for A. | Previous URL without userinfo/query/fragment; path retained. |
 | A→B by host, port, or scheme | Strip every active secret header unless an eligible directed grant matches. Ordinary custom headers remain. | If resolved `Location` has any confidential query, reject the whole hop; do not rewrite signed URLs. Non-secret query remains. Credential-bearing userinfo always rejects. | Previous origin plus `/` only. |
 | HTTP→HTTPS, same numeric port | An origin change: strip secrets. No HTTP-origin transfer grant is eligible. | Same cross-origin rule. | Previous HTTP origin only. |
 | HTTPS→HTTP | Reject by existing default. With explicit `allow_downgrade_redirects`, follow only after stripping all secret headers; no transfer grant can permit cleartext transfer. | Reject if next URL has confidential query or credential-bearing userinfo. | Actively remove both supplied and previously generated Referer. |
 | A→B→A or A→B→C | An earlier strip is permanent for the logical request. A return to A never resurrects credentials. A grant for A→B does not grant B→A or B→C. | Re-evaluate each resolved target; the current hop cannot bless a cross-origin secret query. | Recompute on every hop; downgrade always removes. |
+
+All followed-redirect rows additionally require fresh URL-derived authority:
+A→A uses A, A→B uses B, and B→A recomputes A. A supplied override is rejected
+before the chain begins; it is never carried, silently stripped, or replaced
+with a warning after an initial request has already been sent.
 
 An allowed initial HTTP request still sends its bound credentials, preserving
 current CLI/library behavior. Broaden `CleartextCredentials` detection to all
@@ -179,17 +206,24 @@ Keep `ClientConfig`'s existing fields and `EngineBuilder::client_config` source
 compatible: adding a public struct field would break complete Rust struct
 literals even though the crate is unpublished. The omitted credential policy
 uses these secure defaults. This is a deliberate behavior change for unbound
-secret defaults, Proxy-Authorization, userinfo/Authorization ambiguity,
-credentialed redirects, and Referer; do not market it as behavior-compatible.
+secret defaults, Proxy-Authorization, supplied HTTP authority,
+userinfo/Authorization ambiguity, credentialed redirects, and Referer; do not
+market it as behavior-compatible.
 Dynamic/external library consumers cannot be ruled out by a workspace search.
 Keep public `RequestConfig` and evidence struct fields compatible too; carry
 provenance through a private internal request envelope. Existing
 [`Engine::new(spec)` and `Engine::with_client_config(spec, config)`](../../crates/arazzo-runtime/src/runtime_core/engine_impl.rs) continue
 delegating to the builder and therefore receive its secure policy defaults.
+The reserved-authority check applies equally to library header maps, CLI
+`-H`/test headers, workflow header parameters, and future trusted MCP/DAP
+adapters. Existing `-H 'Host: ...'` virtual-host use now fails, even if matching;
+remove it when the URL already selects the intended host. No compatibility
+switch or Host-setting policy field is proposed. A genuine virtual-host/TLS-SNI
+feature requires a separately accepted trusted API.
 
 | Surface | Trusted input and migration |
 |---|---|
-| Library | Caller constructs a validated policy and attaches it to the builder. Existing public non-secret defaults work unchanged. Secret defaults without bindings return a safe configuration error; callers add explicit bindings. |
+| Library | Caller constructs a validated policy and attaches it to the builder. Existing ordinary non-secret defaults work unchanged except the reserved authority headers. Secret defaults without bindings return a safe configuration error; callers add explicit bindings. |
 | CLI run/test | One CLI adapter maps trusted operator arguments to the runtime policy. Proposed repeatable flags: `--secret-header NAME`, `--secret-query NAME`, `--credential-origin HEADER=ORIGIN`, and `--credential-transfer HEADER,INITIAL,FROM,TO` (origins cannot contain commas); `--secret-whole-query` declares the whole query confidential. Binding/grant flags refer only to `DefaultHeader(HEADER)` identity. Each parser rejects invalid input; repeated bindings/grants form sets, exact duplicates deduplicate, and a binding for a missing or unclassified default is invalid. Preserve `-H` for values; a secret `-H` now needs its binding. These are proposed new flags, not current help. |
 | MCP | Only trusted startup/library host configuration may install declarations, bindings, or grants. Agent tool arguments, inputs, documents, and source descriptions cannot widen them. Until the host API is accepted, MCP uses the strict runtime default; no new permissive tool argument. Host policy remains capped by MCP destination restrictions. |
 | DAP | Inherits the same runtime defaults. Any future adapter for trusted launch configuration is owned by invocation parity, not a new credential mechanism. |
@@ -230,7 +264,10 @@ Recommend one new stable `RUNTIME_CREDENTIAL_POLICY` error code with bounded
 reason identifiers: `invalid_policy`, `unbound_default`,
 `ambiguous_authorization`, `proxy_authorization_unsupported`,
 `redirect_userinfo`, `redirect_secret_query`, `invalid_referer`, and
-`ambiguous_header`, plus `invalid_userinfo`. Existing downgrade/limit codes stay unchanged. The accepted
+`ambiguous_header`, plus `invalid_userinfo` and `authority_override`.
+For `authority_override`, report only the fixed reason and reserved header
+name, never the supplied value; invalid configuration returns the safe error
+before an execution event stream exists. Existing downgrade/limit codes stay unchanged. The accepted
 follow-on must update schema authorities and affected consumers together;
 this proposal does not silently overload an existing error code.
 
@@ -252,7 +289,7 @@ prepare these bounded slices; none is dispatch-ready now:
 | Order / unit | One outcome and owner; behavior-owner Create maximum |
 |---|---|
 | 1 / `arazzo-runtime` | Consumer-free origin/policy/provenance decisions and public builder boundary. Create only `credential_policy.rs`; modify builder/export glue. Pure contract tests own normalization, validation, and positive/negative decisions. |
-| 2 / `arazzo-runtime` | Integrate initial requests and every redirect, one-time userinfo conversion, Referer, cleartext detection, safe errors/events, and the two-origin wire matrix. Create no behavior owner; modify the existing client/engine warning/error/event seams. New proof uses a focused integration target, never the God `engine_execution.rs`. |
+| 2 / `arazzo-runtime` | Integrate invocation/pre-send authority guards and URL-derived per-hop authority, initial credentials and every redirect, one-time userinfo conversion, Referer, cleartext detection, safe errors/events, and the two-origin wire matrix. Create no behavior owner; modify the existing client/engine warning/error/event seams. New proof uses a focused integration target, never the God `engine_execution.rs`. |
 | 3 / existing evidence owners | Reconcile userinfo/default-header/redaction tickets with the accepted policy so traces/dry-run represent effective credentials safely, including policy-declared custom names. No replacement sanitizer. Sequence replay consumers after the shared projection is settled. |
 | 4 / `arazzo-cli` | One shared run/test credential argument adapter and migration/help/schema projection. Create at most `credential_options.rs`; handlers only delegate. Focused CLI integration target, never the God `cli_integration.rs`. |
 | 5 / `arazzo-mcp` | Trusted host configuration and rejection of tool-selected widening, coordinated with invocation parity and MCP policy. Create at most one host-policy adapter, or reuse its accepted owner; no mirrored runtime decisions. |
@@ -275,6 +312,7 @@ external DNS or services.
 
 | Scenario | Required proof |
 |---|---|
+| Reserved authority, initial and redirect | Caller/default/step `Host`, mixed-case variants, matching and mismatching values, overwritten defaults, and normal `:authority` all fail with `authority_override` before network activity; A and B counts remain zero even when A would redirect. Ordinary requests without overrides observe A's URL authority at A and B's at B after A→B. Wire-test HTTP/1.1 Host with default/non-default ports and IPv6 serialization; test normal `:authority` input rejection now. Any future HTTP/2 enablement must add URL-derived authority wire proof; do not enable HTTP/2 solely for this policy. |
 | Initial A and independent B | Bound A default appears only at A; B remains usable, including an independent same-name step credential. Unbound defaults reject before send. Step overrides replace defaults and their provenance once. |
 | A→A, relative and absolute Location | Active secrets reach A; query semantics and 301/302/303 versus 307/308 bodies are preserved; Referer has no query/userinfo/fragment. |
 | Same host/different port; different host/same port | B receives ordinary custom headers, zero secret headers; target non-secret query remains byte-preserving. |
@@ -310,7 +348,7 @@ mutate tracker state or design their policy:
 
 Steve's remaining disposition is to accept or revise the recommendation,
 particularly the breaking default-header migration, header-default-only HTTPS
-grants, Proxy-Authorization rejection, query-free/origin-reduced Referer, and
+grants, Proxy-Authorization and authority-override rejection, query-free/origin-reduced Referer, and
 rejection of classified cross-origin signed Location URLs. Confirm the scoped
 trusted-workflow guarantee and future API/error additions as part of that
 acceptance. Fresh security/architecture review must precede implementation
@@ -377,6 +415,27 @@ passing tests or product failures. The custom driver successfully completed
 its 15 scenarios with controlled-loopback permission and offline locked
 dependencies. The artifact is synthetic-only; no real credentials or upstream
 services were used.
+
+The [authority supplement](/private/tmp/ac-d0c49-host-probe/report.md), bound
+to candidate `8ef458f5061778dd98c571f1586f3a325fd037d0` and the unchanged
+runtime client hash, contains one additional public-engine HTTP probe. A
+request to the URL-selected loopback listener supplied
+`Host: override.invalid:4444`; the receiver observed that exact Host,
+`/probe`, and a successful workflow. This proves the initial authority
+mismatch. Host retention across redirects follows from the mutable-map source
+path; it was not a second supplemental wire scenario. The current locked
+reqwest/Hyper feature configuration is HTTP/1 only, so the supplement makes
+no claim to have exercised HTTP/2 `:authority`.
+
+These supplemental SHA-256 values were checked against the retained files:
+
+| Artifact | SHA-256 |
+|---|---|
+| Authority report | `1f9478fd225aac4c5a245e9529347e3408394606d5f6ebc7bb054e61a1091d73` |
+| [Authority driver](/private/tmp/ac-d0c49-host-probe/src/main.rs) | `921f83ae0e2f54e6d85c92f614de6d1abbf8f89898f972e33da01c9aac1b1690` |
+| [Authority probe lock](/private/tmp/ac-d0c49-host-probe/Cargo.lock) | `2a560e824cf2718572bca176a6b6609ce018e0e2ee346928c33ca0239c4260eb` |
+| [Authority binary](/private/tmp/ac-d0c49-host-probe/target/debug/ac-d0c49-host-probe) | `18fb2972c336f6bbb31bd850c594cdb16aa0238c1627f5fc5dd681473a2d7d04` |
+| [Authority result](/private/tmp/ac-d0c49-host-probe/result.txt) | `e57a17b6e396316f125c65de69533256af9648706eec6c4371a91370fe7357ef` |
 
 Lint is **FAIL**: `tkt lint --severity warn ac-d0c49` returns only
 `plan-not-set`. Steve explicitly authorized planning assessments despite this
