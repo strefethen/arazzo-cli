@@ -1,10 +1,11 @@
 # Origin-scoped credentials for workflow execution
 
-**Disposition: recommendation awaiting Steve; assessment only.** Prepared
+**Disposition: complete policy accepted by Steve on 2026-09-09.** Prepared
 2026-09-08 for [ac-d0c49](https://sonos.scapedeck.com/docs/ac-tickets/ac-d0c49).
-No transport change or implementation acceptance is implied.
+All policy choices below are accepted. No transport implementation is delivered;
+implementation readiness awaits cross-decision follow-up reconciliation.
 
-## Recommendation and scope
+## Accepted policy and scope
 
 Make credentials belong to an exact origin. Require explicit origin bindings
 for host-supplied secret defaults; bind workflow-supplied credentials to each
@@ -175,7 +176,7 @@ A `Location` can legitimately contain a fresh destination-signed download URL;
 that is distinct from copying source query state. The client cannot establish
 which occurred from a query key or value alone. URL joining determines whether
 the source query was inherited, but a server can also copy it explicitly.
-Recommend rejecting all cross-origin confidential target queries for this
+Reject all cross-origin confidential target queries for this
 first policy, including fresh signed URLs, rather than treating server input
 as a grant. This intentionally breaks such redirect-based downloads when the
 query is classified; use an explicit trusted workflow request to the target.
@@ -200,7 +201,7 @@ maps; the policy stores no secret values. The pure owner consumes parsed URLs,
 provenance, active credentials, and policy and returns send/strip/reject plus
 safe audit data. `client.rs` integrates that result into its existing loop;
 it does not gain a second policy implementation. No new crate or package is
-needed for this proposed boundary.
+needed for this accepted boundary.
 
 Keep `ClientConfig`'s existing fields and `EngineBuilder::client_config` source
 compatible: adding a public struct field would break complete Rust struct
@@ -224,11 +225,11 @@ feature requires a separately accepted trusted API.
 | Surface | Trusted input and migration |
 |---|---|
 | Library | Caller constructs a validated policy and attaches it to the builder. Existing ordinary non-secret defaults work unchanged except the reserved authority headers. Secret defaults without bindings return a safe configuration error; callers add explicit bindings. |
-| CLI run/test | One CLI adapter maps trusted operator arguments to the runtime policy. Proposed repeatable flags: `--secret-header NAME`, `--secret-query NAME`, `--credential-origin HEADER=ORIGIN`, and `--credential-transfer HEADER,INITIAL,FROM,TO` (origins cannot contain commas); `--secret-whole-query` declares the whole query confidential. Binding/grant flags refer only to `DefaultHeader(HEADER)` identity. Each parser rejects invalid input; repeated bindings/grants form sets, exact duplicates deduplicate, and a binding for a missing or unclassified default is invalid. Preserve `-H` for values; a secret `-H` now needs its binding. These are proposed new flags, not current help. |
-| MCP | Only trusted startup/library host configuration may install declarations, bindings, or grants. Agent tool arguments, inputs, documents, and source descriptions cannot widen them. Until the host API is accepted, MCP uses the strict runtime default; no new permissive tool argument. Host policy remains capped by MCP destination restrictions. |
+| CLI run/test | One CLI adapter maps trusted operator arguments to the runtime policy. Accepted future repeatable flags: `--secret-header NAME`, `--secret-query NAME`, `--credential-origin HEADER=ORIGIN`, and `--credential-transfer HEADER,INITIAL,FROM,TO` (origins cannot contain commas); `--secret-whole-query` declares the whole query confidential. Binding/grant flags refer only to `DefaultHeader(HEADER)` identity. Each parser rejects invalid input; repeated bindings/grants form sets, exact duplicates deduplicate, and a binding for a missing or unclassified default is invalid. Preserve `-H` for values; a secret `-H` now needs its binding. These are selected new flags, not current help. |
+| MCP | Only trusted startup/library host configuration may install declarations, bindings, or grants. Agent tool arguments, inputs, documents, and source descriptions cannot widen them. Until the host adapter is reconciled and delivered, MCP uses the strict runtime default; no new permissive tool argument. Host policy remains capped by MCP destination restrictions. |
 | DAP | Inherits the same runtime defaults. Any future adapter for trusted launch configuration is owned by invocation parity, not a new credential mechanism. |
 
-Choose one coordinated security release with migration examples; no temporary
+Use one coordinated security release with migration examples; no temporary
 warn-and-forward default. For example, `-H 'X-API-Key: synthetic'` gains
 `--credential-origin X-API-Key=https://api.example`. Independent requests
 to another service still work but omit this default. Explicit step credentials
@@ -242,7 +243,7 @@ The three boundaries remain independent:
   is its provisional runtime implementation owner. The referenced
   `plans/current/mcp-security-hardening.md` is absent and is not accepted
   authority. Ordinary CLI/library destination access stays permissive.
-* Credential delivery: this proposed runtime owner. No DNS lookup or destination
+* Credential delivery: this accepted runtime owner. No DNS lookup or destination
   exception matching belongs in it.
 * Evidence sanitization: existing runtime `redaction.rs`, consumed by CLI trace
   and MCP projections. Reuse [ac-d95a9](https://sonos.scapedeck.com/docs/ac-tickets/ac-d95a9)
@@ -260,7 +261,7 @@ a second invocation package or persisted profile.
 
 ## Safe errors, evidence, and implementation sequence
 
-Recommend one new stable `RUNTIME_CREDENTIAL_POLICY` error code with bounded
+The accepted contract selects one new stable `RUNTIME_CREDENTIAL_POLICY` error code with bounded
 reason identifiers: `invalid_policy`, `unbound_default`,
 `ambiguous_authorization`, `proxy_authorization_unsupported`,
 `redirect_userinfo`, `redirect_secret_query`, `invalid_referer`, and
@@ -269,7 +270,7 @@ For `authority_override`, report only the fixed reason and reserved header
 name, never the supplied value; invalid configuration returns the safe error
 before an execution event stream exists. Existing downgrade/limit codes stay unchanged. The accepted
 follow-on must update schema authorities and affected consumers together;
-this proposal does not silently overload an existing error code.
+this contract does not silently overload an existing error code.
 
 Add a typed runtime credential-policy audit event for `stripped`,
 `default_omitted`, `grant_used`, or `rejected`, containing only safe reason,
@@ -283,8 +284,8 @@ CLI/library error safe. CLI/MCP display the new safe reasons; runtime
 sanitization remains independent of whether a send was permitted. Matching a
 redaction rule does not prohibit an intentional successful workflow output.
 
-After Steve accepts the policy and fresh security/architecture review passes,
-prepare these bounded slices; none is dispatch-ready now:
+The policy is accepted. Retain this proposed bounded slice partition for
+cross-decision follow-up reconciliation and review; none is dispatch-ready now:
 
 | Order / unit | One outcome and owner; behavior-owner Create maximum |
 |---|---|
@@ -328,31 +329,38 @@ external DNS or services.
 
 ## Residual findings and disposition
 
-Two observed/source-confirmed concerns need a separate epic with bounded
-follow-on tickets under Steve's standing rule; this drafting task does not
-mutate tracker state or design their policy:
+The two observed/source-confirmed residual concerns now belong to the created
+and independently reviewed [epic:ac-8df57](https://sonos.scapedeck.com/docs/ac-tickets/ac-8df57).
+Its current revision is
+`5faeebddc29a93cfd3e86854e99dc50ce65ce079b35d27be148064b034d7172d`;
+the recorded transfer review passed with no findings. Its two assessment
+children own the remaining decisions, not implementation of this policy:
 
 * Cross-origin 307/308 redirects preserve raw request bodies
   (`client.rs::HttpClient::request`, `current_body` handling). A body containing
   credentials or private business data is sent to B independently of header
   stripping. This assessment intentionally preserves current method/body
   semantics and therefore does not establish a whole-request confidentiality
-  guarantee. Decide body transfer separately; do not build a taint engine here.
+  guarantee. [ac-f5018](https://sonos.scapedeck.com/docs/ac-tickets/ac-f5018)
+  owns the separate body-transfer decision; do not build a taint engine here.
 * Existing runtime URL/error sinks embed request or redirect URLs and upstream
   error text (`client.rs::HttpClient::request`, invalid-URL/send/downgrade/limit
   branches). The userinfo evidence ticket does not cover them.
   [ac-51f8c](https://sonos.scapedeck.com/docs/ac-tickets/ac-51f8c) owns MCP-only
   error projection and explicitly excludes runtime production and ordinary
-  CLI errors. A broad runtime/plain-CLI sink repair is currently unowned;
+  CLI errors. [ac-8a804](https://sonos.scapedeck.com/docs/ac-tickets/ac-8a804)
+  owns the separate runtime/plain-CLI transport-error exposure decision;
   keep it separate from the bounded new-policy error contract.
 
-Steve's remaining disposition is to accept or revise the recommendation,
-particularly the breaking default-header migration, header-default-only HTTPS
-grants, Proxy-Authorization and authority-override rejection, query-free/origin-reduced Referer, and
-rejection of classified cross-origin signed Location URLs. Confirm the scoped
-trusted-workflow guarantee and future API/error additions as part of that
-acceptance. Fresh security/architecture review must precede implementation
-decomposition. Completion of this assessment cannot close those future gates.
+On 2026-09-09 Steve approved the complete recommendation, including the breaking
+default-header migration, header-default-only HTTPS grants, Proxy-Authorization
+and authority-override rejection, query-free/origin-reduced Referer, the scoped
+trusted-workflow guarantee, and the future API/error additions. He explicitly
+approved conservative rejection of classified confidential query parameters in
+cross-origin signed redirects. No listed policy choice remains pending Steve.
+The proposed slice partition still requires cross-decision follow-up
+reconciliation and review before implementation dispatch; acceptance of this
+assessment does not complete those gates or the residual assessments.
 
 ## Planning evidence binding
 
@@ -385,12 +393,12 @@ Actual receiving headers/targets, rather than only client results, establish:
 | Both scheme-change directions at the same explicit port | All tested credential headers remain. The permitted HTTPS→HTTP case sends Authorization/Cookie/Proxy-Authorization to cleartext; the direct hop has no preexisting Referer. |
 | Cross-origin then return with defaults | Removed standard credentials never return; custom secrets survive the whole chain. |
 | Location userinfo/query | After source Authorization is stripped, target userinfo generates fresh Basic Authorization. The target query also reaches B. |
-| Initial userinfo, with and without explicit Authorization | Userinfo alone generates Basic; explicit Authorization wins on the observed initial request. Userinfo is absent from the HTTP target and generated Referer. Rejecting this ambiguity is a proposed behavior change. |
+| Initial userinfo, with and without explicit Authorization | Userinfo alone generates Basic; explicit Authorization wins on the observed initial request. Userinfo is absent from the HTTP target and generated Referer. Rejecting this ambiguity is an accepted behavior change. |
 | Cross-origin 307 | POST, JSON body, Content-Type and Content-Length reach B, along with custom secrets, despite standard-header stripping. This substantiates the separate body-transfer residual. |
 
 Same-origin Location-userinfo precedence when an explicit Authorization header
 is already retained remains **unproven**; the future matrix must test it,
-including proof that the proposed rejection runs before any builder can mint
+including proof that the accepted rejection runs before any builder can mint
 or replace Authorization. The initial-request precedence result does not prove
 that case. Default-header merge order/provenance is additionally established
 by the source owner, not inferred from redacted equality of different values.
@@ -443,7 +451,8 @@ tooling-policy mismatch; no fabricated plan or passing lint is claimed.
 Planning scope/checkout clearance is **PASS**: the started ticket has the
 assessment reservation, current checkout is canonical `main`, and the only
 authorized repository write is this file. Implementation readiness is **FAIL**
-pending policy acceptance and a reviewed partition. The planning ticket is
+pending cross-decision follow-up reconciliation and a reviewed implementation
+partition; policy acceptance is complete. The planning ticket is
 in progress with no dependencies; source implementation queue eligibility has
 not been assessed. The unrelated untracked Rust audit remains untouched.
 
