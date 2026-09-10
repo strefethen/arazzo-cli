@@ -134,6 +134,116 @@ async fn charac_301_302_303_convert_post_to_get_and_drop_body() {
 }
 
 #[tokio::test]
+async fn charac_301_302_preserve_non_post_methods_and_payload() {
+    for status in [301_u16, 302] {
+        for method in ["PUT", "PATCH", "DELETE", "GET", "HEAD"] {
+            let log = new_request_log();
+            let log_ref = std::sync::Arc::clone(&log);
+            let server = start_server(move |method, url, headers, body| {
+                record_request(&log_ref, &method, &url, &headers, &body);
+                match url.as_str() {
+                    "/a" => MockHttpResponse::redirect(status, "/b"),
+                    "/b" => MockHttpResponse::json(200, r#"{"ok":true}"#),
+                    _ => MockHttpResponse::empty(404),
+                }
+            });
+
+            let payload = json!({"method":method,"status":status});
+            let expected_body = payload.to_string();
+            let outputs = run_one_step(
+                &server.base_url,
+                &format!("{method} /a"),
+                Vec::new(),
+                Some(payload),
+            )
+            .await;
+            if let Err(err) = outputs {
+                panic!("{status} {method} chain should succeed: {err}");
+            }
+            let requests = logged_requests(&log);
+            assert_eq!(requests.len(), 2, "{status} {method}: one hop expected");
+            assert_eq!(
+                requests[0].method, method,
+                "{status} {method}: original method"
+            );
+            assert_eq!(
+                requests[0].body, expected_body,
+                "{status} {method}: original exact body bytes"
+            );
+            assert_eq!(
+                header_value(&requests[0].headers, "Content-Type").as_deref(),
+                Some("application/json"),
+                "{status} {method}: original content-type"
+            );
+            assert_eq!(
+                requests[1].method, method,
+                "{status} {method}: method preserved"
+            );
+            assert_eq!(
+                requests[1].body, requests[0].body,
+                "{status} {method}: exact body bytes preserved"
+            );
+            assert_eq!(
+                header_value(&requests[1].headers, "Content-Type"),
+                header_value(&requests[0].headers, "Content-Type"),
+                "{status} {method}: content-type preserved"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn charac_303_converts_put_but_retains_head_and_drops_payload() {
+    for method in ["PUT", "HEAD"] {
+        for (header_name, header_contents) in [
+            ("Content-Type", "application/json"),
+            ("Content-Length", "9"),
+            ("Content-Encoding", "identity"),
+            ("Transfer-Encoding", "chunked"),
+        ] {
+            let log = new_request_log();
+            let log_ref = std::sync::Arc::clone(&log);
+            let server = start_server(move |method, url, headers, body| {
+                record_request(&log_ref, &method, &url, &headers, &body);
+                match url.as_str() {
+                    "/a" => MockHttpResponse::redirect(303, "/b"),
+                    "/b" => MockHttpResponse::json(200, r#"{"ok":true}"#),
+                    _ => MockHttpResponse::empty(404),
+                }
+            });
+
+            let outputs = run_one_step(
+                &server.base_url,
+                &format!("{method} /a"),
+                vec![header_param(header_name, header_contents)],
+                Some(json!({"k":"v"})),
+            )
+            .await;
+            if let Err(err) = outputs {
+                panic!("303 {method} with {header_name} should succeed: {err}");
+            }
+            let requests = logged_requests(&log);
+            assert_eq!(requests.len(), 2, "303 {method}: one hop expected");
+            assert!(
+                header_value(&requests[0].headers, header_name).is_some(),
+                "303 {method}: original request carries {header_name}"
+            );
+            assert_eq!(
+                requests[1].method,
+                if method == "HEAD" { "HEAD" } else { "GET" },
+                "303 {method}: redirected method"
+            );
+            assert_eq!(requests[1].body, "", "303 {method}: body dropped on hop");
+            assert_eq!(
+                header_value(&requests[1].headers, header_name),
+                None,
+                "303 {method}: {header_name} dropped on hop"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn charac_307_308_preserve_method_and_body() {
     for status in [307_u16, 308] {
         let log = new_request_log();
@@ -166,6 +276,61 @@ async fn charac_307_308_preserve_method_and_body() {
             Some("application/json"),
             "{status}: content-type preserved"
         );
+    }
+}
+
+#[tokio::test]
+async fn charac_307_308_preserve_non_post_methods_and_body() {
+    for status in [307_u16, 308] {
+        for method in ["PUT", "PATCH", "DELETE", "GET", "HEAD"] {
+            let log = new_request_log();
+            let log_ref = std::sync::Arc::clone(&log);
+            let server = start_server(move |method, url, headers, body| {
+                record_request(&log_ref, &method, &url, &headers, &body);
+                match url.as_str() {
+                    "/a" => MockHttpResponse::redirect(status, "/b"),
+                    "/b" => MockHttpResponse::json(200, r#"{"ok":true}"#),
+                    _ => MockHttpResponse::empty(404),
+                }
+            });
+
+            let payload = json!({"method":method,"status":status});
+            let expected_body = payload.to_string();
+            let outputs = run_one_step(
+                &server.base_url,
+                &format!("{method} /a"),
+                Vec::new(),
+                Some(payload),
+            )
+            .await;
+            if let Err(err) = outputs {
+                panic!("{status} {method} chain should succeed: {err}");
+            }
+            let requests = logged_requests(&log);
+            assert_eq!(requests.len(), 2, "{status} {method}: one hop expected");
+            assert_eq!(
+                requests[0].body, expected_body,
+                "{status} {method}: original exact body bytes"
+            );
+            assert_eq!(
+                header_value(&requests[0].headers, "Content-Type").as_deref(),
+                Some("application/json"),
+                "{status} {method}: original content-type"
+            );
+            assert_eq!(
+                requests[1].method, method,
+                "{status} {method}: method preserved"
+            );
+            assert_eq!(
+                requests[1].body, requests[0].body,
+                "{status} {method}: exact body bytes preserved"
+            );
+            assert_eq!(
+                header_value(&requests[1].headers, "Content-Type"),
+                header_value(&requests[0].headers, "Content-Type"),
+                "{status} {method}: content-type preserved"
+            );
+        }
     }
 }
 

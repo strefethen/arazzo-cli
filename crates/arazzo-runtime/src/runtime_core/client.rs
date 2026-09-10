@@ -596,14 +596,23 @@ impl HttpClient {
                 to: next_url.to_string(),
             });
 
-            // 30x semantics pinned by the characterization tests:
-            // 301/302/303 become GET and drop the body (and its
-            // headers); 307/308 preserve method and body.
-            if matches!(status, 301..=303) {
-                if current_method != reqwest::Method::GET && current_method != reqwest::Method::HEAD
-                {
+            // reqwest/tower-http baseline: 301/302 rewrite only POST and
+            // drop its payload; 303 always drops the payload and rewrites
+            // every method except HEAD; 307/308 preserve method and payload.
+            let drop_payload = match status {
+                301 | 302 if current_method == reqwest::Method::POST => {
                     current_method = reqwest::Method::GET;
+                    true
                 }
+                303 => {
+                    if current_method != reqwest::Method::HEAD {
+                        current_method = reqwest::Method::GET;
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if drop_payload {
                 current_body = None;
                 for header in [
                     reqwest::header::TRANSFER_ENCODING,
