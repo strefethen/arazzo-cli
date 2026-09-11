@@ -923,7 +923,17 @@ impl Engine {
         }
 
         if !path_params.is_empty() && target.contains('{') {
-            target = replace_path_params(&target, &path_params);
+            target = replace_path_params(&target, &path_params).map_err(|error| {
+                RuntimeError::new(
+                    RuntimeErrorKind::InvalidParameterValue,
+                    format!(
+                        "step {:?}: path parameter(s) {:?} would produce a complete URL path \
+                         segment that the WHATWG URL parser normalizes as `.` or `..`; the \
+                         runtime path safety policy refuses this request",
+                        step.step_id, error.parameter_names
+                    ),
+                )
+            })?;
         }
         if let Some((name, raw)) = querystring {
             // `querystring` *is* the query component, so it replaces whatever
