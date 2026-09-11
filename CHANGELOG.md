@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-09-11
+
+Path parameter substitutions reject dot-segment navigation, and 301/302
+redirects preserve non-POST request methods and payloads.
+
+**Upgrade if** your workflows use dynamic path parameters or encounter 301/302
+redirects, especially on `PUT`, `PATCH`, or `DELETE` requests that must reach
+their destination as writes.
+
+- **Path parameter safety** — refuse substitutions that would navigate through
+  a complete dot segment, including values supplied by a previous response.
+- **Redirected writes** — non-POST requests retain their method, exact body
+  bytes, and payload headers when following a 301 or 302 response.
+- **Release notes** — each GitHub release includes its version's CHANGELOG
+  section, and tagging refuses a version with missing release notes.
+
+### Fixed
+
+#### Security
+- Refuse path-parameter substitutions that form complete `.` or `..` URL path
+  segments, including encoded-dot seams and empty or adjacent substitutions.
+  Validate the final URL after query assembly, before live dispatch, dry-run
+  planning, or replay consumption, using `RUNTIME_INVALID_PARAMETER_VALUE`.
+- Encode backslashes in path values as `%5C` to prevent injected path separators.
+  Safe dotted names, literal percent escapes, and query/fragment behavior remain
+  supported, including unresolved placeholders.
+
+#### Workflow Engine
+- A 301 or 302 response no longer converts `PUT`, `PATCH`, or `DELETE` to
+  `GET`, which could silently skip a write while reporting workflow success.
+  Non-POST requests keep their body and payload headers, including `GET`
+  and `HEAD` requests with bodies. This restores the pinned reqwest redirect
+  behavior. POST conversion, 303 handling, and 307/308 preservation are
+  unchanged.
+
+#### Quality
+- Publish the matching CHANGELOG section as the GitHub release body and
+  reject tag creation when that section is absent.
+- Add hermetic regression coverage for non-POST redirect methods, exact
+  body preservation, and 303 payload-header removal when `HEAD` is retained.
+
 ## [0.6.0] - 2026-09-06
 
 Header parameters stop duplicating, `$self` becomes the base URI for relative
