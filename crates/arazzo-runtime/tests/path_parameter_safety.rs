@@ -429,3 +429,61 @@ async fn appended_queries_keep_safe_dotted_paths_and_literal_braces() {
         assert_eq!(requests[before].url, expected);
     }
 }
+
+#[tokio::test]
+async fn unresolved_placeholder_delimiters_match_the_equivalent_static_url() {
+    let log = new_request_log();
+    let captured = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&captured, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, "{}")
+    });
+
+    // Unmatched placeholders are emitted verbatim by the existing runtime.
+    // Their literal query/fragment delimiters still have URL semantics.
+    for delimiter in ['?', '#'] {
+        for value in [".", ".."] {
+            let path = format!("/v1/pets/{{missing{delimiter}name}}/{{id}}");
+            let literal = path.replace("{id}", value);
+            let expected = if delimiter == '?' {
+                format!("/v1/pets/%7Bmissing?name}}/{value}")
+            } else {
+                "/v1/pets/%7Bmissing".to_string()
+            };
+            for template in [&literal, &path] {
+                let before = logged_requests(&log).len();
+                let engine = builder(&server.base_url, template, vec![target_step(value)])
+                    .build()
+                    .unwrap_or_else(|error| panic!("build: {error}"));
+                let result = engine.execute_collect("wf", BTreeMap::new()).await;
+                assert!(result.outputs.is_ok(), "{template:?}: {:?}", result.outputs);
+                let requests = logged_requests(&log);
+                assert_eq!(requests.len(), before + 1);
+                assert_eq!(requests[before].url, expected);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn resolved_placeholder_name_delimiters_cannot_hide_navigation() {
+    let log = new_request_log();
+    let captured = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&captured, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, "{}")
+    });
+    for name in ["other?name", "other#name", "other/name"] {
+        let path = format!("/v1/pets/{{{name}}}/{{id}}");
+        let mut target = target_step("..");
+        target.parameters.push(parameter(name, "safe"));
+        let observer = Arc::new(TestObserver::default());
+        let engine = builder(&server.base_url, &path, vec![target])
+            .observer(observer.clone())
+            .build()
+            .unwrap_or_else(|error| panic!("build: {error}"));
+        let result = engine.execute_collect("wf", BTreeMap::new()).await;
+        assert_refused(&result, &observer);
+        assert!(logged_requests(&log).is_empty());
+    }
+}
