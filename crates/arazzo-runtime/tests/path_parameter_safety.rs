@@ -329,3 +329,103 @@ async fn replay_refusal_does_not_consume_the_next_record() {
         accepted.outputs
     );
 }
+
+#[tokio::test]
+async fn query_finalization_cannot_expose_response_derived_navigation() {
+    let log = new_request_log();
+    let captured = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&captured, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, r#"{"id":".."}"#)
+    });
+
+    for query in ["", "?"] {
+        let before = logged_requests(&log).len();
+        let seed = Step {
+            step_id: "seed".to_string(),
+            target: Some(StepTarget::OperationId("seed".to_string())),
+            success_criteria: success_200(),
+            outputs: BTreeMap::from([("id".to_string(), "$response.body#/id".to_string().into())]),
+            ..Step::default()
+        };
+        let mut target = target_step("$steps.seed.outputs.id");
+        target.parameters.push(Parameter {
+            in_: Some(ParamLocation::Querystring),
+            ..parameter("query", query)
+        });
+        let observer = Arc::new(TestObserver::default());
+        let engine = builder(&server.base_url, "/v1/pets/{id} ?", vec![seed, target])
+            .observer(observer.clone())
+            .build()
+            .unwrap_or_else(|error| panic!("build: {error}"));
+        let result = engine.execute_collect("wf", BTreeMap::new()).await;
+        assert_refused(&result, &observer);
+        let requests = logged_requests(&log);
+        assert_eq!(requests.len(), before + 1, "only the seed may be sent");
+        assert_eq!(requests[before].url, "/seed");
+    }
+}
+
+#[tokio::test]
+async fn empty_querystring_is_refused_in_dry_run_and_replay() {
+    let base = "https://replay.invalid";
+    for query in ["", "?"] {
+        for dry_run in [true, false] {
+            let mut target = target_step("$inputs.id");
+            target.parameters.push(Parameter {
+                in_: Some(ParamLocation::Querystring),
+                ..parameter("query", query)
+            });
+            let observer = Arc::new(TestObserver::default());
+            let engine = builder(base, "/v1/pets/{id} ?", vec![target])
+                .observer(observer.clone())
+                .dry_run(dry_run)
+                .replay_trace_steps(vec![replay_record(&format!("{base}/v1/pets/good "))])
+                .build()
+                .unwrap_or_else(|error| panic!("build: {error}"));
+            let refused = engine
+                .execute_collect("wf", BTreeMap::from([("id".to_string(), json!(".."))]))
+                .await;
+            assert_refused(&refused, &observer);
+            let accepted = engine
+                .execute_collect("wf", BTreeMap::from([("id".to_string(), json!("good"))]))
+                .await;
+            assert!(accepted.outputs.is_ok(), "{:?}", accepted.outputs);
+        }
+    }
+}
+
+#[tokio::test]
+async fn appended_queries_keep_safe_dotted_paths_and_literal_braces() {
+    let log = new_request_log();
+    let captured = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&captured, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, "{}")
+    });
+    for (location, value, expected) in [
+        (ParamLocation::Query, "x", "/v1/pets/..%20?q=x"),
+        (ParamLocation::Querystring, "q=x", "/v1/pets/..%20?q=x"),
+        (ParamLocation::Query, "{id}", "/v1/pets/..%20?q=%7Bid%7D"),
+        (
+            ParamLocation::Querystring,
+            "q={id}",
+            "/v1/pets/..%20?q={id}",
+        ),
+    ] {
+        let before = logged_requests(&log).len();
+        let mut target = target_step("..");
+        target.parameters.push(Parameter {
+            in_: Some(location),
+            ..parameter("q", value)
+        });
+        let engine = builder(&server.base_url, "/v1/pets/{id} ", vec![target])
+            .build()
+            .unwrap_or_else(|error| panic!("build: {error}"));
+        let result = engine.execute_collect("wf", BTreeMap::new()).await;
+        assert!(result.outputs.is_ok(), "{value:?}: {:?}", result.outputs);
+        let requests = logged_requests(&log);
+        assert_eq!(requests.len(), before + 1);
+        assert_eq!(requests[before].url, expected);
+    }
+}

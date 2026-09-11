@@ -922,19 +922,13 @@ impl Engine {
                 .or_insert_with(|| v.clone());
         }
 
-        if !path_params.is_empty() && target.contains('{') {
-            target = replace_path_params(&target, &path_params).map_err(|error| {
-                RuntimeError::new(
-                    RuntimeErrorKind::InvalidParameterValue,
-                    format!(
-                        "step {:?}: path parameter(s) {:?} would produce a complete URL path \
-                         segment that the WHATWG URL parser normalizes as `.` or `..`; the \
-                         runtime path safety policy refuses this request",
-                        step.step_id, error.parameter_names
-                    ),
-                )
-            })?;
-        }
+        let path_validation = if !path_params.is_empty() && target.contains('{') {
+            let (substituted, validation) = replace_path_params(&target, &path_params);
+            target = substituted;
+            Some(validation)
+        } else {
+            None
+        };
         if let Some((name, raw)) = querystring {
             // `querystring` *is* the query component, so it replaces whatever
             // the target carried rather than being appended to it, and it is
@@ -1021,6 +1015,19 @@ impl Engine {
                 target.push('?');
                 target.push_str(&query);
             }
+        }
+        if let Some(validation) = path_validation {
+            validation.validate(&target).map_err(|error| {
+                RuntimeError::new(
+                    RuntimeErrorKind::InvalidParameterValue,
+                    format!(
+                        "step {:?}: path parameter(s) {:?} would produce a complete URL path \
+                         segment that the WHATWG URL parser normalizes as `.` or `..`; the \
+                         runtime path safety policy refuses this request",
+                        step.step_id, error.parameter_names
+                    ),
+                )
+            })?;
         }
         Ok(UrlBuildResult {
             url: target,

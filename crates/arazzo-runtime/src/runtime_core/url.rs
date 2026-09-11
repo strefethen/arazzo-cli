@@ -28,11 +28,65 @@ pub(super) struct PathParameterExpansionError {
     pub parameter_names: Vec<String>,
 }
 
+/// Provenance needed to validate path substitutions after query assembly has
+/// finalized the URL's component boundaries.
+#[derive(Debug, Clone)]
+pub(super) struct PathParameterValidation {
+    parts: Vec<SubstitutedPart>,
+}
+
+#[derive(Debug, Clone)]
+struct SubstitutedPart {
+    start: usize,
+    end: usize,
+    parameter_name: Option<String>,
+}
+
+impl SubstitutedPart {
+    fn is_unresolved_template(&self) -> bool {
+        self.parameter_name.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Template<'a> {
     start: usize,
     end: usize,
     key: &'a str,
+}
+
+trait OpaqueUrlPart {
+    fn start(&self) -> usize;
+    fn end(&self) -> usize;
+    fn is_opaque(&self) -> bool;
+}
+
+impl OpaqueUrlPart for Template<'_> {
+    fn start(&self) -> usize {
+        self.start
+    }
+
+    fn end(&self) -> usize {
+        self.end
+    }
+
+    fn is_opaque(&self) -> bool {
+        true
+    }
+}
+
+impl OpaqueUrlPart for SubstitutedPart {
+    fn start(&self) -> usize {
+        self.start
+    }
+
+    fn end(&self) -> usize {
+        self.end
+    }
+
+    fn is_opaque(&self) -> bool {
+        self.is_unresolved_template()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -94,6 +148,41 @@ impl PathSegmentGuard {
     }
 }
 
+impl PathParameterValidation {
+    pub(super) fn validate(&self, url: &str) -> Result<(), PathParameterExpansionError> {
+        let (path_start, path_end) = path_component_bounds(url, &self.parts);
+        let mut guard = PathSegmentGuard::default();
+        let mut cursor = path_start;
+
+        for part in self.parts.iter().filter(|part| {
+            part.end <= url.len()
+                && if part.start == part.end {
+                    part.start >= path_start && part.start <= path_end
+                } else {
+                    part.start >= path_start && part.end <= path_end
+                }
+        }) {
+            guard.append_literal(&url[cursor..part.start]);
+            if let Some(parameter_name) = &part.parameter_name {
+                guard.append_substitution(&url[part.start..part.end], parameter_name);
+            } else {
+                guard.append_opaque_literal(&url[part.start..part.end]);
+            }
+            cursor = part.end;
+        }
+        guard.append_literal(&url[cursor..path_end]);
+
+        let unsafe_params = guard.finish(path_end == url.len());
+        if unsafe_params.is_empty() {
+            Ok(())
+        } else {
+            Err(PathParameterExpansionError {
+                parameter_names: unsafe_params,
+            })
+        }
+    }
+}
+
 /// Result of building a URL from an operationPath, including resolved parameters.
 #[derive(Debug, Clone)]
 pub(crate) struct UrlBuildResult {
@@ -116,49 +205,41 @@ pub(crate) fn parse_method(operation_path: &str) -> (&str, &str) {
 pub(super) fn replace_path_params(
     path: &str,
     params: &BTreeMap<String, String>,
-) -> Result<String, PathParameterExpansionError> {
+) -> (String, PathParameterValidation) {
     let templates = find_templates(path);
     let (path_start, path_end) = path_component_bounds(path, &templates);
     let mut out = String::with_capacity(path.len());
-    let mut guard = PathSegmentGuard::default();
+    let mut parts = Vec::new();
     let mut cursor = 0;
 
     for template in templates {
         out.push_str(&path[cursor..template.start]);
-        append_path_literal(
-            path,
-            cursor,
-            template.start,
-            (path_start, path_end),
-            &mut guard,
-        );
 
         if let Some(value) = params.get(template.key) {
             let encoded = utf8_percent_encode(value, PATH_SEGMENT_ENCODE_SET).to_string();
+            let start = out.len();
             out.push_str(&encoded);
             if template.start >= path_start && template.end <= path_end {
-                guard.append_substitution(&encoded, template.key);
+                parts.push(SubstitutedPart {
+                    start,
+                    end: out.len(),
+                    parameter_name: Some(template.key.to_string()),
+                });
             }
         } else {
+            let start = out.len();
             out.push_str(&path[template.start..template.end]);
-            if template.start >= path_start && template.end <= path_end {
-                guard.append_opaque_literal(&path[template.start..template.end]);
-            }
+            parts.push(SubstitutedPart {
+                start,
+                end: out.len(),
+                parameter_name: None,
+            });
         }
         cursor = template.end;
     }
 
     out.push_str(&path[cursor..]);
-    append_path_literal(path, cursor, path.len(), (path_start, path_end), &mut guard);
-    let unsafe_params = guard.finish(path_end == path.len());
-
-    if unsafe_params.is_empty() {
-        Ok(out)
-    } else {
-        Err(PathParameterExpansionError {
-            parameter_names: unsafe_params,
-        })
-    }
+    (out, PathParameterValidation { parts })
 }
 
 /// Finds templates with the same permissive matching behavior as the original
@@ -188,20 +269,19 @@ fn find_templates(path: &str) -> Vec<Template<'_>> {
 /// Returns the byte range of the URL path component. Delimiters inside
 /// template names are skipped, so a parameter named `{part?query}` or
 /// `{part/name}` cannot change component detection.
-fn path_component_bounds(path: &str, templates: &[Template<'_>]) -> (usize, usize) {
+fn path_component_bounds(path: &str, parts: &[impl OpaqueUrlPart]) -> (usize, usize) {
     let authority_end = authority_prefix_end(path);
     let path_start = authority_end
         .and_then(|start| {
-            find_outside_templates(path, templates, start, |byte| {
+            find_outside_opaque_parts(path, parts, start, |byte| {
                 matches!(byte, b'/' | b'\\' | b'?' | b'#')
             })
         })
         .map(|(position, _)| position)
         .unwrap_or_else(|| authority_end.map_or(0, |_| path.len()));
-    let path_end = find_outside_templates(path, templates, path_start, |byte| {
-        matches!(byte, b'?' | b'#')
-    })
-    .map_or(path.len(), |(position, _)| position);
+    let path_end =
+        find_outside_opaque_parts(path, parts, path_start, |byte| matches!(byte, b'?' | b'#'))
+            .map_or(path.len(), |(position, _)| position);
 
     (path_start, path_end)
 }
@@ -221,22 +301,22 @@ fn authority_prefix_end(path: &str) -> Option<usize> {
     (valid_scheme && path[colon..].starts_with("://")).then_some(colon + 3)
 }
 
-fn find_outside_templates(
+fn find_outside_opaque_parts(
     path: &str,
-    templates: &[Template<'_>],
+    parts: &[impl OpaqueUrlPart],
     start: usize,
     predicate: impl Fn(u8) -> bool,
 ) -> Option<(usize, u8)> {
     let mut cursor = start;
-    for template in templates {
-        if template.end <= cursor {
+    for part in parts {
+        if !part.is_opaque() || part.end() > path.len() || part.end() <= cursor {
             continue;
         }
-        if template.start < cursor {
-            cursor = template.end;
+        if part.start() < cursor {
+            cursor = part.end();
             continue;
         }
-        for (offset, byte) in path.as_bytes()[cursor..template.start]
+        for (offset, byte) in path.as_bytes()[cursor..part.start()]
             .iter()
             .copied()
             .enumerate()
@@ -245,7 +325,7 @@ fn find_outside_templates(
                 return Some((cursor + offset, byte));
             }
         }
-        cursor = template.end;
+        cursor = part.end();
     }
 
     path.as_bytes()[cursor..]
@@ -253,21 +333,6 @@ fn find_outside_templates(
         .copied()
         .enumerate()
         .find_map(|(offset, byte)| predicate(byte).then_some((cursor + offset, byte)))
-}
-
-fn append_path_literal(
-    path: &str,
-    literal_start: usize,
-    literal_end: usize,
-    path_bounds: (usize, usize),
-    guard: &mut PathSegmentGuard,
-) {
-    let start = literal_start.max(path_bounds.0);
-    let end = literal_end.min(path_bounds.1);
-    if start >= end {
-        return;
-    }
-    guard.append_literal(&path[start..end]);
 }
 
 fn is_whatwg_dot_segment(segment: &str) -> bool {
@@ -328,8 +393,17 @@ mod tests {
             .collect()
     }
 
+    fn validated(
+        url: &str,
+        entries: &[(&str, &str)],
+    ) -> Result<String, PathParameterExpansionError> {
+        let (result, validation) = replace_path_params(url, &substitutions(entries));
+        validation.validate(&result)?;
+        Ok(result)
+    }
+
     fn replaced(url: &str, entries: &[(&str, &str)]) -> String {
-        match replace_path_params(url, &substitutions(entries)) {
+        match validated(url, entries) {
             Ok(result) => result,
             Err(error) => panic!("safe URL substitution was refused: {error:?}"),
         }
@@ -365,7 +439,7 @@ mod tests {
         ];
 
         for (url, entries) in cases {
-            let err = match replace_path_params(url, &substitutions(&entries)) {
+            let err = match validated(url, &entries) {
                 Ok(result) => panic!("dot segment was not refused: {result}"),
                 Err(error) => error,
             };
@@ -391,7 +465,7 @@ mod tests {
             ("https://example.test/a/{id}\0\t ", "."),
             ("https://example.test/a/.. {id}", ""),
         ] {
-            assert!(replace_path_params(url, &substitutions(&[("id", value)])).is_err());
+            assert!(validated(url, &[("id", value)]).is_err());
         }
         for url in [
             "https://example.test/a/{id} /z",
@@ -403,6 +477,31 @@ mod tests {
         assert_eq!(
             replaced("https://example.test/a/{id}", &[("id", ".. ")]),
             "https://example.test/a/..%20"
+        );
+    }
+
+    #[test]
+    fn validation_uses_final_query_boundaries_without_reparsing_query_braces() {
+        let (mut exposed, exposed_validation) = replace_path_params(
+            "https://example.test/a/{id} ?",
+            &substitutions(&[("id", "..")]),
+        );
+        let query = match exposed.find('?') {
+            Some(position) => position,
+            None => panic!("fixture must carry a query delimiter"),
+        };
+        exposed.truncate(query);
+        assert!(exposed_validation.validate(&exposed).is_err());
+
+        let (mut protected, protected_validation) = replace_path_params(
+            "https://example.test/a/{id} ",
+            &substitutions(&[("id", "..")]),
+        );
+        protected.push_str("?raw={value?/with#delimiters}");
+        assert_eq!(protected_validation.validate(&protected), Ok(()));
+        assert_eq!(
+            protected,
+            "https://example.test/a/.. ?raw={value?/with#delimiters}"
         );
     }
 
