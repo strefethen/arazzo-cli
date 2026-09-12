@@ -226,6 +226,11 @@ fn split_predicate<'a>(input: &'a str, delimiter: &str) -> Option<Vec<&'a str>> 
     let mut found = false;
 
     for (idx, ch) in input.char_indices() {
+        // Skip the bytes of a delimiter just consumed; otherwise a delimiter
+        // run (`&&&`) matches again inside it and `input[start..idx]` inverts.
+        if idx < start {
+            continue;
+        }
         if let Some(quote) = in_quote {
             if escaped {
                 escaped = false;
@@ -539,6 +544,56 @@ mod tests {
             JsonPathOutcome::Matched(result) => assert!(!result),
             JsonPathOutcome::Unsupported(reason) => {
                 panic!("count predicate should stay supported, got: {reason}")
+            }
+        }
+    }
+
+    /// H1: a delimiter run used to slice `input[start..idx]` backwards and
+    /// panic. Only the absence of a panic is asserted; the resulting truth
+    /// value for these malformed predicates is an accepted gap, not a
+    /// contract (rejection belongs to ac-3677f).
+    #[test]
+    fn delimiter_runs_do_not_panic() {
+        let context = json!([{"a": true, "b": true}]);
+        for condition in [
+            "$[?(@.a &&& @.b)]",
+            "$[?(@.a ||| @.b)]",
+            "$[?(@.a &&&& @.b)]",
+            "$[?(&&&)]",
+        ] {
+            let _ = evaluate(&context, condition);
+        }
+    }
+
+    #[test]
+    fn logical_operators_still_evaluate() {
+        let cases = [
+            (json!([{"a": true, "b": true}]), "$[?(@.a && @.b)]", true),
+            (json!([{"a": true, "b": false}]), "$[?(@.a && @.b)]", false),
+            (json!([{"a": false, "b": true}]), "$[?(@.a || @.b)]", true),
+            (json!([{"a": false, "b": false}]), "$[?(@.a || @.b)]", false),
+            (
+                json!([{"a": false, "b": true, "c": true}]),
+                "$[?((@.a || @.b) && @.c)]",
+                true,
+            ),
+            (
+                json!([{"a": true, "b": true, "c": false}]),
+                "$[?((@.a || @.b) && @.c)]",
+                false,
+            ),
+            (json!([{"s": "x && y"}]), r#"$[?(@.s == "x && y")]"#, true),
+            (json!([{"s": "x || y"}]), r#"$[?(@.s == "x || y")]"#, true),
+            (json!([{"s": "x"}]), r#"$[?(@.s == "x || y")]"#, false),
+        ];
+        for (context, condition, expected) in cases {
+            match evaluate(&context, condition) {
+                JsonPathOutcome::Matched(result) => {
+                    assert_eq!(result, expected, "{condition} against {context}")
+                }
+                JsonPathOutcome::Unsupported(reason) => {
+                    panic!("{condition} should stay supported, got: {reason}")
+                }
             }
         }
     }

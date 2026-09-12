@@ -3531,6 +3531,46 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
         .any(|warning| warning.contains("unsupported XPath version \"20\"")));
 }
 
+/// H1: a delimiter run in a JSONPath filter predicate used to panic the
+/// execution task ("execution task completed without sending result"), which
+/// is a process abort under the release profile's `panic = "abort"`.
+#[tokio::test]
+async fn jsonpath_delimiter_run_fails_criteria_instead_of_panicking() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"a":true,"b":true}"#)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "delimiter-run".to_string(),
+            steps: vec![Step {
+                step_id: "check".to_string(),
+                target: Some(StepTarget::OperationPath("/check".to_string())),
+                success_criteria: vec![SuccessCriterion {
+                    context: "$response.body".to_string(),
+                    condition: "$[?(@.a &&& @.b)]".to_string(),
+                    type_: Some(CriterionType::Name("jsonpath".to_string())),
+                    ..SuccessCriterion::default()
+                }],
+                ..Step::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).build() {
+        Ok(engine) => engine,
+        Err(error) => panic!("building delimiter-run engine: {error}"),
+    };
+    let result = engine
+        .execute_collect("delimiter-run", BTreeMap::new())
+        .await;
+    let err = match &result.outputs {
+        Ok(_) => panic!("a malformed predicate must not satisfy the criterion"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::SuccessCriteriaFailed, "{err}");
+}
+
 fn captured_string(captured: &Arc<Mutex<String>>) -> String {
     match captured.lock() {
         Ok(guard) => guard.clone(),
