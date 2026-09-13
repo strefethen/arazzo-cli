@@ -130,14 +130,14 @@ jobs:
         run: cargo build --workspace --target aarch64-unknown-linux-gnu
 
   msrv:
-    name: MSRV (1.82)
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Rust 1.82
-        uses: dtolnay/rust-toolchain@1.82
+      - name: Set up Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -145,10 +145,12 @@ jobs:
           workspaces: . -> target
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
       - name: Test
-        run: cargo test --workspace
+        env:
+          CARGO_BIN_EXE_arazzo-cli: ${{ github.workspace }}/target/debug/arazzo-cli
+        run: cargo test --workspace --locked
 
   audit:
     name: Security Audit

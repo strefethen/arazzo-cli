@@ -1,7 +1,7 @@
 # AGENTS.md — arazzo-cli
 
 Runtime executor for the **Arazzo Specification v1.1.0**
-(<https://spec.openapis.org/arazzo/latest.html>). Rust workspace, MSRV 1.82,
+(<https://spec.openapis.org/arazzo/latest.html>). Rust workspace, MSRV 1.88,
 `unsafe` forbidden. `CLAUDE.md` imports this file; edit this one.
 
 Run the CLI with `--help` to discover commands and usage. None of that belongs

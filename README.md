@@ -1,7 +1,7 @@
 # arazzo-cli
 
 [![CI](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/strefethen/arazzo-cli/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.82+-000000?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.88+-000000?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Execute multi-step API workflows from a YAML spec — no code generation, no glue scripts.**
@@ -864,7 +864,7 @@ docs/schemas/              JSON Schemas for --json output formats
 
 ## Building from Source
 
-**Prerequisites:** Rust 1.82+ (`rustup` will handle this automatically via `rust-toolchain.toml`)
+**Prerequisites:** Rust 1.88+ (`rustup` will handle this automatically via `rust-toolchain.toml`)
 
 ```bash
 git clone https://github.com/strefethen/arazzo-cli.git
@@ -881,7 +881,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
-CI also runs `cargo audit`, MSRV verification (Rust 1.82), and cross-platform builds (Linux, macOS, Windows).
+CI also runs `cargo audit`, MSRV verification (Rust 1.88), and cross-platform builds (Linux, macOS, Windows).
 
 ## Contributing
 
