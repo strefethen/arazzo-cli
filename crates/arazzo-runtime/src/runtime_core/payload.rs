@@ -1,3 +1,5 @@
+use arazzo_expr::JsonPathQuery;
+
 use super::*;
 
 pub(super) fn value_to_string(value: &Value) -> String {
@@ -17,23 +19,63 @@ pub(super) fn resolve_payload_detailed(
     resolve_value_source(value, eval)
 }
 
+/// Resolve a value for ordinary readers: the projected value and warnings.
 pub(super) fn resolve_value_source(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    match value {
-        ValueSource::Selector(selector) => resolve_selector(selector, eval),
-        ValueSource::Literal(value) => resolve_literal_value(value, eval),
+    resolve_value_checked(value, eval).into_parts()
+}
+
+/// Value-resolution outcome with private hard-failure provenance.
+///
+/// Ordinary readers see only the projected `value` and `warnings`. Payload
+/// replacement additionally needs to know whether a JSONPath Selector Object
+/// anywhere inside the value failed hard — an unsupported version, invalid
+/// syntax, an admission limit, an evaluation failure, or a context that did
+/// not resolve — because the `Null` such a failure projects is not a selected
+/// value and must not be written into a request body as one. Zero matches
+/// and a legitimately selected `null` are ordinary selections, not failures.
+#[derive(Debug)]
+struct Resolution {
+    value: Value,
+    warnings: Vec<arazzo_expr::ExpressionWarning>,
+    jsonpath_failed: bool,
+}
+
+impl Resolution {
+    fn sound(value: Value, warnings: Vec<arazzo_expr::ExpressionWarning>) -> Self {
+        Self {
+            value,
+            warnings,
+            jsonpath_failed: false,
+        }
+    }
+
+    fn jsonpath_failure(warnings: Vec<arazzo_expr::ExpressionWarning>) -> Self {
+        Self {
+            value: Value::Null,
+            warnings,
+            jsonpath_failed: true,
+        }
+    }
+
+    fn into_parts(self) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+        (self.value, self.warnings)
     }
 }
 
-fn resolve_literal_value(
-    value: &serde_yaml_ng::Value,
-    eval: &ExpressionEvaluator,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+fn resolve_value_checked(value: &ValueSource, eval: &ExpressionEvaluator) -> Resolution {
     match value {
-        serde_yaml_ng::Value::Null => (Value::Null, Vec::new()),
-        serde_yaml_ng::Value::Bool(v) => (Value::Bool(*v), Vec::new()),
+        ValueSource::Selector(selector) => resolve_selector_checked(selector, eval),
+        ValueSource::Literal(value) => resolve_literal_checked(value, eval),
+    }
+}
+
+fn resolve_literal_checked(value: &serde_yaml_ng::Value, eval: &ExpressionEvaluator) -> Resolution {
+    match value {
+        serde_yaml_ng::Value::Null => Resolution::sound(Value::Null, Vec::new()),
+        serde_yaml_ng::Value::Bool(v) => Resolution::sound(Value::Bool(*v), Vec::new()),
         serde_yaml_ng::Value::Number(v) => {
             let value = if let Some(i) = v.as_i64() {
                 json!(i)
@@ -44,61 +86,129 @@ fn resolve_literal_value(
             } else {
                 Value::Null
             };
-            (value, Vec::new())
+            Resolution::sound(value, Vec::new())
         }
-        serde_yaml_ng::Value::String(v) => eval.resolve_value_with_diagnostics(v),
+        serde_yaml_ng::Value::String(v) => {
+            let (value, warnings) = eval.resolve_value_with_diagnostics(v);
+            Resolution::sound(value, warnings)
+        }
+        // Nested containers are not parsed here: the existing `ValueSource`
+        // model decides whether each item is a Selector Object, and this walk
+        // only carries every item's outcome upward.
         serde_yaml_ng::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
             let mut warnings = Vec::new();
+            let mut jsonpath_failed = false;
             for item in seq {
-                let (value, item_warnings) = resolve_value_source(&item.clone().into(), eval);
-                out.push(value);
-                warnings.extend(item_warnings);
+                let item = resolve_value_checked(&item.clone().into(), eval);
+                jsonpath_failed |= item.jsonpath_failed;
+                out.push(item.value);
+                warnings.extend(item.warnings);
             }
-            (Value::Array(out), warnings)
+            Resolution {
+                value: Value::Array(out),
+                warnings,
+                jsonpath_failed,
+            }
         }
         serde_yaml_ng::Value::Mapping(map) => {
             let mut out = serde_json::Map::new();
             let mut warnings = Vec::new();
+            let mut jsonpath_failed = false;
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
-                let (value, item_warnings) = resolve_value_source(&v.clone().into(), eval);
-                out.insert(key, value);
-                warnings.extend(item_warnings);
+                let item = resolve_value_checked(&v.clone().into(), eval);
+                jsonpath_failed |= item.jsonpath_failed;
+                out.insert(key, item.value);
+                warnings.extend(item.warnings);
             }
-            (Value::Object(out), warnings)
+            Resolution {
+                value: Value::Object(out),
+                warnings,
+                jsonpath_failed,
+            }
         }
-        _ => (Value::Null, Vec::new()),
+        _ => Resolution::sound(Value::Null, Vec::new()),
     }
 }
 
+/// Resolve a Selector Object for ordinary readers: the projected value and
+/// warnings. A selector that fails reads as `Null` with one warning; zero
+/// matches read as `Null` with the no-match warning.
 pub(super) fn resolve_selector(
     selector: &SelectorObject,
     eval: &ExpressionEvaluator,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    let (context, mut warnings) = eval.evaluate_with_diagnostics(&selector.context);
-    if !warnings.is_empty() {
-        return (Value::Null, warnings);
-    }
+    resolve_selector_checked(selector, eval).into_parts()
+}
 
+fn resolve_selector_checked(selector: &SelectorObject, eval: &ExpressionEvaluator) -> Resolution {
     let type_name = selector.type_.resolved_name();
     let version = selector.type_.declared_version();
-    let selected = match type_name.as_str() {
-        "jsonpath" => {
-            if !matches!(
-                version,
-                None | Some("rfc9535") | Some("draft-goessner-dispatch-jsonpath-00")
-            ) {
-                Err(format!(
-                    "unsupported JSONPath version {:?}",
-                    version.unwrap_or_default()
-                ))
-            } else {
-                arazzo_expr::select_json_path(&context, &selector.selector)
-                    .map(|selection| (selection.value, selection.match_count))
-                    .map_err(|err| err.to_string())
+
+    // A jsonpath selector is admitted through the shared owner — declared
+    // version, resource budget and complete syntax — before its context is
+    // resolved, so an unsupported version or a malformed expression is
+    // reported even when the context turns out to be missing. Goessner is
+    // not a supported version; the owner rejects it like any other.
+    let jsonpath = match type_name.as_str() {
+        "jsonpath" => match JsonPathQuery::parse(&selector.selector, version) {
+            Ok(query) => Some(query),
+            Err(error) => {
+                return Resolution::jsonpath_failure(vec![selector_warning(
+                    selector,
+                    &error.to_string(),
+                )]);
+            }
+        },
+        _ => None,
+    };
+
+    let (context, mut warnings) = eval.evaluate_with_diagnostics(&selector.context);
+    if !warnings.is_empty() {
+        // The projection is unchanged: a context that did not resolve reads
+        // as `Null`. For a JSONPath selector that is failed resolution, not a
+        // selected value, so replacement use must not write it.
+        return Resolution {
+            value: Value::Null,
+            warnings,
+            jsonpath_failed: jsonpath.is_some(),
+        };
+    }
+
+    let selected = if let Some(query) = jsonpath {
+        match query.select(&context) {
+            Ok(selection) => Ok((selection.value, selection.match_count)),
+            Err(error) => {
+                warnings.push(selector_warning(selector, &error.to_string()));
+                return Resolution::jsonpath_failure(warnings);
             }
         }
+    } else {
+        resolve_non_jsonpath_selector(selector, &context, version)
+    };
+
+    match selected {
+        Ok((value, 0)) => {
+            warnings.push(selector_warning(selector, "selector matched no values"));
+            Resolution::sound(value, warnings)
+        }
+        Ok((value, _)) => Resolution::sound(value, warnings),
+        Err(message) => {
+            warnings.push(selector_warning(selector, &message));
+            Resolution::sound(Value::Null, warnings)
+        }
+    }
+}
+
+/// The JSON Pointer and XPath selector arms, unchanged by the JSONPath
+/// cutover: their errors are ordinary selector warnings, not hard failures.
+fn resolve_non_jsonpath_selector(
+    selector: &SelectorObject,
+    context: &Value,
+    version: Option<&str>,
+) -> Result<(Value, usize), String> {
+    match selector.type_.resolved_name().as_str() {
         "jsonpointer" => {
             if !matches!(version, None | Some("rfc6901")) {
                 Err(format!(
@@ -119,30 +229,18 @@ pub(super) fn resolve_selector(
             // check so a bad version is reported for any context shape.
             if let Some(rejection) = xpath_version_rejection(version) {
                 Err(rejection)
-            } else if let Value::String(xml) = &context {
+            } else if let Value::String(xml) = context {
                 select_xpath(xml.as_bytes(), &selector.selector, version).and_then(|selection| {
                     selection.value.map(|value| (value, selection.match_count))
                 })
             } else {
                 Err(format!(
                     "XPath selector context must resolve to an XML string, got {}",
-                    json_type_name(&context)
+                    json_type_name(context)
                 ))
             }
         }
         other => Err(format!("unsupported selector type {other:?}")),
-    };
-
-    match selected {
-        Ok((value, 0)) => {
-            warnings.push(selector_warning(selector, "selector matched no values"));
-            (value, warnings)
-        }
-        Ok((value, _)) => (value, warnings),
-        Err(message) => {
-            warnings.push(selector_warning(selector, &message));
-            (Value::Null, warnings)
-        }
     }
 }
 
@@ -184,12 +282,24 @@ pub(super) fn apply_replacements(
             continue;
         }
 
-        let (resolved, selector_warnings) = resolve_replacement_value(&replacement.value, eval);
+        // Value first: a hard JSONPath failure anywhere inside the value
+        // projected `Null`, which is not a selected value. Nothing is written
+        // and the target is not evaluated; later replacements continue.
+        let resolution = resolve_value_checked(&replacement.value, eval);
         warnings.extend(
-            selector_warnings
-                .into_iter()
+            resolution
+                .warnings
+                .iter()
                 .map(|warning| replacement_warning(index, &warning.to_string())),
         );
+        if resolution.jsonpath_failed {
+            warnings.push(replacement_warning(
+                index,
+                "value did not resolve; replacement skipped and body unchanged",
+            ));
+            continue;
+        }
+        let resolved = resolution.value;
 
         let declared = replacement.target_selector_type.as_ref();
         let kind = match declared {
@@ -229,50 +339,54 @@ pub(super) fn apply_replacements(
                 }
             }
             TargetKind::JsonPath => {
-                if !matches!(
-                    version,
-                    None | Some("rfc9535") | Some("draft-goessner-dispatch-jsonpath-00")
-                ) {
-                    warnings.push(replacement_warning(
+                // The shared owner admits the declared version, the resource
+                // budget and the complete syntax before the current body is
+                // queried; the pointers come from that one located query.
+                let query = match JsonPathQuery::parse(target, version) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        warnings.push(replacement_warning(index, &error.to_string()));
+                        continue;
+                    }
+                };
+                let pointers = match query.query(&body) {
+                    Ok(matches) => matches
+                        .into_iter()
+                        .map(|found| found.pointer)
+                        .collect::<Vec<_>>(),
+                    Err(error) => {
+                        warnings.push(replacement_warning(index, &error.to_string()));
+                        continue;
+                    }
+                };
+                // Decision 2 (ac-bd441, project rule): a replacement applies
+                // iff its target resolves to exactly one location; zero and
+                // many — repeated occurrences included — both report and
+                // leave the body unchanged.
+                match pointers.as_slice() {
+                    [] => warnings.push(replacement_warning(
+                        index,
+                        "JSONPath target matched no locations; body unchanged",
+                    )),
+                    // The root selector `$` resolves to the empty RFC 6901
+                    // pointer — one location, the whole document — which
+                    // the segment-walking applier cannot express.
+                    [pointer] if pointer.is_empty() => body = resolved,
+                    [pointer] => {
+                        if let Err(message) =
+                            apply_json_pointer_replacement(&mut body, pointer, resolved)
+                        {
+                            warnings.push(replacement_warning(index, &message));
+                        }
+                    }
+                    many => warnings.push(replacement_warning(
                         index,
                         &format!(
-                            "unsupported JSONPath version {:?}",
-                            version.unwrap_or_default()
+                            "JSONPath target matched {} locations; a replacement applies \
+                             only when it resolves to exactly one location; body unchanged",
+                            many.len()
                         ),
-                    ));
-                    continue;
-                }
-                match arazzo_expr::resolve_json_path_pointers(&body, target) {
-                    Err(err) => warnings.push(replacement_warning(index, &err.to_string())),
-                    // Decision 2 (ac-bd441, project rule): a replacement
-                    // applies iff its target resolves to exactly one
-                    // location; zero and many both report and leave the
-                    // body unchanged.
-                    Ok(pointers) => match pointers.as_slice() {
-                        [] => warnings.push(replacement_warning(
-                            index,
-                            "JSONPath target matched no locations; body unchanged",
-                        )),
-                        // The root selector `$` resolves to the empty RFC 6901
-                        // pointer — one location, the whole document — which
-                        // the segment-walking applier cannot express.
-                        [pointer] if pointer.is_empty() => body = resolved,
-                        [pointer] => {
-                            if let Err(message) =
-                                apply_json_pointer_replacement(&mut body, pointer, resolved)
-                            {
-                                warnings.push(replacement_warning(index, &message));
-                            }
-                        }
-                        many => warnings.push(replacement_warning(
-                            index,
-                            &format!(
-                                "JSONPath target matched {} locations; a replacement applies \
-                                 only when it resolves to exactly one location; body unchanged",
-                                many.len()
-                            ),
-                        )),
-                    },
+                    )),
                 }
             }
             TargetKind::XPath => {
@@ -330,13 +444,6 @@ fn infer_target_kind(body: &Value, content_type: &str) -> TargetKind {
     }
 }
 
-fn resolve_replacement_value(
-    value: &ValueSource,
-    eval: &ExpressionEvaluator,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    resolve_value_source(value, eval)
-}
-
 fn replacement_warning(index: usize, message: &str) -> String {
     format!("requestBody.replacements[{index}]: {message}")
 }
@@ -346,18 +453,18 @@ fn apply_json_pointer_replacement(
     pointer: &str,
     replacement: Value,
 ) -> Result<(), String> {
-    if pointer.is_empty() || !pointer.starts_with('/') {
+    // RFC 6901 §3: a non-empty pointer is a sequence of reference tokens,
+    // each introduced by exactly one "/", so only the first separator is
+    // dropped. A token may be empty — "//child" names member "child" of the
+    // member named "" — and stripping every leading "/" would rewrite it to
+    // "/child" and overwrite a root-level sibling instead.
+    let Some(reference) = pointer.strip_prefix('/') else {
         return Err("not a JSON Pointer".to_string());
-    }
-
-    let tokens = pointer
-        .trim_start_matches('/')
+    };
+    let tokens = reference
         .split('/')
         .map(unescape_json_pointer_token)
         .collect::<Vec<_>>();
-    if tokens.is_empty() {
-        return Err("empty JSON Pointer".to_string());
-    }
 
     let mut current = root;
     for (index, token) in tokens.iter().enumerate() {
@@ -964,46 +1071,261 @@ mod tests {
     }
 
     #[test]
-    fn explicit_jsonpath_gjson_filter_warns_and_body_unchanged() {
+    fn explicit_jsonpath_gjson_filter_is_invalid_syntax_and_body_unchanged() {
+        // A GJSON dot-form filter is not RFC 9535 syntax: the shared owner
+        // rejects the target at parse time — whether it would have matched
+        // one item or two — with exactly one warning and an untouched body.
         let eval = evaluator();
-        let original = json!({
-            "items": [
-                {"sku": "A", "q": 1},
-                {"sku": "A", "q": 2}
-            ]
-        });
-        let (body, warnings) = apply(
-            original.clone(),
-            vec![typed_replacement(
-                "$.items.#(sku==\"A\").q",
-                name_type("jsonpath"),
-                yaml(json!(99)),
-            )],
-            &eval,
-        );
+        for original in [
+            json!({"items": [{"sku": "A", "q": 1}, {"sku": "A", "q": 2}]}),
+            json!({"items": [{"sku": "A", "q": 1}]}),
+        ] {
+            let (body, warnings) = apply(
+                original.clone(),
+                vec![typed_replacement(
+                    "$.items.#(sku==\"A\").q",
+                    name_type("jsonpath"),
+                    yaml(json!(99)),
+                )],
+                &eval,
+            );
 
-        assert_eq!(body, original);
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert_warning_contains(&warnings, "GJSON");
+            assert_eq!(body, original);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_warning_contains(&warnings, "invalid JSONPath syntax");
+        }
     }
 
     #[test]
-    fn explicit_jsonpath_gjson_filter_one_match_warns_and_body_unchanged() {
+    fn explicit_jsonpath_descent_and_slice_targets_resolve_one_location() {
         let eval = evaluator();
-        let original = json!({"items": [{"sku": "A", "q": 1}]});
+        let (body, warnings) = apply(
+            json!({"a": {"deep": {"leaf": 1}}, "items": [10, 20, 30]}),
+            vec![
+                typed_replacement("$..leaf", name_type("jsonpath"), yaml(json!(2))),
+                typed_replacement("$.items[1:2]", name_type("jsonpath"), yaml(json!(21))),
+            ],
+            &eval,
+        );
+
+        assert_eq!(
+            body,
+            json!({"a": {"deep": {"leaf": 2}}, "items": [10, 21, 30]})
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn explicit_jsonpath_duplicate_occurrences_count_as_many_locations() {
+        let eval = evaluator();
+        let original = json!({"items": [{"q": 1}]});
         let (body, warnings) = apply(
             original.clone(),
             vec![typed_replacement(
-                "$.items.#(sku==\"A\").q",
+                "$.items[0,0].q",
                 name_type("jsonpath"),
-                yaml(json!(99)),
+                yaml(json!(9)),
             )],
             &eval,
         );
 
         assert_eq!(body, original);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert_warning_contains(&warnings, "GJSON");
+        assert_warning_contains(&warnings, "matched 2 locations");
+    }
+
+    #[test]
+    fn empty_name_pointer_segment_replaces_nested_child_not_root_sibling() {
+        // $['']['child'] resolves to the RFC 6901 pointer "//child": member
+        // "child" of the member named "". Dropping every leading "/" used to
+        // rewrite it to "/child" and overwrite the root-level sibling.
+        let eval = evaluator();
+        let original = json!({"": {"child": "old"}, "child": "sibling"});
+        let expected = json!({"": {"child": "new"}, "child": "sibling"});
+
+        let (body, warnings) = apply(
+            original.clone(),
+            vec![typed_replacement(
+                "$['']['child']",
+                name_type("jsonpath"),
+                yaml(json!("new")),
+            )],
+            &eval,
+        );
+        assert_eq!(body, expected);
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // The same pointer written directly through the JSON Pointer arm.
+        let (body, warnings) = apply(
+            original,
+            vec![replacement("//child", yaml(json!("new")))],
+            &eval,
+        );
+        assert_eq!(body, expected);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    fn jsonpath_selector_yaml(context: &str, selector: &str) -> serde_yaml_ng::Value {
+        yaml(json!({"context": context, "selector": selector, "type": "jsonpath"}))
+    }
+
+    #[test]
+    fn hard_jsonpath_failure_in_a_nested_replacement_value_skips_only_that_replacement() {
+        let eval = evaluator_with_inputs(BTreeMap::from([(
+            "document".to_string(),
+            json!({"value": null, "n": 7}),
+        )]));
+        let oversized = format!("${}", ".a".repeat(129));
+        let (body, warnings) = apply(
+            json!({
+                "first": "old",
+                "nested": "old",
+                "context": "old",
+                "null": "old",
+                "zero": "old",
+                "last": "old"
+            }),
+            vec![
+                replacement("/first", yaml(json!("new"))),
+                // A resource failure inside a map inside an array: the value
+                // is a hard failure, so nothing is written at /nested.
+                replacement(
+                    "/nested",
+                    yaml(
+                        json!([{"inner": jsonpath_selector_yaml("$inputs.document", &oversized)}]),
+                    ),
+                ),
+                // A valid query whose context is missing is failed resolution
+                // for replacement use.
+                replacement("/context", jsonpath_selector_yaml("$inputs.absent", "$.n")),
+                // A legitimately selected null is one match and is written.
+                replacement(
+                    "/null",
+                    jsonpath_selector_yaml("$inputs.document", "$.value"),
+                ),
+                // Zero matches keep their normalization: null plus the
+                // existing no-match warning, still written.
+                replacement(
+                    "/zero",
+                    jsonpath_selector_yaml("$inputs.document", "$.absent"),
+                ),
+                replacement("/last", yaml(json!("new"))),
+            ],
+            &eval,
+        );
+
+        assert_eq!(
+            body,
+            json!({
+                "first": "new",
+                "nested": "old",
+                "context": "old",
+                "null": null,
+                "zero": null,
+                "last": "new"
+            })
+        );
+        let skipped: Vec<&String> = warnings
+            .iter()
+            .filter(|warning| warning.contains("replacement skipped"))
+            .collect();
+        assert_eq!(skipped.len(), 2, "{warnings:?}");
+        assert!(
+            skipped[0].starts_with("requestBody.replacements[1]:"),
+            "{skipped:?}"
+        );
+        assert!(
+            skipped[1].starts_with("requestBody.replacements[2]:"),
+            "{skipped:?}"
+        );
+        assert_warning_contains(
+            &warnings,
+            "JSONPath query structural characters limit of 128 exceeded",
+        );
+        assert_warning_contains(
+            &warnings,
+            "requestBody.replacements[2]: $inputs.absent: input \"absent\" not found in context",
+        );
+        assert_warning_contains(
+            &warnings,
+            "requestBody.replacements[4]: $.absent: selector matched no values",
+        );
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.starts_with("requestBody.replacements[3]:")),
+            "a selected null is not a failure: {warnings:?}"
+        );
+    }
+
+    fn jsonpath_selector_object(
+        context: &str,
+        selector: &str,
+        type_: SelectorType,
+    ) -> SelectorObject {
+        SelectorObject {
+            context: context.to_string(),
+            selector: selector.to_string(),
+            type_,
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn jsonpath_selector_admission_precedes_context_resolution() {
+        // No inputs: `$inputs.absent` resolves to null with a diagnostic.
+        let eval = evaluator();
+        for (selector, type_, needle) in [
+            (
+                "$.a",
+                object_type("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+                "unsupported JSONPath version \"draft-goessner-dispatch-jsonpath-00\"",
+            ),
+            ("$.a[", name_type("jsonpath"), "invalid JSONPath syntax"),
+        ] {
+            let object = jsonpath_selector_object("$inputs.absent", selector, type_);
+            let (value, warnings) = resolve_selector(&object, &eval);
+            assert_eq!(value, Value::Null);
+            assert_eq!(warnings.len(), 1, "{selector}: {warnings:?}");
+            assert!(
+                warnings[0].message.contains(needle),
+                "{selector}: {warnings:?}"
+            );
+        }
+
+        // A valid query over a missing context keeps the context diagnostic.
+        let valid = jsonpath_selector_object("$inputs.absent", "$.a", name_type("jsonpath"));
+        let (value, warnings) = resolve_selector(&valid, &eval);
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0]
+                .message
+                .contains("input \"absent\" not found in context"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn jsonpath_selector_reads_keep_zero_one_many_and_selected_null_distinct() {
+        let eval = evaluator_with_inputs(BTreeMap::from([(
+            "document".to_string(),
+            json!({"items": [{"id": 1}, {"id": 2}], "value": null}),
+        )]));
+        for (selector, expected, warning_count) in [
+            ("$.items[0].id", json!(1), 0),
+            ("$.items[*].id", json!([1, 2]), 0),
+            ("$..id", json!([1, 2]), 0),
+            ("$.items[1:].id", json!(2), 0),
+            ("$.value", Value::Null, 0),
+            ("$.absent", Value::Null, 1),
+        ] {
+            let object =
+                jsonpath_selector_object("$inputs.document", selector, name_type("jsonpath"));
+            let (value, warnings) = resolve_selector(&object, &eval);
+            assert_eq!(value, expected, "{selector}");
+            assert_eq!(warnings.len(), warning_count, "{selector}: {warnings:?}");
+        }
     }
 
     #[test]
@@ -1135,6 +1457,28 @@ mod tests {
 
         assert_eq!(body, original);
         assert_warning_contains(&warnings, "unsupported JSONPath version");
+    }
+
+    #[test]
+    fn goessner_jsonpath_target_is_rejected_before_the_body_is_queried() {
+        let eval = evaluator();
+        let original = json!({"a": 1});
+        let (body, warnings) = apply(
+            original.clone(),
+            vec![typed_replacement(
+                "$.a",
+                object_type("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+                yaml(json!(2)),
+            )],
+            &eval,
+        );
+
+        assert_eq!(body, original);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_warning_contains(
+            &warnings,
+            "unsupported JSONPath version \"draft-goessner-dispatch-jsonpath-00\"",
+        );
     }
 
     #[test]

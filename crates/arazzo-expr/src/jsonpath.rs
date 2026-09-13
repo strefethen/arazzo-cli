@@ -92,6 +92,20 @@ pub struct JsonPathMatch<'a> {
     pub pointer: String,
 }
 
+/// Value and cardinality produced by a JSONPath selection.
+///
+/// The nodelist is normalized the way Arazzo consumers read it: zero nodes
+/// collapse to `Null`, one node is the selected value itself, and several
+/// nodes become an array in query order with repeated occurrences kept.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonPathSelection {
+    /// `Null` for zero matches, the selected value for one match, or an array
+    /// preserving query order for multiple matches.
+    pub value: Value,
+    /// Number of nodes selected before cardinality collapse.
+    pub match_count: usize,
+}
+
 /// A validated RFC 9535 query that owns its parsed representation.
 #[derive(Debug, Clone)]
 pub struct JsonPathQuery {
@@ -143,6 +157,49 @@ impl JsonPathQuery {
             })
             .collect())
     }
+
+    /// Evaluate the query against `context` and normalize the nodelist into
+    /// a [`JsonPathSelection`].
+    ///
+    /// The same located query as [`JsonPathQuery::query`] supplies the nodes,
+    /// so the cardinality and the collapsed value can never disagree.
+    pub fn select(&self, context: &Value) -> Result<JsonPathSelection, JsonPathError> {
+        let matches = self.query(context)?;
+        let match_count = matches.len();
+        let value = match matches.as_slice() {
+            [] => Value::Null,
+            [single] => single.value.clone(),
+            many => Value::Array(many.iter().map(|found| found.value.clone()).collect()),
+        };
+        Ok(JsonPathSelection { value, match_count })
+    }
+}
+
+/// Select JSON nodes with the default RFC 9535 dialect and normalize them.
+///
+/// Convenience over [`JsonPathQuery::parse`] with no explicit version followed
+/// by [`JsonPathQuery::select`]. Callers holding a declared version prepare
+/// the query themselves so admission and evaluation share one owner.
+pub fn select_json_path(root: &Value, selector: &str) -> Result<JsonPathSelection, JsonPathError> {
+    JsonPathQuery::parse(selector, None)?.select(root)
+}
+
+/// Resolve a default-dialect RFC 9535 query to the RFC 6901 pointer of every
+/// selected location, in query order with repeated occurrences kept.
+///
+/// Companion to [`select_json_path`] for callers that mutate through a JSON
+/// Pointer applier: the pointers come from the same located query as the
+/// values, never from a second walk. The root selector `$` resolves to the
+/// empty pointer.
+pub fn resolve_json_path_pointers(
+    root: &Value,
+    selector: &str,
+) -> Result<Vec<String>, JsonPathError> {
+    Ok(JsonPathQuery::parse(selector, None)?
+        .query(root)?
+        .into_iter()
+        .map(|found| found.pointer)
+        .collect())
 }
 
 /// Apply the byte and structural budgets to a raw expression.

@@ -3795,13 +3795,11 @@ workflows:
     let warning = warnings[0]
         .as_str()
         .unwrap_or_else(|| panic!("expected string warning: {body}"));
+    // The GJSON form is not RFC 9535 syntax, so the shared query owner
+    // rejects it at parse time and the body is left untouched.
     assert!(
-        warning.contains("GJSON"),
-        "warning should name GJSON: {warning}"
-    );
-    assert!(
-        warning.contains("not JSONPath"),
-        "warning should identify non-JSONPath syntax: {warning}"
+        warning.contains("invalid JSONPath syntax"),
+        "warning should report the RFC 9535 syntax rejection: {warning}"
     );
 }
 

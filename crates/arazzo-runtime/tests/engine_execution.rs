@@ -3475,7 +3475,7 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
                         "invalid".to_string(),
                         OutputValue::Selector(selector(
                             "$response.body",
-                            "$.items[0:1]",
+                            "$.items[",
                             SelectorType::Name("jsonpath".to_string()),
                         )),
                     ),
@@ -3522,7 +3522,7 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
     assert!(trace
         .warnings
         .iter()
-        .any(|warning| warning.contains("array slices are not supported")));
+        .any(|warning| warning.contains("invalid JSONPath syntax")));
     // Decision 1 (ac-bd441): bare-number XPath version tokens are not in the
     // §5.8.12.1 table and are invalid metadata, not a capability gap.
     assert!(trace

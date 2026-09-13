@@ -9,7 +9,10 @@ use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use arazzo_expr::{JsonPathError, JsonPathMatch, JsonPathQuery};
+use arazzo_expr::{
+    resolve_json_path_pointers, select_json_path, JsonPathError, JsonPathMatch, JsonPathQuery,
+    JsonPathSelection,
+};
 use serde_json::{json, Value};
 
 const QUERY_BYTE_LIMIT: usize = 16_384;
@@ -598,4 +601,185 @@ fn excessive_nesting_reproducer_is_rejected_in_a_bounded_child_process() {
         !stderr.contains("overflowed its stack"),
         "child stderr:\n{stderr}"
     );
+}
+
+// ── Facade wrappers ─────────────────────────────────────────────────
+//
+// `select_json_path` and `resolve_json_path_pointers` keep their names and
+// value/count shape but delegate to the query owner above: default RFC 9535
+// dialect, one located query, `JsonPathError` for every failure.
+
+fn selected(document: &Value, selector: &str) -> JsonPathSelection {
+    match select_json_path(document, selector) {
+        Ok(selection) => selection,
+        Err(error) => panic!("{selector:?} failed to select: {error}"),
+    }
+}
+
+fn located(document: &Value, selector: &str) -> Vec<String> {
+    match resolve_json_path_pointers(document, selector) {
+        Ok(pointers) => pointers,
+        Err(error) => panic!("{selector:?} failed to resolve pointers: {error}"),
+    }
+}
+
+#[test]
+fn select_json_path_normalizes_cardinality_in_query_order() {
+    let document = json!({
+        "items": [
+            {"id": 1, "enabled": true},
+            {"id": 2, "enabled": false},
+            {"id": 3, "enabled": true}
+        ],
+        "value": null
+    });
+    let table: Vec<(&str, Value, usize)> = vec![
+        ("$", document.clone(), 1),
+        ("$.items[0].id", json!(1), 1),
+        ("$.items[*].id", json!([1, 2, 3]), 3),
+        ("$.items[?(@.enabled == true)].id", json!([1, 3]), 2),
+        ("$.items[?@.enabled == false].id", json!(2), 1),
+        // Repeated occurrences are kept, in query order.
+        ("$.items[2,0,2].id", json!([3, 1, 3]), 3),
+        // Descent and slices are RFC features the retired subset rejected.
+        ("$.items..id", json!([1, 2, 3]), 3),
+        ("$.items[0:2].id", json!([1, 2]), 2),
+        ("$.items[-1:].id", json!(3), 1),
+        // A selected null is one match; zero matches collapse to null.
+        ("$.value", Value::Null, 1),
+        ("$.missing", Value::Null, 0),
+        ("$.items[?@.id > 5].id", Value::Null, 0),
+    ];
+    for (expression, value, match_count) in table {
+        let selection = selected(&document, expression);
+        assert_eq!(selection.value, value, "{expression}");
+        assert_eq!(selection.match_count, match_count, "{expression}");
+    }
+}
+
+#[test]
+fn resolve_json_path_pointers_returns_locations_in_order_with_special_keys() {
+    let document = json!({
+        "items": [
+            {"sku": "ABC123", "quantity": 1},
+            {"sku": "XYZ999", "quantity": 5}
+        ],
+        "tags": [{"tag": "#x", "q": 2}],
+        "#": {"q": 1},
+        "a/b": {"c~d": 1},
+        "O'Reilly": 1,
+        "雪": 1,
+        "": {"child": 1, "": 2},
+        "child": 1
+    });
+    let table: Vec<(&str, Vec<&str>)> = vec![
+        ("$", vec![""]),
+        ("$.items[0].quantity", vec!["/items/0/quantity"]),
+        (
+            "$.items[?(@.sku=='ABC123')].quantity",
+            vec!["/items/0/quantity"],
+        ),
+        ("$.items[*].sku", vec!["/items/0/sku", "/items/1/sku"]),
+        (
+            "$.items[1,0,1].sku",
+            vec!["/items/1/sku", "/items/0/sku", "/items/1/sku"],
+        ),
+        (
+            "$..quantity",
+            vec!["/items/0/quantity", "/items/1/quantity"],
+        ),
+        ("$.items[1:].sku", vec!["/items/1/sku"]),
+        ("$.missing", vec![]),
+        // `#` is an ordinary character inside names and string literals.
+        ("$['#'].q", vec!["/#/q"]),
+        ("$.tags[?(@.tag=='#x')].q", vec!["/tags/0/q"]),
+        ("$['a/b']['c~d']", vec!["/a~1b/c~0d"]),
+        (r"$['O\'Reilly']", vec!["/O'Reilly"]),
+        (r#"$["雪"]"#, vec!["/雪"]),
+        // Empty-name segments survive as empty reference tokens.
+        ("$['']['child']", vec!["//child"]),
+        ("$['']['']", vec!["//"]),
+    ];
+    for (expression, expected) in table {
+        let pointers = located(&document, expression);
+        assert_eq!(pointers, expected, "{expression}");
+        for pointer in &pointers {
+            assert!(
+                document.pointer(pointer).is_some(),
+                "{expression}: {pointer:?} does not resolve"
+            );
+        }
+    }
+}
+
+#[test]
+fn wrappers_share_the_owner_and_report_json_path_errors() {
+    let document = json!({"items": [1, 2, 3]});
+    // Malformed syntax, every GJSON-only form included, is a parse error for
+    // both wrappers; the error type is the owner's.
+    for malformed in [
+        "",
+        "$.items[",
+        "@.items",
+        "$[?(",
+        "$.items.#",
+        "$.items.#.q",
+        "$.items.#(sku==\"A\").q",
+        "$.items.#(sku==\"A\")#.q",
+        "$.items[#(sku==\"A\")].q",
+    ] {
+        let selection: JsonPathError = match select_json_path(&document, malformed) {
+            Ok(selection) => panic!("{malformed:?} unexpectedly selected {selection:?}"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(selection, JsonPathError::InvalidSyntax { .. }),
+            "{malformed:?}: {selection:?}"
+        );
+        let pointers: JsonPathError = match resolve_json_path_pointers(&document, malformed) {
+            Ok(pointers) => panic!("{malformed:?} unexpectedly resolved {pointers:?}"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(pointers, JsonPathError::InvalidSyntax { .. }),
+            "{malformed:?}: {pointers:?}"
+        );
+    }
+
+    // Admission limits and evaluation failures reach the wrappers unchanged.
+    let oversized = format!("${}", ".a".repeat(QUERY_STRUCTURAL_LIMIT + 1));
+    assert!(matches!(
+        select_json_path(&document, &oversized),
+        Err(JsonPathError::ResourceLimit {
+            resource: "query structural characters",
+            limit: QUERY_STRUCTURAL_LIMIT
+        })
+    ));
+    assert!(matches!(
+        resolve_json_path_pointers(&document, &oversized),
+        Err(JsonPathError::ResourceLimit { .. })
+    ));
+    let regex_document = json!([{"value": "a"}]);
+    assert!(matches!(
+        select_json_path(&regex_document, "$[?match(@.value, 'a{1000000000}')]"),
+        Err(JsonPathError::Evaluation { .. })
+    ));
+    assert!(matches!(
+        resolve_json_path_pointers(&regex_document, "$[?!match(@.value, 'a{1000000000}')]"),
+        Err(JsonPathError::Evaluation { .. })
+    ));
+
+    // A versioned query prepared by a typed consumer is the same owner and
+    // the same normalization as the default-dialect wrapper.
+    let typed = match JsonPathQuery::parse("$.items[1:]", Some("rfc9535")) {
+        Ok(query) => query,
+        Err(error) => panic!("versioned parse failed: {error}"),
+    };
+    let via_query = match typed.select(&document) {
+        Ok(selection) => selection,
+        Err(error) => panic!("versioned select failed: {error}"),
+    };
+    assert_eq!(via_query, selected(&document, "$.items[1:]"));
+    assert_eq!(via_query.value, json!([2, 3]));
+    assert_eq!(via_query.match_count, 2);
 }
