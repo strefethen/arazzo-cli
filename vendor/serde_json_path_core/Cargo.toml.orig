@@ -1,0 +1,33 @@
+[package]
+name = "serde_json_path_core"
+version = "0.2.2"
+edition = "2021"
+license = "MIT"
+authors = ["Trevor Hilton <trevor.hilton@gmail.com>"]
+description = "Core types for the serde_json_path crate"
+repository = "https://github.com/hiltontj/serde_json_path"
+readme = "README.md"
+keywords = ["json", "jsonpath", "json_path", "serde", "serde_json"]
+
+[lib]
+
+[features]
+default = ["functions"]
+trace = ["dep:tracing"]
+functions = []
+
+[dependencies]
+# crates.io crates:
+inventory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dependencies.tracing]
+workspace = true
+optional = true
+
+
+[dev-dependencies]
+serde_json_path = { path = "../serde_json_path" }
+

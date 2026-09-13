@@ -12,8 +12,16 @@ publish = false
 workspace = true
 
 [dependencies]
+# RFC 9485 I-Regexp for the JSONPath match()/search() functions. Immutable
+# public revision whose library, build, grammar and dependency bytes equal the
+# qualified 8bb2186a14f23029f7ec62c8d766d825dc343480.
+iregexp = { package = "iregexp-rs", git = "https://github.com/strefethen/iregexp-rs", rev = "e22a35b0d2c25f942f1e4e375525be10d342b7f6" }
 regex = "1"
 serde_json = "1"
+# Qualified RFC 9535 backend: no built-in regex functions, custom ones only.
+serde_json_path = { version = "=0.7.2", default-features = false, features = ["functions"] }
+# Named by the #[serde_json_path::function] expansion; same qualified pin.
+serde_json_path_macros = "=0.1.6"
 
 [dev-dependencies]
 criterion = { workspace = true }

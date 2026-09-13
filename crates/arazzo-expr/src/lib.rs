@@ -31,6 +31,10 @@ use serde_json::{json, Number, Value};
 
 mod matches_operator;
 
+pub mod jsonpath;
+
+pub use jsonpath::{JsonPathError, JsonPathMatch, JsonPathQuery};
+
 /// Error produced when evaluating an Arazzo dot-notation path against a JSON value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathError {

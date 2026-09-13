@@ -9,6 +9,8 @@ members = [
   "crates/arazzo-debug-adapter",
   "crates/arazzo-mcp",
 ]
+# Vendored dependency unit consumed through [patch.crates-io], not a member.
+exclude = ["vendor/serde_json_path_core"]
 resolver = "2"
 
 [workspace.package]
@@ -47,3 +49,9 @@ unwrap_used = "deny"
 expect_used = "deny"
 dbg_macro = "deny"
 todo = "deny"
+
+[patch.crates-io]
+# Published serde_json_path_core 0.2.2 plus the qualified eight-line recursive
+# numeric-equality repair. Provenance, verification and the removal criterion
+# live in vendor/serde_json_path_core/PATCHES.md.
+serde_json_path_core = { path = "vendor/serde_json_path_core" }

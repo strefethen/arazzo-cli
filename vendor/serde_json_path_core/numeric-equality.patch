@@ -1,0 +1,17 @@
+--- a/src/spec/selector/filter.rs
++++ b/src/spec/selector/filter.rs
+@@ -258,6 +258,14 @@
+ fn value_equal_to(left: &Value, right: &Value) -> bool {
+     match (left, right) {
+         (Value::Number(l), Value::Number(r)) => number_equal_to(l, r),
++        (Value::Array(l), Value::Array(r)) => {
++            l.len() == r.len() && l.iter().zip(r).all(|(l, r)| value_equal_to(l, r))
++        }
++        (Value::Object(l), Value::Object(r)) => {
++            l.len() == r.len()
++                && l.iter()
++                    .all(|(key, l)| r.get(key).is_some_and(|r| value_equal_to(l, r)))
++        }
+         _ => left == right,
+     }
+ }
