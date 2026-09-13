@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::{DebugController, DebugScopes, StepCheckpoint};
-use arazzo_expr::{is_truthy, EvalContext, ExpressionEvaluator};
+use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{
     classify_operation_id, classify_operation_path, ActionType, ArazzoSpec, OnAction,
     OperationIdTarget, OperationPathForm, OutputValue, ParamLocation, Parameter, SelectorObject,
@@ -87,7 +87,7 @@ pub use events::{
     TraceStepRecord, TransportWarning, TransportWarningKind,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
-use jsonpath::{evaluate_jsonpath_condition, JsonPathOutcome};
+use jsonpath::jsonpath_condition_holds;
 use payload::{
     apply_replacements, json_type_name, resolve_payload_detailed, resolve_selector,
     resolve_value_source, to_json_path, value_to_string,

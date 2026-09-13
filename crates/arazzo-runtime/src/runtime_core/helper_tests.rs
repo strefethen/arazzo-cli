@@ -29,9 +29,13 @@ fn typed_criterion(type_: CriterionType, context: &str, condition: &str) -> Succ
     }
 }
 
+/// Explicit `rfc9535`: the shared JSONPath owner evaluates only RFC 9535, so
+/// the Goessner draft this fixture used to declare now fails every criterion
+/// before the expression is examined. Keeping the object form exercises the
+/// explicit-version path alongside the omitted form used elsewhere.
 fn jsonpath_criterion(context: &str, condition: &str) -> SuccessCriterion {
     typed_criterion(
-        expression_criterion_type("jsonpath", "draft-goessner-dispatch-jsonpath-00"),
+        expression_criterion_type("jsonpath", "rfc9535"),
         context,
         condition,
     )
@@ -207,6 +211,11 @@ fn extract_step_refs_and_control_flow() {
     assert!(has_control_flow(&wf_with_flow));
 }
 
+/// RFC 9535 §2.3.5: a filter over the root object iterates its member values,
+/// so `@` inside `$[?…]` is the `items` array, not the root object the old
+/// evaluator treated as its own single candidate. The nested filter therefore
+/// runs directly over `@`, and the parenthesis inside the string literal is
+/// the parser's to handle.
 #[test]
 fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
     let cache = RegexCache::new();
@@ -217,7 +226,7 @@ fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
 
     let jp_count = jsonpath_criterion(
         "$response.body",
-        "$[?(count(@.items[?(@.type == 'foo)bar')]) > 0)]",
+        "$[?(count(@[?(@.type == 'foo)bar')]) > 0)]",
     );
     assert!(
         evaluate_criterion(&jp_count, &eval, None, &cache),
@@ -225,6 +234,10 @@ fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
     );
 }
 
+/// Same RFC 9535 §2.3.5 member-value iteration as above: `@` is the `items`
+/// array. `count()` still counts nodelist cardinality, and the slice case that
+/// the old subset rejected is an ordinary RFC 9535 §2.3.4 slice selector that
+/// selects one node.
 #[test]
 fn evaluate_jsonpath_count_predicate_counts_nodelist_cardinality() {
     let cache = RegexCache::new();
@@ -240,21 +253,24 @@ fn evaluate_jsonpath_count_predicate_counts_nodelist_cardinality() {
 
     let matching_object = jsonpath_criterion(
         "$response.body",
-        "$[?(count(@.items[?(@.type == 'match')]) == 1)]",
+        "$[?(count(@[?(@.type == 'match')]) == 1)]",
     );
     assert!(evaluate_criterion(&matching_object, &eval, None, &cache));
 
     let missing = jsonpath_criterion(
         "$response.body",
-        "$[?(count(@.items[?(@.type == 'missing')]) == 0)]",
+        "$[?(count(@[?(@.type == 'missing')]) == 0)]",
     );
     assert!(evaluate_criterion(&missing, &eval, None, &cache));
 
-    let indexed = jsonpath_criterion("$response.body", "$[?(count(@.items[0]) == 1)]");
+    let indexed = jsonpath_criterion("$response.body", "$[?(count(@[0]) == 1)]");
     assert!(evaluate_criterion(&indexed, &eval, None, &cache));
 
-    let unsupported = jsonpath_criterion("$response.body", "$[?(count(@.items[0:1]) == 1)]");
-    assert!(!evaluate_criterion(&unsupported, &eval, None, &cache));
+    let sliced = jsonpath_criterion("$response.body", "$[?(count(@[0:1]) == 1)]");
+    assert!(
+        evaluate_criterion(&sliced, &eval, None, &cache),
+        "an RFC 9535 slice selects one node here; it is no longer an unsupported construct"
+    );
 }
 
 #[test]

@@ -259,6 +259,10 @@ mod tests {
             content_type: ContentType::Json,
             redirects: Vec::new(),
         };
+        // Explicit `rfc9535`: the shared JSONPath owner evaluates only
+        // RFC 9535, so the Goessner draft this fixture used to declare now
+        // fails the criterion before the expression is examined and the
+        // action would not match.
         let typed = vec![OnAction {
             name: "typed".to_string(),
             type_: Some(ActionType::Goto),
@@ -268,7 +272,7 @@ mod tests {
                 condition: "$.pets[0]".to_string(),
                 type_: Some(CriterionType::ExpressionType(CriterionExpressionType {
                     type_: "jsonpath".to_string(),
-                    version: "draft-goessner-dispatch-jsonpath-00".to_string(),
+                    version: "rfc9535".to_string(),
                     ..CriterionExpressionType::default()
                 })),
                 ..SuccessCriterion::default()
