@@ -17,6 +17,14 @@ pub(super) enum JsonPathOutcome {
 ///   operators (`==`, `!=`, `>`, `<`, `>=`, `<=`), and `count(...)`
 /// - bare existence checks (`$.name`, `@.name`)
 ///
+/// A bare path decides on the **cardinality of the selected nodelist**, which
+/// is the whole of the rule in Arazzo v1.1.0 §5.8.11.4.3: a non-empty nodelist
+/// (one or more nodes) passes, an empty nodelist (zero nodes) fails. No value
+/// is inspected, so a single matched node holding `false`, `0`, `""`, or
+/// `null` passes. This deliberately differs from the XPath arm one section
+/// later (§5.8.11.4.4), which does carry a type truth table and delegates to
+/// Effective Boolean Value; JSONPath has no such step.
+///
 /// Unsupported constructs — including recursive descent (`..`) and array
 /// slices (`[a:b]`) — return [`JsonPathOutcome::Unsupported`] with a diagnostic
 /// instead of silently evaluating to `false`.
@@ -42,7 +50,10 @@ pub(super) fn evaluate_jsonpath_condition(
     }
 
     match arazzo_expr::select_json_path(context_value, trimmed) {
-        Ok(selection) => JsonPathOutcome::Matched(is_truthy(&selection.value)),
+        // §5.8.11.4.3 is cardinality-only: `match_count` is the nodelist size
+        // before `selection.value` collapses zero/one/many to null/scalar/array,
+        // so the collapsed value never reaches the decision.
+        Ok(selection) => JsonPathOutcome::Matched(selection.match_count > 0),
         Err(err) => JsonPathOutcome::Unsupported(err.to_string()),
     }
 }
@@ -488,6 +499,45 @@ mod tests {
             }
             JsonPathOutcome::Matched(result) => {
                 panic!("expected unsupported diagnostic, got Matched({result})")
+            }
+        }
+    }
+
+    /// §5.8.11.4.3: a bare path passes on a non-empty nodelist and fails on an
+    /// empty one. The four values below are exactly the ones where nodelist
+    /// cardinality and JSON truthiness diverge — each is one node, so each
+    /// passes despite being falsy.
+    #[test]
+    fn bare_path_decides_on_nodelist_cardinality_not_truthiness() {
+        let context = json!({"data": {
+            "active": false,
+            "count": 0,
+            "name": "",
+            "missing": null,
+        }});
+        for condition in [
+            "$.data.active",
+            "$.data.count",
+            "$.data.name",
+            "$.data.missing",
+        ] {
+            match evaluate(&context, condition) {
+                JsonPathOutcome::Matched(result) => {
+                    assert!(result, "{condition}: one node selected must pass")
+                }
+                JsonPathOutcome::Unsupported(reason) => {
+                    panic!("{condition} should stay supported, got: {reason}")
+                }
+            }
+        }
+
+        // The negative half of the same rule: an absent key selects zero nodes.
+        match evaluate(&context, "$.data.absent") {
+            JsonPathOutcome::Matched(result) => {
+                assert!(!result, "an empty nodelist must fail")
+            }
+            JsonPathOutcome::Unsupported(reason) => {
+                panic!("absent key should stay supported, got: {reason}")
             }
         }
     }

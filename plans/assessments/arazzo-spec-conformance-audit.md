@@ -9,7 +9,7 @@
 Eleven deviations in the original pass, F1–F11 below. Two cause a conformant
 document to fail outright or silently misbehave; the rest are unenforced
 constraints, ignored fields, non-conformant output, and undocumented
-extensions. Later passes added F12–F23 — see the addenda at the end, which also
+extensions. Later passes added F12–F24 — see the addenda at the end, which also
 record which findings have since been closed.
 
 The single most important structural fact: **our `operationPath` idiom and our
@@ -817,3 +817,82 @@ $ echo $?
 Recorded rather than fixed: the closure is the same one-guard shape as F22 (a
 null check ahead of the stringification), left as a follow-up to keep the F22
 change atomic.
+
+## Addendum — 2026-09-13 (ac-58896 JSONPath criterion cardinality)
+
+One deviation in the sibling of the clause F22 covered, found while auditing
+the XPath criterion arm after `301174a` (`fix: decide xpath criteria by
+effective boolean value`). Same defect class — a typed result collapsed to a
+JSON value before the truth decision — surviving in the JSONPath arm that
+change did not touch. Grounded in the vendored `spec/arazzo/v1.1.0.html`
+§5.8.11.4.3.
+
+| # | Deviation | Severity | Surface |
+|---|---|---|---|
+| F24 | JSONPath criterion decided by value truthiness, not nodelist cardinality | P1 | runtime |
+
+### F24. JSONPath criterion decided by value truthiness
+
+**Spec** (§5.8.11.4.3 JSONPath Conditions): *"JSONPath expressions return a
+NodesType (a nodelist, which is a sequence of zero or more nodes). The
+condition evaluates to:"* — *"A condition passes (truthy) when the JSONPath
+expression returns a non-empty nodelist (one or more nodes)."* / *"A condition
+fails (falsy) when the JSONPath expression returns an empty nodelist (zero
+nodes)."* The section inspects no values anywhere. That is deliberate: the
+XPath section one clause later (§5.8.11.4.4) does carry a four-way type truth
+table and delegates to Effective Boolean Value. JSONPath has no EBV step.
+
+**We did:** the bare-path arm of `evaluate_jsonpath_condition`
+(`crates/arazzo-runtime/src/runtime_core/jsonpath.rs`) discarded the
+cardinality it was handed and asked the collapsed value whether it was truthy:
+
+```rust
+Ok(selection) => JsonPathOutcome::Matched(is_truthy(&selection.value)),
+```
+
+`arazzo_expr::select_json_path` returns both halves — `JsonPathSelection`
+carries `match_count` ("Number of nodes selected before cardinality collapse",
+computed by `count_resolved_path_nodes`) alongside the collapsed `value`. The
+correct signal was present at the call site and unused.
+
+The two diverge because the `PathToken::Field` arm of `apply_path_token`
+(`crates/arazzo-expr/src/lib.rs`) pushes a node on key *presence*
+(`obj.get(name)`), independent of what the key holds. So a one-node nodelist
+whose node holds `false`, `0`, `""`, or `null` was reported as a failed
+criterion. Those four are the whole divergence: every other JSON value is
+already truthy and already passed, which is why this went unnoticed. The
+unsupported-syntax arm, the filter-predicate arm, and the null-context guard
+in `criteria.rs` were correct and are unchanged.
+
+**Observed** — a step whose only criterion is
+`{context: $response.body, condition: $.data.active, type: jsonpath}` against a
+body of `{"data":{"active":false,"count":0,"name":"","missing":null}}`, driven
+through the engine against a local `tiny_http` server. The specification says
+the criterion passes: the nodelist holds one node. Against the pre-fix arm the
+workflow failed with
+
+```
+step active: success criteria not met (status=200, body={"data":{"active":false,"count":0,"missing":null,"name":""}})
+```
+
+and the same failure appeared for `$.data.count`, `$.data.name`, and
+`$.data.missing`. After the fix all four steps succeed. That regression is
+pinned by `single_node_nodelist_passes_for_each_falsy_value` and
+`each_falsy_value_passes_in_isolation` in
+`crates/arazzo-runtime/tests/jsonpath_semantics.rs`, both verified to fail
+against the pre-fix arm and pass against the fixed one.
+
+**F24 is closed** by the change this addendum ships with: the bare-path arm
+decides on `selection.match_count > 0`. `is_truthy` is unchanged and remains
+correct for the `simple` and `regex` arms and for the values inside JSONPath
+filter predicates; only this criterion call site stopped consulting it.
+
+**Scope note.** The negative half of the rule is pinned separately
+(`empty_nodelist_fails_the_step`), as is the null-context guard
+(`null_context_fails_without_evaluating`, using the root selector `$` so the
+failure can only come from the guard). The diagnostic naming an unsupported
+construct stays pinned at unit level; surfacing that text through the step
+failure rather than a generic "success criteria not met" is a separate
+deviation, not this one. Nothing here narrows or widens the supported JSONPath
+subset — F18 (undifferentiated JSONPath version semantics) and F20 (GJSON
+forms accepted by typed JSONPath read surfaces) are untouched.
