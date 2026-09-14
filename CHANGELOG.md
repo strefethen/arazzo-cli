@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Typed JSONPath — `type: jsonpath` success criteria, Selector Objects, and
+`targetSelectorType: jsonpath` payload replacement targets — now executes as
+RFC 9535 on one shared engine, replacing two handwritten subsets.
+
+**Upgrade if** you use `type: jsonpath` anywhere: queries that previously
+failed as "unsupported JSONPath" now run, filter and comparison semantics
+follow the RFC, a criterion is decided by nodelist cardinality rather than
+truthiness, and a declared `draft-goessner-dispatch-jsonpath-00` version is
+rejected instead of quietly evaluated as something else.
+
+- **One engine** — criteria, Selector Objects, and replacement targets share
+  a single RFC 9535 query owner; both handwritten implementations are gone,
+  with no engine-selection flag, alias, or fallback.
+- **The whole query language** — recursive descent (`$..sku`), slices
+  (`$.items[0:2]`), unions, negative indices, and the standard function
+  extensions `length()`, `count()`, `value()`, `match()`, and `search()`.
+- **RFC 9535 only** — an omitted version or `rfc9535` executes; every other
+  declared JSONPath version, including the expired Goessner draft, is a
+  permanent capability limit and is rejected before evaluation.
+- **Explicit resource budgets** — conservative admission limits on query size,
+  query structure, and context nesting, applied before parsing or evaluation.
+- **Rust 1.88** — the minimum supported Rust version for the workspace.
+
+### Added
+
+#### Workflow Engine
+- `arazzo_expr::JsonPathQuery` is the single owner of typed JSONPath: it
+  admits the declared version and the resource budgets, validates the complete
+  expression before any context is resolved, and runs one *located* query so a
+  selected value and its RFC 6901 pointer always come from the same walk.
+- `match()` and `search()` evaluate through an I-Regexp matcher and accept a
+  literal pattern or a pattern drawn from the queried document. An invalid
+  pattern is logical false; a resource or backend failure invalidates the whole
+  query, including under negation, instead of degrading to false.
+- Admission limits, checked before the parser and the evaluator run: 16,384
+  UTF-8 bytes per query, 128 combined occurrences of the raw bytes `.` `[` `(`
+  `!` `&` `|` in a query, and 128 nested containers in the queried context.
+  Each rejection names the resource and the limit. These are explicit budgets,
+  not a universal CPU, heap, or result-size quota, and this release does not
+  claim 100% RFC 9535 Compliance Test Suite conformance.
+
+### Changed
+
+#### Workflow Engine
+- Recursive descent and array slices no longer raise an "unsupported JSONPath"
+  diagnostic on typed surfaces; they evaluate under RFC 9535 semantics, as do
+  filters, unions, negative indices, and the standard function extensions.
+- A declared JSONPath version other than `rfc9535` is rejected before
+  evaluation: a criterion fails its step with an error, a selector resolves to
+  `null` with one warning, and a replacement leaves the body unchanged with a
+  warning. `validate` has no JSONPath version advisory, so such a declaration
+  still validates as document metadata and is rejected only at run time.
+- A JSONPath failure in a replacement value — including a nested Selector
+  Object — skips that replacement and leaves the body unchanged, rather than
+  writing `null`. Earlier replacements stay applied and later ones continue.
+- The legacy GJSON-flavored dot-path traversal used by `$response.body...`
+  runtime expressions is unchanged and remains an arazzo-cli extension. It is
+  a separate code path; its syntax is rejected on every typed JSONPath surface.
+
+#### Quality
+- Raise the workspace minimum supported Rust version to 1.88.
+- `serde_json_path` 0.7.2 is pinned with `serde_json_path_core` vendored under
+  `vendor/serde_json_path_core` for one eight-line recursive numeric-equality
+  repair; `PATCHES.md` records its provenance, checksum, and removal criterion.
+
+### Fixed
+
+#### Workflow Engine
+- A `type: jsonpath` criterion is decided by nodelist cardinality, per Arazzo
+  v1.1.0 §5.8.11.4.3: one or more selected nodes pass and zero fail, so a
+  single node holding `false`, `0`, `""`, or `null` now passes instead of being
+  read for truthiness. A null or undefined context still fails.
+- A run of JSONPath delimiter characters in a criterion condition no longer
+  panics the runtime; malformed expressions are reported as syntax errors.
+- A payload replacement pointer with an empty name segment (`//child`) no
+  longer collapses to `/child`, so it can no longer overwrite a root sibling.
+
 ## [0.6.1] - 2026-09-11
 
 Path parameter substitutions reject dot-segment navigation, and 301/302

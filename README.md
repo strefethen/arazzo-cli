@@ -52,8 +52,8 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
 | **JSON output** | `--json` on every command for scripting and CI integration |
 | **Expression language** | `$inputs`, `$steps`, `$response`, XPath, JSON Pointer, interpolation |
-| **Arazzo 1.1 selectors** | Typed JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
-| **Success criteria** | Simple expressions, regex, XPath, and JSONPath criterion types |
+| **Arazzo 1.1 selectors** | Typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
+| **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
 | **Control flow** | `onSuccess`/`onFailure` actions with goto, retry (with backoff), and end |
 | **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
 | **SOAP support** | Execute SOAP workflows with XPath-based success criteria |
@@ -397,7 +397,16 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 
 **Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
 
-**JSONPath criteria (supported subset):** `type: jsonpath` success criteria support dot paths, bracket indexing (`$.items[0].name`), wildcards (`$.items[*].id`, `$.*`), filter predicates (`$[?(@.price > 10)]`) with `&&`/`||`, comparison operators, `count(...)` over resolved nodes, and bare existence checks (`$.name`). Recursive descent (`$..foo`) and array slices (`$.items[0:2]`) are **not** supported — a criterion using them fails with an `unsupported JSONPath` diagnostic rather than silently evaluating to false.
+<a id="typed-jsonpath-rfc-9535"></a>
+**Typed JSONPath (RFC 9535):** `type: jsonpath` success criteria, [Selector Objects](#arazzo-11-selector-objects), and `targetSelectorType: jsonpath` payload replacement targets all run on one [RFC 9535](https://www.rfc-editor.org/rfc/rfc9535.html) query engine. That is the full query language: child and descendant segments (`$.items[0].name`, `$..sku`), wildcards (`$.items[*].id`, `$.*`), array slices (`$.items[0:2]`), negative indices, unions, filter expressions (`$.items[?@.price > 10 && @.active]`) with existence tests and comparisons, and the standard function extensions `length()`, `count()`, `value()`, `match()` and `search()` — the latter two taking a literal pattern or a pattern drawn from the queried document (`$.items[?search(@.description, @.tag)]`).
+
+A criterion is decided by nodelist cardinality alone: one or more selected nodes pass, zero nodes fail. A single node holding `false`, `0`, `""` or `null` therefore passes, and a null or undefined *context* fails. Selector reads normalize the same nodelist to `null` (zero matches, with a warning), the selected value (one match), or an array in query order (many matches, repeated occurrences kept). A replacement target applies only when it resolves to exactly one location.
+
+**JSONPath versions, limits, and what is not claimed:** JSONPath Criterion and Selector expressions execute under RFC 9535 semantics when the version is omitted or `rfc9535`; any other declared JSONPath version and any syntactically invalid expression are rejected before evaluation (a criterion fails with an error, a selector resolves `null` with one warning). A rejected replacement target or value leaves the body unchanged with a warning. In particular `draft-goessner-dispatch-jsonpath-00` is a **permanent capability limit**: the draft has expired, arazzo-cli will not implement it, and there is no compatibility engine, silent alias, or fallback. Unlike the XPath version rejection above, `validate` carries no JSONPath version advisory — a Goessner declaration validates as document metadata (§5.8.12.1 allows the token) and is rejected only at run time.
+
+Three conservative admission budgets are applied before the parser or the evaluator runs: at most 16,384 UTF-8 bytes per query, at most 128 combined occurrences of the raw bytes `.` `[` `(` `!` `&` `|` in a query (counted in quoted and escaped literals too), and at most 128 nested containers in the queried context. Exceeding one names the resource and the limit. `match()` and `search()` delegate to an [I-Regexp](https://www.rfc-editor.org/rfc/rfc9485.html) matcher and inherit its own pattern, repetition, nesting, and compiled-matcher limits; an invalid pattern yields logical false, while a resource or backend failure invalidates the whole query — even under negation — rather than quietly reading as false. These are explicit resource budgets, **not** a universal CPU, heap, or result-size quota for every query, and arazzo-cli does not claim 100% RFC 9535 Compliance Test Suite conformance. The engine is [`serde_json_path`](https://github.com/hiltontj/serde_json_path) 0.7.2 with one eight-line recursive numeric-equality repair vendored under [`vendor/serde_json_path_core`](vendor/serde_json_path_core/PATCHES.md), which records the provenance, the checksum, and the criterion for dropping the patch.
+
+This typed surface is distinct from the legacy dot-path traversal that `$response.body...` runtime expressions use — see [JSONPath](#jsonpath) under Success Criteria.
 
 ### Arazzo 1.1 Selector Objects
 
@@ -413,9 +422,11 @@ outputs:
       version: rfc9535
 ```
 
-`type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `xpath-10` / `xpath-20` / `xpath-30` / `xpath-31`. Runtime XPath execution requires an explicit `version: xpath-10`: every other declared version — and the bare `type: xpath` string form, whose omitted version the specification defaults to `xpath-31` — validates as document metadata but is rejected before evaluation. A rejected criterion fails its step with an error; a rejected selector resolves to `null` with one warning; a rejected replacement leaves the body unchanged with one warning. `validate` flags each such declaration ahead of execution with a warning naming the rejected version and the `xpath-10` remedy; `--strict` promotes it to an error.
+`type` may be the string `jsonpath`, `jsonpointer`, or `xpath`, or an object with an explicit version. Supported schema combinations are JSONPath `rfc9535` / `draft-goessner-dispatch-jsonpath-00`, JSON Pointer `rfc6901`, and XPath `xpath-10` / `xpath-20` / `xpath-30` / `xpath-31`. What a document may *declare* and what this runtime *executes* are different questions, and both version families answer it the same way: an unexecutable version validates as document metadata and is rejected before evaluation.
 
-All selector callers use the same selection engine. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in traversal/document order. Invalid syntax, unsupported runtime versions, and zero matches produce trace or dry-run warnings. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
+Runtime JSONPath execution accepts an omitted version or `version: rfc9535`; `draft-goessner-dispatch-jsonpath-00` is rejected permanently — see [Typed JSONPath (RFC 9535)](#typed-jsonpath-rfc-9535). Runtime XPath execution requires an explicit `version: xpath-10`: every other declared version — and the bare `type: xpath` string form, whose omitted version the specification defaults to `xpath-31` — is rejected the same way. A rejected criterion fails its step with an error; a rejected selector resolves to `null` with one warning; a rejected replacement leaves the body unchanged with one warning. For XPath, `validate` flags each such declaration ahead of execution with a warning naming the rejected version and the `xpath-10` remedy, and `--strict` promotes it to an error; there is no equivalent JSONPath version advisory, so a Goessner declaration passes `validate` cleanly and is rejected only at run time.
+
+All selector callers use the same selection engine — RFC 9535 for `jsonpath`. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in query/document order. Invalid syntax, unsupported runtime versions, admission-limit rejections, and zero matches produce trace or dry-run warnings; only the last of those is a legitimate selection, and a JSONPath failure is never written into a request body as `null`. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
 
 For XPath outputs specifically, prefer the Selector Object form with an explicit version (`type: {type: xpath, version: xpath-10}`) over the bare `//xpath/expression` value in the table above — the Selector Object is the specification-conformant 1.1 form; the bare form is a retained arazzo-cli extension kept for compatibility with older workflows.
 
@@ -576,7 +587,22 @@ Unprefixed XPath name tests match on local names, so `//customer/id` matches `<n
 
 ### JSONPath
 
-Filter-based queries on JSON response bodies, via the same dot-path traversal `$response.body...` uses everywhere. Beyond the specification's plain `.` de-reference, this traversal accepts wildcards, array-length, and two filter-predicate syntaxes — all of that is an **arazzo-cli extension** (see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps)); it is distinct from the specification-conformant `type: jsonpath` criterion / Selector Object subset documented above and under [Arazzo 1.1 Selector Objects](#arazzo-11-selector-objects).
+`type: jsonpath` criteria are RFC 9535 queries decided by nodelist cardinality — one or more selected nodes pass, zero fail:
+
+```yaml
+successCriteria:
+  - condition: $.users[?search(@.email, @.domainPattern)].name
+    context: $response.body
+    type:
+      type: jsonpath
+      version: rfc9535
+```
+
+The grammar, the version rule, the admission budgets, and the regex-function behavior are documented once under [Typed JSONPath (RFC 9535)](#typed-jsonpath-rfc-9535); the same engine serves Selector Objects and payload replacement targets.
+
+#### Legacy dot-path traversal (arazzo-cli extension)
+
+A criterion with **no** `type` is a simple criterion, and its `$response.body...` expression uses the runtime-expression dot-path traversal instead — a separate, older code path that is not RFC 9535 and is not going to become it:
 
 ```yaml
 successCriteria:
@@ -584,7 +610,9 @@ successCriteria:
     context: $response.body
 ```
 
-Supports array indexing (`[0]`), wildcards (`[*]`), array length (`.#`), a JSONPath-style bracket filter predicate (`[?(@.field=="value")]`), and a GJSON-style dot-form filter predicate (`.#(field==value)`, or `.#(field==value)#` to keep all matches instead of the first). The bracket-wrapped GJSON form `[#(field==value)]` is **not** supported — it is parsed as a literal (and normally nonexistent) field name, so it silently resolves to `null` instead of erroring or matching; use `[?(@.field=="value")]` or `.#(field==value)` instead. Verified by running each form through `arazzo-cli run --json` against a local test server and comparing outputs. Payload replacement targets declared as `targetSelectorType: jsonpath` reject all GJSON forms with a diagnostic; this GJSON extension applies only to runtime-expression dot-path traversal.
+Beyond the specification's plain `.` de-reference, that traversal accepts array indexing (`[0]`), wildcards (`[*]`), array length (`.#`), a JSONPath-style bracket filter predicate (`[?(@.field=="value")]`), and a GJSON-style dot-form filter predicate (`.#(field==value)`, or `.#(field==value)#` to keep all matches instead of the first) — all of it an **arazzo-cli extension** (see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps)). The bracket-wrapped GJSON form `[#(field==value)]` is **not** supported — it is parsed as a literal (and normally nonexistent) field name, so it silently resolves to `null` instead of erroring or matching; use `[?(@.field=="value")]` or `.#(field==value)` instead. Verified by running each form through `arazzo-cli run --json` against a local test server and comparing outputs.
+
+The two surfaces do not share syntax. Every GJSON form is rejected on a typed JSONPath criterion, Selector Object, or replacement target with an `invalid JSONPath syntax` diagnostic; this extension applies only to runtime-expression dot-path traversal. New workflows should prefer the typed form.
 
 ## Control Flow
 

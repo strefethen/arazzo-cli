@@ -53,6 +53,45 @@ Parallel execution guarantees deterministic ordering for both:
 2. `arazzo-debug-adapter` exposes the DAP loop (`run_dap_stdio`).
 3. `vscode-arazzo-debug/` is the editor integration scaffold.
 
+## Typed Query Ownership
+
+Typed JSONPath has exactly one owner: `arazzo_expr::jsonpath`, published as
+`JsonPathQuery` / `JsonPathMatch` / `JsonPathSelection` / `JsonPathError`.
+It wraps `serde_json_path` 0.7.2 (RFC 9535) plus a private I-Regexp callback
+adapter for `match()` and `search()`; the upstream parser, query and node
+types stay private, so no consumer can reach the backend directly.
+
+Three production entry points consume it, and there is no fourth:
+
+1. `runtime_core::criteria` — `type: jsonpath` success criteria, decided by
+   nodelist cardinality in `runtime_core::jsonpath`.
+2. `runtime_core::payload::resolve_selector_checked` — Selector Objects in
+   parameters, payload values, and step/workflow outputs.
+3. `runtime_core::payload` replacement targets — `targetSelectorType: jsonpath`,
+   applied through the existing JSON Pointer mutator.
+
+Dependency direction is `arazzo-runtime` → `arazzo-expr`; nothing flows back.
+Both handwritten typed-JSONPath implementations that preceded this owner are
+retired, and there is no engine-selection flag, alias, or fallback.
+
+`JsonPathQuery::parse` admits a declared version (`None` or `rfc9535`) and the
+query byte/structural budgets, then validates the complete expression, all
+before any context is resolved. `JsonPathQuery::query` checks the context
+nesting budget, then runs one *located* query so a selected value and its
+RFC 6901 pointer always come from the same walk. An operational failure inside
+a regex callback is recorded in a scoped thread-local frame and invalidates the
+whole query rather than degrading to `false`.
+
+The upstream patch is narrow and documented: `[patch.crates-io]` in the root
+`Cargo.toml` points `serde_json_path_core` at `vendor/serde_json_path_core`,
+whose `PATCHES.md` records the provenance, checksum, and removal criterion for
+the one recursive numeric-equality repair.
+
+JSON Pointer and XPath selectors keep their own arms in
+`runtime_core::payload` and `runtime_core::xpath`; the legacy GJSON-flavored
+dot-path traversal used by `$response.body...` runtime expressions remains a
+separate code path in `arazzo-expr` and is not part of this owner.
+
 ## Stability Notes
 
 Frozen v1 internal APIs are declared in:
