@@ -32,9 +32,6 @@ expression grammar, the `successCriteria` condition grammar, or accepted
 - Existing deviations are debts, not precedent. Never add one because similar
   ones exist.
 
-**Approved extensions: none.** The allowlist is empty and maintainer-owned; an
-agent never adds to it.
-
 Known deviations are tracked in
 [`plans/assessments/arazzo-spec-conformance-audit.md`](plans/assessments/arazzo-spec-conformance-audit.md)
 — read it before touching spec surface. Closing one of its findings, or
