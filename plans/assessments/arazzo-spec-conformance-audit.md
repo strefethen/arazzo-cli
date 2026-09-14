@@ -896,3 +896,73 @@ failure rather than a generic "success criteria not met" is a separate
 deviation, not this one. Nothing here narrows or widens the supported JSONPath
 subset — F18 (undifferentiated JSONPath version semantics) and F20 (GJSON
 forms accepted by typed JSONPath read surfaces) are untouched.
+
+## Addendum — 2026-09-13 (ac-a983f: F18 and F20 under the RFC 9535 engine)
+
+The accepted JSONPath migration
+([plans/current/arazzo-jsonpath-rfc9535-migration.md](../current/arazzo-jsonpath-rfc9535-migration.md),
+epic [ac-edd23](https://sonos.scapedeck.com/docs/ac-tickets/ac-edd23)) replaced
+both handwritten typed-JSONPath implementations with one library-backed
+RFC 9535 owner in `crates/arazzo-expr/src/jsonpath.rs`. Every typed JSONPath
+entry point — `type: jsonpath` criteria, JSONPath Selector Objects, and
+`targetSelectorType: jsonpath` replacement targets — now admits a declared
+version, applies the byte and structural budgets, and parses the complete
+expression through that owner *before* a context is resolved or a predicate
+runs. This addendum records the disposition of the two JSONPath findings that
+survived the earlier conformance epic.
+
+**F20 is closed.** GJSON's `#` forms are not RFC 9535 syntax, so the shared
+parser rejects them where the old subset evaluator resolved them. The five
+forms the debt named — unquoted terminal `#`, `.#.`, `#(…)`, `#(…)#` and the
+bracket-wrapped `[#(…)]` — now fail at every typed surface: a criterion is
+false with a detailed error plus exactly one warning on both the criterion
+record and the enclosing step; a Selector Object reads as `null` with one
+diagnostic; a replacement target or a replacement value leaves that
+replacement unapplied and the body untouched, while the replacements around it
+still apply. Because admission and parsing precede context resolution, neither
+a context that resolves to nothing nor a satisfied left-hand `||` operand can
+conceal the syntax, and a GJSON path compared with `null` is rejected rather
+than evaluated as an absent-value comparison.
+
+The rejection is syntax-specific and narrows nothing: a literal `#` member
+name (`$['#']`), a `#`-bearing string literal inside a filter, and the
+root/wildcard/index/slice/descent/compound/`count()` queries the GJSON forms
+resemble all keep their zero/one/many results, with a selected `null` (one
+match, no warning) still distinguishable from a zero-match normalization (one
+no-match warning) and from a query error. The separate GJSON dot-path
+extension on Arazzo *runtime expressions* (`$response.body.items.#(sku=="A")`)
+is a different surface and is unchanged.
+
+Engine-level proof is
+`crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs`; operator-visible
+proof — dry-run warnings with an unchanged resolved body, and a live
+`tiny_http` run whose `--json` error and `--trace` criterion record both carry
+the diagnostic — is `crates/arazzo-cli/tests/cli_jsonpath_gjson.rs`. The
+`expr.typed-jsonpath-rejects-gjson` conformance claim is narrowed to RFC 9535
+and marked covered against those tests. The
+[ac-cf3e2](https://sonos.scapedeck.com/docs/ac-tickets/ac-cf3e2) write-path
+regression baseline still holds: the unchanged-body assertions are made on the
+captured wire request, not only on a warning.
+
+**F18 is closed, and is recorded here only.** It was closed by `974bacb`
+([ac-43177](https://sonos.scapedeck.com/docs/ac-tickets/ac-43177)), which
+routed JSONPath criteria through the shared owner, and `a0f7170`
+([ac-7a0ce](https://sonos.scapedeck.com/docs/ac-tickets/ac-7a0ce)), which cut
+selectors and replacements over to it. The two version tokens are no longer
+undifferentiated: an omitted version and an explicit `rfc9535` are one engine,
+and `draft-goessner-dispatch-jsonpath-00` is refused by name before the
+expression is examined. No conformance-manifest row, status or inventory entry
+changes for F18; this entry is its record.
+
+**Permanent capability limit (user-approved, no owning ticket).** Rejecting
+`draft-goessner-dispatch-jsonpath-00` is a deliberate product decision — *"Goessner
+is an expired draft and we will not support it period"* — not an implementation
+gap awaiting a ticket. §5.8.12 says that when a particular JSONPath version is
+specified, implementations *"MUST apply the semantics defined in that version's
+specification"*, and §5.8.12.1 lists that token as allowed. This runtime will
+never apply those semantics, so that version-semantics MUST is permanently
+unmet and no future work will close it. Structural validation still accepts the
+token as document metadata, so documents declaring it remain valid; runtime
+capability and document validity stay distinct. This paragraph, rather than a
+conformance-manifest row, is the record of that unmet MUST: the manifest tracks
+claims that have or await an owner, and this one has neither.

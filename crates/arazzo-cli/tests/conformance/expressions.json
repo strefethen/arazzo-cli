@@ -22,10 +22,25 @@
         "spec/arazzo/v1.1.0.html#selector-object"
       ],
       "normativeLevels": ["MUST"],
-      "claim": "JSONPath Criterion and Selector expressions conform to the selected Arazzo-supported JSONPath version; invalid Criterion expressions fail.",
-      "status": "deviation",
-      "owner": "ac-a983f",
-      "reason": "Typed JSONPath read rejection is scheduled in ac-a983f."
+      "claim": "JSONPath Criterion and Selector expressions execute under RFC 9535 semantics when the version is omitted or rfc9535; any other declared JSONPath version and any syntactically invalid expression are rejected before evaluation (a criterion fails with an error, a selector resolves null with one warning).",
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#quoted_hash_literals_and_rfc_9535_queries_keep_their_results",
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#runtime_expression_gjson_dot_path_extension_is_unchanged",
+          "crates/arazzo-runtime/tests/jsonpath_semantics.rs#default_and_explicit_rfc9535_execute_identically"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#gjson_forms_are_rejected_by_typed_criteria",
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#gjson_forms_are_rejected_by_typed_selector_objects",
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#gjson_criteria_fail_before_missing_context_and_short_circuit",
+          "crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs#gjson_replacement_targets_and_values_leave_the_body_unchanged",
+          "crates/arazzo-runtime/tests/jsonpath_semantics.rs#explicit_goessner_version_fails_before_evaluation",
+          "crates/arazzo-runtime/tests/jsonpath_selectors.rs#read_selectors_report_admission_and_evaluation_errors_once",
+          "crates/arazzo-cli/tests/cli_jsonpath_gjson.rs#run_dry_run_reports_gjson_selector_and_replacement_rejection",
+          "crates/arazzo-cli/tests/cli_jsonpath_gjson.rs#run_trace_reports_gjson_criterion_rejection_against_a_live_server"
+        ]
+      }
     },
     {
       "id": "expr.decimal-retry-after-and-case-insensitive-simple-comparison",
