@@ -38,9 +38,23 @@ jobs:
             exe_suffix: ".exe"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Verify release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "ERROR: checked out $head_commit, expected ${RELEASE_TAG} at $tag_commit." >&2
+            exit 1
+          fi
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -84,6 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Ensure tag exists
@@ -100,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum * > SHA256SUMS.txt
+          sha256sum -- * > SHA256SUMS.txt
 
       # The release body is the CHANGELOG section for this tag, never
       # GitHub's generated summary alone -- with no PRs in the range that

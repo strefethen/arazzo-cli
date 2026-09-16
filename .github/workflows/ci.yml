@@ -28,8 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
 
@@ -43,10 +43,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
   test:
     name: Test (Linux)
@@ -62,8 +62,8 @@ jobs:
       - name: Verify CHANGELOG version matches Cargo.toml
         run: bash scripts/ci/verify-changelog-version.sh
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -71,7 +71,7 @@ jobs:
           workspaces: . -> target
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       # Hermeticity guard: rerun the full suite inside a network namespace with
       # only loopback up, so a test that reintroduces a live external host
@@ -111,8 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: aarch64-unknown-linux-gnu
 
@@ -127,7 +127,7 @@ jobs:
       - name: Build for aarch64
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --workspace --target aarch64-unknown-linux-gnu
+        run: cargo build --workspace --locked --target aarch64-unknown-linux-gnu
 
   msrv:
     name: MSRV (1.88)
@@ -159,8 +159,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Install cargo-audit
         run: cargo install cargo-audit

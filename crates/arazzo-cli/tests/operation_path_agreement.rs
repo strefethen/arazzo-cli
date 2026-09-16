@@ -95,10 +95,7 @@ impl Drop for TempDir {
 }
 
 fn cli_bin() -> PathBuf {
-    match std::env::var("CARGO_BIN_EXE_arazzo-cli") {
-        Ok(bin) => PathBuf::from(bin),
-        Err(_) => panic!("CARGO_BIN_EXE_arazzo-cli missing"),
-    }
+    PathBuf::from(env!("CARGO_BIN_EXE_arazzo-cli"))
 }
 
 fn write_spec(dir: &Path, operation_path: &str) -> String {

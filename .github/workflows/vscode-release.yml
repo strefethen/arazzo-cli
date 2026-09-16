@@ -58,9 +58,23 @@ jobs:
             experimental: true
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Verify release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "ERROR: checked out $head_commit, expected ${RELEASE_TAG} at $tag_commit." >&2
+            exit 1
+          fi
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: ${{ matrix.target }}
 
@@ -75,7 +89,7 @@ jobs:
 
       - name: Build DAP binary
         shell: bash
-        run: cargo build --release -p arazzo-debug-adapter --target ${{ matrix.target }}
+        run: cargo build --locked --release -p arazzo-debug-adapter --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
 

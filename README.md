@@ -892,24 +892,31 @@ docs/schemas/              JSON Schemas for --json output formats
 
 ## Building from Source
 
-**Prerequisites:** Rust 1.88+ (`rustup` will handle this automatically via `rust-toolchain.toml`)
+**Prerequisites:** `rustup`. The repository pins Rust 1.98.1 for development and
+release builds via `rust-toolchain.toml`; the minimum supported Rust version
+(MSRV) for source builds remains 1.88.
 
 ```bash
 git clone https://github.com/strefethen/arazzo-cli.git
 cd arazzo-cli
-cargo build --workspace
-cargo test --workspace
+cargo build --workspace --locked
+cargo test --workspace --locked
 ```
 
 Quality gates (run by CI on every push):
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
-CI also runs `cargo audit`, MSRV verification (Rust 1.88), and cross-platform builds (Linux, macOS, Windows).
+CI also runs `cargo audit`, locked MSRV verification (Rust 1.88), and locked
+Rust 1.98.1 cross-platform builds (Linux, macOS, Windows).
+
+Rust 1.88 is a supported compatibility boundary, not the compiler used to cut
+releases. Any future MSRV increase should be intentional, tested, and called out
+in the release notes.
 
 ## Contributing
 
