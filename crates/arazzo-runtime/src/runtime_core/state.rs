@@ -79,6 +79,82 @@ pub(crate) struct OperationEntry {
     pub(super) method: String,
     pub(super) path: String,
     pub(super) origin: OperationOrigin,
+    /// The server the operation declares for itself, recorded when its
+    /// document is indexed.
+    pub(super) server: OperationServer,
+}
+
+/// Where an operation's request goes when its own OpenAPI objects say so.
+///
+/// OpenAPI 3.2 lets a Path Item Object (§4.9.1) and an Operation Object
+/// (§4.10.1) each declare an alternative `servers` array, and the lowest
+/// declaring level overrides every one above it.
+#[derive(Debug, Clone)]
+pub(crate) enum OperationServer {
+    /// Neither level declares a server, so the document's request base
+    /// applies. Every operation of an explicitly provided spec is recorded
+    /// this way: such a spec belongs to no source description, and its
+    /// `servers` are consulted at no level.
+    Inherited,
+    /// The request base the lowest declaring level yields.
+    Declared(String),
+    /// The lowest declaring level yields no usable server. Resolving the
+    /// operation is refused; a declared level never falls back to one above
+    /// it.
+    Unusable(UnusableServer),
+}
+
+impl OperationServer {
+    /// The request base this operation is sent to, given its document's.
+    pub(super) fn base(&self, document_base: &str) -> Result<String, &UnusableServer> {
+        match self {
+            Self::Inherited => Ok(document_base.to_string()),
+            Self::Declared(base) => Ok(base.clone()),
+            Self::Unusable(unusable) => Err(unusable),
+        }
+    }
+}
+
+/// A declared `servers` field that yields no usable server, and the level
+/// that declared it.
+#[derive(Debug, Clone)]
+pub(crate) struct UnusableServer {
+    pub(super) level: ServerLevel,
+    pub(super) issue: ServerIssue,
+}
+
+/// The OpenAPI object below the document root that declares `servers`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ServerLevel {
+    PathItem,
+    Operation,
+}
+
+impl ServerLevel {
+    /// The specification's name for the object, as messages quote it.
+    pub(super) fn object_name(self) -> &'static str {
+        match self {
+            Self::PathItem => "Path Item Object",
+            Self::Operation => "Operation Object",
+        }
+    }
+}
+
+/// Why a present `servers` field yields no usable server. Absence and an
+/// empty array are not issues: they declare nothing.
+#[derive(Debug, Clone)]
+pub(crate) enum ServerIssue {
+    /// The field is not an array; `null` included.
+    NotAnArray,
+    /// The first Server Object has no `url`, or an empty one. The Server
+    /// Object's `url` is REQUIRED (OpenAPI 3.2 §4.5.1).
+    MissingUrl,
+    /// The first Server Object's `url`, its variables substituted, is a
+    /// relative reference. OpenAPI allows one — it resolves against the
+    /// location the document is served from (§4.5.2.1) — but a document this
+    /// runtime reads from disk has no HTTP location, so no request base
+    /// follows from it.
+    Relative(String),
 }
 
 /// Every indexed operation, keyed by `operationId`, retaining every definition

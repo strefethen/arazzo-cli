@@ -142,8 +142,7 @@ impl DocumentSet {
         if sd.type_ != SourceType::OpenApi || sd.url.is_empty() {
             return Ok(None);
         }
-        let authored_is_relative =
-            matches!(Url::parse(&sd.url), Err(ParseError::RelativeUrlWithoutBase));
+        let authored_is_relative = is_relative_reference(&sd.url);
         let Some(resolved) = self.resolve(sd, authored_is_relative)? else {
             return Ok(None);
         };
@@ -304,6 +303,16 @@ pub(super) fn local_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<(Str
             Some((sd.name.clone(), path))
         })
         .collect()
+}
+
+/// Whether `reference` is an RFC 3986 relative reference: text with no scheme,
+/// which can only be resolved against a base URI. The one test for "relative"
+/// in this runtime, shared by Source Description urls and server urls.
+pub(super) fn is_relative_reference(reference: &str) -> bool {
+    matches!(
+        Url::parse(reference),
+        Err(ParseError::RelativeUrlWithoutBase)
+    )
 }
 
 /// The base URI relative references resolve against, per §5.6.1: an absolute

@@ -109,10 +109,29 @@ fn arazzo_document(operation_ids: &[&str]) -> String {
     lines.join("\n")
 }
 
+/// An operation whose own `servers` url is relative. OpenAPI allows that, but
+/// it resolves against where the document is served from, and a document read
+/// from disk has no HTTP location, so the operation yields no request base.
+const RELATIVE_SERVER_OPERATION: &str = "  /relative-server:
+    get:
+      operationId: relativeServer
+      servers:
+        - url: ./v2
+      responses:
+        \"200\":
+          description: OK
+";
+
 /// Writes both OpenAPI documents plus an Arazzo document naming
 /// `operation_ids`, and returns the path to run.
 fn fixture(dir: &TempDir, operation_ids: &[&str]) -> PathBuf {
-    dir.write("alpha.openapi.yaml", &openapi_document(ALPHA_BASE, "/pets"));
+    dir.write(
+        "alpha.openapi.yaml",
+        &format!(
+            "{}{RELATIVE_SERVER_OPERATION}",
+            openapi_document(ALPHA_BASE, "/pets")
+        ),
+    );
     dir.write(
         "beta.openapi.yaml",
         &openapi_document(BETA_BASE, "/animals"),
@@ -193,6 +212,84 @@ fn dry_run_plans_a_distinct_host_per_qualified_source() {
     );
 }
 
+/// One source whose OpenAPI document declares `servers` at every level: the
+/// document, a path item (with a server variable), and an operation that
+/// overrides its path item.
+const SERVER_LEVELS_DOCUMENT: &str = "openapi: 3.2.0
+info:
+  title: server levels
+  version: \"1.0.0\"
+servers:
+  - url: https://doc.example.com/v1
+paths:
+  /doc-level:
+    get:
+      operationId: docLevel
+  /path-level:
+    servers:
+      - url: \"https://path.example.com/{version}\"
+        variables:
+          version:
+            default: v9
+    get:
+      operationId: pathLevel
+  /op-level:
+    servers:
+      - url: https://path.example.com
+    get:
+      operationId: opLevel
+      servers:
+        - url: https://op.example.com
+";
+
+const SERVER_LEVELS_ARAZZO: &str = "arazzo: 1.1.0
+info:
+  title: server levels
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: ./api.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: wf
+    steps:
+      - stepId: docLevel
+        operationId: docLevel
+      - stepId: pathLevel
+        operationId: pathLevel
+      - stepId: opLevel
+        operationId: $sourceDescriptions.api.opLevel
+";
+
+/// OpenAPI lets a path item and an operation override the document's servers,
+/// and the lowest declaring level wins. Before this was honored, all three
+/// steps planned the document's host.
+#[test]
+fn dry_run_plans_each_operations_own_declared_server() {
+    let dir = TempDir::new();
+    dir.write("api.openapi.yaml", SERVER_LEVELS_DOCUMENT);
+    let spec = dir.write("levels.arazzo.yaml", SERVER_LEVELS_ARAZZO);
+
+    let (ok, output) = run_json(&spec, &["--dry-run"]);
+    assert!(ok, "dry run failed: {output}");
+    assert_eq!(string_field(&output, "kind"), "dryRun");
+    let urls: Vec<String> = output
+        .get("requests")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("expected a requests array in {output}"))
+        .iter()
+        .map(|request| string_field(request, "url"))
+        .collect();
+    assert_eq!(
+        urls,
+        vec![
+            "https://doc.example.com/v1/doc-level".to_string(),
+            "https://path.example.com/v9/path-level".to_string(),
+            "https://op.example.com/op-level".to_string(),
+        ]
+    );
+}
+
 /// Every refusal reaches `--json` as the documented error object with a
 /// stable `code`, so a caller can branch on the cause instead of matching
 /// message text.
@@ -227,6 +324,12 @@ fn refused_operation_ids_carry_their_stable_code_in_json() {
         (
             "$sourceDescriptions.alpha.v2.getPet",
             "RUNTIME_OPERATION_ID_NOT_FOUND",
+        ),
+        // The operation exists, but its own `servers` yields no request base,
+        // so it is refused at resolution, before a request is built.
+        (
+            "$sourceDescriptions.alpha.relativeServer",
+            "RUNTIME_SOURCE_DESCRIPTION_PARSE",
         ),
     ];
 

@@ -97,8 +97,9 @@ pub use state::Engine;
 use state::ExecutionContext;
 pub(crate) use state::VarStore;
 use state::{
-    EngineInner, OperationEntry, OperationIndex, OperationMatch, OperationOrigin, StepExecution,
-    StepResult, StepTraceData, WorkflowIndex,
+    EngineInner, OperationEntry, OperationIndex, OperationMatch, OperationOrigin, OperationServer,
+    ServerIssue, ServerLevel, StepExecution, StepResult, StepTraceData, UnusableServer,
+    WorkflowIndex,
 };
 pub(crate) use url::parse_method;
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};

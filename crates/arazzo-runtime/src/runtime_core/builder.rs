@@ -248,8 +248,12 @@ pub fn relative_openapi_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<
 }
 
 /// Indexes a bound document's operations and derives its request base from
-/// `servers[0].url`. Every failure is a build error naming the source and the
-/// document it was bound to — never a silent fallback.
+/// `servers[0].url`. A failure of the document's own `servers` is a build
+/// error naming the source and the document it was bound to — never a silent
+/// fallback. A Path Item or Operation Object whose `servers` yields no usable
+/// server is instead recorded on each operation it governs and refused when a
+/// step resolves one, the way an ambiguous operationId is: the document's
+/// other operations stay usable.
 fn index_bound_document(
     sd: &SourceDescription,
     bound: &BoundDocument,
@@ -272,35 +276,76 @@ fn index_bound_document(
     derive_servers_base(&root, sd, &bound.label)
 }
 
-/// Derives the request base URL from `servers[0].url`, substituting server
-/// variable defaults (mirrors the typed logic used by `generate`).
+/// Derives the document's request base from its OpenAPI Object `servers`
+/// under the one Server Object rule, [`read_servers`]. The document level has
+/// no level above it, so declaring nothing is as fatal here as declaring
+/// something unusable.
 fn derive_servers_base(
     root: &serde_yaml_ng::Value,
     sd: &SourceDescription,
     document: &str,
 ) -> Result<String, RuntimeError> {
-    let no_servers = || {
-        RuntimeError::new(
+    match read_servers(root.get("servers")) {
+        ServersField::Base(base) => Ok(base),
+        ServersField::Unusable(ServerIssue::Relative(url)) => Err(RuntimeError::new(
             RuntimeErrorKind::SourceDescriptionParse,
             format!(
-                "sourceDescription \"{}\": OpenAPI document \"{document}\" declares no \
-                 servers[0].url; an absolute server URL is required to derive the request base",
+                "sourceDescription \"{}\": server URL \"{url}\" in OpenAPI document \
+                 \"{document}\" is relative; an absolute URL is required to derive the request \
+                 base",
                 sd.name,
             ),
-        )
+        )),
+        ServersField::Undeclared
+        | ServersField::Unusable(ServerIssue::NotAnArray | ServerIssue::MissingUrl) => {
+            Err(RuntimeError::new(
+                RuntimeErrorKind::SourceDescriptionParse,
+                format!(
+                    "sourceDescription \"{}\": OpenAPI document \"{document}\" declares no \
+                     servers[0].url; an absolute server URL is required to derive the request \
+                     base",
+                    sd.name,
+                ),
+            ))
+        }
+    }
+}
+
+/// What one `servers` field yields.
+enum ServersField {
+    /// The field is absent, or an empty array: this level declares nothing.
+    Undeclared,
+    /// The request base the field yields.
+    Base(String),
+    /// The field is present but yields no usable server.
+    Unusable(ServerIssue),
+}
+
+/// The one Server Object rule, applied alike at the document, Path Item, and
+/// Operation levels: the first Server Object's `url`, its variables' defaults
+/// substituted, a trailing `/` trimmed, and a relative reference refused
+/// rather than guessed at.
+///
+/// `generate` repeats the substitution in its typed generation-time
+/// diagnostic, but that diagnostic still treats only a leading `/` as
+/// relative.
+fn read_servers(field: Option<&serde_yaml_ng::Value>) -> ServersField {
+    let Some(field) = field else {
+        return ServersField::Undeclared;
     };
-    let first_server = root
-        .get("servers")
-        .and_then(serde_yaml_ng::Value::as_sequence)
-        .and_then(|servers| servers.first())
-        .ok_or_else(no_servers)?;
+    let Some(servers) = field.as_sequence() else {
+        return ServersField::Unusable(ServerIssue::NotAnArray);
+    };
+    let Some(first_server) = servers.first() else {
+        return ServersField::Undeclared;
+    };
     let mut url = first_server
         .get("url")
         .and_then(serde_yaml_ng::Value::as_str)
         .unwrap_or_default()
         .to_string();
     if url.is_empty() {
-        return Err(no_servers());
+        return ServersField::Unusable(ServerIssue::MissingUrl);
     }
     if let Some(vars) = first_server
         .get("variables")
@@ -316,18 +361,37 @@ fn derive_servers_base(
             url = url.replace(&format!("{{{name}}}"), default);
         }
     }
-    if url.starts_with('/') {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionParse,
-            format!(
-                "sourceDescription \"{}\": server URL \"{url}\" in OpenAPI document \
-                 \"{document}\" is relative; an absolute URL is required to derive the request \
-                 base",
-                sd.name,
-            ),
-        ));
+    if document_set::is_relative_reference(&url) {
+        return ServersField::Unusable(ServerIssue::Relative(url));
     }
-    Ok(url.trim_end_matches('/').to_string())
+    ServersField::Base(url.trim_end_matches('/').to_string())
+}
+
+/// The server an operation declares for itself. The Operation Object's
+/// `servers` override the Path Item Object's (OpenAPI 3.2 §4.10.1), which
+/// override the document's (§4.9.1); a level that declares nothing passes to
+/// the one above, and the document level is the caller's.
+///
+/// This is the one place that precedence lives. A resolver that reaches an
+/// operation other than by operationId — the specification's JSON Pointer
+/// `operationPath`, not implemented — must call it too.
+fn operation_server(
+    path_item: &serde_yaml_ng::Value,
+    operation: &serde_yaml_ng::Value,
+) -> OperationServer {
+    for (level, object) in [
+        (ServerLevel::Operation, operation),
+        (ServerLevel::PathItem, path_item),
+    ] {
+        match read_servers(object.get("servers")) {
+            ServersField::Undeclared => continue,
+            ServersField::Base(base) => return OperationServer::Declared(base),
+            ServersField::Unusable(issue) => {
+                return OperationServer::Unusable(UnusableServer { level, issue })
+            }
+        }
+    }
+    OperationServer::Inherited
 }
 
 /// Parses an OpenAPI spec and populates the operation index.
@@ -390,10 +454,18 @@ fn index_operations(
             if op_id.is_empty() {
                 continue;
             }
+            // Only a source-bound document's `servers` decide where its
+            // operations go. An explicitly provided spec keeps the
+            // engine-wide base, so its declarations are not read at all.
+            let server = match origin {
+                OperationOrigin::Source { .. } => operation_server(methods_value, operation_value),
+                OperationOrigin::ExplicitSpec { .. } => OperationServer::Inherited,
+            };
             let entry = OperationEntry {
                 method: method.to_uppercase(),
                 path: path.to_string(),
                 origin: origin.clone(),
+                server,
             };
             // Every definition is retained, so an operationId defined by two
             // documents is a lookup-time ambiguity rather than whichever one

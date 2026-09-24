@@ -9,7 +9,7 @@
 Eleven deviations in the original pass, F1–F11 below. Two cause a conformant
 document to fail outright or silently misbehave; the rest are unenforced
 constraints, ignored fields, non-conformant output, and undocumented
-extensions. Later passes added F12–F24 — see the addenda at the end, which also
+extensions. Later passes added F12–F25 — see the addenda at the end, which also
 record which findings have since been closed.
 
 The single most important structural fact: **our `operationPath` idiom and our
@@ -966,3 +966,119 @@ token as document metadata, so documents declaring it remain valid; runtime
 capability and document validity stay distinct. This paragraph, rather than a
 conformance-manifest row, is the record of that unmet MUST: the manifest tracks
 claims that have or await an owner, and this one has neither.
+
+## Addendum — 2026-09-23 (ac-13ecf operation servers)
+
+One deviation, found in a live workflow: an operation declared its own server
+and was sent to its document's `servers[0]` instead. Grounded in the vendored
+`spec/arazzo/v1.1.0.html` §5.7 and `spec/oas/v3.2.0.html` §4.1.1, §4.5, §4.9.1
+and §4.10.1.
+
+| # | Deviation | Severity | Surface |
+|---|---|---|---|
+| F25 | Path Item and Operation Object `servers` ignored; every operation sent to the document's `servers[0]` | P1 | runtime |
+
+### F25. Path Item and Operation `servers` ignored
+
+**Spec** (§5.7 Relative References in API URLs): *"When Step Objects reference
+API operations via operationId or operationPath, the actual API endpoint URL is
+determined by the OpenAPI description’s Server Object, not by the Arazzo
+Description’s base URI."* OpenAPI 3.2 declares Server Objects at three levels.
+The Path Item Object's `servers` (§4.9.1): *"An alternative servers array to
+service all operations in this path. If a servers array is specified at the
+OpenAPI Object level, it will be overridden by this value."* The Operation
+Object's (§4.10.1): *"An alternative servers array to service this operation.
+If a servers array is specified at the Path Item Object or OpenAPI Object
+level, it will be overridden by this value."*
+
+**We did:** `index_operations`
+(`crates/arazzo-runtime/src/runtime_core/builder.rs`) recorded only an
+operation's method, path and origin, and `derive_servers_base` derived one
+request base per source from the OpenAPI Object's `servers[0].url`.
+`resolve_in_source` and `resolve_bare` (`engine_http.rs`) sent every operation
+of a source to that base, so no Path Item or Operation Object `servers` was
+ever read.
+
+**Observed** — one source whose document declares `https://doc.example.test`
+on the OpenAPI Object, `https://path.example.test/{ver}` (default `v9`) on the
+`/path-level` path item, and `https://op.example.test` on the `/op-level`
+operation, whose path item declares `https://path.example.test`.
+`arazzo-cli run --dry-run --json` at `38b6088` planned
+
+```
+https://doc.example.test/doc-level
+https://doc.example.test/path-level
+https://doc.example.test/op-level
+```
+
+and a live run sends where it plans; the live workflow got a 403 from the
+document's host for an operation served elsewhere. After the fix the plan is
+
+```
+https://doc.example.test/doc-level
+https://path.example.test/v9/path-level
+https://op.example.test/op-level
+```
+
+**F25 is closed for `operationId` targets** by the change this addendum ships
+with. `operation_server` (`builder.rs`) is the one place the precedence lives:
+the Operation Object's `servers`, else the Path Item Object's, else the
+document's. Each operation's result is recorded on its `OperationEntry` when a
+source-bound document is indexed, and both resolvers apply it before the
+source's document base. Every level reads its `servers` through one rule,
+`read_servers`: the first Server Object's `url`, its variables' defaults
+substituted, a trailing `/` trimmed. An explicitly provided spec belongs to no
+source description — an `operationId` names an operation *"existing within one
+of the sourceDescriptions"* — so it keeps the engine-wide base and its
+`servers` are read at no level. Engine proof, live and dry-run with bare and
+source-qualified targets, is `crates/arazzo-runtime/tests/openapi_servers.rs`;
+the operator-visible plan and `--json` refusal code are pinned in
+`crates/arazzo-cli/tests/cli_operation_id_routing.rs`.
+
+**Interpretations, recorded as such.** Three choices the specification leaves
+open:
+
+- *An empty `servers: []` below the root declares nothing*, so the level above
+  applies. §4.1.1 gives an absent and an empty array the same default only on
+  the OpenAPI Object and is silent below it; OAI/OpenAPI-Specification#3427
+  asked exactly this and was closed without an answer. The reading matches
+  swagger-client (`isNonEmptyServerList`) with ApiDOM's `servers`
+  normalization, and openapi-generator; Redocly Respect falls back to the
+  document.
+- *A relative server url is refused, as a runtime limit rather than a
+  deviation.* A server url *"MAY be relative, to indicate that the host
+  location is relative to the location where the document containing the
+  Server Object is being served"* (§4.5.1), and *"For API URLs the $self
+  field, which identifies the OpenAPI document, is ignored and the retrieval
+  URI is used instead"* (§4.5.2.1). A document this runtime reads from disk has
+  no HTTP retrieval location, so no request base follows from it. "Relative"
+  now means an RFC 3986 relative reference at every level — the test
+  `DocumentSet::bind` already applied to a Source Description url — rather
+  than a leading `/`. At the document level that widens the existing
+  build-time refusal to `.`, `./x` and scheme-less urls, which previously
+  built, dry-ran to a URL with no scheme, and failed only when sent
+  (`RUNTIME_HTTP_REQUEST`).
+- *A declared level never falls back.* A path-item or operation `servers` that
+  yields no usable server — a relative url, a value that is not an array
+  (`null` included), or a Server Object without its REQUIRED `url` — refuses
+  that operation when a step resolves it (`RUNTIME_SOURCE_DESCRIPTION_PARSE`),
+  before anything is sent. The engine still builds, the document's other
+  operations still route, and the message says whose limit it is.
+
+**Remaining debt.**
+
+- §5.7 covers `operationPath` too. The specification's JSON-Pointer form is
+  unresolved (F1); when it is, its resolver must call `operation_server`.
+  Overrides are recorded on operationId-keyed entries, operations without an
+  `operationId` are not indexed, and bound document bytes are dropped after
+  build, so they will not arrive through the index. The `{name}./path`
+  extension keeps the source's document base by design.
+- A document whose OpenAPI Object declares no absolute server still fails the
+  build even when every operation declares its own. Such a document is
+  conformant; Respect and swagger-client accept it.
+- Three edges the new levels inherit from the document level: a non-string
+  variable `default` leaves `{var}` in the url; `replace_path_params`
+  substitutes over the whole target URL, so a same-named `in: path` parameter
+  can fill a `{var}` left in a server url; and operations beside a path-item
+  `$ref` ignore the referenced item's `servers`, because the indexer does not
+  follow that `$ref`.
