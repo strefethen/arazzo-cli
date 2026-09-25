@@ -315,7 +315,6 @@ impl Engine {
                     }
                 };
                 let duration = start.elapsed();
-                let step_outputs = vars.step_outputs(&step.step_id);
 
                 let mut action = self
                     .handle_step_result(StepDecisionContext {
@@ -347,7 +346,10 @@ impl Engine {
                         duration,
                         &execution.trace,
                         action.trace.clone(),
-                        step_outputs,
+                        // This attempt's own outputs. `vars` keeps the last
+                        // successful run's for `$steps` expressions, and a
+                        // failed re-run must not be recorded with them.
+                        execution.outputs,
                         trace_err,
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
@@ -549,7 +551,6 @@ impl Engine {
                     }
                 };
                 let duration = start.elapsed();
-                let step_outputs = vars.step_outputs(&step.step_id);
 
                 let step_status_code = execution
                     .result
@@ -558,12 +559,15 @@ impl Engine {
                     .map(|r| r.status_code)
                     .unwrap_or(0);
 
+                // Each record carries this attempt's own outputs. `vars` keeps
+                // the last successful run's for `$steps` expressions, and a
+                // failed re-run must not be recorded with them.
                 self.emit_after_step_event(
                     exec_ctx,
                     workflow_id,
                     &step,
                     step_status_code,
-                    step_outputs.clone(),
+                    execution.outputs.clone(),
                     execution.result.err.clone(),
                     duration,
                 )
@@ -575,7 +579,7 @@ impl Engine {
                     &step,
                     step_status_code,
                     duration,
-                    step_outputs.clone(),
+                    execution.outputs.clone(),
                     execution.result.err.clone(),
                     execution.result.success,
                 )
@@ -611,7 +615,7 @@ impl Engine {
                         duration,
                         &execution.trace,
                         action.trace.clone(),
-                        step_outputs,
+                        execution.outputs,
                         trace_err,
                     );
                     Engine::push_trace_record(exec_ctx, record).await;
