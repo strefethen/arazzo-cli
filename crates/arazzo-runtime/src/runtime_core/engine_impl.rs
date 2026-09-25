@@ -484,15 +484,14 @@ impl Engine {
                     let result = self
                         .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
                         .await;
+                    // A cancelled invocation did not complete, so it is not
+                    // recorded as completed.
+                    exec_ctx.check_cancelled()?;
                     // The dependency guard ran before entering parallel execution.
                     // Record terminal failures too: this invocation was admitted
                     // and therefore completed, even when one of its steps failed.
                     exec_ctx.mark_workflow_completed(workflow_id);
-                    return if exec_ctx.cancel.is_cancelled() {
-                        Err(exec_ctx.cancelled_error())
-                    } else {
-                        result
-                    };
+                    return result;
                 }
             }
 
@@ -654,6 +653,9 @@ impl Engine {
                                 )
                                 .await
                             {
+                                // A cancelled invocation did not complete, so it
+                                // is neither recorded nor reported as completed.
+                                exec_ctx.check_cancelled()?;
                                 exec_ctx.mark_workflow_completed(workflow_id);
                                 self.emit_observer_event(
                                     exec_ctx,
@@ -695,6 +697,9 @@ impl Engine {
                         let result = self
                             .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
                             .await;
+                        // A cancelled caller did not complete, so it is not
+                        // recorded as completed.
+                        exec_ctx.check_cancelled()?;
                         // The caller workflow was admitted and ran far enough
                         // to invoke the target. Its terminal outcome is
                         // completion evidence even when the target fails.

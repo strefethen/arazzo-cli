@@ -139,6 +139,9 @@ impl Engine {
                 }
             }
             if let Some(outcome) = terminal {
+                // A cancelled invocation did not complete, whatever its
+                // level's steps settled.
+                exec_ctx.check_cancelled()?;
                 let (outputs, error) = match &outcome {
                     Ok(outputs) => (outputs.clone(), None),
                     Err(err) => (BTreeMap::new(), Some(err.message.clone())),
@@ -156,6 +159,7 @@ impl Engine {
                 return outcome;
             }
         }
+        exec_ctx.check_cancelled()?;
         let workflow_outputs = self.build_outputs(workflow, vars);
         self.emit_observer_event(
             exec_ctx,

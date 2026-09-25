@@ -4,11 +4,11 @@
 mod common;
 
 use arazzo_runtime::{
-    ClientConfig, Engine, EngineBuilder, EngineEvent, ExecutionHandle, ExecutionResult,
-    ObserverEvent, RuntimeErrorKind, TraceDecisionPath,
+    ClientConfig, Engine, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionHandle,
+    ExecutionObserver, ExecutionResult, ObserverEvent, RuntimeErrorKind, TraceDecisionPath,
 };
 use arazzo_spec::{ActionType, OnAction, Step, StepTarget, Workflow};
-use common::{make_spec_with_base, success_200};
+use common::{make_spec_with_base, success_200, TestObserver};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -101,6 +101,17 @@ impl StallServer {
             .await
             .ok()
             .flatten()
+    }
+
+    /// Waits until the fixture has received a request for `path`.
+    async fn wait_until_requested(&self, path: &str) -> bool {
+        tokio::time::timeout(READY_BOUND, async {
+            while !self.request_paths().contains(&path.to_string()) {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     fn request_paths(&self) -> Vec<String> {
@@ -274,7 +285,34 @@ fn terminal_routing_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
     spec
 }
 
-fn engine(spec: arazzo_spec::ArazzoSpec, http_budget: Duration, parallel: bool) -> Engine {
+/// One level runs `stalled` and `admitted` together; `later` depends on both,
+/// so it runs in the next level.
+fn parallel_level_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
+    let mut spec = make_spec_with_base(
+        base_url,
+        vec![Workflow {
+            workflow_id: "parallel".to_string(),
+            steps: vec![
+                request_step("stalled", "/stall"),
+                request_step("admitted", "/admitted"),
+                Step {
+                    depends_on: vec!["stalled".to_string(), "admitted".to_string()],
+                    ..request_step("later", "/later")
+                },
+            ],
+            ..Workflow::default()
+        }],
+    );
+    // Step-level `dependsOn` is an Arazzo 1.1 field.
+    spec.arazzo = "1.1.0".to_string();
+    spec
+}
+
+fn engine_builder(
+    spec: arazzo_spec::ArazzoSpec,
+    http_budget: Duration,
+    parallel: bool,
+) -> EngineBuilder {
     let config = ClientConfig {
         timeout: http_budget,
         ..ClientConfig::default()
@@ -283,8 +321,23 @@ fn engine(spec: arazzo_spec::ArazzoSpec, http_budget: Duration, parallel: bool) 
         .client_config(config)
         .parallel(parallel)
         .trace(true)
+}
+
+fn engine(spec: arazzo_spec::ArazzoSpec, http_budget: Duration, parallel: bool) -> Engine {
+    engine_builder(spec, http_budget, parallel)
         .build()
         .unwrap_or_else(|err| panic!("building cancellation engine: {err}"))
+}
+
+/// The cancellation engine with an observer attached, for tests that check
+/// what the observer received as well as what the stream carried.
+fn observed_engine(spec: arazzo_spec::ArazzoSpec, parallel: bool) -> (Engine, Arc<TestObserver>) {
+    let observer = Arc::new(TestObserver::default());
+    let engine = engine_builder(spec, HTTP_BUDGET, parallel)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+        .unwrap_or_else(|err| panic!("building observed cancellation engine: {err}"));
+    (engine, observer)
 }
 
 async fn collect_with_bound(handle: ExecutionHandle) -> Option<ExecutionResult> {
@@ -341,6 +394,68 @@ fn assert_no_post_cancel_routing(result: &ExecutionResult) {
             )
         )
     }));
+}
+
+/// A cancelled invocation did not complete: neither its event stream nor its
+/// observer reports `WorkflowCompleted`.
+fn assert_not_reported_completed(result: &ExecutionResult, observer: &TestObserver) {
+    let streamed: Vec<_> = result
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                EngineEvent::Observer(ObserverEvent::WorkflowCompleted { .. })
+            )
+        })
+        .collect();
+    let observed: Vec<_> = observer
+        .events()
+        .into_iter()
+        .filter(|tag| tag.starts_with("WorkflowCompleted:"))
+        .collect();
+    assert!(
+        streamed.is_empty() && observed.is_empty(),
+        "cancelled invocation reported WorkflowCompleted; stream: {streamed:?}; observer: {observed:?}"
+    );
+}
+
+/// `step_id` ran once and its attempt is recorded: an AfterStep execution
+/// event, a StepCompleted event in the stream and at the observer, and a
+/// trace record.
+fn assert_step_recorded(result: &ExecutionResult, observer: &TestObserver, step_id: &str) {
+    let after_steps = result
+        .execution_events()
+        .into_iter()
+        .filter(|event| event.kind == ExecutionEventKind::AfterStep && event.step_id == step_id)
+        .count();
+    let streamed_completions = result
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                EngineEvent::Observer(ObserverEvent::StepCompleted { step_id: id, .. })
+                    if id == step_id
+            )
+        })
+        .count();
+    let completed_tag = format!("StepCompleted:{step_id}:");
+    let observed_completions = observer
+        .events()
+        .iter()
+        .filter(|tag| tag.starts_with(&completed_tag))
+        .count();
+    let traces = result
+        .trace_steps()
+        .into_iter()
+        .filter(|record| record.step_id == step_id)
+        .count();
+    assert_eq!(
+        (after_steps, streamed_completions, observed_completions, traces),
+        (1, 1, 1, 1),
+        "{step_id}: AfterStep events, streamed StepCompleted, observed StepCompleted, trace records"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -504,7 +619,7 @@ async fn workflow_retry_reference_preserves_terminal_cancel_classification() {
             },
         ],
     );
-    let engine = engine(spec, HTTP_BUDGET, false);
+    let (engine, observer) = observed_engine(spec, false);
     let handle = engine.execute("main", BTreeMap::new());
 
     let stalled = server.wait_until_stalled().await;
@@ -526,6 +641,7 @@ async fn workflow_retry_reference_preserves_terminal_cancel_classification() {
         event,
         EngineEvent::Observer(ObserverEvent::RetryScheduled { .. })
     )));
+    assert_not_reported_completed(&result, &observer);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -546,7 +662,7 @@ async fn step_retry_reference_preserves_terminal_cancel_classification() {
             ..Workflow::default()
         }],
     );
-    let engine = engine(spec, HTTP_BUDGET, false);
+    let (engine, observer) = observed_engine(spec, false);
     let handle = engine.execute("main", BTreeMap::new());
 
     let stalled = server.wait_until_stalled().await;
@@ -568,27 +684,13 @@ async fn step_retry_reference_preserves_terminal_cancel_classification() {
         event,
         EngineEvent::Observer(ObserverEvent::RetryScheduled { .. })
     )));
+    assert_not_reported_completed(&result, &observer);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_boundary_preserves_timeout_and_does_not_dispatch_next_level() {
     let mut server = StallServer::start("/stall", StallPhase::Headers);
-    let spec = make_spec_with_base(
-        &server.base_url,
-        vec![Workflow {
-            workflow_id: "parallel".to_string(),
-            steps: vec![
-                request_step("stalled", "/stall"),
-                request_step("admitted", "/admitted"),
-                Step {
-                    depends_on: vec!["stalled".to_string(), "admitted".to_string()],
-                    ..request_step("later", "/later")
-                },
-            ],
-            ..Workflow::default()
-        }],
-    );
-    let engine = engine(spec, HTTP_BUDGET, true);
+    let (engine, observer) = observed_engine(parallel_level_spec(&server.base_url), true);
     let handle =
         engine.execute_with_timeout("parallel", BTreeMap::new(), Duration::from_millis(350));
 
@@ -609,6 +711,46 @@ async fn parallel_boundary_preserves_timeout_and_does_not_dispatch_next_level() 
     assert!(paths.contains(&"/stall".to_string()));
     assert!(paths.contains(&"/admitted".to_string()));
     assert!(!paths.contains(&"/later".to_string()));
+    for step_id in ["stalled", "admitted"] {
+        assert_step_recorded(&result, &observer, step_id);
+    }
+    assert_not_reported_completed(&result, &observer);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_external_cancel_records_the_level_without_completing_the_workflow() {
+    let mut server = StallServer::start("/stall", StallPhase::Headers);
+    let (engine, observer) = observed_engine(parallel_level_spec(&server.base_url), true);
+    let handle = engine.execute("parallel", BTreeMap::new());
+
+    let stalled = server.wait_until_stalled().await;
+    if stalled.as_deref() != Some("/stall") {
+        server.shutdown();
+        panic!("parallel request did not reach the stall: {stalled:?}");
+    }
+    // `admitted` shares the stalled step's level; wait for its request so the
+    // cancel lands on a level in which a sibling step already ran.
+    if !server.wait_until_requested("/admitted").await {
+        server.shutdown();
+        panic!(
+            "the level's other request did not reach the fixture: {:?}",
+            server.request_paths()
+        );
+    }
+    handle.cancel_token().cancel();
+    let completed = collect_with_bound(handle).await;
+    server.shutdown();
+
+    let result = completed_within_bound(
+        completed,
+        "parallel external cancellation must complete promptly",
+    );
+    assert_terminal(&result, RuntimeErrorKind::ExecutionCancelled);
+    assert!(!server.request_paths().contains(&"/later".to_string()));
+    for step_id in ["stalled", "admitted"] {
+        assert_step_recorded(&result, &observer, step_id);
+    }
+    assert_not_reported_completed(&result, &observer);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
