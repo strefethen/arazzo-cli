@@ -458,6 +458,150 @@ fn assert_step_recorded(result: &ExecutionResult, observer: &TestObserver, step_
     );
 }
 
+/// Signals when the invocation hands its observer a `WorkflowCompleted`,
+/// which the engine does just before it sends that event to the stream.
+#[derive(Default)]
+struct CompletionSignal {
+    reported: tokio::sync::Notify,
+}
+
+impl ExecutionObserver for CompletionSignal {
+    fn on_event(&self, event: &ObserverEvent) {
+        if matches!(event, ObserverEvent::WorkflowCompleted { .. }) {
+            self.reported.notify_one();
+        }
+    }
+}
+
+/// Stream index of the first `WorkflowCompleted`.
+fn completion_position(result: &ExecutionResult) -> usize {
+    result
+        .events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                EngineEvent::Observer(ObserverEvent::WorkflowCompleted { .. })
+            )
+        })
+        .unwrap_or_else(|| panic!("the stream reported no WorkflowCompleted"))
+}
+
+/// Runs `workflow_id`, holds the invocation on the send of its
+/// `WorkflowCompleted`, cancels it there, and then drains the stream.
+///
+/// `ExecutionHandle` cannot read events one at a time, so a first run counts
+/// the events before `WorkflowCompleted` and the second run's channel holds
+/// exactly that many. Nothing reads the stream until after the cancel, so the
+/// invocation reports its outcome before the cancel and returns after it.
+async fn cancel_while_completion_is_reported(
+    spec: arazzo_spec::ArazzoSpec,
+    parallel: bool,
+    workflow_id: &str,
+) -> ExecutionResult {
+    let unheld = engine(spec.clone(), HTTP_BUDGET, parallel)
+        .execute_collect(workflow_id, BTreeMap::new())
+        .await;
+    let preceding = completion_position(&unheld);
+
+    let signal = Arc::new(CompletionSignal::default());
+    let engine = engine_builder(spec, HTTP_BUDGET, parallel)
+        .channel_capacity(preceding)
+        .observer(Arc::clone(&signal) as Arc<dyn ExecutionObserver>)
+        .build()
+        .unwrap_or_else(|err| panic!("building held cancellation engine: {err}"));
+    let handle = engine.execute(workflow_id, BTreeMap::new());
+    if tokio::time::timeout(READY_BOUND, signal.reported.notified())
+        .await
+        .is_err()
+    {
+        panic!("the held invocation never reported WorkflowCompleted");
+    }
+    handle.cancel_token().cancel();
+    let result = completed_within_bound(
+        collect_with_bound(handle).await,
+        "the held invocation must finish once its stream drains",
+    );
+    assert_eq!(
+        completion_position(&result),
+        preceding,
+        "WorkflowCompleted must be the send that waited for the drain"
+    );
+    result
+}
+
+/// The `error` of every `WorkflowCompleted` the stream reported, in order.
+fn reported_completions(result: &ExecutionResult) -> Vec<Option<&str>> {
+    result
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::Observer(ObserverEvent::WorkflowCompleted { error, .. }) => {
+                Some(error.as_deref())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The invocation's result agrees with the one `WorkflowCompleted` its stream
+/// reported: `error: None` pairs with `Ok`, and `error: Some(message)` with an
+/// error that carries that message.
+fn assert_result_matches_reported_completion(result: &ExecutionResult) {
+    let reported = reported_completions(result);
+    let returned = match &result.outputs {
+        Ok(_) => None,
+        Err(err) => Some(err.message.as_str()),
+    };
+    assert_eq!(
+        reported,
+        [returned],
+        "the stream reported {reported:?}, but the invocation returned {:?}",
+        result.outputs
+    );
+}
+
+/// Two steps that share one parallel level; `second` requests `second_path`.
+fn one_level_spec(base_url: &str, second_path: &str) -> arazzo_spec::ArazzoSpec {
+    make_spec_with_base(
+        base_url,
+        vec![Workflow {
+            workflow_id: "level".to_string(),
+            steps: vec![
+                request_step("first", "/first"),
+                request_step("second", second_path),
+            ],
+            ..Workflow::default()
+        }],
+    )
+}
+
+/// `main`'s only step fails, and its failure action hands the invocation to
+/// `target` with a goto.
+fn goto_workflow_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
+    let mut hop = request_step("hop", "/fail");
+    hop.on_failure = vec![OnAction {
+        type_: Some(ActionType::Goto),
+        workflow_id: "target".to_string(),
+        ..OnAction::default()
+    }];
+    make_spec_with_base(
+        base_url,
+        vec![
+            Workflow {
+                workflow_id: "main".to_string(),
+                steps: vec![hop],
+                ..Workflow::default()
+            },
+            Workflow {
+                workflow_id: "target".to_string(),
+                steps: vec![request_step("land", "/landed")],
+                ..Workflow::default()
+            },
+        ],
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_cancel_interrupts_pending_headers_via_execute() {
     let mut server = StallServer::start("/stall", StallPhase::Headers);
@@ -751,6 +895,40 @@ async fn parallel_external_cancel_records_the_level_without_completing_the_workf
         assert_step_recorded(&result, &observer, step_id);
     }
     assert_not_reported_completed(&result, &observer);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_success_reported_before_a_cancel_stays_a_success() {
+    let server = StallServer::start("/never", StallPhase::Headers);
+    let spec = one_level_spec(&server.base_url, "/second");
+    let result = cancel_while_completion_is_reported(spec, true, "level").await;
+
+    assert_eq!(reported_completions(&result), [None]);
+    assert_result_matches_reported_completion(&result);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_failure_reported_before_a_cancel_stays_that_failure() {
+    let server = StallServer::start("/never", StallPhase::Headers);
+    let spec = one_level_spec(&server.base_url, "/fail");
+    let result = cancel_while_completion_is_reported(spec, true, "level").await;
+
+    assert!(matches!(
+        reported_completions(&result).as_slice(),
+        [Some(_)]
+    ));
+    assert_result_matches_reported_completion(&result);
+    assert_error_kind(&result, RuntimeErrorKind::SuccessCriteriaFailed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goto_target_success_reported_before_a_cancel_stays_a_success() {
+    let server = StallServer::start("/never", StallPhase::Headers);
+    let spec = goto_workflow_spec(&server.base_url);
+    let result = cancel_while_completion_is_reported(spec, false, "main").await;
+
+    assert_eq!(reported_completions(&result), [None]);
+    assert_result_matches_reported_completion(&result);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

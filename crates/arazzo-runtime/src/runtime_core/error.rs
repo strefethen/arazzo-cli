@@ -114,6 +114,14 @@ impl RuntimeErrorKind {
             Self::IterationLimitExceeded => "RUNTIME_ITERATION_LIMIT_EXCEEDED",
         }
     }
+
+    /// Whether an error of this kind ends an invocation because its execution
+    /// was cancelled: `ExecutionCancelled`, or `ExecutionTimeout` when the
+    /// execution timeout fired. During execution only
+    /// `control::cancellation_error` produces either kind.
+    pub(crate) fn is_cancellation(self) -> bool {
+        matches!(self, Self::ExecutionCancelled | Self::ExecutionTimeout)
+    }
 }
 
 #[derive(Debug)]
