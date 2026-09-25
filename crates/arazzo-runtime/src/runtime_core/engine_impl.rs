@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use super::step_attempt::{count_retry, RouteScope};
 use super::*;
 
 impl Engine {
@@ -482,7 +483,7 @@ impl Engine {
                     Engine::push_sequential_fallback(exec_ctx, fallback).await;
                 } else {
                     let result = self
-                        .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
+                        .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars, depth)
                         .await;
                     // execute_parallel settles cancellation before it reports a
                     // terminal outcome, so its result decides: a cancelled
@@ -520,111 +521,27 @@ impl Engine {
                     .await?;
                 exec_ctx.check_cancelled()?;
 
-                self.emit_before_step_event(exec_ctx, workflow_id, &step)
-                    .await;
+                let begun = self.begin_attempt(exec_ctx, workflow_id, &step).await;
                 exec_ctx.check_cancelled()?;
 
-                let attempt = if self.inner.trace_enabled {
-                    Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
-                } else {
-                    0
-                };
-
-                let start = Instant::now();
-                let execution = match self
+                let run = self
                     .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, depth)
-                    .await
-                {
-                    Ok(execution) => execution,
-                    Err(err) => {
-                        // Route runtime errors (HTTP timeout, connection refused, etc.)
-                        // through onFailure action handlers instead of failing immediately.
-                        // The Arazzo spec says onFailure should handle ALL forms of step failure.
-                        StepExecution {
-                            result: StepResult {
-                                success: false,
-                                response: None,
-                                err: Some(err.message.clone()),
-                                err_kind: Some(err.kind),
-                            },
-                            outputs: BTreeMap::new(),
-                            dry_run_request: None,
-                            trace: StepTraceData::default(),
-                        }
-                    }
-                };
-                let duration = start.elapsed();
-
-                let step_status_code = execution
-                    .result
-                    .response
-                    .as_ref()
-                    .map(|r| r.status_code)
-                    .unwrap_or(0);
-
-                // Each record carries this attempt's own outputs. `vars` keeps
-                // the last successful run's for `$steps` expressions, and a
-                // failed re-run must not be recorded with them.
-                self.emit_after_step_event(
-                    exec_ctx,
-                    workflow_id,
-                    &step,
-                    step_status_code,
-                    execution.outputs.clone(),
-                    execution.result.err.clone(),
-                    duration,
-                )
-                .await;
-
-                self.emit_step_completed_event(
-                    exec_ctx,
-                    workflow_id,
-                    &step,
-                    step_status_code,
-                    duration,
-                    execution.outputs.clone(),
-                    execution.result.err.clone(),
-                    execution.result.success,
-                )
-                .await;
-
-                let mut action = self
-                    .handle_step_result(StepDecisionContext {
-                        workflow_id,
-                        workflow: &workflow,
-                        step_idx: step_index,
-                        result: &execution.result,
-                        vars: &vars,
-                        depth,
-                        retry_count: &retry_count,
-                        cancel: &exec_ctx.cancel,
-                        is_timeout: &exec_ctx.is_timeout,
-                    })
                     .await;
-                if exec_ctx.cancel.is_cancelled() {
-                    action = engine_actions::RoutedDecision::error(exec_ctx.cancelled_error());
-                }
-
-                let trace_err = match &action.flow {
-                    FlowDecision::Error(err) => Some(err.message.clone()),
-                    _ => execution.result.err.clone(),
+                let scope = RouteScope {
+                    workflow_id,
+                    workflow: &workflow,
+                    step_idx: step_index,
+                    vars: &vars,
+                    depth,
+                    retry_count: &retry_count,
+                    cancel: &exec_ctx.cancel,
+                    is_timeout: &exec_ctx.is_timeout,
                 };
-                if self.inner.trace_enabled {
-                    let record = Engine::build_step_trace_record(
-                        exec_ctx,
-                        workflow_id,
-                        &step,
-                        attempt,
-                        duration,
-                        &execution.trace,
-                        action.trace.clone(),
-                        execution.outputs,
-                        trace_err,
-                    );
-                    Engine::push_trace_record(exec_ctx, record).await;
-                }
+                let (_settled, flow) = self
+                    .finish_attempt(exec_ctx, &step, begun, run, scope)
+                    .await;
                 exec_ctx.check_cancelled()?;
-                match action.flow {
+                match flow {
                     FlowDecision::Done => {
                         completed = true;
                         break;
@@ -673,18 +590,13 @@ impl Engine {
                             }
                             exec_ctx.check_cancelled()?;
                         }
-                        let value = retry_count.entry(retry_site).or_insert(0);
-                        *value += 1;
-                        let retry_step = &workflow.steps[idx];
-                        self.emit_observer_event(
+                        let retry =
+                            count_retry(&mut retry_count, retry_site, retry_limit, delay_seconds);
+                        self.emit_retry_scheduled(
                             exec_ctx,
-                            ObserverEvent::RetryScheduled {
-                                workflow_id: workflow_id.to_string(),
-                                step_id: retry_step.step_id.clone(),
-                                attempt: *value,
-                                max_attempts: retry_limit,
-                                delay_seconds,
-                            },
+                            workflow_id,
+                            &workflow.steps[idx].step_id,
+                            retry,
                         )
                         .await;
                         exec_ctx.check_cancelled()?;

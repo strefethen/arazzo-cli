@@ -52,6 +52,7 @@ mod payload;
 mod redaction;
 mod replay;
 mod state;
+mod step_attempt;
 mod url;
 mod xpath;
 

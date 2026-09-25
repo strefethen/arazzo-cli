@@ -667,7 +667,7 @@ pub(super) struct RetrySite {
 }
 
 impl RetrySite {
-    fn new(step_index: usize, action_index: usize) -> Self {
+    pub(super) fn new(step_index: usize, action_index: usize) -> Self {
         Self {
             step_index,
             action_index,

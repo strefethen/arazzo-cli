@@ -13,7 +13,9 @@ use arazzo_runtime::{
     Engine, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionObserver, ExecutionResult,
     ObserverEvent, RuntimeErrorKind, TraceStepRecord,
 };
-use arazzo_spec::{ActionType, OnAction, ParamLocation, Parameter, Step, StepTarget, Workflow};
+use arazzo_spec::{
+    ActionType, OnAction, ParamLocation, Parameter, Step, StepTarget, SuccessCriterion, Workflow,
+};
 use common::{
     find_event_pos, logged_requests, make_spec_with_base, new_request_log, record_request,
     start_server, start_server_concurrent, success_200, MockHttpResponse, RequestLog, TestObserver,
@@ -448,5 +450,210 @@ async fn execute_step_observer_follows_the_stream() {
             "RequestSent:s1:GET",
             "CriterionEvaluated:s1:0:true",
         ]
+    );
+}
+
+// ── Sequential and parallel runs record each attempt alike ──────────
+
+const PARITY_WORKFLOW: &str = "parity";
+
+/// A `GET /<step_id>` step that must answer 200, retries a 503 at most
+/// `retry_limit` times, and outputs the response's `ok` field.
+fn retried_step(step_id: &str, retry_limit: u64) -> Step {
+    Step {
+        step_id: step_id.to_string(),
+        target: Some(StepTarget::OperationPath(format!("/{step_id}"))),
+        success_criteria: success_200(),
+        outputs: BTreeMap::from([("ok".to_string(), "$response.body#/ok".into())]),
+        on_failure: vec![OnAction {
+            name: "retry-unavailable".to_string(),
+            type_: Some(ActionType::Retry),
+            retry_limit: Some(retry_limit),
+            criteria: vec![SuccessCriterion {
+                condition: "$statusCode == 503".to_string(),
+                ..SuccessCriterion::default()
+            }],
+            ..OnAction::default()
+        }],
+        ..Step::default()
+    }
+}
+
+/// Three independent steps, which parallel execution runs as one level.
+fn parity_workflow() -> Workflow {
+    Workflow {
+        workflow_id: PARITY_WORKFLOW.to_string(),
+        steps: vec![
+            retried_step("s1", 2),
+            retried_step("s2", 2),
+            retried_step("s3", 3),
+        ],
+        ..Workflow::default()
+    }
+}
+
+/// `/s1` answers 503 once, `/s2` never, and `/s3` twice, then 200
+/// `{"ok":true}`. `/s1` answers after 60ms, `/s2` after 5ms, and `/s3` after
+/// 20ms, so the attempts of a parallel level finish out of step order.
+fn start_parity_server() -> TestServer {
+    let hits = Mutex::new(BTreeMap::<String, usize>::new());
+    start_server_concurrent(move |_method, url, _headers, _body| {
+        let (delay_ms, failures) = match url.as_str() {
+            "/s1" => (60, 1),
+            "/s2" => (5, 0),
+            "/s3" => (20, 2),
+            _ => return MockHttpResponse::empty(404),
+        };
+        let hit = {
+            let mut hits = hits.lock().unwrap_or_else(PoisonError::into_inner);
+            let count = hits.entry(url).or_insert(0);
+            *count += 1;
+            *count
+        };
+        thread::sleep(Duration::from_millis(delay_ms));
+        if hit <= failures {
+            MockHttpResponse::empty(503)
+        } else {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+    })
+}
+
+/// One traced run of `parity_workflow` against a server of its own.
+struct ParityRun {
+    base_url: String,
+    result: ExecutionResult,
+}
+
+async fn run_parity_workflow(parallel: bool) -> ParityRun {
+    let server = start_parity_server();
+    let engine = build_engine(
+        EngineBuilder::new(make_spec_with_base(
+            &server.base_url,
+            vec![parity_workflow()],
+        ))
+        .parallel(parallel)
+        .trace(true),
+    );
+    let result = engine
+        .execute_collect(PARITY_WORKFLOW, BTreeMap::new())
+        .await;
+    if let Err(err) = &result.outputs {
+        panic!("expected every retry to succeed (parallel: {parallel}), got: {err}");
+    }
+    ParityRun {
+        base_url: server.base_url.clone(),
+        result,
+    }
+}
+
+/// A trace record's workflow, step, and attempt.
+type AttemptKey = (String, String, u32);
+
+/// The run's trace records by attempt, less what differs between two runs
+/// of the same responses: `seq`, the duration, the request URL's origin
+/// (each run has its own server), and the response headers, where tiny_http
+/// stamps a `Date`.
+fn comparable_trace_records(run: &ParityRun) -> BTreeMap<AttemptKey, TraceStepRecord> {
+    let mut records = BTreeMap::new();
+    for record in run.result.trace_steps() {
+        let key = (
+            record.workflow_id.clone(),
+            record.step_id.clone(),
+            record.attempt,
+        );
+        let mut record = record.clone();
+        record.seq = 0;
+        record.duration_ms = 0;
+        if let Some(request) = record.request.as_mut() {
+            request.url = match request.url.strip_prefix(&run.base_url) {
+                Some(path) => path.to_string(),
+                None => panic!(
+                    "{key:?} requested {:?}, not its own server {}",
+                    request.url, run.base_url
+                ),
+            };
+        }
+        if let Some(response) = record.response.as_mut() {
+            response.headers.clear();
+        }
+        if records.insert(key.clone(), record).is_some() {
+            panic!("more than one trace record for {key:?}");
+        }
+    }
+    records
+}
+
+/// What an AfterStep event reports: status code, outputs, and error.
+type Completion = (i64, Outputs, Option<String>);
+
+/// Each step's AfterStep events, in occurrence order.
+fn completions_by_step(result: &ExecutionResult) -> BTreeMap<String, Vec<Completion>> {
+    let mut completions = BTreeMap::<String, Vec<Completion>>::new();
+    for event in result.execution_events() {
+        if event.kind == ExecutionEventKind::AfterStep {
+            completions.entry(event.step_id.clone()).or_default().push((
+                event.status_code,
+                event.outputs.clone(),
+                event.err.clone(),
+            ));
+        }
+    }
+    completions
+}
+
+#[tokio::test]
+async fn sequential_and_parallel_runs_record_each_attempt_alike() {
+    let sequential = run_parity_workflow(false).await;
+    let parallel = run_parity_workflow(true).await;
+    let fallbacks = parallel.result.sequential_fallbacks();
+    assert!(
+        fallbacks.is_empty(),
+        "the steps must run as one parallel level: {fallbacks:?}"
+    );
+
+    // `s1` is retried once, `s2` never, and `s3` twice.
+    let attempts = [
+        ("s1", 1),
+        ("s1", 2),
+        ("s2", 1),
+        ("s3", 1),
+        ("s3", 2),
+        ("s3", 3),
+    ]
+    .map(|(step, attempt)| (PARITY_WORKFLOW.to_string(), step.to_string(), attempt));
+    let sequential_records = comparable_trace_records(&sequential);
+    let parallel_records = comparable_trace_records(&parallel);
+    assert_eq!(
+        sequential_records.keys().cloned().collect::<Vec<_>>(),
+        attempts
+    );
+    assert_eq!(
+        parallel_records.keys().cloned().collect::<Vec<_>>(),
+        attempts
+    );
+    for (key, record) in &sequential_records {
+        assert_eq!(
+            parallel_records.get(key),
+            Some(record),
+            "parallel trace record of {key:?} against the sequential one"
+        );
+    }
+
+    let failed: Completion = (503, Outputs::new(), None);
+    let passed: Completion = (200, BTreeMap::from([("ok".to_string(), json!(true))]), None);
+    let sequential_completions = completions_by_step(&sequential.result);
+    assert_eq!(
+        sequential_completions,
+        BTreeMap::from([
+            ("s1".to_string(), vec![failed.clone(), passed.clone()]),
+            ("s2".to_string(), vec![passed.clone()]),
+            ("s3".to_string(), vec![failed.clone(), failed, passed]),
+        ])
+    );
+    assert_eq!(
+        completions_by_step(&parallel.result),
+        sequential_completions,
+        "parallel AfterStep events against the sequential ones"
     );
 }

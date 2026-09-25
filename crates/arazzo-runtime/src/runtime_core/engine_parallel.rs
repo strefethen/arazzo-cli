@@ -1,3 +1,4 @@
+use super::step_attempt::{count_retry, settle, RouteScope, ScheduledRetry, SettledAttempt};
 use super::*;
 
 impl Engine {
@@ -37,6 +38,7 @@ impl Engine {
         workflow_id: &str,
         workflow: &Workflow,
         vars: &mut VarStore,
+        depth: usize,
     ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let workflow_start = Instant::now();
         let levels = build_levels(workflow)?;
@@ -79,6 +81,7 @@ impl Engine {
                             step_idx: idx,
                             step: &step,
                             vars: &step_vars,
+                            depth,
                             cancel: &cancel,
                             is_timeout: &is_timeout,
                         })
@@ -194,25 +197,18 @@ impl Engine {
         for (attempt, retry) in retried {
             self.replay_parallel_attempt(exec_ctx, workflow_id, step, attempt, announce)
                 .await;
-            self.emit_observer_event(
-                exec_ctx,
-                ObserverEvent::RetryScheduled {
-                    workflow_id: workflow_id.to_string(),
-                    step_id: step.step_id.clone(),
-                    attempt: retry.attempt,
-                    max_attempts: retry.max_attempts,
-                    delay_seconds: retry.delay_seconds,
-                },
-            )
-            .await;
+            self.emit_retry_scheduled(exec_ctx, workflow_id, &step.step_id, retry)
+                .await;
             announce = true;
         }
-        let execution = self
+        let last = self
             .replay_parallel_attempt(exec_ctx, workflow_id, step, last, announce)
             .await;
-        (execution, flow)
+        (last.execution, flow)
     }
 
+    /// Replays one attempt: announces it when it retries the step, forwards
+    /// the events it buffered, and records it.
     async fn replay_parallel_attempt(
         &self,
         exec_ctx: &ExecutionContext,
@@ -220,23 +216,12 @@ impl Engine {
         step: &Step,
         attempt: ParallelAttempt,
         announce: bool,
-    ) -> StepExecution {
+    ) -> SettledAttempt {
         if announce {
             self.emit_before_step_event(exec_ctx, workflow_id, step)
                 .await;
         }
-        let attempt_number = if self.inner.trace_enabled {
-            Engine::next_attempt(exec_ctx, workflow_id, &step.step_id)
-        } else {
-            0
-        };
-        let ParallelAttempt {
-            execution,
-            duration,
-            events,
-            decision,
-            trace_error,
-        } = attempt;
+        let ParallelAttempt { events, settled } = attempt;
 
         // Replay intra-step events through the parent context. Each observer
         // event reaches the observer as it enters the invocation's stream.
@@ -249,51 +234,9 @@ impl Engine {
             }
         }
 
-        let status_code = execution
-            .result
-            .response
-            .as_ref()
-            .map(|r| r.status_code)
-            .unwrap_or(0);
-
-        self.emit_after_step_event(
-            exec_ctx,
-            workflow_id,
-            step,
-            status_code,
-            execution.outputs.clone(),
-            execution.result.err.clone(),
-            duration,
-        )
-        .await;
-
-        self.emit_step_completed_event(
-            exec_ctx,
-            workflow_id,
-            step,
-            status_code,
-            duration,
-            execution.outputs.clone(),
-            execution.result.err.clone(),
-            execution.result.success,
-        )
-        .await;
-
-        if self.inner.trace_enabled {
-            let record = Engine::build_step_trace_record(
-                exec_ctx,
-                workflow_id,
-                step,
-                attempt_number,
-                duration,
-                &execution.trace,
-                decision,
-                execution.outputs.clone(),
-                trace_error,
-            );
-            Engine::push_trace_record(exec_ctx, record).await;
-        }
-        execution
+        self.record_settled(exec_ctx, workflow_id, step, &settled)
+            .await;
+        settled
     }
 
     /// Runs one step of a parallel level to its routing outcome.
@@ -309,26 +252,19 @@ impl Engine {
         let mut retry_count = BTreeMap::<RetrySite, u64>::new();
         loop {
             let (execution, duration, events) = self.execute_parallel_attempt(&ctx).await;
-            let mut decision = self
-                .handle_step_result(StepDecisionContext {
-                    workflow_id: ctx.workflow_id,
-                    workflow: ctx.workflow,
-                    step_idx: ctx.step_idx,
-                    result: &execution.result,
-                    vars: ctx.vars,
-                    depth: 0,
-                    retry_count: &retry_count,
-                    cancel: ctx.cancel,
-                    is_timeout: ctx.is_timeout,
-                })
-                .await;
-            if ctx.cancel.is_cancelled() {
-                decision = engine_actions::RoutedDecision::error(control::cancellation_error(
-                    ctx.is_timeout,
-                ));
-            }
+            let scope = RouteScope {
+                workflow_id: ctx.workflow_id,
+                workflow: ctx.workflow,
+                step_idx: ctx.step_idx,
+                vars: ctx.vars,
+                depth: ctx.depth,
+                retry_count: &retry_count,
+                cancel: ctx.cancel,
+                is_timeout: ctx.is_timeout,
+            };
+            let mut routed = self.route_attempt(&scope, &execution).await;
             if matches!(
-                decision.flow,
+                routed.flow,
                 FlowDecision::Retry {
                     reference: Some(_),
                     ..
@@ -336,39 +272,23 @@ impl Engine {
             ) {
                 // parallel_blocker keeps both out of parallel levels; fail
                 // loudly if that guard is ever relaxed rather than skip one.
-                decision = engine_actions::RoutedDecision::error(RuntimeError::new(
+                routed = engine_actions::RoutedDecision::error(RuntimeError::new(
                     RuntimeErrorKind::InternalError,
                     "parallel execution does not support Retry/GotoWorkflow flow decisions",
                 ));
             }
-            let trace_error = match &decision.flow {
-                FlowDecision::Error(err) => Some(err.message.clone()),
-                _ => execution.result.err.clone(),
-            };
-            let attempt = ParallelAttempt {
-                execution,
-                duration,
-                events,
-                decision: decision.trace,
-                trace_error,
-            };
-            match decision.flow {
+            let (settled, flow) = SettledAttempt::new(execution, duration, routed);
+            let attempt = ParallelAttempt { events, settled };
+            match flow {
                 FlowDecision::Retry {
                     retry_site,
                     retry_limit,
                     delay_seconds,
                     ..
                 } => {
-                    let count = retry_count.entry(retry_site).or_insert(0);
-                    *count += 1;
-                    retried.push((
-                        attempt,
-                        ScheduledRetry {
-                            attempt: *count,
-                            max_attempts: retry_limit,
-                            delay_seconds,
-                        },
-                    ));
+                    let retry =
+                        count_retry(&mut retry_count, retry_site, retry_limit, delay_seconds);
+                    retried.push((attempt, retry));
                 }
                 flow => {
                     return ParallelStepRun {
@@ -381,9 +301,9 @@ impl Engine {
         }
     }
 
-    /// Runs one attempt against a private event buffer: the invocation's
-    /// stream, and the observer with it, receives the attempt's events in step
-    /// order once the level ends.
+    /// Runs one attempt against a private event buffer and settles it: the
+    /// invocation's stream, and the observer with it, receives the attempt's
+    /// events in step order once the level ends.
     async fn execute_parallel_attempt(
         &self,
         ctx: &ParallelStepContext<'_>,
@@ -404,7 +324,7 @@ impl Engine {
 
         let start = Instant::now();
         let execution =
-            self.execute_http_step(&minimal_ctx, ctx.workflow_id, ctx.step, ctx.vars, 0);
+            self.execute_http_step(&minimal_ctx, ctx.workflow_id, ctx.step, ctx.vars, ctx.depth);
         tokio::pin!(execution);
         let mut events = Vec::new();
         let execution = loop {
@@ -422,19 +342,7 @@ impl Engine {
         while let Some(event) = rx.recv().await {
             events.push(event);
         }
-        // Route runtime errors through onFailure handlers, as execute_inner does.
-        let execution = execution.unwrap_or_else(|err| StepExecution {
-            result: StepResult {
-                success: false,
-                response: None,
-                err_kind: Some(err.kind),
-                err: Some(err.message),
-            },
-            outputs: BTreeMap::new(),
-            dry_run_request: None,
-            trace: StepTraceData::default(),
-        });
-        (execution, duration, events)
+        (settle(execution), duration, events)
     }
 }
 
@@ -447,6 +355,8 @@ struct ParallelStepContext<'a> {
     step: &'a Step,
     /// Outputs of every earlier level.
     vars: &'a VarStore,
+    /// The invocation's call depth.
+    depth: usize,
     cancel: &'a CancellationToken,
     is_timeout: &'a Arc<AtomicBool>,
 }
@@ -462,19 +372,11 @@ struct ParallelStepRun {
     flow: FlowDecision,
 }
 
+/// One attempt as its task left it: the events it buffered, beside how it
+/// settled and was routed.
 #[derive(Debug)]
 struct ParallelAttempt {
-    execution: StepExecution,
-    duration: Duration,
     /// Events the attempt emitted while it ran.
     events: Vec<EngineEvent>,
-    decision: TraceDecision,
-    trace_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ScheduledRetry {
-    attempt: u64,
-    max_attempts: u64,
-    delay_seconds: f64,
+    settled: SettledAttempt,
 }
