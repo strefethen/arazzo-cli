@@ -5,13 +5,13 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{
     Engine, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionObserver, ExecutionResult,
-    ObserverEvent, RuntimeErrorKind, TraceStepRecord,
+    ObserverEvent, RuntimeErrorKind, TraceHook, TraceStepRecord,
 };
 use arazzo_spec::{
     ActionType, OnAction, ParamLocation, Parameter, Step, StepTarget, SuccessCriterion, Workflow,
@@ -19,9 +19,10 @@ use arazzo_spec::{
 use common::{
     find_event_pos, logged_requests, make_spec_with_base, new_request_log, record_request,
     start_server, start_server_concurrent, success_200, MockHttpResponse, RequestLog, TestObserver,
-    TestServer,
+    TestServer, TestTraceHook,
 };
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 type Outputs = BTreeMap<String, Value>;
 
@@ -218,7 +219,10 @@ async fn execute_records_a_failed_rerun_with_its_own_empty_outputs() {
 async fn execute_step_traces_a_failed_rerun_with_its_own_empty_outputs() {
     let requests = new_request_log();
     let server = start_rerun_server(&requests);
-    let engine = build_engine(rerun_engine(&server));
+    let observer = Arc::new(RecordingObserver::default());
+    let engine = build_engine(
+        rerun_engine(&server).observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>),
+    );
 
     let result = engine
         .execute_step(RERUN_WORKFLOW, "b", BTreeMap::new(), false)
@@ -226,9 +230,16 @@ async fn execute_step_traces_a_failed_rerun_with_its_own_empty_outputs() {
         .await;
 
     assert_rerun_path(&result, &requests);
-    // `execute_step` emits no AfterStep or StepCompleted events, so its trace
-    // records are the only record of each attempt.
     assert_rerun_trace_records(&result);
+    // `execute_step` completes each attempt as `execute` does.
+    assert_eq!(
+        after_step_outputs(&result, "a"),
+        [tok("t1"), Outputs::new()]
+    );
+    assert_eq!(
+        observer.step_completed_outputs("a"),
+        [tok("t1"), Outputs::new()]
+    );
 }
 
 // ── Observer callbacks follow the event stream ─────────────────────
@@ -438,17 +449,23 @@ async fn execute_step_observer_follows_the_stream() {
     if let Err(err) = &result.outputs {
         panic!("expected s1's retry to succeed, got: {err}");
     }
-    // `execute_step` reports no step or workflow lifecycle to the observer.
+    // `execute_step` reports each attempt's lifecycle to the observer, as
+    // `execute` does, but no workflow lifecycle: it does not run the
+    // workflow to completion.
     assert_eq!(
         callbacks_matching_stream(&observer, &result),
         [
+            "StepStarted:s1",
             "RequestPrepared:s1:GET",
             "RequestSent:s1:GET",
             "CriterionEvaluated:s1:0:false",
+            "StepCompleted:s1:false",
             "RetryScheduled:s1:1/1",
+            "StepStarted:s1",
             "RequestPrepared:s1:GET",
             "RequestSent:s1:GET",
             "CriterionEvaluated:s1:0:true",
+            "StepCompleted:s1:true",
         ]
     );
 }
@@ -655,5 +672,256 @@ async fn sequential_and_parallel_runs_record_each_attempt_alike() {
         completions_by_step(&parallel.result),
         sequential_completions,
         "parallel AfterStep events against the sequential ones"
+    );
+}
+
+// ── `run --step` records each attempt as `execute` does ─────────────
+
+const SINGLE_STEP_WORKFLOW: &str = "single";
+
+/// One step, `s`, whose first attempt fails and whose retry succeeds.
+fn single_step_workflow() -> Workflow {
+    Workflow {
+        workflow_id: SINGLE_STEP_WORKFLOW.to_string(),
+        steps: vec![retried_step("s", 1)],
+        ..Workflow::default()
+    }
+}
+
+/// `/s` answers 503 once, then 200 `{"ok":true}`.
+fn start_single_step_server() -> TestServer {
+    let hits = AtomicUsize::new(0);
+    start_server(move |_method, url, _headers, _body| {
+        if url != "/s" {
+            return MockHttpResponse::empty(404);
+        }
+        if hits.fetch_add(1, Ordering::SeqCst) == 0 {
+            MockHttpResponse::empty(503)
+        } else {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+    })
+}
+
+/// One traced run of `single_step_workflow`, with what its observer and
+/// trace hook received.
+struct LifecycleRun {
+    result: ExecutionResult,
+    observer: Arc<TestObserver>,
+    hook: Arc<TestTraceHook>,
+}
+
+/// Runs `single_step_workflow` against a server of its own: the whole
+/// workflow through `execute`, or, with `single_step`, only its step through
+/// `execute_step` without dependencies.
+async fn run_single_step_workflow(single_step: bool) -> LifecycleRun {
+    let server = start_single_step_server();
+    let observer = Arc::new(TestObserver::default());
+    let hook = Arc::new(TestTraceHook::default());
+    let engine = build_engine(
+        EngineBuilder::new(make_spec_with_base(
+            &server.base_url,
+            vec![single_step_workflow()],
+        ))
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>),
+    );
+    let handle = if single_step {
+        engine.execute_step(SINGLE_STEP_WORKFLOW, "s", BTreeMap::new(), true)
+    } else {
+        engine.execute(SINGLE_STEP_WORKFLOW, BTreeMap::new())
+    };
+    let result = handle.collect().await;
+    if let Err(err) = &result.outputs {
+        panic!("expected s's retry to succeed (single step: {single_step}), got: {err}");
+    }
+    LifecycleRun {
+        result,
+        observer,
+        hook,
+    }
+}
+
+/// One token per step lifecycle record, in stream order: BeforeStep and
+/// AfterStep events, each trace record's attempt and decision, and
+/// `RetryScheduled`.
+fn lifecycle_tokens(result: &ExecutionResult) -> Vec<String> {
+    result
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::Execution(event) => {
+                let kind = match event.kind {
+                    ExecutionEventKind::BeforeStep => "before",
+                    ExecutionEventKind::AfterStep => "after",
+                    _ => "other",
+                };
+                Some(format!("{kind}:{}", event.step_id))
+            }
+            EngineEvent::TraceStep(record) => Some(format!(
+                "trace:{}#{}:{:?}",
+                record.step_id, record.attempt, record.decision.path
+            )),
+            EngineEvent::Observer(ObserverEvent::RetryScheduled {
+                step_id,
+                attempt,
+                max_attempts,
+                ..
+            }) => Some(format!("retry:{step_id}:{attempt}/{max_attempts}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many before and after calls a trace hook received.
+fn hook_calls(hook: &TestTraceHook) -> (usize, usize) {
+    let before = hook
+        .before_events
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .len();
+    let after = hook
+        .after_events
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .len();
+    (before, after)
+}
+
+#[tokio::test]
+async fn execute_step_records_each_attempt_as_execute_does() {
+    let workflow = run_single_step_workflow(false).await;
+    let single_step = run_single_step_workflow(true).await;
+
+    let tokens = lifecycle_tokens(&workflow.result);
+    assert_eq!(
+        tokens,
+        [
+            "before:s",
+            "after:s",
+            "trace:s#1:Retry",
+            "retry:s:1/1",
+            "before:s",
+            "after:s",
+            "trace:s#2:Next",
+        ]
+    );
+    assert_eq!(
+        lifecycle_tokens(&single_step.result),
+        tokens,
+        "execute_step's step lifecycle against execute's"
+    );
+
+    // Only `execute` runs the workflow to completion.
+    let mut tags = workflow.observer.events();
+    assert_eq!(tags.pop().as_deref(), Some("WorkflowCompleted:single:ok"));
+    assert_eq!(
+        single_step.observer.events(),
+        tags,
+        "execute_step's observer callbacks against execute's"
+    );
+
+    assert_eq!(hook_calls(&single_step.hook), (2, 2));
+}
+
+/// Tags each observer callback as `TestObserver` does, and cancels the
+/// invocation from inside a `StepStarted` callback, which runs while the
+/// attempt is being announced, before the event enters the stream.
+#[derive(Default)]
+struct CancelOnStepStarted {
+    token: OnceLock<CancellationToken>,
+    tags: TestObserver,
+}
+
+impl ExecutionObserver for CancelOnStepStarted {
+    fn on_event(&self, event: &ObserverEvent) {
+        self.tags.on_event(event);
+        if let (ObserverEvent::StepStarted { .. }, Some(token)) = (event, self.token.get()) {
+            token.cancel();
+        }
+    }
+}
+
+/// One run of `single_step_workflow` cancelled while its attempt is being
+/// announced, with what its observer and server received.
+struct CancelledRun {
+    result: ExecutionResult,
+    observer: Arc<CancelOnStepStarted>,
+    requests: RequestLog,
+}
+
+/// Runs `single_step_workflow` as `run_single_step_workflow` does, with an
+/// observer that cancels the run when its step is announced.
+///
+/// The caller must use a current-thread runtime. Its spawned invocation
+/// cannot run before this function first awaits, so the observer holds the
+/// handle's token before the step is announced.
+async fn run_cancelled_during_announcement(single_step: bool) -> CancelledRun {
+    let requests = new_request_log();
+    let log = Arc::clone(&requests);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&log, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+    let observer = Arc::new(CancelOnStepStarted::default());
+    let engine = build_engine(
+        EngineBuilder::new(make_spec_with_base(
+            &server.base_url,
+            vec![single_step_workflow()],
+        ))
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>),
+    );
+    let handle = if single_step {
+        engine.execute_step(SINGLE_STEP_WORKFLOW, "s", BTreeMap::new(), true)
+    } else {
+        engine.execute(SINGLE_STEP_WORKFLOW, BTreeMap::new())
+    };
+    assert!(
+        observer.token.set(handle.cancel_token().clone()).is_ok(),
+        "the observer receives one token"
+    );
+    let result = handle.collect().await;
+    CancelledRun {
+        result,
+        observer,
+        requests,
+    }
+}
+
+// The runtime flavor is load-bearing: see `run_cancelled_during_announcement`.
+#[tokio::test(flavor = "current_thread")]
+async fn execute_step_ends_an_attempt_cancelled_during_its_announcement_as_execute_does() {
+    let workflow = run_cancelled_during_announcement(false).await;
+    let single_step = run_cancelled_during_announcement(true).await;
+
+    for (mode, run) in [("execute", &workflow), ("execute_step", &single_step)] {
+        match &run.result.outputs {
+            Err(err) => assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled, "{mode}"),
+            Ok(outputs) => panic!("expected {mode} to end cancelled, got {outputs:?}"),
+        }
+        let requests = logged_requests(&run.requests);
+        assert!(
+            requests.is_empty(),
+            "{mode} sent the announced attempt's request: {requests:?}"
+        );
+    }
+
+    // The cancel cuts the attempt's lifecycle after its announcement: no
+    // AfterStep, StepCompleted, or trace record follows.
+    let tokens = lifecycle_tokens(&workflow.result);
+    assert_eq!(tokens, ["before:s"]);
+    assert_eq!(
+        lifecycle_tokens(&single_step.result),
+        tokens,
+        "execute_step's step lifecycle against execute's"
+    );
+    let tags = callbacks_matching_stream(&workflow.observer.tags, &workflow.result);
+    assert_eq!(tags, ["StepStarted:s"]);
+    assert_eq!(
+        callbacks_matching_stream(&single_step.observer.tags, &single_step.result),
+        tags,
+        "execute_step's observer callbacks against execute's"
     );
 }

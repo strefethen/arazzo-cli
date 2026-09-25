@@ -73,7 +73,7 @@ pub(crate) use criteria::{
 pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker};
 use engine_actions::{
     applicable_actions, effective_retry_limit, ActionBranch, FlowDecision, RetryReference,
-    RetrySite, SelectedActionDebugContext, StepDecisionContext,
+    RetrySite, SelectedActionDebugContext,
 };
 use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
