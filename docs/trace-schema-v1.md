@@ -31,6 +31,11 @@ arazzo --json run <spec> <workflow-id> --trace <path>
 - `durationMs` (number)
 - `status` (string: `success` or `failure`)
 - `error` (string, optional on failure)
+- `sequentialFallbacks` (array, optional): workflows that ran their steps one at a time although `parallel` is `true`, one entry per workflow and reason
+  - `workflowId` (string)
+  - `reason` (string: `controlFlowAction`, `retryReference`, `subWorkflowStep`, `debugger`, or `singleStep`)
+  - `stepId` (string, optional): the step that requires sequential execution
+  - `message` (string): the explanation `run --verbose` prints
 
 ## `steps[*]`
 

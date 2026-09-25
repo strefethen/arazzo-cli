@@ -1,17 +1,60 @@
 mod common;
 
 use arazzo_runtime::{
-    EngineBuilder, ExecutionEventKind, ExecutionObserver, RuntimeErrorKind, TraceDecisionPath,
-    TraceHook,
+    DebugController, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionObserver,
+    ExecutionResult, ObserverEvent, RuntimeErrorKind, SequentialFallback, SequentialFallbackReason,
+    TraceDecisionPath, TraceHook,
 };
-use arazzo_spec::{ActionType, OnAction, ParamLocation, Step, StepTarget, Workflow};
+use arazzo_spec::{
+    ActionType, ArazzoSpec, OnAction, ParamLocation, Step, StepTarget, SuccessCriterion, Workflow,
+};
 use common::*;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
+
+fn retry_on_503(retry_limit: u64) -> OnAction {
+    OnAction {
+        name: "retry-unavailable".to_string(),
+        type_: Some(ActionType::Retry),
+        retry_limit: Some(retry_limit),
+        criteria: vec![SuccessCriterion {
+            condition: "$statusCode == 503".to_string(),
+            ..SuccessCriterion::default()
+        }],
+        ..OnAction::default()
+    }
+}
+
+/// A `GET /<step_id>` step that must answer 200.
+fn http_step(step_id: &str, on_failure: Vec<OnAction>) -> Step {
+    Step {
+        step_id: step_id.to_string(),
+        target: Some(StepTarget::OperationPath(format!("/{step_id}"))),
+        success_criteria: success_200(),
+        on_failure,
+        ..Step::default()
+    }
+}
+
+/// Counts requests per path and returns this request's 1-based count.
+fn count_request(hits: &Mutex<BTreeMap<String, usize>>, url: &str) -> usize {
+    let mut guard = hits.lock().unwrap_or_else(PoisonError::into_inner);
+    let count = guard.entry(url.to_string()).or_insert(0);
+    *count += 1;
+    *count
+}
+
+fn request_counts(hits: &Mutex<BTreeMap<String, usize>>) -> BTreeMap<String, usize> {
+    hits.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+fn sequential_fallbacks(result: &ExecutionResult) -> Vec<SequentialFallback> {
+    result.sequential_fallbacks().into_iter().cloned().collect()
+}
 
 // ── Parallel execution tests ────────────────────────────────────────
 
@@ -336,11 +379,8 @@ async fn execute_parallel_fallback_on_control_flow() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine
-        .execute_collect("cf-fallback", BTreeMap::new())
-        .await
-        .outputs;
-    if let Err(err) = result {
+    let result = engine.execute_collect("cf-fallback", BTreeMap::new()).await;
+    if let Err(err) = &result.outputs {
         panic!("expected success, got: {err}");
     }
 
@@ -349,6 +389,44 @@ async fn execute_parallel_fallback_on_control_flow() {
         Err(_) => panic!("reading paths"),
     };
     assert_eq!(observed, vec!["/a".to_string()]);
+    assert_eq!(
+        sequential_fallbacks(&result),
+        vec![SequentialFallback {
+            workflow_id: "cf-fallback".to_string(),
+            reason: SequentialFallbackReason::ControlFlowAction,
+            step_id: "s1".to_string(),
+            message: "workflow \"cf-fallback\" runs sequentially because step \"s1\" has an onSuccess action of type \"end\", which redirects control flow".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn sequential_mode_reports_no_parallel_fallback() {
+    let server = start_server(|_method, _url, _headers, _body| MockHttpResponse::empty(200));
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "not-parallel".to_string(),
+            steps: vec![Step {
+                on_success: vec![OnAction {
+                    name: "stop".to_string(),
+                    type_: Some(ActionType::End),
+                    ..OnAction::default()
+                }],
+                ..http_step("s1", Vec::new())
+            }],
+            ..Workflow::default()
+        }],
+    );
+
+    let engine = new_test_engine(&server.base_url, spec);
+    let result = engine
+        .execute_collect("not-parallel", BTreeMap::new())
+        .await;
+    if let Err(err) = &result.outputs {
+        panic!("expected success, got: {err}");
+    }
+    assert_eq!(sequential_fallbacks(&result), Vec::new());
 }
 
 #[tokio::test]
@@ -400,11 +478,8 @@ async fn execute_parallel_fallback_on_subworkflow() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
-    let result = engine
-        .execute_collect("parent", BTreeMap::new())
-        .await
-        .outputs;
-    if let Err(err) = result {
+    let result = engine.execute_collect("parent", BTreeMap::new()).await;
+    if let Err(err) = &result.outputs {
         panic!("expected success, got: {err}");
     }
 
@@ -413,6 +488,423 @@ async fn execute_parallel_fallback_on_subworkflow() {
         Err(_) => panic!("reading paths"),
     };
     assert_eq!(observed, vec!["/child".to_string(), "/after".to_string()]);
+    // Only the parent falls back; the action-free child runs in levels.
+    assert_eq!(
+        sequential_fallbacks(&result),
+        vec![SequentialFallback {
+            workflow_id: "parent".to_string(),
+            reason: SequentialFallbackReason::SubWorkflowStep,
+            step_id: "call-child".to_string(),
+            message: "workflow \"parent\" runs sequentially because step \"call-child\" calls workflow \"child\"".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn execute_parallel_retries_a_failed_step_inside_its_level() {
+    // "slow" holds its response until "flaky" has been retried. Had the level
+    // fallen back to sequential execution, "flaky" could not start before
+    // "slow" answered, and the wait would time out instead.
+    let retried = Arc::new((Mutex::new(false), Condvar::new()));
+    let released_by_retry = Arc::new(AtomicBool::new(false));
+    let hits = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let (retried_ref, released_ref, hits_ref) = (
+        Arc::clone(&retried),
+        Arc::clone(&released_by_retry),
+        Arc::clone(&hits),
+    );
+    let server = start_server_concurrent(move |_method, url, _headers, _body| {
+        let count = count_request(&hits_ref, &url);
+        let (seen, signal) = &*retried_ref;
+        if url == "/slow" {
+            let guard = seen.lock().unwrap_or_else(PoisonError::into_inner);
+            let (guard, _) = signal
+                .wait_timeout_while(guard, Duration::from_secs(5), |seen| !*seen)
+                .unwrap_or_else(PoisonError::into_inner);
+            released_ref.store(*guard, Ordering::SeqCst);
+            return MockHttpResponse::json(200, r#"{"step":"slow"}"#);
+        }
+        if count == 1 {
+            return MockHttpResponse::empty(503);
+        }
+        *seen.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        signal.notify_all();
+        MockHttpResponse::json(200, r#"{"step":"flaky"}"#)
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "retry-in-level".to_string(),
+            steps: vec![
+                http_step("slow", Vec::new()),
+                Step {
+                    outputs: BTreeMap::from([(
+                        "step".to_string(),
+                        "$response.body#/step".to_string().into(),
+                    )]),
+                    ..http_step("flaky", vec![retry_on_503(1)])
+                },
+            ],
+            outputs: BTreeMap::from([(
+                "answeredBy".to_string(),
+                "$steps.flaky.outputs.step".to_string().into(),
+            )]),
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("retry-in-level", BTreeMap::new())
+        .await;
+    let outputs = match &result.outputs {
+        Ok(outputs) => outputs,
+        Err(err) => panic!("expected the retry to succeed, got: {err}"),
+    };
+
+    assert_eq!(outputs.get("answeredBy"), Some(&json!("flaky")));
+    assert!(
+        released_by_retry.load(Ordering::SeqCst),
+        "\"flaky\" must be retried while \"slow\" is still in flight"
+    );
+    assert_eq!(
+        request_counts(&hits),
+        BTreeMap::from([("/flaky".to_string(), 2), ("/slow".to_string(), 1)])
+    );
+    assert_eq!(sequential_fallbacks(&result), Vec::new());
+}
+
+#[tokio::test]
+async fn execute_parallel_retry_exhausts_its_budget_and_still_records_later_siblings() {
+    let hits = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server_concurrent(move |_method, url, _headers, _body| {
+        count_request(&hits_ref, &url);
+        if url == "/broken" {
+            MockHttpResponse::empty(503)
+        } else {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "exhaust".to_string(),
+            steps: vec![
+                http_step("broken", vec![retry_on_503(2)]),
+                http_step("sibling", Vec::new()),
+            ],
+            ..Workflow::default()
+        }],
+    );
+    let observer = Arc::new(TestObserver::default());
+    let engine = match EngineBuilder::new(spec)
+        .parallel(true)
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine.execute_collect("exhaust", BTreeMap::new()).await;
+    let err = match &result.outputs {
+        Ok(outputs) => panic!("expected the retry budget to run out, got: {outputs:?}"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind, RuntimeErrorKind::RetryLimitExceeded);
+    assert_eq!(err.message, "step broken: max retries (2) exceeded");
+    assert_eq!(
+        request_counts(&hits),
+        BTreeMap::from([("/broken".to_string(), 3), ("/sibling".to_string(), 1)])
+    );
+
+    // "sibling" ran in the same level as "broken", so its request is on the
+    // record even though "broken" is the step that ended the workflow.
+    let trace = result
+        .trace_steps()
+        .into_iter()
+        .map(|record| {
+            (
+                record.step_id.as_str(),
+                record.attempt,
+                record.decision.path.clone(),
+                record.error.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trace,
+        vec![
+            ("broken", 1, TraceDecisionPath::Retry, None),
+            ("broken", 2, TraceDecisionPath::Retry, None),
+            (
+                "broken",
+                3,
+                TraceDecisionPath::Error,
+                Some("step broken: max retries (2) exceeded")
+            ),
+            ("sibling", 1, TraceDecisionPath::Next, None),
+        ]
+    );
+    let events = observer.events();
+    assert!(events.contains(&"StepCompleted:sibling:true".to_string()));
+    assert_eq!(
+        events.last().map(String::as_str),
+        Some("WorkflowCompleted:exhaust:error")
+    );
+}
+
+#[tokio::test]
+async fn execute_parallel_routes_a_failure_after_the_outputs_its_criteria_read() {
+    // "consumer" inherits a workflow-level retry whose criterion reads
+    // "probe"'s outputs. Routed in the same level as "probe", the criterion
+    // would see no output and the failure would end the workflow.
+    let order = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hits = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let (order_ref, hits_ref) = (Arc::clone(&order), Arc::clone(&hits));
+    let server = start_server_concurrent(move |_method, url, _headers, _body| {
+        let count = count_request(&hits_ref, &url);
+        if url == "/probe" {
+            thread::sleep(Duration::from_millis(50));
+        }
+        order_ref
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(url.clone());
+        match (url.as_str(), count) {
+            ("/probe", _) => MockHttpResponse::json(200, r#"{"retryable":true}"#),
+            (_, 1) => MockHttpResponse::empty(503),
+            _ => MockHttpResponse::json(200, r#"{"ok":true}"#),
+        }
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "routing-dependency".to_string(),
+            steps: vec![
+                Step {
+                    outputs: BTreeMap::from([(
+                        "retryable".to_string(),
+                        "$response.body#/retryable".to_string().into(),
+                    )]),
+                    ..http_step("probe", vec![retry_on_503(1)])
+                },
+                http_step("consumer", Vec::new()),
+            ],
+            failure_actions: vec![OnAction {
+                name: "retry-when-probe-allows".to_string(),
+                type_: Some(ActionType::Retry),
+                criteria: vec![SuccessCriterion {
+                    condition: "$steps.probe.outputs.retryable == true".to_string(),
+                    ..SuccessCriterion::default()
+                }],
+                ..OnAction::default()
+            }],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("routing-dependency", BTreeMap::new())
+        .await;
+    if let Err(err) = &result.outputs {
+        panic!("expected the inherited retry to apply, got: {err}");
+    }
+
+    assert_eq!(
+        *order.lock().unwrap_or_else(PoisonError::into_inner),
+        vec!["/probe", "/consumer", "/consumer"]
+    );
+    assert_eq!(sequential_fallbacks(&result), Vec::new());
+}
+
+#[tokio::test]
+async fn execute_parallel_accepts_routing_criteria_that_read_the_routed_step() {
+    // Both steps inherit a retry whose criterion reads "b". A step's routing
+    // never sees its own outputs, so "b" gets no edge to itself: the workflow
+    // runs in levels rather than failing as a dependency cycle.
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "inherited".to_string(),
+        steps: vec![http_step("a", Vec::new()), http_step("b", Vec::new())],
+        failure_actions: vec![OnAction {
+            name: "retry-when-b-allows".to_string(),
+            type_: Some(ActionType::Retry),
+            criteria: vec![SuccessCriterion {
+                condition: "$steps.b.outputs.retryable == true".to_string(),
+                ..SuccessCriterion::default()
+            }],
+            ..OnAction::default()
+        }],
+        ..Workflow::default()
+    }]);
+    let engine = match EngineBuilder::new(spec)
+        .parallel(true)
+        .dry_run(true)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine.execute_collect("inherited", BTreeMap::new()).await;
+    if let Err(err) = &result.outputs {
+        panic!("expected the dry run to succeed, got: {err}");
+    }
+
+    // "a" routes through a criterion that reads "b", so "b" runs a level earlier.
+    let planned = result
+        .dry_run_requests()
+        .iter()
+        .map(|request| request.step_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(planned, vec!["b", "a"]);
+    assert_eq!(sequential_fallbacks(&result), Vec::new());
+}
+
+#[tokio::test]
+async fn execute_parallel_keeps_retry_references_sequential() {
+    let paths = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hits = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let (paths_ref, hits_ref) = (Arc::clone(&paths), Arc::clone(&hits));
+    let server = start_server(move |_method, url, _headers, _body| {
+        let count = count_request(&hits_ref, &url);
+        paths_ref
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(url.clone());
+        if url == "/fetch" && count == 1 {
+            MockHttpResponse::empty(401)
+        } else {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+    });
+
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "reauthenticate".to_string(),
+            steps: vec![
+                http_step("login", Vec::new()),
+                http_step(
+                    "fetch",
+                    vec![OnAction {
+                        name: "login-again".to_string(),
+                        type_: Some(ActionType::Retry),
+                        step_id: "login".to_string(),
+                        criteria: vec![SuccessCriterion {
+                            condition: "$statusCode == 401".to_string(),
+                            ..SuccessCriterion::default()
+                        }],
+                        ..OnAction::default()
+                    }],
+                ),
+            ],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine
+        .execute_collect("reauthenticate", BTreeMap::new())
+        .await;
+    if let Err(err) = &result.outputs {
+        panic!("expected the recovery retry to succeed, got: {err}");
+    }
+
+    assert_eq!(
+        *paths.lock().unwrap_or_else(PoisonError::into_inner),
+        vec!["/login", "/fetch", "/login", "/fetch"]
+    );
+    assert_eq!(
+        sequential_fallbacks(&result),
+        vec![SequentialFallback {
+            workflow_id: "reauthenticate".to_string(),
+            reason: SequentialFallbackReason::RetryReference,
+            step_id: "fetch".to_string(),
+            message: "workflow \"reauthenticate\" runs sequentially because step \"fetch\" has an onFailure action of type \"retry\" with a stepId, which runs another step before retrying".to_string(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn execute_step_reports_that_parallel_mode_does_not_apply() {
+    let server = start_server(|_method, _url, _headers, _body| {
+        MockHttpResponse::json(200, r#"{"ok":true}"#)
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "single".to_string(),
+            steps: vec![http_step("a", Vec::new()), http_step("b", Vec::new())],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine
+        .execute_step("single", "b", BTreeMap::new(), false)
+        .collect()
+        .await;
+    if let Err(err) = &result.outputs {
+        panic!("expected the selected step to succeed, got: {err}");
+    }
+
+    assert_eq!(
+        sequential_fallbacks(&result),
+        vec![SequentialFallback {
+            workflow_id: "single".to_string(),
+            reason: SequentialFallbackReason::SingleStep,
+            step_id: "b".to_string(),
+            message: "workflow \"single\" runs sequentially because step \"b\" was selected for single-step execution, which runs one step at a time".to_string(),
+        }]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execute_parallel_reports_an_attached_debugger() {
+    let spec = make_spec(vec![Workflow {
+        workflow_id: "debugged".to_string(),
+        steps: vec![http_step("a", Vec::new()), http_step("b", Vec::new())],
+        ..Workflow::default()
+    }]);
+    let engine = match EngineBuilder::new(spec)
+        .parallel(true)
+        .dry_run(true)
+        .debug_controller(Arc::new(DebugController::new()))
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine.execute_collect("debugged", BTreeMap::new()).await;
+    if let Err(err) = &result.outputs {
+        panic!("expected the dry run to succeed, got: {err}");
+    }
+
+    assert_eq!(
+        sequential_fallbacks(&result),
+        vec![SequentialFallback {
+            workflow_id: "debugged".to_string(),
+            reason: SequentialFallbackReason::Debugger,
+            step_id: String::new(),
+            message:
+                "workflow \"debugged\" runs sequentially because a debug controller is attached"
+                    .to_string(),
+        }]
+    );
 }
 
 #[tokio::test]
@@ -1109,6 +1601,158 @@ async fn trace_records_parallel_order_is_deterministic_by_seq() {
     assert_eq!(trace[0].attempt, 1);
     assert_eq!(trace[1].attempt, 1);
     assert_eq!(trace[2].attempt, 1);
+}
+
+/// One token per step lifecycle record, in stream order.
+#[allow(unreachable_patterns)]
+fn lifecycle_tokens(events: &[EngineEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::Execution(event) => {
+                let kind = match event.kind {
+                    ExecutionEventKind::BeforeStep => "before",
+                    ExecutionEventKind::AfterStep => "after",
+                    _ => "other",
+                };
+                Some(format!("{kind}:{}", event.step_id))
+            }
+            EngineEvent::TraceStep(record) => Some(format!(
+                "trace:{}#{}:{:?}",
+                record.step_id, record.attempt, record.decision.path
+            )),
+            EngineEvent::Observer(ObserverEvent::RetryScheduled {
+                step_id,
+                attempt,
+                max_attempts,
+                ..
+            }) => Some(format!("retry:{step_id}:{attempt}/{max_attempts}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Stream of `run_parallel_retry_level`: step index order, each step's
+/// attempts together, in the order sequential execution records them.
+const RETRY_LEVEL_TOKENS: [&str; 21] = [
+    "before:s1",
+    "before:s2",
+    "before:s3",
+    "after:s1",
+    "trace:s1#1:Retry",
+    "retry:s1:1/2",
+    "before:s1",
+    "after:s1",
+    "trace:s1#2:Next",
+    "after:s2",
+    "trace:s2#1:Next",
+    "after:s3",
+    "trace:s3#1:Retry",
+    "retry:s3:1/3",
+    "before:s3",
+    "after:s3",
+    "trace:s3#2:Retry",
+    "retry:s3:2/3",
+    "before:s3",
+    "after:s3",
+    "trace:s3#3:Next",
+];
+
+/// One level of three steps: "s1" fails once, "s2" never, "s3" twice. Each
+/// answers after its `delays_ms` entry. Returns the spec that ran, which names
+/// the server's address, alongside the result.
+async fn run_parallel_retry_level(delays_ms: [u64; 3]) -> (ArazzoSpec, ExecutionResult) {
+    let hits = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let hits_ref = Arc::clone(&hits);
+    let server = start_server_concurrent(move |_method, url, _headers, _body| {
+        let count = count_request(&hits_ref, &url);
+        let (delay_ms, failures) = match url.as_str() {
+            "/s1" => (delays_ms[0], 1),
+            "/s2" => (delays_ms[1], 0),
+            _ => (delays_ms[2], 2),
+        };
+        thread::sleep(Duration::from_millis(delay_ms));
+        if count <= failures {
+            MockHttpResponse::empty(503)
+        } else {
+            MockHttpResponse::json(200, r#"{"ok":true}"#)
+        }
+    });
+    let spec = make_spec_with_base(
+        &server.base_url,
+        vec![Workflow {
+            workflow_id: "retry-order".to_string(),
+            steps: vec![
+                http_step("s1", vec![retry_on_503(2)]),
+                http_step("s2", vec![retry_on_503(2)]),
+                http_step("s3", vec![retry_on_503(3)]),
+            ],
+            ..Workflow::default()
+        }],
+    );
+    let engine = match EngineBuilder::new(spec.clone())
+        .parallel(true)
+        .trace(true)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building engine: {err}"),
+    };
+    let result = engine.execute_collect("retry-order", BTreeMap::new()).await;
+    (spec, result)
+}
+
+#[tokio::test]
+async fn trace_records_parallel_retries_in_step_order_whatever_finishes_first() {
+    // The step that fails first also finishes first in one run and last in the other.
+    for delays_ms in [[60, 5, 20], [5, 20, 60]] {
+        let (_, result) = run_parallel_retry_level(delays_ms).await;
+        if let Err(err) = &result.outputs {
+            panic!("expected every retry to succeed with delays {delays_ms:?}, got: {err}");
+        }
+        assert_eq!(
+            lifecycle_tokens(&result.events),
+            RETRY_LEVEL_TOKENS,
+            "stream order with delays {delays_ms:?}"
+        );
+        let trace_seqs = result
+            .trace_steps()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>();
+        assert_eq!(trace_seqs, (1..=6).collect::<Vec<u64>>());
+        let event_seqs = result
+            .execution_events()
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>();
+        assert_eq!(event_seqs, (1..=12).collect::<Vec<u64>>());
+    }
+}
+
+#[tokio::test]
+async fn parallel_retry_trace_replays_to_the_same_stream() {
+    let (spec, recorded) = run_parallel_retry_level([60, 5, 20]).await;
+    if let Err(err) = &recorded.outputs {
+        panic!("expected the recorded run to succeed, got: {err}");
+    }
+    let steps = recorded.trace_steps().into_iter().cloned().collect();
+
+    // The recording server is gone, so every response must come from the trace.
+    let engine = match EngineBuilder::new(spec)
+        .parallel(true)
+        .trace(true)
+        .replay_trace_steps(steps)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(err) => panic!("building replay engine: {err}"),
+    };
+    let replayed = engine.execute_collect("retry-order", BTreeMap::new()).await;
+    if let Err(err) = &replayed.outputs {
+        panic!("expected the replay to succeed, got: {err}");
+    }
+    assert_eq!(lifecycle_tokens(&replayed.events), RETRY_LEVEL_TOKENS);
 }
 
 // ── Observer tests ──────────────────────────────────────────────────

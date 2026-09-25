@@ -192,7 +192,7 @@ fn extract_step_refs_and_control_flow() {
         }],
         ..Workflow::default()
     };
-    assert!(!has_control_flow(&wf_no_flow));
+    assert_eq!(parallel_blocker(&wf_no_flow), None);
 
     let wf_with_flow = Workflow {
         workflow_id: "with-flow".to_string(),
@@ -208,7 +208,10 @@ fn extract_step_refs_and_control_flow() {
         }],
         ..Workflow::default()
     };
-    assert!(has_control_flow(&wf_with_flow));
+    assert_eq!(
+        parallel_blocker(&wf_with_flow).map(|blocker| blocker.reason),
+        Some(SequentialFallbackReason::ControlFlowAction)
+    );
 }
 
 /// RFC 9535 §2.3.5: a filter over the root object iterates its member values,

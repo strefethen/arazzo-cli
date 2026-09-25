@@ -8,11 +8,8 @@ impl Engine {
         }
 
         if ctx.result.success {
-            let success_actions = if step.on_success.is_empty() {
-                &ctx.workflow.success_actions
-            } else {
-                &step.on_success
-            };
+            let success_actions =
+                applicable_actions(&step.on_success, &ctx.workflow.success_actions);
             let action = match self
                 .find_matching_action_with_debug(
                     ActionSelectionContext {
@@ -78,11 +75,7 @@ impl Engine {
             };
         }
 
-        let failure_actions = if step.on_failure.is_empty() {
-            &ctx.workflow.failure_actions
-        } else {
-            &step.on_failure
-        };
+        let failure_actions = applicable_actions(&step.on_failure, &ctx.workflow.failure_actions);
         // Failure Action Object §5.8.8.1 requires an exhausted retry to yield
         // to subsequent failure actions. Continue the same routing pass from
         // the action after the exhausted retry; do not evaluate earlier actions
@@ -733,6 +726,20 @@ struct ExecuteActionContext<'a> {
     /// Used by the `End` action on the failure path to preserve the root cause
     /// instead of replacing it with a generic `SuccessCriteriaFailed`.
     original_err_kind: Option<RuntimeErrorKind>,
+}
+
+/// The action list a step's result is routed through: the step's own list
+/// when it declares one, otherwise the workflow's. Parallel levels read the
+/// same list to order a step after the outputs its criteria consult.
+pub(super) fn applicable_actions<'a>(
+    step_actions: &'a [OnAction],
+    workflow_actions: &'a [OnAction],
+) -> &'a [OnAction] {
+    if step_actions.is_empty() {
+        workflow_actions
+    } else {
+        step_actions
+    }
 }
 
 /// Returns the effective Arazzo retry limit for all runtime consumers.

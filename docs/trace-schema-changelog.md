@@ -6,6 +6,7 @@
 - Added deterministic per-step sequence ordering.
 - Included request/response summaries, criteria outcomes, flow decision, outputs, and error fields.
 - Added built-in redaction for sensitive headers/query params/JSON keys.
+- Added optional `run.sequentialFallbacks`: each workflow that ran its steps one at a time although `parallel` was requested, with the reason.
 
 ## Change policy
 

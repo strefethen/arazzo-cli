@@ -45,6 +45,7 @@ Parallel execution guarantees deterministic ordering for both:
 
 - Level ordering from dependency graph
 - Stable per-level step index ordering
+- Each step's attempts, retries included, recorded together in attempt order
 - No ordering dependence on thread completion timing
 
 ## Debugger Surfaces

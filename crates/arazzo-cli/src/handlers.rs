@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, TraceStepRecord, TransportWarning,
-    REDACTED,
+    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, SequentialFallback,
+    TraceStepRecord, TransportWarning, REDACTED,
 };
 use arazzo_spec::ArazzoSpec;
 use arazzo_validate::Error as ValidateError;
@@ -187,6 +187,19 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         }
     }
 
+    // A workflow invoked more than once reports the same fallback each time.
+    let mut sequential_fallbacks = Vec::<SequentialFallback>::new();
+    for fallback in exec_result.sequential_fallbacks() {
+        if !sequential_fallbacks.contains(fallback) {
+            sequential_fallbacks.push(fallback.clone());
+        }
+    }
+    if global.verbose {
+        for fallback in &sequential_fallbacks {
+            eprintln!("Parallel mode: {}", fallback.message);
+        }
+    }
+
     let trace_steps: Vec<TraceStepRecord> = exec_result
         .events
         .iter()
@@ -225,6 +238,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 duration_ms: u64::try_from(run_duration.as_millis()).unwrap_or(u64::MAX),
                 run_error: run_error_text.clone(),
                 transport_warnings: transport_warnings.clone(),
+                sequential_fallbacks,
             },
             inputs,
             trace_steps.clone(),

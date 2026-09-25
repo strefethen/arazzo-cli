@@ -253,6 +253,18 @@ impl Engine {
 
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
+            if self.inner.parallel_mode {
+                let fallback = SequentialFallback::new(
+                    workflow_id,
+                    SequentialFallbackReason::SingleStep,
+                    step_id,
+                    &format!(
+                        "step \"{step_id}\" was selected for single-step execution, which runs one step at a time"
+                    ),
+                );
+                Engine::push_sequential_fallback(exec_ctx, fallback).await;
+            }
+
             // Shared retry counts across all iterations. Keys identify retry
             // execution sites, so later failure-action retries are independent.
             let mut retry_count = BTreeMap::<RetrySite, u64>::new();
@@ -461,22 +473,23 @@ impl Engine {
 
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
-            if self.inner.parallel_mode
-                && self.inner.debug_controller.is_none()
-                && can_execute_parallel(&workflow)
-            {
-                let result = self
-                    .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
-                    .await;
-                // The dependency guard ran before entering parallel execution.
-                // Record terminal failures too: this invocation was admitted
-                // and therefore completed, even when one of its steps failed.
-                exec_ctx.mark_workflow_completed(workflow_id);
-                return if exec_ctx.cancel.is_cancelled() {
-                    Err(exec_ctx.cancelled_error())
+            if self.inner.parallel_mode {
+                if let Some(fallback) = self.sequential_fallback(&workflow) {
+                    Engine::push_sequential_fallback(exec_ctx, fallback).await;
                 } else {
-                    result
-                };
+                    let result = self
+                        .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars)
+                        .await;
+                    // The dependency guard ran before entering parallel execution.
+                    // Record terminal failures too: this invocation was admitted
+                    // and therefore completed, even when one of its steps failed.
+                    exec_ctx.mark_workflow_completed(workflow_id);
+                    return if exec_ctx.cancel.is_cancelled() {
+                        Err(exec_ctx.cancelled_error())
+                    } else {
+                        result
+                    };
+                }
             }
 
             let workflow_start = Instant::now();

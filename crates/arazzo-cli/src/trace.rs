@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_headers, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
-    TraceStepRecord, TransportWarning,
+    SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,10 @@ pub struct TraceRun {
     /// persists regardless of the stderr squelch (audit data).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transport_warnings: Vec<TransportWarning>,
+    /// Workflows whose steps ran one at a time although `parallel` was
+    /// requested, each with the reason, once per workflow and reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sequential_fallbacks: Vec<SequentialFallback>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +68,7 @@ pub struct TraceRunMetadata {
     pub duration_ms: u64,
     pub run_error: Option<String>,
     pub transport_warnings: Vec<TransportWarning>,
+    pub sequential_fallbacks: Vec<SequentialFallback>,
 }
 
 pub fn parse_trace_max_body_bytes(raw: &str) -> Result<usize, String> {
@@ -119,6 +124,7 @@ pub fn build_trace_file(
             },
             error: meta.run_error,
             transport_warnings: meta.transport_warnings,
+            sequential_fallbacks: meta.sequential_fallbacks,
         },
         inputs,
         steps,
@@ -266,6 +272,7 @@ mod tests {
                 status: "success".to_string(),
                 error: None,
                 transport_warnings: Vec::new(),
+                sequential_fallbacks: Vec::new(),
             },
             inputs: BTreeMap::new(),
             steps: vec![TraceStepRecord {

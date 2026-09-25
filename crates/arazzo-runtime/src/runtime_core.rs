@@ -69,22 +69,20 @@ pub(crate) use criteria::{
     evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
     evaluate_output_value_detailed, CriterionEvaluation,
 };
-use deps::can_execute_parallel;
-#[cfg(test)]
-use deps::has_control_flow;
-pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs};
+pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker};
 use engine_actions::{
-    effective_retry_limit, ActionBranch, FlowDecision, RetryReference, RetrySite,
-    SelectedActionDebugContext, StepDecisionContext,
+    applicable_actions, effective_retry_limit, ActionBranch, FlowDecision, RetryReference,
+    RetrySite, SelectedActionDebugContext, StepDecisionContext,
 };
 use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use events::{
     DryRunRequest, EngineEvent, ExecutionEvent, ExecutionEventKind, ExecutionHandle,
-    ExecutionObserver, ExecutionResult, ObserverEvent, StepEvent, TraceCriterionResult,
-    TraceDecision, TraceDecisionPath, TraceHook, TraceRedirectHop, TraceRequest, TraceResponse,
-    TraceStepRecord, TransportWarning, TransportWarningKind,
+    ExecutionObserver, ExecutionResult, ObserverEvent, SequentialFallback,
+    SequentialFallbackReason, StepEvent, TraceCriterionResult, TraceDecision, TraceDecisionPath,
+    TraceHook, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord, TransportWarning,
+    TransportWarningKind,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::jsonpath_condition_holds;

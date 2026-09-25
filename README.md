@@ -536,7 +536,26 @@ Level 2:  [verify-user]                     ← sequential
 
 **Determinism guarantee:** even with concurrent execution, event sequence numbers are assigned per-level in stable step order, so identical inputs always produce identical traces.
 
-Parallel mode is automatically disabled if any step uses `onSuccess`/`onFailure` actions or calls a sub-workflow, since these require sequential control flow.
+### Retries and sequential fallback
+
+A `retry` failure action re-runs only the step that failed, so it works in parallel mode. The step retries inside its own slot of the level, after its `retryAfter` delay, while its siblings keep running. The level still completes before the next one starts, and the trace lists each step's attempts together, in attempt order.
+
+If a retry criterion reads another step's outputs (`$steps.<id>.outputs` in its `condition` or `context`), the scheduler puts that step in an earlier level, as it does for a parameter. The criterion then sees the same outputs it would in sequential mode.
+
+With `--parallel`, a workflow still runs its steps one at a time when:
+
+- a step declares an `onSuccess` action, or a `goto` or `end` `onFailure` action, or the workflow declares one in `successActions` or `failureActions`. These move execution away from dependency order.
+- a `retry` failure action names a `stepId` or `workflowId`, which runs another step or workflow before the retry.
+- a step calls another workflow. The called workflow can still run its own steps in parallel.
+- `--step` selects a single step.
+
+`--verbose` prints the workflow, the step, and the reason:
+
+```text
+Parallel mode: workflow "checkout" runs sequentially because step "pay" has an onFailure action of type "goto", which redirects control flow
+```
+
+`--trace` records the same entries under `run.sequentialFallbacks`.
 
 ## Success Criteria
 
@@ -870,6 +889,8 @@ impl ExecutionObserver for MyObserver {
 ```
 
 Observer events include: `StepStarted`, `RequestPrepared`, `RequestSent`, `CriterionEvaluated`, `RetryScheduled`, `StepCompleted`, `SubWorkflowStarted`, and `WorkflowCompleted`.
+
+Under parallel execution, `RequestPrepared`, `RequestSent`, and `CriterionEvaluated` reach the observer as they happen. `StepCompleted`, `RetryScheduled`, and a retried attempt's `StepStarted` arrive in step order once the level finishes.
 
 The internal API types (`EngineEvent`, `ExecutionHandle`, `RuntimeError`, `TraceStepRecord`, etc.) are versioned as `api_v1` with a documented stability contract — backward-compatible additions are allowed, but type shape changes require a version bump.
 

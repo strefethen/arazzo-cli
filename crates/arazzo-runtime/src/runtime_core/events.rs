@@ -12,6 +12,9 @@ pub enum EngineEvent {
     Execution(ExecutionEvent),
     Observer(ObserverEvent),
     TransportWarning(TransportWarning),
+    /// Parallel mode was requested, but a workflow invocation runs its steps
+    /// one at a time.
+    SequentialFallback(SequentialFallback),
 }
 
 /// Handle returned by [`Engine::execute`] for streaming execution results.
@@ -140,6 +143,17 @@ impl ExecutionResult {
             })
             .collect()
     }
+
+    /// Filter parallel-mode fallbacks from the event stream.
+    pub fn sequential_fallbacks(&self) -> Vec<&SequentialFallback> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::SequentialFallback(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Captured request emitted during dry-run mode.
@@ -258,6 +272,59 @@ pub enum TransportWarningKind {
     UnusedInsecureHosts,
 }
 
+/// Record that a workflow invocation ran its steps one at a time although the
+/// engine was built with parallel mode. Emitted before the invocation's first
+/// step; `reason` names the first declaration found that requires it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SequentialFallback {
+    /// Workflow whose steps run sequentially.
+    pub workflow_id: String,
+    pub reason: SequentialFallbackReason,
+    /// Step that requires it; empty when the cause is not a single step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub step_id: String,
+    /// Human-readable explanation (the line `run -v` prints).
+    pub message: String,
+}
+
+impl SequentialFallback {
+    /// `detail` completes the sentence "workflow … runs sequentially because".
+    pub(crate) fn new(
+        workflow_id: &str,
+        reason: SequentialFallbackReason,
+        step_id: &str,
+        detail: &str,
+    ) -> Self {
+        Self {
+            workflow_id: workflow_id.to_string(),
+            reason,
+            step_id: step_id.to_string(),
+            message: format!("workflow \"{workflow_id}\" runs sequentially because {detail}"),
+        }
+    }
+}
+
+/// Class of a [`SequentialFallback`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum SequentialFallbackReason {
+    /// A success action, or a `goto` or `end` failure action, moves execution
+    /// away from dependency order.
+    ControlFlowAction,
+    /// A `retry` failure action names a `stepId` or `workflowId` to run before
+    /// the step is retried.
+    RetryReference,
+    /// A step calls another workflow.
+    SubWorkflowStep,
+    /// A debug controller is attached to the engine.
+    Debugger,
+    /// Single-step execution runs the selected step and its dependencies in
+    /// order.
+    SingleStep,
+}
+
 /// Trace response payload for one step attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -372,6 +439,11 @@ pub trait TraceHook: Send + Sync {
 /// Each variant captures a specific lifecycle moment during workflow execution,
 /// carrying the relevant data for that moment. Observers receive these events
 /// via [`ExecutionObserver::on_event`].
+///
+/// Under parallel execution, request-level events (`RequestPrepared`,
+/// `RequestSent`, `CriterionEvaluated`) reach the observer as they happen,
+/// while `StepCompleted`, `RetryScheduled`, and the `StepStarted` of a retried
+/// attempt arrive in step order once the step's level completes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ObserverEvent {
@@ -412,7 +484,7 @@ pub enum ObserverEvent {
 
     /// A retry will execute. Emitted after the retry delay and any recovery
     /// reference complete successfully, immediately before the retried step is
-    /// scheduled.
+    /// scheduled; parallel execution delivers it with the rest of its level.
     RetryScheduled {
         workflow_id: String,
         step_id: String,

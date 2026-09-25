@@ -77,6 +77,39 @@
         },
         "error": {
           "type": "string"
+        },
+        "sequentialFallbacks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "workflowId",
+              "reason",
+              "message"
+            ],
+            "properties": {
+              "workflowId": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "controlFlowAction",
+                  "retryReference",
+                  "subWorkflowStep",
+                  "debugger",
+                  "singleStep"
+                ]
+              },
+              "stepId": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
         }
       },
       "additionalProperties": true

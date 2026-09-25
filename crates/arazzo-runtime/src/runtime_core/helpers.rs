@@ -11,8 +11,7 @@ pub(super) use super::criteria::{
     evaluate_output_expression_detailed, CriterionEvaluation, RegexCache,
 };
 pub(super) use super::deps::{
-    build_levels, can_execute_parallel, compute_transitive_deps, extract_step_refs,
-    has_control_flow,
+    build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker,
 };
 pub(super) use super::payload::{
     apply_replacements, resolve_payload_detailed, resolve_value_source, to_json_path,
