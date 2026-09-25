@@ -890,7 +890,7 @@ impl ExecutionObserver for MyObserver {
 
 Observer events include: `StepStarted`, `RequestPrepared`, `RequestSent`, `CriterionEvaluated`, `RetryScheduled`, `StepCompleted`, `SubWorkflowStarted`, and `WorkflowCompleted`.
 
-Under parallel execution, `RequestPrepared`, `RequestSent`, and `CriterionEvaluated` reach the observer as they happen. `StepCompleted`, `RetryScheduled`, and a retried attempt's `StepStarted` arrive in step order once the level finishes.
+Observers receive events in the order they appear in the execution's event stream, in every mode. Under parallel execution, each step's first `StepStarted` arrives when its level starts. Everything else the level's steps emit, including `RequestPrepared`, `RequestSent`, and `CriterionEvaluated`, arrives in step order once the level finishes.
 
 The internal API types (`EngineEvent`, `ExecutionHandle`, `RuntimeError`, `TraceStepRecord`, etc.) are versioned as `api_v1` with a documented stability contract — backward-compatible additions are allowed, but type shape changes require a version bump.
 

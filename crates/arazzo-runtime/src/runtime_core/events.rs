@@ -440,10 +440,14 @@ pub trait TraceHook: Send + Sync {
 /// carrying the relevant data for that moment. Observers receive these events
 /// via [`ExecutionObserver::on_event`].
 ///
-/// Under parallel execution, request-level events (`RequestPrepared`,
-/// `RequestSent`, `CriterionEvaluated`) reach the observer as they happen,
-/// while `StepCompleted`, `RetryScheduled`, and the `StepStarted` of a retried
-/// attempt arrive in step order once the step's level completes.
+/// Observers receive events in the order they appear in the execution's
+/// event stream, in every mode. Under parallel execution, each step's first
+/// [`StepStarted`](Self::StepStarted) arrives when its level starts.
+/// Everything else the level's steps emit, including
+/// [`RequestPrepared`](Self::RequestPrepared),
+/// [`RequestSent`](Self::RequestSent), and
+/// [`CriterionEvaluated`](Self::CriterionEvaluated), arrives in step order
+/// once the level finishes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ObserverEvent {

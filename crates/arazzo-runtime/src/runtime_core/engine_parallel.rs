@@ -234,9 +234,15 @@ impl Engine {
             trace_error,
         } = attempt;
 
-        // Replay intra-step events through the parent context
+        // Replay intra-step events through the parent context. Each observer
+        // event reaches the observer as it enters the invocation's stream.
         for event in events {
-            let _ = exec_ctx.event_tx.send(event).await;
+            match event {
+                EngineEvent::Observer(event) => self.emit_observer_event(exec_ctx, event).await,
+                other => {
+                    let _ = exec_ctx.event_tx.send(other).await;
+                }
+            }
         }
 
         let status_code = execution
@@ -372,16 +378,18 @@ impl Engine {
     }
 
     /// Runs one attempt against a private event buffer: the invocation's
-    /// stream receives the attempt's events in step order once the level ends.
+    /// stream, and the observer with it, receives the attempt's events in step
+    /// order once the level ends.
     async fn execute_parallel_attempt(
         &self,
         ctx: &ParallelStepContext<'_>,
     ) -> (StepExecution, Duration, Vec<EngineEvent>) {
-        // Parallel steps don't get a full ExecutionContext with event_tx because
-        // they run independently. Create a minimal context for the HTTP call.
+        // Parallel steps run independently, so the attempt sends its events to
+        // a buffer of its own rather than the invocation's stream.
         let (tx, mut rx) = mpsc::channel(64);
         let minimal_ctx = ExecutionContext {
             event_tx: tx,
+            role: ContextRole::AttemptBuffer,
             trace_seq: AtomicU64::new(0),
             execution_event_seq: AtomicU64::new(0),
             step_attempts: Mutex::new(BTreeMap::new()),

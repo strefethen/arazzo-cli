@@ -69,6 +69,7 @@ impl Engine {
         tokio::spawn(async move {
             let ctx = Arc::new(ExecutionContext {
                 event_tx,
+                role: ContextRole::Invocation,
                 trace_seq: AtomicU64::new(0),
                 execution_event_seq: AtomicU64::new(0),
                 step_attempts: Mutex::new(BTreeMap::new()),
@@ -179,6 +180,7 @@ impl Engine {
         tokio::spawn(async move {
             let ctx = Arc::new(ExecutionContext {
                 event_tx,
+                role: ContextRole::Invocation,
                 trace_seq: AtomicU64::new(0),
                 execution_event_seq: AtomicU64::new(0),
                 step_attempts: Mutex::new(BTreeMap::new()),

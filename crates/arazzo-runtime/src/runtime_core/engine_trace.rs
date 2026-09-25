@@ -372,10 +372,14 @@ impl Engine {
         .await;
     }
 
-    /// Dispatch an event to the registered observer, if any, and stream it.
+    /// Streams an observer event and, from the invocation's own context,
+    /// dispatches it to the registered observer, if any. An attempt buffer's
+    /// events are dispatched when their level replays them.
     pub(super) async fn emit_observer_event(&self, ctx: &ExecutionContext, event: ObserverEvent) {
-        if let Some(observer) = &self.inner.observer {
-            observer.on_event(&event);
+        if ctx.role.delivers_to_observer() {
+            if let Some(observer) = &self.inner.observer {
+                observer.on_event(&event);
+            }
         }
         let _ = ctx.event_tx.send(EngineEvent::Observer(event)).await;
     }

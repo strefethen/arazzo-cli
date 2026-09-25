@@ -5,6 +5,8 @@ use super::*;
 /// Per-execution mutable state, shared across tasks via `Arc`.
 pub(super) struct ExecutionContext {
     pub event_tx: mpsc::Sender<EngineEvent>,
+    /// Whether `event_tx` is the invocation's stream or an attempt's buffer.
+    pub role: ContextRole,
     pub trace_seq: AtomicU64,
     pub execution_event_seq: AtomicU64,
     pub step_attempts: Mutex<BTreeMap<(String, String), u32>>,
@@ -38,6 +40,32 @@ impl ExecutionContext {
     pub(super) fn mark_workflow_completed(&self, workflow_id: &str) {
         if let Ok(mut completed) = self.completed_workflows.lock() {
             completed.insert(workflow_id.to_string());
+        }
+    }
+}
+
+/// What an [`ExecutionContext`]'s `event_tx` feeds.
+///
+/// The observer follows the invocation's event stream: it receives each
+/// observer event when that event enters the stream. Only an invocation
+/// context sends to that stream directly, so only it delivers to the observer.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ContextRole {
+    /// The channel is the invocation's event stream.
+    Invocation,
+    /// The channel buffers one parallel step attempt's events. The attempt's
+    /// level replays them into the invocation's stream, delivering each
+    /// observer event as it does.
+    AttemptBuffer,
+}
+
+impl ContextRole {
+    /// Whether an observer event sent through a context with this role
+    /// reaches the observer as it is sent.
+    pub(super) fn delivers_to_observer(self) -> bool {
+        match self {
+            Self::Invocation => true,
+            Self::AttemptBuffer => false,
         }
     }
 }
