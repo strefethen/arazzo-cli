@@ -250,3 +250,76 @@ async fn non_10_replacement_versions_leave_the_body_unchanged_with_one_warning()
         assert_eq!(xpath_warnings.len(), 1, "{version:?}: {warnings:?}");
     }
 }
+
+// ac-d1649 (audit I1): hostile XML response structure is refused before the
+// recursive parser runs, and the refusal fails the criterion like any other
+// invalid XML instead of aborting the process or exhausting memory.
+
+fn xml_response(body: String) -> MockHttpResponse {
+    let mut response = xml_body_response();
+    response.body = body;
+    response
+}
+
+/// Every condition used below is TRUE for its body if the body were parsed,
+/// so a failure proves the body was refused rather than evaluated. The hit
+/// count proves the response actually arrived (a dead proxy or unreachable
+/// server must not satisfy a failure assertion).
+async fn run_criterion_against(body: String, condition: &str) -> Result<(), String> {
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let served = std::sync::Arc::clone(&hits);
+    let server = start_server(move |_m, _u, _h, _b| {
+        served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        xml_response(body.clone())
+    });
+    let mut step = criterion_step(Some(xpath_type("xpath-10")));
+    step.success_criteria[0].condition = condition.to_string();
+    let engine = new_test_engine(&server.base_url, make_spec(one_step_workflow(step)));
+    let result = engine.execute_collect("wf", BTreeMap::new()).await;
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the XML response must have been served"
+    );
+    result.outputs.map(|_| ()).map_err(|err| err.to_string())
+}
+
+fn nested_body(depth: usize) -> String {
+    format!("{}leaf{}", "<a>".repeat(depth), "</a>".repeat(depth))
+}
+
+#[tokio::test]
+async fn deeply_nested_xml_response_fails_the_step_without_crashing() {
+    // 5000 levels overflowed the worker stack before admission existed.
+    let result = run_criterion_against(nested_body(5_000), "string(/) = 'leaf'").await;
+    assert!(result.is_err(), "a hostile depth must fail the criterion");
+
+    // The deepest admitted body still evaluates and passes.
+    let result = run_criterion_against(nested_body(64), "string(/) = 'leaf'").await;
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
+async fn dtd_entity_cascade_response_fails_the_step_promptly() {
+    // The audit's 8-level cascade: ~1 GB and 38 s before admission existed.
+    let mut dtd = String::from("<!ENTITY e0 \"lol\">");
+    for level in 1..=8 {
+        let refs = format!("&e{};", level - 1).repeat(10);
+        dtd.push_str(&format!("<!ENTITY e{level} \"{refs}\">"));
+    }
+    let bomb = format!("<!DOCTYPE r [{dtd}]><r>&e8;</r>");
+
+    let started = std::time::Instant::now();
+    let result = run_criterion_against(bomb, "string-length(/r) > 0").await;
+    let elapsed = started.elapsed();
+    assert!(result.is_err(), "an entity cascade must fail the criterion");
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "refusal took {elapsed:?}"
+    );
+
+    // A DOCTYPE without an internal subset is still evaluated.
+    let plain = "<!DOCTYPE r SYSTEM \"r.dtd\"><r><pet>dog</pet></r>".to_string();
+    let result = run_criterion_against(plain, "count(//pet) = 1").await;
+    assert!(result.is_ok(), "{result:?}");
+}

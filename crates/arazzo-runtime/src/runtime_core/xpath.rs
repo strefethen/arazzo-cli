@@ -71,6 +71,8 @@ fn xpath_backend<'a>(
         return Err(rejection);
     }
     let text = std::str::from_utf8(body).map_err(|err| format!("XML is not UTF-8: {err}"))?;
+    // Hostile nesting or DTD entities never reach the recursive parser (ac-d1649).
+    super::xml_admission::admit_xml(text)?;
     let mut doc = uppsala::parse(text).map_err(|err| format!("invalid XML: {err}"))?;
     doc.prepare_xpath();
     let mut eval = uppsala::XPathEvaluator::new();
@@ -520,5 +522,57 @@ mod tests {
         assert_eq!(extract_xpath(xml, "//item"), json!("one"));
         assert_eq!(extract_xpath(xml, "1 div 0"), Value::Null);
         assert_eq!(extract_xpath(b"<broken", "//item"), Value::Null);
+    }
+
+    fn nested_xml(depth: usize) -> String {
+        format!("{}leaf{}", "<a>".repeat(depth), "</a>".repeat(depth))
+    }
+
+    /// Runs on the default test thread in whatever profile the suite uses, so
+    /// a debug `cargo test` proves the admitted depth is stack-safe for parse,
+    /// text collection, and descendant evaluation (ac-d1649).
+    #[test]
+    fn deepest_admitted_nesting_parses_and_evaluates() {
+        use super::super::xml_admission::MAX_XML_NESTING_DEPTH;
+        let xml = nested_xml(MAX_XML_NESTING_DEPTH);
+        assert_eq!(
+            value_of(&selected(xml.as_bytes(), "string(/)")),
+            json!("leaf")
+        );
+        assert_eq!(
+            value_of(&selected(xml.as_bytes(), "count(//a)")),
+            json!(MAX_XML_NESTING_DEPTH)
+        );
+        assert!(selected(xml.as_bytes(), "//a[not(a)]").truthy);
+        let replaced = replace_xpath(&xml, "//a[not(a)]", Some("xpath-10"), "new")
+            .unwrap_or_else(|error| panic!("replacing at the deepest level: {error}"));
+        assert!(replaced.contains("new"), "{replaced}");
+    }
+
+    #[test]
+    fn nesting_past_the_limit_is_refused_before_parsing() {
+        use super::super::xml_admission::MAX_XML_NESTING_DEPTH;
+        let deep = nested_xml(MAX_XML_NESTING_DEPTH + 1);
+        let error = selection_error(deep.as_bytes(), "string(/)");
+        assert!(error.starts_with("invalid XML:"), "{error}");
+        assert!(error.contains("nesting"), "{error}");
+        match replace_xpath(&deep, "//a", Some("xpath-10"), "x") {
+            Ok(xml) => panic!("replacement must refuse the same body, got {xml}"),
+            Err(error) => assert!(error.contains("nesting"), "{error}"),
+        }
+        // A depth that aborted the process before admission existed.
+        let hostile = nested_xml(5_000);
+        assert!(selection_error(hostile.as_bytes(), "/a").contains("nesting"));
+    }
+
+    #[test]
+    fn doctype_internal_subset_is_refused_and_a_plain_doctype_is_not() {
+        let entity = br#"<!DOCTYPE r [<!ENTITY e "x">]><r>&e;</r>"#;
+        let error = selection_error(entity, "string(/r)");
+        assert!(error.starts_with("invalid XML:"), "{error}");
+        assert!(error.contains("internal subset"), "{error}");
+
+        let plain = br#"<?xml version="1.0"?><!DOCTYPE r SYSTEM "r.dtd"><r>ok</r>"#;
+        assert_eq!(value_of(&selected(plain, "string(/r)")), json!("ok"));
     }
 }

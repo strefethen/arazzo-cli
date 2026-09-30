@@ -54,6 +54,7 @@ mod replay;
 mod state;
 mod step_attempt;
 mod url;
+mod xml_admission;
 mod xpath;
 
 use ::url as url_crate;
