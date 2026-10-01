@@ -8,6 +8,11 @@ dispatch, action targets, operationPath presentation, XPath boundaries, and
 grammar-backed evidence. They replace older ticket prose that treated current
 implementation quirks or an unevaluated package candidate as settled design.
 
+Amended: 2026-09-30, Steve-approved. Runtime Expressions and simple conditions
+are parsed by one pest grammar generated from the specification's ABNF, and the
+simple-condition syntax is accepted. See "Runtime Expression parsing precedes
+field dispatch". Simple-condition evaluation semantics remain gated.
+
 ## Goal
 
 Make Arazzo 1.1.0 support auditable from the vendored specification to an
@@ -167,22 +172,36 @@ pub fn parse_runtime_expression(
 ) -> Result<ParsedRuntimeExpression<'_>, RuntimeExpressionError>;
 ```
 
-It also owns a crate-private iterator over every valid Runtime Expression prefix
-end so syntax consumers can resolve field boundaries without duplicating the
-grammar or reparsing every prefix. The parsed expression keeps its AST private
-and exposes only the raw input, namespace, local Step output reference,
-source-description reference, and component reference needed by evaluator,
-validator, and dependency consumers. Names borrow from the input; no returned
-value is self-referential.
+The parsed expression keeps its AST private and exposes only the raw input,
+namespace, local Step output reference, source-description reference, and
+component reference needed by evaluator, validator, and dependency consumers.
+Names borrow from the input; no returned value is self-referential.
 
-Parsing consumes the full input in bounded linear time without regex or
-backtracking. Dotted `identifier` values are greedy: `$inputs.foo.bar` names the
+Runtime Expressions and simple conditions are parsed by one pest grammar in
+`arazzo-expr` (amended 2026-09-30). The Runtime Expression productions are
+generated at build time from the Section 5.9 ABNF. That ABNF is committed
+verbatim, except that the `expression` rule's closing parenthesis is indented
+so RFC 5234 reads it as a continuation. This follows the build-time generation
+already used by the `iregexp-rs` dependency. Hand-written rules hold only
+accepted decisions: the namespace-exact source forms, the simple-condition
+grammar, and its operand boundary. Parsing consumes the full input and uses no
+regex. Parse work is linear in input length, and a call-budget test asserts
+this. Condition nesting is bounded before parsing. No prefix-end iterator
+exists: simple-condition operands reuse the generated productions, and only the
+four unbounded terminals have condition-context variants that stop at the
+accepted boundary.
+
+Dotted `identifier` values are greedy: `$inputs.foo.bar` names the
 single input `foo.bar`; nested access uses `#/bar`. Step, Workflow, and source
 names use the strict no-dot identifier. A source-description expression splits
 once after that strict source name and retains the entire nonempty remaining
 reference ID. JSON Pointer escapes are validated, including rejection of
 `~2`. Namespace-specific source forms remain exact; the shared-looking ABNF
-does not authorize `$message.query` or `$request.payload`.
+does not authorize `$message.query` or `$request.payload`. Keyword literals
+match case-insensitively, as ABNF quoted strings do (RFC 5234 Section 2.3), so
+`$STATUSCODE` and `$Inputs.x` are valid. This applies to namespace prefixes,
+source keywords such as `header.`, `outputs`, and component types. Names and
+identifiers remain case-sensitive values (accepted 2026-09-30).
 
 Expression-string classification is a separate parser that depends on this
 base parser and on the accepted result of
@@ -236,13 +255,31 @@ recognition, first-raw-`}` delimiting, and full-consumption inner parsing
 remain grammar-conformant surfaces claimable through `expression-string` and
 `embedded-expression`.
 
-Simple Criterion syntax and evaluation depend on the accepted matrix from
-[ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1). The vendored
-specification fixes part of that behavior but leaves material whitespace,
-precedence, Runtime Expression boundary, postfix, numeric, type, truthiness,
-short-circuit, and error choices unresolved. The parser and evaluator remain
-separate implementation units and neither may infer those choices from current
-behavior.
+Simple Criterion syntax is accepted (2026-09-30, Steve-approved). Section
+5.8.11.1 fixes the literal types and single-quote doubling. Section 5.8.11.2
+fixes the operator list (`[]` is "Index (0-based)", `.` is "Property
+de-reference"). `contains`, `matches`, and `in` are not operators. The rows
+below are maintainer-selected interpretations where the specification is
+silent, except numbers, which Section 5.4 settles.
+
+| Syntax | Accepted rule | Accepts | Rejects |
+|---|---|---|---|
+| Whitespace | Optional space, tab, CR, or LF around operators and inside `()` and `[]`; never inside an operand, number, keyword, or two-character operator | `$statusCode==200`, `( $statusCode == 200 )` | `$statusCode = = 200` |
+| Precedence | `\|\|` below `&&` below comparison below postfix. `&&` and `\|\|` are n-ary, left to right. Comparisons do not chain. `!` takes one postfix operand (a group counts) and cannot be followed by a comparison operator | `A && B \|\| C` groups as `(A && B) \|\| C`; `!(A == B)`; `!A && B` | `!A == B`, `A == B == C`, `!!A`, `!` |
+| Operand boundary | Deterministic, so there is no ambiguity error. Inside a condition, query/path `name`, header `token`, JSON Pointer reference tokens, and source-reference ids stop before whitespace or any of `= ! < > & \| ( ) ' [ ]` | `$request.query.x==true`; `$response.header.X\|\|$inputs.y` | `$response.header.X\|\|Y` (bare word) |
+| `.` | `.` followed by `[A-Za-z0-9_-]+`, chainable on any operand. Greedy identifiers keep dots after `$inputs.x`, `$outputs.x`, and step outputs inside the name | `$response.body.items[0].id` | `$response.body.` |
+| `[]` | A non-negative integer without sign or leading zero, chainable | `[0]`, `[12]` | `[-1]`, `[01]`, `['a']`, `[]` |
+| Numbers | JSON (RFC 8259) numbers: Section 5.8.11.1 defers to "Data Types", and Section 5.4 bases those on JSON Schema types | `200`, `-1`, `2.5`, `2e2` | `+200`, `0200`, `.5`, `5.` |
+| Literals | Lowercase `true`, `false`, `null`, not followed by an identifier character. Single-quoted strings, where `''` is the only escape and a backslash is literal | `'It''s'`, `'a\'` | `"apple"`, `$x contains 'a'`, `$x in [1]` |
+
+Conditions nested deeper than 32 levels of `(` or `!` are a `NestingLimit`
+syntax error, detected by a linear scan before parsing. Evaluation semantics
+remain gated by
+[ac-ec3a1](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ec3a1): the
+operator and type matrix, numeric representation, truthiness, short-circuiting,
+missing-property and index results, and the numeric-string `SHOULD`. The parser
+and evaluator remain separate implementation units, and neither may infer
+evaluation choices from current behavior.
 
 Dispatch is field-specific after those decision gates are accepted:
 
@@ -258,10 +295,10 @@ Dispatch is field-specific after those decision gates are accepted:
   trailing text is an `invalidExpression` validation error.
 - Regex, JSONPath, and XPath conditions substitute only brace-delimited Runtime
   Expressions. Unbraced `$` remains native condition text.
-- Simple conditions use the accepted deterministic condition parser and the
-  shared Runtime Expression parser for operands. Quoted `$...` remains a string
-  literal; no second expression lexer is permitted. Unsupported or ambiguous
-  cases fail closed only where the accepted condition matrix says they do.
+- Simple conditions use the accepted condition grammar. Operands reuse the
+  shared grammar's Runtime Expression productions; only the four unbounded
+  terminals have condition-context variants. Quoted `$...` remains a string
+  literal. Syntax the accepted grammar rejects fails the condition closed.
 - Action IDs, dependencies, and operation targets use their specialized field
   grammar and never the generic literal-value resolver.
 
@@ -442,11 +479,10 @@ precedent or silently added to an allowlist.
 10. Remove direct `$env` evaluation and add the canonical Runtime Expression
     parser as independent roots; migrate evaluator dispatch after both without
     growing the expression God module.
-11. Accept the simple Criterion grammar/evaluation decision, extract the current
-    condition owner isomorphically, then implement syntax and evaluation as
-    separate units on the canonical Runtime Expression parser. Propagate
-    structured failures through runtime and debugger boundaries before recording
-    bounded evidence.
+11. Implement simple-condition syntax on the shared grammar (syntax accepted
+    2026-09-30). Accept the evaluation decision, then implement evaluation as a
+    separate unit. Propagate structured failures through runtime and debugger
+    boundaries before recording bounded evidence.
 12. Accept the expression-string brace decision, then add the dedicated
     expression-string parser and diagnostic-preserving renderer; apply the
     field-mode matrix through the decomposed validator. Keep the legacy
@@ -486,12 +522,14 @@ halves count as the routing prerequisite.
 
 For the Runtime Expression slice, `$env` evaluator removal and the syntax-only
 parser are independent roots; the evaluator migration follows both, and
-interpolation follows evaluator migration. Validator field enforcement follows
-interpolation plus the settled simple-condition boundary. Action validation
-follows field enforcement, and runtime action-target removal follows action
-validation. Runtime warning transport follows both interpolation and
-action-target removal. CLI evidence follows its runtime/validator owner plus the
-grammar-manifest contract.
+interpolation follows evaluator migration. Simple-condition syntax follows only
+the Runtime Expression parser. It does not wait for the validator
+decomposition, which gates only validator field enforcement. Validator field
+enforcement follows interpolation plus the settled simple-condition boundary.
+Action validation follows field enforcement, and runtime action-target removal
+follows action validation. Runtime warning transport follows both interpolation
+and action-target removal. CLI evidence follows its runtime/validator owner plus
+the grammar-manifest contract.
 
 File overlap alone is not represented as a false semantic dependency. The
 single-writer repository policy still serializes overlapping implementation
@@ -557,7 +595,8 @@ this plan and must likewise be serialized.
 - [epic:ac-62307](https://sonos.scapedeck.com/docs/ac-tickets/ac-62307) owns the
   two presentation-only operationPath adapters.
 - [ac-80673](https://sonos.scapedeck.com/docs/ac-tickets/ac-80673) owns only the
-  canonical full-consumption Runtime Expression parser and prefix iterator;
+  canonical full-consumption Runtime Expression parser, generated from the
+  specification ABNF with no prefix iterator (amended 2026-09-30);
   [ac-9eaf1](https://sonos.scapedeck.com/docs/ac-tickets/ac-9eaf1) migrates the
   evaluator to that parser. [ac-d1e2f](https://sonos.scapedeck.com/docs/ac-tickets/ac-d1e2f)
   settles expression-string brace classification before
@@ -570,12 +609,13 @@ this plan and must likewise be serialized.
   [ac-bb7ab](https://sonos.scapedeck.com/docs/ac-tickets/ac-bb7ab) remove the
   adapter and regex. This ordering prevents a dependency cycle and keeps the
   temporary compatibility surface explicitly bounded.
-- [ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1) settles the
-  simple Criterion grammar/evaluation matrix. The current condition owner is
-  first extracted isomorphically by
-  [ac-aac49](https://sonos.scapedeck.com/docs/ac-tickets/ac-aac49);
-  [ac-67bf5](https://sonos.scapedeck.com/docs/ac-tickets/ac-67bf5) is then
-  limited to syntax,
+- This plan records the accepted simple Criterion syntax (2026-09-30), and
+  [ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1) settles the
+  evaluation matrix. The condition owner was extracted isomorphically by
+  [ac-aac49](https://sonos.scapedeck.com/docs/ac-tickets/ac-aac49), which is
+  closed.
+  [ac-67bf5](https://sonos.scapedeck.com/docs/ac-tickets/ac-67bf5) is limited to
+  syntax on the shared grammar,
   [ac-60b0b](https://sonos.scapedeck.com/docs/ac-tickets/ac-60b0b) owns
   evaluation semantics, and
   [ac-d98bd](https://sonos.scapedeck.com/docs/ac-tickets/ac-d98bd) maps the
