@@ -309,6 +309,68 @@ Implementations must not partially evaluate a rejected candidate, consume raw
 Validation and direct-evaluator error projection are specified in the dependent
 tickets after that decision is recorded.
 
+### Canonical standalone body and payload references
+
+DEC-5 accepted 2026-10-01 in
+[ac-f1e14](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f1e14): Steve selected
+**A: canonical syntax, helpful authoring feedback, and migration before
+enforcement**. This amendment changes the affected architecture and order only.
+The vendored [Runtime Expressions grammar](../../spec/arazzo/v1.1.0.html#runtime-expressions)
+states `body-reference = "body" ["#" json-pointer ]` and
+`payload-reference = "payload" ["#" json-pointer ]`. Standalone request/response
+body and message payload expressions therefore accept the bare reference or
+its `#` JSON Pointer suffix. Dotted/bracket member traversal is not an additional
+standalone expression grammar. Simple-condition `.` ("Property de-reference")
+and `[]` ("Index (0-based)") remain accepted operators under
+[Operators](../../spec/arazzo/v1.1.0.html#operators) and
+[Simple Conditions](../../spec/arazzo/v1.1.0.html#simple-conditions).
+
+Required-expression outputs and Selector/Criterion contexts reject dotted
+standalone forms with one structured `invalidExpression` at the owning field,
+including actionable pointer guidance; they must not silently become literal
+strings or null execution results. Direct evaluator callers retain the existing
+null-plus-one-diagnostic API. Literal-capable Parameter/payload values keep the
+accepted classifier contract: an unbraced non-expression string remains literal,
+while a malformed reserved `{$...}` candidate is diagnosed. No global
+leading-dollar rejection, new dotted compatibility grammar, automatic execution
+rewrite, or warning-only fallback is approved.
+
+For known nested members, `.a.b` migrates to `#/a/b`; a property literally named
+`a.b` uses `#/a.b`. JSON Pointer tokens escape `~` as `~0` and `/` as `~1`, in
+that order. Suggestions for ordinary chains state the intended interpretation;
+wildcards, filters, bracket paths, and ambiguous names are not automatically
+converted. The expression crate owns one additive diagnostic-only
+`body_pointer_migration_hint(input: &str, error: &RuntimeExpressionError)
+-> Option<String>` helper. Consumers append its optional guidance to their
+existing diagnostic; it changes neither parser acceptance nor canonical error
+kind/range/Display, and performs no evaluation or value classification.
+
+Required order: complete generator output migration
+[ac-a9bea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a9bea), authored
+documentation/fixture migration
+[ac-e2aaa](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e2aaa), and shared
+diagnostic guidance
+[ac-5c231](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c231) before the
+evaluator or validator consumer cutover. These are independent prerequisites
+after the DEC-5 decision; shared-file writes remain serialized by reservations.
+The existing evaluator owner retains legacy standalone traversal removal.
+
+Code handoff for evaluator cutover remains blocked by
+[ac-2997b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2997b): current
+simple-condition operand evaluation calls the public standalone evaluator, while
+the planned AST condition evaluator depends on its replacement seam. That
+planning-only gate must settle safe intermediate boundaries and ordering without
+choosing the separately pending condition semantics or adding a fallback.
+DEC-5 A is settled; this implementation-sequencing issue does not reopen it.
+
+The disposition is exact-grammar conformance as the desired state, claimable as
+`covered` only after positive and negative executable consumer evidence. This
+decision is not that evidence; current legacy behavior remains F13 deviation
+debt until removed. The [local upstream-report draft](../assessments/arazzo-dotted-body-spec-report.md)
+records contradictory published examples and the separate Sonos owning-repository
+migration/verification gate before those consumers upgrade. No cross-repository
+change or upstream publication is authorized here.
+
 ### Effective Step dependency ownership
 
 Implicit dependency discovery follows effective behavior, not raw Step text.

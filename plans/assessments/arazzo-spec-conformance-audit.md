@@ -293,7 +293,7 @@ tracks above.
 | # | Deviation | Severity | Surface |
 |---|---|---|---|
 | F12 | Condition operators `contains`, `matches`, `in [...]` | P3 | expr |
-| F13 | `$response.body` wildcard/filter traversal | P3 | expr |
+| F13 | Standalone dotted body/payload and wildcard/filter traversal | P3 | expr |
 | F14 | `RequestBody.reference` is not a spec field | P2 | model |
 | F15 | Success and Failure Action Objects share one `OnAction` struct | P2 | model |
 
@@ -308,12 +308,43 @@ Blast radius is small: one fixture uses them —
 `examples/httpbin-conditions.arazzo.yaml`, three occurrences. `matches` has a
 conformant replacement in a `regex`-type criterion.
 
-### F13. `$response.body` wildcard and filter traversal
+### F13. Standalone body/payload traversal versus condition operators
 
-Beyond the spec's `.` de-reference, the evaluator accepts `[*]`, GJSON-style
-`.#`, `#(k==v)`, `#(k==v)#`, and JSONPath filters `[?(@.k=="v")]` inside a dot
-path. Overlaps the conformant Selector Object with `type: jsonpath`, which is
-already implemented — so this has a like-for-like replacement.
+Updated 2026-10-01: Steve selected DEC-5 A in
+[ac-f1e14](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f1e14), recorded in
+the accepted plan's [canonical body/payload row](../current/arazzo-1.1-conformance-evidence.md#canonical-standalone-body-and-payload-references).
+The [vendored Runtime Expressions grammar](../../spec/arazzo/v1.1.0.html#runtime-expressions)
+defines `body-reference = "body" ["#" json-pointer ]` and
+`payload-reference = "payload" ["#" json-pointer ]`. Standalone expressions
+permit bare body/payload references and JSON Pointers, not `.member` traversal.
+The specification's `.` "Property de-reference" and `[]` "Index (0-based)"
+belong to [simple-condition operators](../../spec/arazzo/v1.1.0.html#operators),
+not a dotted standalone body grammar. The earlier wording conflated these.
+
+Current `crates/arazzo-expr/src/lib.rs::resolve_body_value` accepts dot and
+bracket suffixes through `resolve_dot_path`; its tokenizer also accepts `[*]`,
+GJSON-style `.#`, `#(k==v)`, `#(k==v)#`, and JSONPath-style filters. This is
+implementation evidence of debt, not specification authority. Canonical
+pointer syntax is the accepted target; the standalone parser already rejects
+the dotted form, but consumer migration and executable integration proof remain
+outstanding. Do not mark F13 `covered` merely because this decision is recorded.
+
+Generator, authored-data, and diagnostic prerequisites must complete before
+evaluator/validator cutover. The evaluator owner retains traversal removal;
+the [sequencing gate](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2997b)
+must preserve legitimate condition postfix behavior at every intermediate
+candidate. Required-expression outputs/contexts must report `invalidExpression`
+with actionable pointer guidance, while the direct evaluator retains its
+null-plus-diagnostic API and literal-capable value fields preserve literals.
+No dotted compatibility grammar or warning-only fallback is approved.
+
+Migration is field- and intent-aware: `#/a.b` selects one property and `#/a/b`
+selects nested members; encode `~` as `~0` and `/` as `~1`. Wildcards, filters,
+and ambiguous bracket/member names have no automatic pointer conversion.
+Selector Objects or typed conditions may express the intended query where the
+field permits them, but are not blanket like-for-like replacements: verify
+cardinality and field legality. See the [local report](arazzo-dotted-body-spec-report.md)
+for the contradictory published examples and cross-repository impact gate.
 
 ### F14. `RequestBody.reference`
 
@@ -616,6 +647,10 @@ section: `$env.*`, bare XPath outputs, the `operationPath` extension forms,
 url-as-base-URL, name-based `$components` action resolution, and the GJSON
 dot-path traversal all carry explicit **arazzo-cli extension** labels, with
 the Selector Object documented as the conformant preferred form.
+
+For F13 this paragraph records historical documentation, not current policy:
+the 2026-10-01 DEC-5 A decision above supersedes its extension disposition and
+requires migration before exact standalone consumer enforcement.
 
 **F11 stays open, now documented.** `$response.query.<name>` /
 `$response.path.<name>` remain unimplemented (evaluate to `null`) and are
