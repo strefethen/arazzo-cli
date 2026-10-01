@@ -9,6 +9,11 @@
 
 use std::cmp::Ordering;
 
+mod syntax;
+pub use syntax::{
+    parse_simple_condition, ConditionError, ConditionErrorKind, ParsedSimpleCondition,
+};
+
 use serde_json::Value;
 
 use super::{

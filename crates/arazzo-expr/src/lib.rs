@@ -34,6 +34,10 @@ mod matches_operator;
 mod runtime_expression;
 mod simple_condition;
 
+pub use simple_condition::{
+    parse_simple_condition, ConditionError, ConditionErrorKind, ParsedSimpleCondition,
+};
+
 pub use runtime_expression::{
     parse_runtime_expression, ComponentReference, ComponentReferenceSection,
     ParsedRuntimeExpression, RuntimeExpressionError, RuntimeExpressionErrorKind,

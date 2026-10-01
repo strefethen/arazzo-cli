@@ -15,3 +15,54 @@ rt_steps = { ^"$steps." ~ steps_reference }
 rt_workflows = { ^"$workflows." ~ workflows_reference }
 rt_source_descriptions = { ^"$sourceDescriptions." ~ source_reference }
 rt_components = { ^"$components." ~ components_reference }
+
+// Accepted simple Criterion syntax (DEC-2/DEC-4). Explicit spacing keeps
+// whitespace out of Runtime Expression terminals and multi-character operators.
+condition = { SOI ~ c_space ~ or_expr ~ c_space ~ EOI }
+c_space = _{ (" " | "\t" | "\r" | "\n")* }
+or_expr = { and_expr ~ (c_space ~ or_operator ~ c_space ~ and_expr)* }
+and_expr = { unary ~ (c_space ~ and_operator ~ c_space ~ unary)* }
+unary = { (not_operator ~ c_space ~ postfix) | comparison }
+comparison = { postfix ~ (c_space ~ comparison_operator ~ c_space ~ postfix)? }
+postfix = { primary ~ (c_space ~ (index | property))* }
+primary = _{ c_expression | group | boolean | null | number | string }
+group = { "(" ~ c_space ~ or_expr ~ c_space ~ ")" }
+index = { "[" ~ c_space ~ unsigned_integer ~ c_space ~ "]" }
+property = { "." ~ c_space ~ identifier_strict }
+unsigned_integer = @{ "0" | (ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) }
+or_operator = { "||" }
+and_operator = { "&&" }
+not_operator = { "!" ~ !"=" }
+comparison_operator = { "<=" | ">=" | "==" | "!=" | "<" | ">" }
+boolean = { ("true" | "false") ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+null = { "null" ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+number = @{ "-"? ~ unsigned_integer ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+string = @{ "'" ~ ("''" | (!"'" ~ ANY))* ~ "'" }
+
+// Only the four unbounded ABNF terminals change in condition context. All
+// namespace, identifier, escape, and character rules retain canonical meaning.
+c_stop = _{ " " | "\t" | "\r" | "\n" | "=" | "!" | "<" | ">" | "&" | "|" | "(" | ")" | "'" | "[" | "]" }
+c_name = { (!c_stop ~ CHAR)* }
+c_token = { (!c_stop ~ tchar)+ }
+c_reference_token = { (!c_stop ~ (unescaped | escaped))* }
+c_source_reference_id = { (!c_stop ~ CHAR)+ }
+c_json_pointer = { ("/" ~ c_reference_token)* }
+c_header_reference = { ^"header." ~ c_token }
+c_query_reference = { ^"query." ~ c_name }
+c_path_reference = { ^"path." ~ c_name }
+c_body_reference = { ^"body" ~ ("#" ~ c_json_pointer)? }
+c_payload_reference = { ^"payload" ~ ("#" ~ c_json_pointer)? }
+c_inputs_reference = { input_name ~ ("#" ~ c_json_pointer)? }
+c_outputs_reference = { output_name ~ ("#" ~ c_json_pointer)? }
+c_steps_reference = { step_id ~ ^".outputs." ~ output_name ~ ("#" ~ c_json_pointer)? }
+c_workflows_reference = { workflow_id ~ "." ~ workflow_field ~ "." ~ workflow_field_name ~ ("#" ~ c_json_pointer)? }
+c_source_reference = { source_name ~ "." ~ c_source_reference_id }
+c_request = { ^"$request." ~ (c_header_reference | c_query_reference | c_path_reference | c_body_reference) }
+c_response = { ^"$response." ~ (c_header_reference | c_query_reference | c_path_reference | c_body_reference) }
+c_message = { ^"$message." ~ (c_header_reference | c_payload_reference) }
+c_inputs = { ^"$inputs." ~ c_inputs_reference }
+c_outputs = { ^"$outputs." ~ c_outputs_reference }
+c_steps = { ^"$steps." ~ c_steps_reference }
+c_workflows = { ^"$workflows." ~ c_workflows_reference }
+c_source_descriptions = { ^"$sourceDescriptions." ~ c_source_reference }
+c_expression = { rt_url | rt_method | rt_status_code | c_request | c_response | c_message | c_inputs | c_outputs | c_steps | c_workflows | c_source_descriptions | rt_components | rt_self }

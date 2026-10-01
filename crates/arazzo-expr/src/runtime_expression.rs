@@ -302,7 +302,15 @@ fn field<'a>(pair: &Pair<'a, Rule>, rule: Rule) -> Pair<'a, Rule> {
     pair.clone()
         .into_inner()
         .flatten()
-        .find(|child| child.as_rule() == rule)
+        .find(|child| {
+            child.as_rule() == rule
+                || matches!(
+                    (rule, child.as_rule()),
+                    (Rule::token, Rule::c_token)
+                        | (Rule::name, Rule::c_name)
+                        | (Rule::source_reference_id, Rule::c_source_reference_id)
+                )
+        })
         .expect("required field in a successfully parsed reference")
 }
 
@@ -310,7 +318,7 @@ fn pointer<'a>(pair: &Pair<'a, Rule>) -> Option<RuntimeExpressionPointer<'a>> {
     pair.clone()
         .into_inner()
         .flatten()
-        .find(|child| child.as_rule() == Rule::json_pointer)
+        .find(|child| matches!(child.as_rule(), Rule::json_pointer | Rule::c_json_pointer))
         .map(|child| {
             let span = child.as_span();
             // The ABNF places a literal '#' immediately before json_pointer.
@@ -327,7 +335,7 @@ pub(crate) fn map_runtime_expression(mut pair: Pair<'_, Rule>) -> ParsedRuntimeE
     use RuntimeExpressionNamespace as Namespace;
     while matches!(
         pair.as_rule(),
-        Rule::runtime_expression | Rule::rt_expression
+        Rule::runtime_expression | Rule::rt_expression | Rule::c_expression
     ) {
         pair = pair.into_inner().next().expect("expression terminal");
     }
@@ -337,50 +345,63 @@ pub(crate) fn map_runtime_expression(mut pair: Pair<'_, Rule>) -> ParsedRuntimeE
         Rule::rt_method => Namespace::Method,
         Rule::rt_status_code => Namespace::StatusCode,
         Rule::rt_self => Namespace::SelfUri,
-        Rule::rt_request => Namespace::Request,
-        Rule::rt_response => Namespace::Response,
-        Rule::rt_message => Namespace::Message,
-        Rule::rt_inputs => Namespace::Inputs,
-        Rule::rt_outputs => Namespace::Outputs,
-        Rule::rt_steps => Namespace::Steps,
-        Rule::rt_workflows => Namespace::Workflows,
-        Rule::rt_source_descriptions => Namespace::SourceDescriptions,
+        Rule::rt_request | Rule::c_request => Namespace::Request,
+        Rule::rt_response | Rule::c_response => Namespace::Response,
+        Rule::rt_message | Rule::c_message => Namespace::Message,
+        Rule::rt_inputs | Rule::c_inputs => Namespace::Inputs,
+        Rule::rt_outputs | Rule::c_outputs => Namespace::Outputs,
+        Rule::rt_steps | Rule::c_steps => Namespace::Steps,
+        Rule::rt_workflows | Rule::c_workflows => Namespace::Workflows,
+        Rule::rt_source_descriptions | Rule::c_source_descriptions => Namespace::SourceDescriptions,
         Rule::rt_components => Namespace::Components,
         _ => unreachable!("namespace terminal from the shared expression production"),
     };
     let form = match pair.into_inner().next() {
         None => RuntimeExpressionForm::Scalar,
         Some(reference) => match reference.as_rule() {
-            Rule::header_reference => {
+            Rule::header_reference | Rule::c_header_reference => {
                 RuntimeExpressionForm::Header(field(&reference, Rule::token).as_str())
             }
-            Rule::query_reference => {
+            Rule::query_reference | Rule::c_query_reference => {
                 RuntimeExpressionForm::Query(field(&reference, Rule::name).as_str())
             }
-            Rule::path_reference => {
+            Rule::path_reference | Rule::c_path_reference => {
                 RuntimeExpressionForm::Path(field(&reference, Rule::name).as_str())
             }
-            Rule::body_reference => RuntimeExpressionForm::Body(pointer(&reference)),
-            Rule::payload_reference => RuntimeExpressionForm::Payload(pointer(&reference)),
-            Rule::inputs_reference | Rule::outputs_reference => RuntimeExpressionForm::Named(
+            Rule::body_reference | Rule::c_body_reference => {
+                RuntimeExpressionForm::Body(pointer(&reference))
+            }
+            Rule::payload_reference | Rule::c_payload_reference => {
+                RuntimeExpressionForm::Payload(pointer(&reference))
+            }
+            Rule::inputs_reference
+            | Rule::outputs_reference
+            | Rule::c_inputs_reference
+            | Rule::c_outputs_reference => RuntimeExpressionForm::Named(
                 field(&reference, Rule::identifier).as_str(),
                 pointer(&reference),
             ),
-            Rule::steps_reference => RuntimeExpressionForm::Step(StepOutputReference {
-                step_id: field(&reference, Rule::step_id).as_str(),
-                output_name: field(&reference, Rule::output_name).as_str(),
-                pointer: pointer(&reference),
-            }),
-            Rule::workflows_reference => RuntimeExpressionForm::Workflow {
-                id: field(&reference, Rule::workflow_id).as_str(),
-                field: field(&reference, Rule::workflow_field).as_str(),
-                name: field(&reference, Rule::workflow_field_name).as_str(),
-                pointer: pointer(&reference),
-            },
-            Rule::source_reference => RuntimeExpressionForm::Source(SourceDescriptionReference {
-                source_name: field(&reference, Rule::source_name).as_str(),
-                reference_id: field(&reference, Rule::source_reference_id).as_str(),
-            }),
+            Rule::steps_reference | Rule::c_steps_reference => {
+                RuntimeExpressionForm::Step(StepOutputReference {
+                    step_id: field(&reference, Rule::step_id).as_str(),
+                    output_name: field(&reference, Rule::output_name).as_str(),
+                    pointer: pointer(&reference),
+                })
+            }
+            Rule::workflows_reference | Rule::c_workflows_reference => {
+                RuntimeExpressionForm::Workflow {
+                    id: field(&reference, Rule::workflow_id).as_str(),
+                    field: field(&reference, Rule::workflow_field).as_str(),
+                    name: field(&reference, Rule::workflow_field_name).as_str(),
+                    pointer: pointer(&reference),
+                }
+            }
+            Rule::source_reference | Rule::c_source_reference => {
+                RuntimeExpressionForm::Source(SourceDescriptionReference {
+                    source_name: field(&reference, Rule::source_name).as_str(),
+                    reference_id: field(&reference, Rule::source_reference_id).as_str(),
+                })
+            }
             Rule::components_reference => {
                 let component_type = field(&reference, Rule::component_type);
                 let section = if component_type.as_str().eq_ignore_ascii_case("parameters") {
