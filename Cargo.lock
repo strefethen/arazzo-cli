@@ -147,8 +147,11 @@ dependencies = [
 name = "arazzo-expr"
 version = "0.7.0"
 dependencies = [
+ "abnf_to_pest",
  "criterion",
  "iregexp-rs",
+ "pest",
+ "pest_derive",
  "proptest",
  "regex",
  "serde_json",

@@ -1,0 +1,17 @@
+// Namespace-exact source policy: accepted conformance plan, Runtime Expression
+// parsing precedes field dispatch (DEC-1 and DEC-3). ABNF literals are caseless.
+runtime_expression = { SOI ~ rt_expression ~ EOI }
+rt_expression = { rt_url | rt_method | rt_status_code | rt_request | rt_response | rt_message | rt_inputs | rt_outputs | rt_steps | rt_workflows | rt_source_descriptions | rt_components | rt_self }
+rt_url = { ^"$url" }
+rt_method = { ^"$method" }
+rt_status_code = { ^"$statusCode" }
+rt_self = { ^"$self" }
+rt_request = { ^"$request." ~ (header_reference | query_reference | path_reference | body_reference) }
+rt_response = { ^"$response." ~ (header_reference | query_reference | path_reference | body_reference) }
+rt_message = { ^"$message." ~ (header_reference | payload_reference) }
+rt_inputs = { ^"$inputs." ~ inputs_reference }
+rt_outputs = { ^"$outputs." ~ outputs_reference }
+rt_steps = { ^"$steps." ~ steps_reference }
+rt_workflows = { ^"$workflows." ~ workflows_reference }
+rt_source_descriptions = { ^"$sourceDescriptions." ~ source_reference }
+rt_components = { ^"$components." ~ components_reference }

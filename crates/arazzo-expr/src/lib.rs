@@ -31,7 +31,15 @@ use regex::Regex;
 use serde_json::{json, Number, Value};
 
 mod matches_operator;
+mod runtime_expression;
 mod simple_condition;
+
+pub use runtime_expression::{
+    parse_runtime_expression, ComponentReference, ComponentReferenceSection,
+    ParsedRuntimeExpression, RuntimeExpressionError, RuntimeExpressionErrorKind,
+    RuntimeExpressionNamespace, RuntimeExpressionPointer, SourceDescriptionReference,
+    StepOutputReference,
+};
 
 pub mod jsonpath;
 
