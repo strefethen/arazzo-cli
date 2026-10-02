@@ -923,9 +923,10 @@ fn build_step(
 
     let mut outputs = BTreeMap::new();
     if let Some(id_field) = output_id_field {
+        let pointer_token = id_field.replace('~', "~0").replace('/', "~1");
         outputs.insert(
             id_field.to_string(),
-            format!("$response.body.{id_field}").into(),
+            format!("$response.body#/{pointer_token}").into(),
         );
     }
 

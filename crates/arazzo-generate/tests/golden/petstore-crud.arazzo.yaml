@@ -38,7 +38,7 @@ workflows:
     - name: fail-fast
       type: end
     outputs:
-      petId: $response.body.petId
+      petId: $response.body#/petId
   - stepId: list-pets
     description: List all pets
     operationPath: GET {petstore}./pets
