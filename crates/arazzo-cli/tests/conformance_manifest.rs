@@ -333,6 +333,7 @@ fn scrub_non_code(source: &str) -> String {
     let mut block_depth = 0_usize;
     let mut quote = None;
     let mut raw_hashes = None;
+    let mut literal_start = 0;
 
     while cursor < input.len() {
         if let Some(hashes) = raw_hashes {
@@ -395,11 +396,36 @@ fn scrub_non_code(source: &str) -> String {
         }
         if input[cursor] == b'"' {
             quote = Some(b'"');
+            literal_start = cursor;
             cursor += 1;
             continue;
         }
         if input[cursor] == b'\'' {
+            // Disambiguate the way the Rust lexer does. An escape, or a closing
+            // quote two bytes on, makes a char literal; that test precedes the
+            // identifier test so `'_'` stays a literal. Otherwise an identifier
+            // byte starts a lifetime or loop label, whose single apostrophe never
+            // opens a literal. A non-ASCII lifetime, absent from this workspace,
+            // still reads as a char literal.
+            let starts_lifetime = match (input.get(cursor + 1), input.get(cursor + 2)) {
+                (Some(b'\\'), _) | (_, Some(b'\'')) => false,
+                (Some(next), _) => next.is_ascii_alphanumeric() || *next == b'_',
+                (None, _) => false,
+            };
+            if starts_lifetime {
+                output[cursor] = input[cursor];
+                cursor += 1;
+                while input
+                    .get(cursor)
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    output[cursor] = input[cursor];
+                    cursor += 1;
+                }
+                continue;
+            }
             quote = Some(b'\'');
+            literal_start = cursor;
             cursor += 1;
             continue;
         }
@@ -410,6 +436,7 @@ fn scrub_non_code(source: &str) -> String {
             }
             if end < input.len() && input[end] == b'"' {
                 raw_hashes = Some(end - cursor - 1);
+                literal_start = cursor;
                 cursor = end + 1;
                 continue;
             }
@@ -418,6 +445,11 @@ fn scrub_non_code(source: &str) -> String {
         cursor += 1;
     }
 
+    if quote.is_some() || raw_hashes.is_some() {
+        panic!(
+            "scrubbed Rust source must close every literal: unterminated literal opened at byte offset {literal_start}"
+        );
+    }
     String::from_utf8(output)
         .unwrap_or_else(|err| panic!("scrubbed Rust source must remain UTF-8: {err}"))
 }
@@ -1492,6 +1524,43 @@ fn evidence_references_require_existing_non_ignored_test_items() {
 #[test]
 fn sync_case() {}
 
+fn generic_lifetime_item<'a>(value: &'a str) -> &'a str {
+    value
+}
+
+#[test]
+fn after_generic_lifetime_case() {}
+
+fn static_bound_item<T: 'static>(value: &'static str, _bound: T) -> &'static str {
+    value
+}
+
+#[test]
+fn after_static_bound_case() {}
+
+fn loop_label_item() {
+    'outer: loop {
+        break 'outer;
+    }
+}
+
+#[test]
+fn after_loop_label_case() {}
+
+const ESCAPED_QUOTE: char = '\'';
+const ESCAPED_NEWLINE: char = '\n';
+const UNDERSCORE: char = '_';
+const SPACE: char = ' ';
+const BYTE: u8 = b'x';
+const DOUBLE_QUOTE: char = '"';
+const HIDDEN_IN_STRING: &str = ";
+#[test]
+fn hidden_in_string_case() {}
+";
+
+#[test]
+fn after_char_literals_case() {}
+
 #[tokio::test]
 async fn async_case() {}
 
@@ -1578,13 +1647,22 @@ const TOKEN_BODY: () = {
     let recognized = recognized_non_ignored_test_items(&source);
     for test_name in [
         "sync_case",
+        "after_generic_lifetime_case",
+        "after_static_bound_case",
+        "after_loop_label_case",
+        "after_char_literals_case",
         "async_case",
         "nested_sync_case",
         "nested_async_case",
     ] {
         assert!(recognized.contains(test_name), "missing {test_name:?}");
     }
+    // Each char literal above must stay a literal. Treating apostrophes as code,
+    // or reading one of these literals as a lifetime, leaves the double quote in
+    // `DOUBLE_QUOTE` outside a literal: it opens a string, and the contents of
+    // `HIDDEN_IN_STRING` surface as an item.
     for test_name in [
+        "hidden_in_string_case",
         "macro_rule_case",
         "macro_invocation_case",
         "disabled_cfg_case",
@@ -1603,6 +1681,10 @@ const TOKEN_BODY: () = {
     }
     for reference in [
         "tests/evidence.rs#sync_case",
+        "tests/evidence.rs#after_generic_lifetime_case",
+        "tests/evidence.rs#after_static_bound_case",
+        "tests/evidence.rs#after_loop_label_case",
+        "tests/evidence.rs#after_char_literals_case",
         "tests/evidence.rs#async_case",
         "tests/evidence.rs#nested_sync_case",
         "tests/evidence.rs#nested_async_case",
@@ -1619,6 +1701,7 @@ const TOKEN_BODY: () = {
         "tests/evidence.rs#missing_case",
         "tests/evidence.rs#not-a-function",
         "tests/evidence.rs#helper_only",
+        "tests/evidence.rs#hidden_in_string_case",
         "tests/evidence.rs#commented_case",
         "tests/evidence.rs#ignored_case",
         "tests/evidence.rs#macro_rule_case",
@@ -1641,6 +1724,54 @@ const TOKEN_BODY: () = {
             "invalid evidence reference must fail",
         );
         assert!(error.contains("model.test-reference"), "{error}");
+    }
+}
+
+#[test]
+fn unterminated_literal_panics_with_its_opening_offset() {
+    for (source, offset) in [
+        ("let c = '\\n", 8),
+        ("let s = \"open", 8),
+        ("let r = r#\"open", 8),
+        // A non-ASCII lifetime reads as a char literal; with no later
+        // apostrophe to close it, the scan fails instead of blanking the rest.
+        ("fn f<'é>() {}", 5),
+    ] {
+        let payload = match std::panic::catch_unwind(|| scrub_non_code(source)) {
+            Ok(scrubbed) => panic!("{source:?} must panic, but scrubbed to {scrubbed:?}"),
+            Err(payload) => payload,
+        };
+        let message = payload
+            .downcast_ref::<String>()
+            .unwrap_or_else(|| panic!("{source:?} must panic with a formatted message"));
+        assert!(
+            message.ends_with(&format!(
+                "unterminated literal opened at byte offset {offset}"
+            )),
+            "{source:?}: {message}"
+        );
+    }
+}
+
+#[test]
+fn scanner_recognizes_nested_evaluator_tests_in_arazzo_expr() {
+    let path = workspace_root().join("crates/arazzo-expr/src/lib.rs");
+    let source =
+        fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+    let recognized = recognized_non_ignored_test_items(&source);
+    // The two adapters precede the crate's first lifetime. The nested tests,
+    // which the adapters delegate to, follow it.
+    for test_name in [
+        "conformance_simple_string_comparison_positive_evidence",
+        "conformance_simple_string_comparison_negative_evidence",
+        "compare_ordered_matches_go_rules",
+        "json_path_filters_remain_case_sensitive_for_equality_and_ordering",
+    ] {
+        assert!(
+            recognized.contains(test_name),
+            "missing {test_name:?} from {}",
+            path.display()
+        );
     }
 }
 
