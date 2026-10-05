@@ -161,8 +161,8 @@ through local path/context adapters rather than rebuilding inheritance.
 1.1 Runtime Expressions. `arazzo-spec` remains independent of expression
 parsing. Both `arazzo-validate` and `arazzo-runtime` consume the published
 `arazzo-expr` parser; neither adds a regex, prefix heuristic, or second grammar.
-Adding the direct `arazzo-validate` dependency on `arazzo-expr` is accepted and
-acyclic after the validator decomposition.
+Adding the direct `arazzo-validate` dependency on `arazzo-expr` is accepted. It
+is acyclic because `arazzo-expr` does not depend on `arazzo-validate`.
 
 The base Runtime Expression parser exposes a borrowed, read-only contract:
 
@@ -547,7 +547,8 @@ precedent or silently added to an allowlist.
     boundaries before recording bounded evidence.
 12. Accept the expression-string brace decision, then add the dedicated
     expression-string parser and diagnostic-preserving renderer; apply the
-    field-mode matrix through the decomposed validator. Keep the legacy
+    field-mode matrix through the validator, placing field-mode enforcement in
+    its sibling expression module per `god-files.md`. Keep the legacy
     brace-only `interpolate_string` adapter only while action-target cleanup
     still calls it, then remove that adapter and its regex in the dedicated
     post-cleanup transition ticket.
@@ -578,16 +579,18 @@ ambiguity rejection — and no longer depends on the validator train, making it
 ready immediately (driven by GitHub issue #5 and sonos-hub's first-party
 multi-source requirement). Its validate-time diagnostics half is
 [ac-fd667](https://sonos.scapedeck.com/docs/ac-tickets/ac-fd667), which
-carries the former ac-d15a3 dependency and follows the validator
-decomposition. When the final cross-surface guard's edges are drawn, both
+carries the former ac-d15a3 dependency and follows
+[ac-d15a3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d15a3). When the
+final cross-surface guard's edges are drawn, both
 halves count as the routing prerequisite.
 
 For the Runtime Expression slice, `$env` evaluator removal and the syntax-only
 parser are independent roots; the evaluator migration follows both, and
 interpolation follows evaluator migration. Simple-condition syntax follows only
-the Runtime Expression parser. It does not wait for the validator
-decomposition, which gates only validator field enforcement. Validator field
-enforcement follows interpolation plus the settled simple-condition boundary.
+the Runtime Expression parser. The validator decomposition plan was archived on
+2026-10-05, and validator work follows the incremental containment rule in
+`god-files.md`. Validator field enforcement follows interpolation plus the
+settled simple-condition boundary.
 Action validation follows field enforcement, and runtime action-target removal
 follows action validation. Runtime warning transport follows both interpolation
 and action-target removal. CLI evidence follows its runtime/validator owner plus

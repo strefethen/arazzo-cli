@@ -1,8 +1,13 @@
 # Arazzo Validate Decomposition Plan
 
+**Archived 2026-10-05** (Steve-approved Option A). Incremental containment, recorded in
+`god-files.md`, replaces this plan. It is not implementation authority. Only work item 1 landed
+(`3afc4be`). See `plans/assessments/validator-chain-restructure-draft-2026-10-05.md` for the
+reasons and the ticket dispositions.
+
 **Accepted:** 2026-08-16
 **Baseline:** `e252c979af1eca064af757f0c71559bc172f116d`
-**Status:** Accepted for the next epic; implementation has not started
+**Status:** Archived; superseded by incremental containment
 **Scope:** Behavior-preserving decomposition of `crates/arazzo-validate`
 
 ## Decision
