@@ -326,11 +326,12 @@ fn tracked_spec_anchor_ids(manifest: &Map<String, Value>) -> Result<BTreeSet<Str
     Ok(anchors)
 }
 
-fn scrub_non_code(source: &str) -> String {
+fn scrub_non_code(source: &str, origin: &str) -> String {
     let input = source.as_bytes();
     let mut output = vec![b' '; input.len()];
     let mut cursor = 0;
     let mut block_depth = 0_usize;
+    let mut comment_start = 0;
     let mut quote = None;
     let mut raw_hashes = None;
     let mut literal_start = 0;
@@ -391,6 +392,7 @@ fn scrub_non_code(source: &str) -> String {
         }
         if input[cursor..].starts_with(b"/*") {
             block_depth = 1;
+            comment_start = cursor;
             cursor += 2;
             continue;
         }
@@ -447,11 +449,16 @@ fn scrub_non_code(source: &str) -> String {
 
     if quote.is_some() || raw_hashes.is_some() {
         panic!(
-            "scrubbed Rust source must close every literal: unterminated literal opened at byte offset {literal_start}"
+            "{origin}: scrubbed Rust source must close every literal: unterminated literal opened at byte offset {literal_start}"
+        );
+    }
+    if block_depth > 0 {
+        panic!(
+            "{origin}: scrubbed Rust source must close every block comment: unterminated block comment opened at byte offset {comment_start}"
         );
     }
     String::from_utf8(output)
-        .unwrap_or_else(|err| panic!("scrubbed Rust source must remain UTF-8: {err}"))
+        .unwrap_or_else(|err| panic!("{origin}: scrubbed Rust source must remain UTF-8: {err}"))
 }
 
 fn skip_whitespace(source: &[u8], cursor: &mut usize) {
@@ -754,8 +761,8 @@ fn scan_rust_item_list(
     }
 }
 
-fn recognized_non_ignored_test_items(source: &str) -> BTreeSet<String> {
-    let source = scrub_non_code(source);
+fn recognized_non_ignored_test_items(source: &str, origin: &str) -> BTreeSet<String> {
+    let source = scrub_non_code(source, origin);
     let bytes = source.as_bytes();
     let mut tests = BTreeSet::new();
     let mut cursor = 0;
@@ -785,7 +792,7 @@ fn validate_evidence_reference(
             &format!("reading {}: {err}", source_path.display()),
         )
     })?;
-    if !recognized_non_ignored_test_items(&source).contains(test_name) {
+    if !recognized_non_ignored_test_items(&source, path).contains(test_name) {
         return Err(claim_error(
             claim_id,
             &format!(
@@ -1644,7 +1651,7 @@ const TOKEN_BODY: () = {
     );
     let source = fs::read_to_string(temp.path().join("tests/evidence.rs"))
         .unwrap_or_else(|err| panic!("reading evidence parser fixture: {err}"));
-    let recognized = recognized_non_ignored_test_items(&source);
+    let recognized = recognized_non_ignored_test_items(&source, "tests/evidence.rs");
     for test_name in [
         "sync_case",
         "after_generic_lifetime_case",
@@ -1737,7 +1744,7 @@ fn unterminated_literal_panics_with_its_opening_offset() {
         // apostrophe to close it, the scan fails instead of blanking the rest.
         ("fn f<'é>() {}", 5),
     ] {
-        let payload = match std::panic::catch_unwind(|| scrub_non_code(source)) {
+        let payload = match std::panic::catch_unwind(|| scrub_non_code(source, "literal.rs")) {
             Ok(scrubbed) => panic!("{source:?} must panic, but scrubbed to {scrubbed:?}"),
             Err(payload) => payload,
         };
@@ -1754,11 +1761,66 @@ fn unterminated_literal_panics_with_its_opening_offset() {
 }
 
 #[test]
+fn unterminated_block_comment_panics_with_its_opening_offset_and_origin() {
+    let origin = "tests/scrubbed.rs";
+    let panic_message = |source: &str| -> String {
+        let payload = match std::panic::catch_unwind(|| scrub_non_code(source, origin)) {
+            Ok(scrubbed) => panic!("{source:?} must panic, but scrubbed to {scrubbed:?}"),
+            Err(payload) => payload,
+        };
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_else(|| panic!("{source:?} must panic with a formatted message"))
+    };
+    for (source, offset) in [
+        ("fn f() {}\n/* open", 10),
+        // Closing the inner comment leaves the outer one open.
+        ("let a = 1; /* outer /* inner */ open", 11),
+        // An open inner comment still reports where the outermost one opened.
+        ("/* outer /* inner", 0),
+    ] {
+        let message = panic_message(source);
+        assert!(
+            message.contains(origin)
+                && message.ends_with(&format!(
+                    "unterminated block comment opened at byte offset {offset}"
+                )),
+            "{source:?}: {message}"
+        );
+    }
+    let message = panic_message("let s = \"open");
+    assert!(
+        message.contains(origin)
+            && message.ends_with("unterminated literal opened at byte offset 8"),
+        "{message}"
+    );
+
+    // A closed nested comment still scrubs: the test-shaped item inside it
+    // stays unrecognized, and the scan resumes after the comment.
+    let recognized = recognized_non_ignored_test_items(
+        r#"
+/* outer
+/* inner */
+#[test]
+fn commented_case() {}
+*/
+#[test]
+fn after_comment_case() {}
+"#,
+        origin,
+    );
+    assert!(recognized.contains("after_comment_case"), "{recognized:?}");
+    assert!(!recognized.contains("commented_case"), "{recognized:?}");
+}
+
+#[test]
 fn scanner_recognizes_nested_evaluator_tests_in_arazzo_expr() {
-    let path = workspace_root().join("crates/arazzo-expr/src/lib.rs");
+    let relative = "crates/arazzo-expr/src/lib.rs";
+    let path = workspace_root().join(relative);
     let source =
         fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
-    let recognized = recognized_non_ignored_test_items(&source);
+    let recognized = recognized_non_ignored_test_items(&source, relative);
     // Both nested `tests` items follow the crate's first lifetime, so
     // recognizing them proves the scanner reads past it.
     for test_name in [
