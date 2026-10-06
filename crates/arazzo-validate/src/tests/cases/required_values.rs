@@ -273,7 +273,7 @@ workflows:
     }
 
     #[test]
-    pub(super) fn raw_required_values_report_exact_paths_for_yaml_and_json() {
+    fn raw_required_values_report_exact_paths_for_yaml_and_json() {
         let yaml = missing_required_value_fixture();
         let json = missing_required_value_json();
         let expected = [
@@ -309,7 +309,7 @@ workflows:
     }
 
     #[test]
-    pub(super) fn raw_required_values_accept_concrete_any_values_for_yaml_and_json() {
+    fn raw_required_values_accept_concrete_any_values_for_yaml_and_json() {
         let yaml = required_value_fixture([
             "null", "\"\"", "false", "0", "{}", "[]", "null", "\"\"", "false", "null", "\"\"",
             "false", "0", "{}", "[]",

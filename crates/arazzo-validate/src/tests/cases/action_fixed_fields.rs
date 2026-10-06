@@ -82,7 +82,7 @@
     /// in both YAML and JSON. An empty action name is valid; raw validation
     /// cares about its string shape and presence, not its length.
     #[test]
-    pub(super) fn action_fixed_fields_positive_matrix() {
+    fn action_fixed_fields_positive_matrix() {
         const POSITIONS: [&str; 6] = [
             "component success",
             "component failure",
@@ -126,7 +126,7 @@
     /// serde-owned malformed containers, type-field applicability, reusable
     /// exemptions, and component diagnostic provenance.
     #[test]
-    pub(super) fn action_fixed_fields_negative_matrix() {
+    fn action_fixed_fields_negative_matrix() {
         const POSITIONS: [&str; 6] = [
             "component success",
             "component failure",
