@@ -17,10 +17,10 @@
       "status": "covered",
       "evidence": {
         "positive": [
-          "crates/arazzo-validate/src/lib.rs#conformance_parameter_context_positive_evidence"
+          "crates/arazzo-validate/src/tests/cases/parameter_context.rs#parameter_context_positive_matrix"
         ],
         "negative": [
-          "crates/arazzo-validate/src/lib.rs#conformance_parameter_context_negative_evidence",
+          "crates/arazzo-validate/src/tests/cases/parameter_context.rs#parameter_context_negative_matrix",
           "crates/arazzo-cli/tests/cli_integration.rs#validate_json_reports_parameter_context_path_and_kind"
         ]
       }
@@ -38,10 +38,10 @@
       "status": "covered",
       "evidence": {
         "positive": [
-          "crates/arazzo-validate/src/lib.rs#conformance_action_fixed_fields_positive_evidence"
+          "crates/arazzo-validate/src/tests/cases/action_fixed_fields.rs#action_fixed_fields_positive_matrix"
         ],
         "negative": [
-          "crates/arazzo-validate/src/lib.rs#conformance_action_fixed_fields_negative_evidence",
+          "crates/arazzo-validate/src/tests/cases/action_fixed_fields.rs#action_fixed_fields_negative_matrix",
           "crates/arazzo-cli/tests/cli_integration.rs#validate_json_reports_action_fixed_field_path_and_kind"
         ]
       }

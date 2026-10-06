@@ -36,10 +36,10 @@
       "status": "covered",
       "evidence": {
         "positive": [
-          "crates/arazzo-validate/src/lib.rs#conformance_required_any_values_positive_evidence"
+          "crates/arazzo-validate/src/tests/cases/required_values.rs#raw_required_values_accept_concrete_any_values_for_yaml_and_json"
         ],
         "negative": [
-          "crates/arazzo-validate/src/lib.rs#conformance_required_any_values_negative_evidence"
+          "crates/arazzo-validate/src/tests/cases/required_values.rs#raw_required_values_report_exact_paths_for_yaml_and_json"
         ]
       }
     },

@@ -2,61 +2,6 @@
 
 //! Validation layer for parsed Arazzo specifications.
 
-// The conformance manifest's hermetic source scanner does not recognize the
-// nested tests in this large library module. Keep these minimal executable
-// adapters before the library items and delegate all assertions to the direct,
-// comprehensive YAML/JSON validation tests below.
-#[cfg(test)]
-#[test]
-fn conformance_required_any_values_positive_evidence() {
-    tests::raw_required_values_accept_concrete_any_values_for_yaml_and_json();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_required_any_values_negative_evidence() {
-    tests::raw_required_values_report_exact_paths_for_yaml_and_json();
-}
-
-// See the note above the required-Any adapters. These two execute the complete
-// Parameter context matrix while keeping the manifest's evidence references
-// stable and scanner-visible.
-#[cfg(test)]
-#[test]
-fn conformance_parameter_context_positive_evidence() {
-    tests::parameter_context_positive_matrix();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_parameter_context_negative_evidence() {
-    tests::parameter_context_negative_matrix();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_action_fixed_fields_positive_evidence() {
-    tests::action_fixed_fields_positive_matrix();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_action_fixed_fields_negative_evidence() {
-    tests::action_fixed_fields_negative_matrix();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_decimal_retry_after_positive_evidence() {
-    tests::decimal_retry_after_positive_matrix();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_decimal_retry_after_negative_evidence() {
-    tests::decimal_retry_after_negative_matrix();
-}
-
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;

@@ -29,6 +29,7 @@ sourceDescriptions:
     /// shape, case-sensitive identities, exact Step overrides, and component
     /// expansion. `unused` deliberately has no `in`: a component definition
     /// has no target context until it is consumed.
+    #[test]
     pub(super) fn parameter_context_positive_matrix() {
         let yaml = parameter_context_document(
             r#"components:
@@ -119,6 +120,7 @@ sourceDescriptions:
     /// component reference with a bad operation context to prove that the
     /// intrinsic component check is not fabricated as a component `in` error,
     /// while the consuming Step gets the context diagnostic.
+    #[test]
     pub(super) fn parameter_context_negative_matrix() {
         let missing_operation_in = parameter_context_document(
             "",

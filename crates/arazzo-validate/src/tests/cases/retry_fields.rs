@@ -93,6 +93,7 @@ workflows:
     /// Scanner-visible positive evidence covers direct and component decimal
     /// retryAfter declarations only. Legacy name-form resolution is a
     /// compatibility extension, not conformance evidence.
+    #[test]
     pub(super) fn decimal_retry_after_positive_matrix() {
         for (position, retry_after) in [
             ("component failure", "0"),
@@ -158,6 +159,7 @@ workflows:
     /// Scanner-visible negative evidence covers direct and component decimal
     /// declarations only. Legacy overlays and ignored reference siblings stay
     /// in ordinary compatibility tests below.
+    #[test]
     pub(super) fn decimal_retry_after_negative_matrix() {
         for (position, retry_after) in [
             ("component failure", "-0.25"),
