@@ -1759,11 +1759,9 @@ fn scanner_recognizes_nested_evaluator_tests_in_arazzo_expr() {
     let source =
         fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
     let recognized = recognized_non_ignored_test_items(&source);
-    // The two adapters precede the crate's first lifetime. The nested tests,
-    // which the adapters delegate to, follow it.
+    // Both nested `tests` items follow the crate's first lifetime, so
+    // recognizing them proves the scanner reads past it.
     for test_name in [
-        "conformance_simple_string_comparison_positive_evidence",
-        "conformance_simple_string_comparison_negative_evidence",
         "compare_ordered_matches_go_rules",
         "json_path_filters_remain_case_sensitive_for_equality_and_ordering",
     ] {

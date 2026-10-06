@@ -2,24 +2,6 @@
 
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
-// The conformance manifest's source scanner needs top-level test functions.
-// Delegate into the exhaustive evaluator tests, now owned by `simple_condition`
-// and the `tests` module below, without duplicating them.
-#[cfg(test)]
-#[test]
-fn conformance_simple_string_comparison_positive_evidence() {
-    simple_condition::run_simple_string_comparisons_evidence();
-}
-
-#[cfg(test)]
-#[test]
-fn conformance_simple_string_comparison_negative_evidence() {
-    simple_condition::run_simple_non_string_comparisons_evidence();
-    simple_condition::run_contains_matches_and_in_evidence();
-    tests::compare_ordered_matches_go_rules();
-    tests::json_path_filters_remain_case_sensitive_for_equality_and_ordering();
-}
-
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

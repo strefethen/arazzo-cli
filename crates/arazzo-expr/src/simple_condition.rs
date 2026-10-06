@@ -380,21 +380,6 @@ pub(super) fn compare_simple_ordered(a: &Value, b: &Value) -> Ordering {
 }
 
 #[cfg(test)]
-pub(super) fn run_simple_string_comparisons_evidence() {
-    tests::simple_string_comparisons_are_case_insensitive_for_all_normative_operators();
-}
-
-#[cfg(test)]
-pub(super) fn run_simple_non_string_comparisons_evidence() {
-    tests::simple_non_string_comparisons_preserve_existing_semantics();
-}
-
-#[cfg(test)]
-pub(super) fn run_contains_matches_and_in_evidence() {
-    tests::evaluate_condition_contains_matches_and_in();
-}
-
-#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -423,7 +408,7 @@ mod tests {
     /// Arazzo 1.1.0 §5.8.11.2 and §5.8.11.4.1: the six normative Simple
     /// comparison operators normalize string operands case-insensitively.
     #[test]
-    pub(super) fn simple_string_comparisons_are_case_insensitive_for_all_normative_operators() {
+    fn simple_string_comparisons_are_case_insensitive_for_all_normative_operators() {
         let mut ctx = EvalContext::default();
         ctx.inputs.insert("ascii".to_string(), json!("Alpha"));
         ctx.inputs.insert("unicode".to_string(), json!("Ångström"));
@@ -450,7 +435,7 @@ mod tests {
     /// Numeric, boolean, and null pairs retain the existing helpers instead
     /// of being coerced through the Simple string normalization path.
     #[test]
-    pub(super) fn simple_non_string_comparisons_preserve_existing_semantics() {
+    fn simple_non_string_comparisons_preserve_existing_semantics() {
         let mut ctx = EvalContext::default();
         ctx.inputs.insert("number".to_string(), json!(2));
         ctx.inputs.insert("numericString".to_string(), json!("10"));
@@ -487,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn evaluate_condition_contains_matches_and_in() {
+    fn evaluate_condition_contains_matches_and_in() {
         let mut ctx = EvalContext {
             status_code: Some(201),
             ..EvalContext::default()
@@ -516,6 +501,15 @@ mod tests {
         assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.msg contains "HELLO""#));
         assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.email matches "^[A-Z]+@""#));
         assert!(!eval.evaluate_condition(r#"$steps.s1.outputs.role in ["ADMIN"]"#));
+    }
+
+    /// Conformance negative-evidence entrypoint: combines these checks so the claim cites one test.
+    #[test]
+    fn simple_string_comparison_negative_evidence() {
+        simple_non_string_comparisons_preserve_existing_semantics();
+        evaluate_condition_contains_matches_and_in();
+        crate::tests::compare_ordered_matches_go_rules();
+        crate::tests::json_path_filters_remain_case_sensitive_for_equality_and_ordering();
     }
 
     #[test]

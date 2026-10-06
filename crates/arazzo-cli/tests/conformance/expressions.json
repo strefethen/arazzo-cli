@@ -54,12 +54,12 @@
         "positive": [
           "crates/arazzo-spec/tests/serde_roundtrip.rs#retry_after_decimal_roundtrips_without_truncation",
           "crates/arazzo-validate/src/tests/cases/retry_fields.rs#decimal_retry_after_positive_matrix",
-          "crates/arazzo-expr/src/lib.rs#conformance_simple_string_comparison_positive_evidence",
+          "crates/arazzo-expr/src/simple_condition.rs#simple_string_comparisons_are_case_insensitive_for_all_normative_operators",
           "crates/arazzo-runtime/tests/engine_execution.rs#retry_after_trace_and_observer_keep_configured_and_effective_delays_distinct"
         ],
         "negative": [
           "crates/arazzo-validate/src/tests/cases/retry_fields.rs#decimal_retry_after_negative_matrix",
-          "crates/arazzo-expr/src/lib.rs#conformance_simple_string_comparison_negative_evidence",
+          "crates/arazzo-expr/src/simple_condition.rs#simple_string_comparison_negative_evidence",
           "crates/arazzo-runtime/tests/engine_execution.rs#invalid_retry_after_is_rejected_before_exhausted_retry_fallthrough",
           "crates/arazzo-runtime/tests/engine_execution.rs#exhausted_retry_does_not_convert_or_schedule_an_unused_finite_overflow_delay"
         ]
