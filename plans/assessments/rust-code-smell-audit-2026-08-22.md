@@ -15,6 +15,12 @@
 > F1's closure surfaced its sibling in the JSONPath arm — same collapse-then-test
 > defect, still live — now tracked as
 > [ac-58896](https://sonos.scapedeck.com/docs/ac-tickets/ac-58896).
+>
+> **Verification pass (2026-09-23).** All 22 findings were re-checked against
+> `04ee287` itself. 21 hold and F18 does not; F11 drops to Low; nine carry
+> evidence corrections. See
+> [Adversarial verification](#adversarial-verification-2026-09-23) before
+> citing any count or line range below.
 
 ## Summary
 
@@ -668,3 +674,147 @@ if key == "set-cookie" { *existing = value.clone(); }
   `[lints]` tables present; 47 dependency entries use `workspace = true`; `panic = "abort"`
   in release. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   exits 0 at this baseline.
+
+---
+
+## Adversarial verification (2026-09-23)
+
+Every finding was re-checked against the audit's own baseline, not current code.
+Source was read at `04ee287` with `git show`, and file sizes match the audit
+exactly (10,881 / 3,037 / 869 / 1,169 / 1,277). Rule citations were checked
+against the agent contracts in force on 2026-08-22: the repo `AGENTS.md` as later
+committed in `4c20d51`, and the global contract at `agents@c1803ee`, which held
+"No God modules. Ever." Fix commits and the 09-05 / 09-12 / 09-19
+re-verifications were used as corroboration only. One scratch probe ran the
+`04ee287` XPath prepass against uppsala 0.3.0 for F2. No repository source was
+touched.
+
+**Scoring.** Severity maps to points: Critical 4, High 3, Medium 2, Low 1. A
+correct dismissal earns the finding's points and a wrong one costs double, so a
+finding is dismissed only when P(real) < ⅓. *EV if dismissed* =
+(1 − P) × pts − P × 2 × pts.
+
+| ID | Pts | Strongest counter-argument | Outcome at `04ee287` | P(real) | EV if dismissed | Verdict |
+|---|---|---|---|---|---|---|
+| F1 | 4 | Only the Boolean/Number arms are affected; node-set criteria were fine. | Holds. `xpath.rs:71-72` turned `Boolean(false)` into `"false"`, and `is_truthy` treats any non-empty string as true (`arazzo-expr/src/lib.rs:1030`); `Number(0)` became `"0"` the same way. Fixed in `301174a`. | 0.99 | −7.9 | ACCEPT |
+| F2 | 3 | Mode (b) is false: uppsala's unprefixed name test compares local names only. | Holds, with (b) reversed — see notes. (a) and (c) stand as written. | 0.97 | −5.7 | ACCEPT |
+| F3 | 3 | `$env` was deliberate: the baseline `AGENTS.md` documented `$env.VAR_NAME`. | Holds. Documenting it doesn't make it safe, and the spec grammar has no `$env`. `lib.rs:186-189` read any variable; a missing one became `""` with no warning. Removed in `1f15ff3`. | 0.98 | −5.8 | ACCEPT |
+| F4 | 2 | `.env` winning over the environment may be a deliberate convenience. | Holds. `set_var` is unconditional (`main.rs:293`, not `:290`) and the precedence is undocumented. Open, read and parse errors are all dropped. The 09-19 audit reproduced `.env` beating the real environment. | 0.95 | −3.7 | ACCEPT |
+| F5 | 3 | (b) is wrong: the engine applies the same POST/GET body default. | Holds on (a); (b) is true only for the unsupported form — see notes. | 0.95 | −5.6 | ACCEPT |
+| F6 | 2 | The unbraced `$inputs.x` form is deliberate (`interpolate_string_modes`). | Holds. The same regex alternative also matches `$USD`. The unknown-namespace arm (`lib.rs:377-383`) returns `Null`, which renders as `""` (`:1021`), and `:154` returns `Vec::new()` for warnings. Reproduced at HEAD by the 09-19 audit. | 0.98 | −3.9 | ACCEPT |
+| F7 | 2 | Reaching 64 events in one step is implausible. | Holds. Every criterion emits one `CriterionEvaluated` through `send().await` (`engine_http.rs:433-443`, `engine_trace.rs:380`), so about 62 passing criteria fill the buffer while `rx` is unpolled. Fixed in `768750d`, with regression tests at 70 and 512 criteria. | 0.98 | −3.9 | ACCEPT |
+| F8 | 2 | `matches` is a non-standard operator few documents use. | Holds; rarity doesn't change the code. It calls `Regex::new` on every evaluation, and `Err(_) => false` gives no warning (`lib.rs:619-626`). Fixed in `291f2ac`. | 0.99 | −3.9 | ACCEPT |
+| F9 | 2 | The trace writer already runs a redaction pass. | Holds. `redact_trace_file` (`arazzo-cli/src/trace.rs:181-241`) never touches `run.error` or a step's `error`, and `control.rs:11-25` embedded the raw body in that error. Fixed in `fa55e51`. | 0.97 | −3.8 | ACCEPT |
+| F10 | 2 | (a) can't happen because parallel mode is off under a debugger; (c) has drain methods. | Holds on (b), the real defect; (a) is latent and (c) negligible — see notes. | 0.90 | −3.4 | ACCEPT |
+| F11 | 2 | None of these locks can ever be poisoned. | The stated consequences are unreachable, but the smell stands; downgrade to Low — see notes. | 0.60 | −1.6 | ACCEPT (Low) |
+| F12 | 3 | Length alone doesn't make a God module, and tests inflate the count. | Holds. About 3,711 production lines sit in the crate's only source file, and `collect_diagnostics` is 650 lines (`:1154-1803`). **Correction:** the four cited functions take 7 parameters, not 8 (`:1054`, `:2767`, `:3056`, `:3386`). Eight would trip `too_many_arguments`, which isn't suppressed in this crate, and clippy exits 0. | 0.95 | −5.6 | ACCEPT |
+| F13 | 2 | The headline evidence is wrong: the dispatcher is 217 lines, not 488. | Holds on file-level evidence — see notes. | 0.75 | −2.5 | ACCEPT |
+| F14 | 2 | This is CLI glue, and repacking into `TestRunOptions` is harmless. | Holds. All six suppressions are confirmed. **Correction:** `run_tests` takes 16 parameters, not 17, so the 09-05 "now 16" was never a change. Swappable same-typed neighbours: `input`/`input_json`, `http_timeout`/`execution_timeout`, and three `bool`s. | 0.90 | −3.4 | ACCEPT |
+| F15 | 1 | The "silent" failure mode is false. | Holds without it. Renaming a nested test breaks the adapter's compile, and a renamed adapter fails `conformance_manifest.rs:760` ("does not name a non-ignored recognized Rust test item"). The eight adapters at `lib.rs:9-58` are real. | 0.85 | −1.6 | ACCEPT |
+| F16 | 2 | `String` errors are acceptable at CLI and DAP edges. | Holds, and the audit's counts are low. There are about 117 `Result<…, String>` signatures in 22 `src` files (not 104 in 10), 18 poison strings in `controller.rs` (not 20), and 5 `Error` impls (not 3; `ValidationReport` and `Diagnostic` also have one). | 0.85 | −3.1 | ACCEPT |
+| F17 | 2 | Snapshot and integration tests cover it. | Holds; `output.rs` had no `cfg(test)` at all. **Correction:** the MCP copy of the parser had no test either — its two tests cover a `channelPath` step and `build_sources`. F5's "uncovered" is right; this finding's "covered on that side" is not. | 0.85 | −3.1 | ACCEPT |
+| F18 | 1 | Neither premise that would make the cache grow without bound is true. | Does not hold — see notes. | 0.10 | **+0.7** | **DISPROVE** |
+| F19 | 1 | It's three copies of two lines. | Holds. `client.rs:292-301`, `state.rs:27-36` and `control.rs:45-56` are identical and back a `RUNTIME_*` contract. Unified in `30987dc` (`control::cancellation_error`). | 0.95 | −1.9 | ACCEPT |
+| F20 | 1 | No material counter-argument. | Holds. The MCP copy calls itself "Adapted from `arazzo-cli/src/main.rs`" (`arazzo-mcp/src/main.rs:63-99`), and the later H3 `KEY="` panic exists in both copies, just as F20 predicted. | 0.97 | −1.9 | ACCEPT |
+| F21 | 1 | Exploiting it needs write access inside `--allowed-dir`. | Holds as scoped. Allowed dirs are canonicalized (`state.rs:32`), and the check (`:71-85`) runs before `validate_spec` opens the file by path (`handlers.rs:356`). The finding already ties its severity to the threat model. | 0.80 | −1.4 | ACCEPT |
+| F22 | 1 | The limitation is documented in a comment. | Holds. The comment explains the cause, not the loss a user sees: two `Set-Cookie` headers leave one value (`client.rs:639-641`). | 0.95 | −1.9 | ACCEPT |
+
+### Notes on contested findings
+
+- **F2: sub-claim (b) is reversed.** uppsala 0.3.0 matches an unprefixed name
+  test on local name alone (`src/xpath.rs:1211-1215` in the crate), so a
+  single-quoted default namespace still matches `//item`. Quoting did change the
+  outcome, but the other way round. The prepass stripped a double-quoted
+  `xmlns:xsi="…"` but left the `xsi:` prefix on attributes. uppsala's parser is
+  namespace-aware by default and rejects that undeclared prefix
+  (`src/parser.rs:2183-2190`). So the common SOAP shape (`xsi:type` under a
+  double-quoted declaration) failed as `invalid XML`, while the single-quoted
+  form parsed. The probe of the `04ee287` prepass showed each case:
+  - Element text `set xmlns="urn:x" on root` came back as `set  on root`, and
+    CDATA `<soap:Body>` came back as `<Body>` (mode (a)).
+  - `<items xmlns='urn:x'>` matched `//item`.
+  - `<v xsi:type="t">` under a double-quoted `xmlns:xsi` failed with
+    `Undeclared namespace prefix: xsi`.
+
+  With (a) and (c) intact, F2 stays High.
+- **F5: sub-claim (b) holds only for the unsupported form.** At `04ee287`,
+  `prepare_http_request` (`engine_http.rs:131-139`) defaulted to POST with a body
+  and GET without one, exactly as the copies did. The only method the copies
+  invented that the runtime never derived is on the unsupported specification
+  form, which `build_url_from_path` refuses (`:530-541`) before any method
+  exists. Sub-claim (a) is the real defect. The copies upper-case the method
+  token, but the runtime calls the case-sensitive `split_operation_method`
+  (`url.rs:38-39`). So `get /pets` was shown as `GET /pets` and executed against
+  the path `get /pets`.
+- **F10: sub-claim (b) is the finding.**
+  - (a) is latent, as the audit said: `engine_impl.rs:454-456` never takes the
+    parallel path when a debug controller is attached.
+  - (c) is negligible. `take_stop_events`/`clear_stop_events` exist, but the DAP
+    monitor never calls them; it clones the whole vector on each poll
+    (`session.rs:235`). Growth is one small record per stop the user sees.
+  - (b) is real. `gate_step` waits on the condvar with no timeout and no
+    cancellation check (`controller.rs:295-300`). `force_resume` releases only a
+    gate that is already waiting (`:328-341`). So any gate reached after a
+    disconnect parks its `spawn_blocking` thread. Nothing races that gate
+    against the cancellation token, so `block_on` never returns and the
+    monitor's engine `join()` blocks teardown. The 09-12 audit reproduced this
+    as H13 (3 of 3 runs).
+- **F11: accurate, unreachable, Low.**
+  - The only code that holds these locks is a `BTreeMap` get/insert
+    (`engine_trace.rs:440-446`) and a `BTreeSet` contains/insert
+    (`state.rs:38-49`). The mutexes are created per execution
+    (`engine_impl.rs:74-77`, and `engine_parallel.rs:259-262` for parallel
+    steps).
+  - Nothing in those sections can unwind: allocation failure aborts, and release
+    builds use `panic = "abort"`. So the `Err` arms are dead code today. The
+    wrong `attempt` in `golden_spec_baseline` and the spurious `dependsOn`
+    failure cannot happen.
+  - What remains is policy. Two fabricate-on-poison sites sit beside the
+    documented `lock_recovering` (`client.rs:282-289`). If either section ever
+    gains a panic, they break the no-fallback rule.
+  - Kept rather than dismissed because every fact it states is true and three
+    later audits carry it. Dismissing it would risk 4 points on how the finding
+    is labelled, not on what the code does.
+- **F13: the dispatcher size is a miscount; the file-level claim stands.**
+  - `evaluate_with_diagnostics` spans `lib.rs:171-387` (217 lines). The cited
+    `172-660` is the whole `impl ExpressionEvaluator` block (it closes at
+    `:637`) plus the start of the free functions that follow.
+  - The finding survives on file-level evidence: 3,037 lines, about 1,739 of
+    them production (`mod tests` opens at `:1741`). Dispatch, interpolation,
+    condition parsing, comparison, coercion and body traversal share one module.
+    `291f2ac` and `38b6088` have since extracted two of those.
+  - The 09-19 audit's "dispatcher 488 → 212" repeats the miscount: the function
+    was 217 lines at `04ee287` and is 212 at HEAD (`:171-382`).
+- **F18: dismissed — the cache cannot grow without bound.**
+  - A new `Engine`, and with it a new `RegexCache` (`builder.rs:205`), is built
+    for every MCP `run_workflow` call (`arazzo-mcp/src/handlers.rs:285-291`).
+    `arazzo serve` reaches the same handler through `run_mcp_stdio`
+    (`arazzo-cli/src/main.rs:251-254`), and the DAP adapter builds one engine
+    per launch.
+  - The only key ever inserted is `criterion.condition` (`criteria.rs:72`). That
+    is literal document text, never interpolated and never taken from a
+    response.
+  - So the cache is bounded by one document's distinct `type: regex` conditions
+    for a single run. The finding's own note says it "stays Low" in exactly that
+    case, and with no growth path there is nothing left to fix. The 09-19 audit
+    reached the same conclusion at HEAD.
+
+### Scorecard
+
+- **Disproved (1):** F18 — +1 if right, −2 if wrong; P(false positive) 0.90,
+  expected +0.7.
+- **Accepted as real (21):** F1–F17 and F19–F22. Accepting scores nothing;
+  dismissing all 21 would have staked 86 points (2 × 43).
+- **Skeptic score:** +1.
+- **Verified list:** F1–F17 and F19–F22. F11 moves from Medium to Low, and F18
+  is withdrawn.
+- **Evidence corrections that leave the verdict unchanged:**
+  - F2: sub-claim (b) is reversed.
+  - F5: sub-claim (b) applies only to the unsupported form.
+  - F10: sub-claim (c) is negligible.
+  - F12: the functions take 7 parameters, not 8.
+  - F13: the dispatcher is 217 lines, not 488.
+  - F14: `run_tests` takes 16 parameters, not 17.
+  - F15: there is no silent failure mode.
+  - F16: the counts are low.
+  - F17: the MCP copy of the parser was untested too.
