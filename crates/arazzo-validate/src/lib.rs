@@ -16,11 +16,16 @@ use arazzo_spec::{
 use iri_string::types::UriReferenceStr;
 
 mod expressions;
+mod step_dependencies;
 mod xpath_advisory;
 
 use expressions::{
     validate_criterion, validate_output_step_reference, validate_output_value,
     validate_replacements, validate_value_source,
+};
+use step_dependencies::{
+    classify_step_dependency, local_step_depends_on_has_cycle, local_workflow_depends_on_has_cycle,
+    StepDependency,
 };
 
 /// Parser/validation error type for Arazzo specs.
@@ -1764,118 +1769,6 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
     }
 
     diagnostics
-}
-
-fn local_workflow_depends_on_has_cycle(spec: &ArazzoSpec, start: usize) -> bool {
-    let positions = spec
-        .workflows
-        .iter()
-        .enumerate()
-        .map(|(index, workflow)| (workflow.workflow_id.as_str(), index))
-        .collect::<HashMap<_, _>>();
-    let mut states = vec![0_u8; spec.workflows.len()];
-
-    fn visit(
-        index: usize,
-        spec: &ArazzoSpec,
-        positions: &HashMap<&str, usize>,
-        states: &mut [u8],
-    ) -> bool {
-        if states[index] == 1 {
-            return true;
-        }
-        if states[index] == 2 {
-            return false;
-        }
-        states[index] = 1;
-        for dependency in &spec.workflows[index].depends_on {
-            let WorkflowDependency::Local(workflow_id) = classify_workflow_dependency(dependency)
-            else {
-                continue;
-            };
-            let Some(&dependency_index) = positions.get(workflow_id) else {
-                continue;
-            };
-            if visit(dependency_index, spec, positions, states) {
-                return true;
-            }
-        }
-        states[index] = 2;
-        false
-    }
-
-    start < spec.workflows.len() && visit(start, spec, &positions, &mut states)
-}
-
-fn local_step_depends_on_has_cycle(workflow: &Workflow) -> bool {
-    let positions = workflow
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(index, step)| (step.step_id.as_str(), index))
-        .collect::<HashMap<_, _>>();
-    let mut states = vec![0_u8; workflow.steps.len()];
-
-    fn visit(
-        index: usize,
-        workflow: &Workflow,
-        positions: &HashMap<&str, usize>,
-        states: &mut [u8],
-    ) -> bool {
-        if states[index] == 1 {
-            return true;
-        }
-        if states[index] == 2 {
-            return false;
-        }
-        states[index] = 1;
-        for dependency in &workflow.steps[index].depends_on {
-            let StepDependency::Local(step_id) = classify_step_dependency(dependency) else {
-                continue;
-            };
-            let Some(&dependency_index) = positions.get(step_id) else {
-                continue;
-            };
-            if visit(dependency_index, workflow, positions, states) {
-                return true;
-            }
-        }
-        states[index] = 2;
-        false
-    }
-
-    (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
-}
-
-enum StepDependency<'a> {
-    Local(&'a str),
-    CrossWorkflow,
-    ExternalSource,
-    Invalid,
-}
-
-fn classify_step_dependency(value: &str) -> StepDependency<'_> {
-    if value.is_empty() {
-        return StepDependency::Invalid;
-    }
-    if !value.starts_with('$') {
-        return StepDependency::Local(value);
-    }
-
-    let parts = value.split('.').collect::<Vec<_>>();
-    match parts.as_slice() {
-        ["$workflows", workflow_id, "steps", step_id]
-            if !workflow_id.is_empty() && !step_id.is_empty() =>
-        {
-            StepDependency::CrossWorkflow
-        }
-        ["$sourceDescriptions", source_name, workflow_id, "steps", step_id]
-            if !source_name.is_empty() && !workflow_id.is_empty() && !step_id.is_empty() =>
-        {
-            StepDependency::ExternalSource
-        }
-        _ => StepDependency::Invalid,
-    }
 }
 
 /// Raw required-list checks for Workflow and Step Objects.
