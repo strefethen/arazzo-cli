@@ -48,7 +48,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
-All three before committing. CI tracks unpinned `stable`.
+All three before committing. The toolchain is pinned in `rust-toolchain.toml`
+and CI builds with the same version; the MSRV job builds on 1.88.
 
 ## Layout
 
@@ -65,6 +66,10 @@ All three before committing. CI tracks unpinned `stable`.
 [`spec/`](spec/README.md) holds the vendored specification documents: Arazzo
 1.1.0 and 1.0.1, OpenAPI 3.2.0. Never hand-edit them — `./spec/fetch.sh`
 re-downloads and rewrites `SHA256SUMS`, `--verify` checks the working copies.
+The HTML is gitignored and fetched, not tracked: run `./spec/fetch.sh` once per
+clone or worktree, or the `arazzo-expr` unit tests that `include_str!` it will
+not compile. CI runs the same script before building and fails if
+`SHA256SUMS` changes.
 
 `RUNTIME_*` codes (`runtime_core/error.rs`) appear in `--json` and in golden
 baselines — changing one is a breaking contract change.
