@@ -10,9 +10,10 @@
 //! capping the file's line count. `include_str!` makes `lib.rs` a build input
 //! of this target, so Cargo re-runs the guard whenever the file changes.
 
-/// Line count of `src/lib.rs` when the guard landed (2026-10-07). Lower it
-/// when `lib.rs` shrinks; raising it needs Steve's approval.
-const LIB_RS_MAX_LINES: usize = 3_729;
+/// Measured line count of `src/lib.rs`, lowered after the expression
+/// validation extraction (ac-da0ff, 2026-10-07). Lower it when `lib.rs`
+/// shrinks; raising it needs Steve's approval.
+const LIB_RS_MAX_LINES: usize = 3_422;
 
 const LIB_RS_SOURCE: &str = include_str!("../src/lib.rs");
 
