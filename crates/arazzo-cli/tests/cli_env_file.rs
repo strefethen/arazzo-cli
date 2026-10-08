@@ -302,3 +302,27 @@ fn report_goes_to_stderr_and_json_stdout_is_unchanged() {
     assert_eq!(parsed["kind"], "dryRun", "{stdout}");
     assert_eq!(output.stdout, baseline.stdout, "stdout changed by .env");
 }
+
+#[test]
+fn unreadable_line_is_reported_and_later_lines_still_load() {
+    let temp = TempDir::new("arazzo-cli-env-unreadable");
+    temp.write(
+        ".env",
+        b"ARAZZO_T_UTF8_A=1\nBAD=\xff\xfe\nARAZZO_T_UTF8_B=2\n",
+    );
+
+    let output = run_cli(
+        temp.path(),
+        &["--version"],
+        &["ARAZZO_T_UTF8_A", "ARAZZO_T_UTF8_B"],
+        &[],
+    );
+
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        stderr,
+        "warning: .env:2: ignored line: line could not be read\n\
+         loaded .env: set 2, kept 0 already in the environment, ignored 1\n"
+    );
+}
