@@ -12,9 +12,12 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{json, Number, Value};
 
+mod body_pointer_hint;
 mod matches_operator;
 mod runtime_expression;
 mod simple_condition;
+
+pub use body_pointer_hint::body_pointer_migration_hint;
 
 pub use simple_condition::{
     parse_simple_condition, ConditionError, ConditionErrorKind, ParsedSimpleCondition,
