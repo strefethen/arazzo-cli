@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A variable already set in the environment now wins over the same name in a
+`.env` file in the current directory.
+
+**Upgrade if** you run `arazzo-cli` or `arazzo-mcp` from a directory with a
+`.env` and rely on exported variables taking effect — or check your setup if
+you relied on `.env` overriding them, which it no longer does.
+
+- **`.env` supplies defaults** — both binaries set a `.env` name only when it
+  is absent from the environment, matching conventional dotenv loaders.
+
+### Changed
+
+- `.env` loading in `arazzo-cli` and `arazzo-mcp` no longer overwrites a
+  variable that is already set, including one set to the empty string. To use
+  the file's value, unset the variable before running.
+
 ## [0.7.0] - 2026-09-14
 
 Typed JSONPath — `type: jsonpath` success criteria, Selector Objects, and

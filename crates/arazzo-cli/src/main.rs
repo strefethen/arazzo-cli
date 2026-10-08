@@ -271,8 +271,12 @@ fn load_env_file(path: impl AsRef<Path>) {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // The environment wins: a `.env` value is only a default for a name
+        // that is not already set, even to the empty string (ac-51491).
         if let Some((key, value)) = parse_env_line(&line) {
-            std::env::set_var(key, value);
+            if std::env::var_os(&key).is_none() {
+                std::env::set_var(key, value);
+            }
         }
     }
 }
@@ -399,5 +403,46 @@ mod tests {
                 "crud"
             ]
         );
+    }
+
+    /// Writes `contents` to a fresh `.env` in a per-test temp directory, loads
+    /// it, and returns what the process environment holds for `key`. Each
+    /// test uses its own variable name, so parallel tests cannot interfere.
+    fn load_and_read(test: &str, key: &str, contents: &str) -> io::Result<Option<String>> {
+        let dir =
+            std::env::temp_dir().join(format!("arazzo-cli-env-{test}-{}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(".env");
+        fs::write(&path, contents)?;
+        load_env_file(&path);
+        fs::remove_dir_all(&dir)?;
+        Ok(std::env::var(key).ok())
+    }
+
+    #[test]
+    fn env_file_does_not_override_an_exported_variable() -> io::Result<()> {
+        let key = "ARAZZO_CLI_TEST_EXPORTED";
+        std::env::set_var(key, "from-env");
+        let seen = load_and_read("exported", key, &format!("{key}=from-file\n"))?;
+        assert_eq!(seen.as_deref(), Some("from-env"));
+        Ok(())
+    }
+
+    #[test]
+    fn env_file_sets_an_absent_variable() -> io::Result<()> {
+        let key = "ARAZZO_CLI_TEST_ABSENT";
+        std::env::remove_var(key);
+        let seen = load_and_read("absent", key, &format!("{key}=from-file\n"))?;
+        assert_eq!(seen.as_deref(), Some("from-file"));
+        Ok(())
+    }
+
+    #[test]
+    fn env_file_does_not_override_an_empty_exported_variable() -> io::Result<()> {
+        let key = "ARAZZO_CLI_TEST_EMPTY";
+        std::env::set_var(key, "");
+        let seen = load_and_read("empty", key, &format!("{key}=from-file\n"))?;
+        assert_eq!(seen.as_deref(), Some(""));
+        Ok(())
     }
 }
