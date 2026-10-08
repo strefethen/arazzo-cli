@@ -75,25 +75,80 @@ fn load_env_file(path: impl AsRef<Path>) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
+        if let Some((key, value)) = parse_env_line(&line) {
+            std::env::set_var(key, value);
         }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim();
-        let trimmed = value.trim();
-        let value = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-        {
-            trimmed[1..trimmed.len() - 1]
-                .replace("\\\"", "\"")
-                .replace("\\'", "'")
-                .replace("\\\\", "\\")
-        } else {
-            trimmed.to_string()
-        };
-        std::env::set_var(key, &value);
+    }
+}
+
+/// Parses one `.env` line into the name and value to set, or `None` for a line
+/// the loader skips: blank, `#` comment, no `=`, or one `std::env::set_var`
+/// would panic on — an empty name, or a NUL byte in the name or value
+/// (ac-342bd). A value wrapped in matching quotes is unwrapped and unescaped;
+/// a lone quote is a literal one-character value.
+fn parse_env_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    let trimmed = value.trim();
+    let value = if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        trimmed[1..trimmed.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\'", "'")
+            .replace("\\\\", "\\")
+    } else {
+        trimmed.to_string()
+    };
+    if key.is_empty() || key.contains('\0') || value.contains('\0') {
+        return None;
+    }
+    Some((key.to_string(), value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_line(line: &str) -> Option<(String, String)> {
+        parse_env_line(line)
+    }
+
+    fn pair(key: &str, value: &str) -> Option<(String, String)> {
+        Some((key.to_string(), value.to_string()))
+    }
+
+    #[test]
+    fn env_lines_set_var_would_panic_on_are_skipped() {
+        for line in ["=v", "  =v", "K\0=v", "K=a\0b", "K=\"a\0b\""] {
+            assert_eq!(env_line(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn env_lines_without_a_setting_are_skipped() {
+        for line in ["", "   ", "# comment", "  # indented", "NO_SEPARATOR"] {
+            assert_eq!(env_line(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn env_line_parsing_is_unchanged_for_valid_lines() {
+        assert_eq!(env_line("K=\""), pair("K", "\""));
+        assert_eq!(env_line("K='"), pair("K", "'"));
+        assert_eq!(env_line("K=\"\""), pair("K", ""));
+        assert_eq!(env_line("K=''"), pair("K", ""));
+        assert_eq!(env_line(r#"K="a\"b""#), pair("K", "a\"b"));
+        assert_eq!(env_line(r"K='it\'s'"), pair("K", "it's"));
+        assert_eq!(env_line(r#"K="a\\b""#), pair("K", r"a\b"));
+        assert_eq!(env_line("K=a=b"), pair("K", "a=b"));
+        assert_eq!(env_line(" K = v "), pair("K", "v"));
+        assert_eq!(env_line("K="), pair("K", ""));
+        assert_eq!(env_line("K=\"mismatched'"), pair("K", "\"mismatched'"));
     }
 }
