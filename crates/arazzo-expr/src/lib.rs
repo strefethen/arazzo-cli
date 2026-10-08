@@ -13,9 +13,15 @@ use regex::Regex;
 use serde_json::{json, Number, Value};
 
 mod body_pointer_hint;
+mod expression_string;
 mod matches_operator;
 mod runtime_expression;
 mod simple_condition;
+
+pub use expression_string::{
+    classify_value_string, EmbeddedExpression, ExpressionStringError, ExpressionStringErrorKind,
+    ValueStringSyntax,
+};
 
 pub use body_pointer_hint::body_pointer_migration_hint;
 
