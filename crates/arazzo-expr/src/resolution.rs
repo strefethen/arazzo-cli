@@ -1,9 +1,5 @@
 //! Parsed Runtime Expression lookup with absence retained until public projection.
 
-// Temporary preparation seam: the renderer and coordinated evaluator cutover
-// will consume this module. Remove this allowance when a production caller lands.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -710,7 +706,7 @@ mod tests {
             evaluator.resolve_value("ordinary text"),
             json!("ordinary text")
         );
-        assert_eq!(evaluator.resolve_value("$USD"), Value::Null);
+        assert_eq!(evaluator.resolve_value("$USD"), json!("$USD"));
         assert_eq!(
             evaluator.resolve_value("id={$inputs.user#/items/0/id}"),
             json!("id=7")

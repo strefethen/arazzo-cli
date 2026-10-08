@@ -716,7 +716,7 @@
             {
               "method": "GET",
               "stepId": "call-secondary",
-              "url": "https://httpbin.org/response-headers?X-Trace-Id=trace-"
+              "url": "https://httpbin.org/response-headers?X-Trace-Id=trace-null"
             }
           ]
         }

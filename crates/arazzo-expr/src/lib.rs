@@ -14,6 +14,7 @@ use serde_json::{json, Number, Value};
 
 mod body_pointer_hint;
 mod expression_string;
+mod interpolation;
 mod matches_operator;
 mod resolution;
 mod runtime_expression;
@@ -141,24 +142,16 @@ impl ExpressionEvaluator {
         &mut self.ctx
     }
 
-    /// Resolve a value string using the canonical three-way dispatch:
-    /// - `$...` full expression → [`evaluate`](Self::evaluate)
-    /// - contains `{$...}` → [`interpolate_string`](Self::interpolate_string)
-    /// - otherwise → literal string
+    /// Resolve a complete expression with its JSON type, an embedded-expression
+    /// template as a string, or literal text unchanged.
     pub fn resolve_value(&self, value: &str) -> Value {
         self.resolve_value_with_diagnostics(value).0
     }
 
-    /// Resolve a value string using the canonical dispatch while retaining
-    /// diagnostics for full runtime expressions.
+    /// Resolve a value string while retaining ordered expression diagnostics.
+    /// Malformed templates return their original text and one syntax warning.
     pub fn resolve_value_with_diagnostics(&self, value: &str) -> (Value, Vec<ExpressionWarning>) {
-        if value.starts_with('$') {
-            self.evaluate_with_diagnostics(value)
-        } else if value.contains("{$") {
-            (Value::String(self.interpolate_string(value)), Vec::new())
-        } else {
-            (Value::String(value.to_string()), Vec::new())
-        }
+        interpolation::resolve_value(value, self.context())
     }
 
     /// Evaluate an expression and return a dynamic JSON value.
