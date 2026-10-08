@@ -284,6 +284,58 @@ fn component_definitions_are_owned_once_and_local_overrides_report_at_use() {
 }
 
 #[test]
+fn component_action_parameter_references_keep_definition_and_override_ownership() {
+    for (component_field, action_field) in [
+        ("successActions", "onSuccess"),
+        ("failureActions", "onFailure"),
+    ] {
+        for reference in ["$env.X", "literal", "$components.parameters.p trailing"] {
+            let components = format!("components:\n  {component_field}:\n    a:\n      name: next\n      type: goto\n      workflowId: wf\n      parameters:\n        - reference: '{reference}'");
+            let definition_path = format!("components.{component_field}.a.parameters[0].reference");
+            let unused = both(&document("", &components));
+            assert_eq!(unused.len(), 1, "{unused:?}");
+            assert_eq!(unused[0].path, definition_path);
+            assert_eq!(unused[0].kind, ValidationErrorKind::InvalidExpression);
+
+            let inherited = format!("        {action_field}:\n          - reference: '$components.{component_field}.a'\n          - name: '$components.{component_field}.a'");
+            let yaml = document(&inherited, &components).replace(
+                "    steps:",
+                &format!("    {component_field}:\n      - reference: '$components.{component_field}.a'\n      - name: '$components.{component_field}.a'\n    steps:"),
+            );
+            assert_eq!(both(&yaml), unused, "inherited copies: {yaml}");
+
+            let local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            parameters:\n              - reference: '$env.LOCAL'");
+            let errors = both(&document(&local, &components));
+            assert_eq!(errors.len(), 2, "{errors:?}");
+            assert_eq!(errors[0], unused[0]);
+            assert_eq!(
+                errors[1].path,
+                format!("{STEP}.{action_field}[2].parameters[0].reference")
+            );
+            assert_eq!(errors[1].kind, ValidationErrorKind::InvalidExpression);
+            assert_eq!(errors[1].message, ENV_MESSAGE);
+
+            let workflow_local = document(&inherited, &components).replace(
+                "    steps:",
+                &format!("    {component_field}:\n      - name: '$components.{component_field}.a'\n        parameters:\n          - reference: '$env.LOCAL'\n    steps:"),
+            );
+            let errors = both(&workflow_local);
+            assert_eq!(errors.len(), 2, "{errors:?}");
+            assert_eq!(errors[0], unused[0]);
+            assert_eq!(
+                errors[1].path,
+                format!("workflow \"wf\".{component_field}[0].parameters[0].reference")
+            );
+            assert_eq!(errors[1].kind, ValidationErrorKind::InvalidExpression);
+            assert_eq!(errors[1].message, ENV_MESSAGE);
+
+            let valid_local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            parameters:\n              - {{name: p, value: literal}}");
+            assert_eq!(both(&document(&valid_local, &components)), unused);
+        }
+    }
+}
+
+#[test]
 fn excluded_text_and_specialized_targets_are_not_expression_scanned() {
     let yaml = document("        description: '{$env.HOST_SENTINEL_SECRET}'\n        x-extension: '{$env.X}'\n        parameters:\n          - {name: '{$env.X}', in: query, value: literal}\n        onSuccess:\n          - {name: '{$env.X}', type: goto, stepId: '{$env.X}'}", "");
     assert!(expression_errors(&yaml).is_empty());

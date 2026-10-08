@@ -3246,9 +3246,11 @@ fn resolve_action_ref(
                 .component_action_fixed_field_origins
                 .insert(action_key, fixed_field_origin);
         }
-        // Action parameters may themselves be Reusable Objects pointing at
-        // `$components.parameters.<name>`. Resolve them after the action-level
-        // merge so parameters inherited from a component action resolve too.
+        // Inherited lists were resolved at their component definition. Only
+        // local lists need resolution here, preserving diagnostic ownership.
+        if component_origin.is_some() {
+            continue;
+        }
         resolve_param_refs(
             &mut action.parameters,
             context.components,
