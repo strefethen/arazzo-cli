@@ -1108,3 +1108,85 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Runs the real `arazzo-mcp` binary from `dir`, feeding it `stdin` and
+/// closing it so the server exits at end of input.
+fn run_mcp_binary(dir: &Path, stdin: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_arazzo-mcp"))
+        .current_dir(dir)
+        .env_remove("ARAZZO_MCP_T_ENV")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawning arazzo-mcp: {err}"));
+    child
+        .stdin
+        .take()
+        .unwrap_or_else(|| panic!("arazzo-mcp stdin was not piped"))
+        .write_all(stdin)
+        .unwrap_or_else(|err| panic!("writing arazzo-mcp stdin: {err}"));
+    child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("waiting for arazzo-mcp: {err}"))
+}
+
+#[test]
+fn test_env_file_report_stays_off_the_stdout_framing() {
+    static SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let base = std::env::temp_dir().join(format!(
+        "arazzo-mcp-env-file-{}-{nanos}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let with_env = base.join("with-env");
+    let without_env = base.join("without-env");
+    for dir in [&with_env, &without_env] {
+        fs::create_dir_all(dir).unwrap_or_else(|err| panic!("creating {}: {err}", dir.display()));
+    }
+    let sentinel = "sentinel-0b7d41c3-must-not-leak";
+    fs::write(
+        with_env.join(".env"),
+        format!("ARAZZO_MCP_T_ENV={sentinel}\nNO_SEPARATOR\n"),
+    )
+    .unwrap_or_else(|err| panic!("writing .env: {err}"));
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+    ]);
+    let output = run_mcp_binary(&with_env, &messages);
+    let baseline = run_mcp_binary(&without_env, &messages);
+    let _ = fs::remove_dir_all(&base);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: .env:2: ignored line: no `=` separator\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("loaded .env: set 1, kept 0 already in the environment, ignored 1\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(sentinel), "value leaked: {stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&baseline.stderr),
+        "",
+        "no .env must add no stderr"
+    );
+
+    assert_eq!(
+        output.stdout, baseline.stdout,
+        "stdout framing changed by .env"
+    );
+    let responses = parse_responses(&output.stdout);
+    assert_eq!(responses.len(), 1, "{responses:?}");
+    assert!(responses[0]["result"]["serverInfo"]["name"]
+        .as_str()
+        .is_some_and(|name| name == "arazzo-mcp"));
+}

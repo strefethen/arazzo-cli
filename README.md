@@ -494,7 +494,11 @@ The engine streams events as it runs. CLI output, traces, verbose logging, and t
 
 ### .env File Support
 
-On startup, arazzo-cli loads a `.env` file from the current directory (if one exists) into the process environment. Values from the file overwrite variables that already exist in the environment, so treat `.env` as authoritative for every name it defines.
+On startup, arazzo-cli (and arazzo-mcp) loads a `.env` file from the current directory (if one exists) into the process environment. The file supplies defaults: a variable already set in the environment, even to an empty string, keeps its value. To use the file's value instead, unset the variable before running.
+
+Loaded values reach everything that reads the process environment, including the HTTP client's proxy resolution: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` in a `.env` beside a spec apply to every outbound request in the run unless the shell already sets them.
+
+Each load is reported on stderr: one line with how many names were set, how many were kept from the environment, and how many lines were ignored, plus a `warning:` naming the line number and reason for each ignored line (no `=`, an empty name, a NUL byte, or an unreadable line). Names and values are never printed. With no `.env`, nothing is printed.
 
 The `$env.VAR_NAME` expression namespace that used to expose those values inside workflow text was removed in 0.4.0. It was an arazzo-cli extension the Arazzo specification does not define, and it handed workflow text read access to the entire process environment. `$env.*` now resolves like any other unknown namespace — `null`, with a warning — and the variable's value never appears in diagnostics. To get a secret or environment-specific value into a workflow, declare a workflow input and pass it at invocation:
 

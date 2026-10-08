@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 A variable already set in the environment now wins over the same name in a
-`.env` file in the current directory.
+`.env` file in the current directory, and loading a `.env` is reported on
+stderr instead of happening silently.
 
 **Upgrade if** you run `arazzo-cli` or `arazzo-mcp` from a directory with a
 `.env` and rely on exported variables taking effect — or check your setup if
@@ -16,12 +17,19 @@ you relied on `.env` overriding them, which it no longer does.
 
 - **`.env` supplies defaults** — both binaries set a `.env` name only when it
   is absent from the environment, matching conventional dotenv loaders.
+- **`.env` loading is visible** — a stderr summary of names set, kept, and
+  ignored, plus a warning per unusable line; never a name or value.
 
 ### Changed
 
 - `.env` loading in `arazzo-cli` and `arazzo-mcp` no longer overwrites a
   variable that is already set, including one set to the empty string. To use
   the file's value, unset the variable before running.
+- When a `.env` is present, both binaries print one stderr line counting the
+  names set, kept from the environment, and ignored, and a `warning:` with the
+  line number and reason for each line that has no `=`, an empty name, a NUL
+  byte, or cannot be read. Previously such lines were dropped silently. stdout,
+  including `--json` output and `arazzo-mcp` framing, is unchanged.
 
 ## [0.7.0] - 2026-09-14
 

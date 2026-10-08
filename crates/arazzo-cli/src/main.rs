@@ -27,7 +27,9 @@ use crate::run_context::{GlobalOptions, RunContext, RunOptions};
 fn main() {
     // Load .env before starting the tokio runtime so that std::env::set_var
     // is called from a single-threaded context (safe per Rust docs).
-    load_env_file(".env");
+    if let Some(report) = load_env_file(".env") {
+        eprint_env_load_report(".env", &report);
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -259,39 +261,106 @@ async fn run(cli: Cli) -> Result<(), String> {
     }
 }
 
-fn load_env_file(path: impl AsRef<Path>) {
-    let file = match fs::File::open(path.as_ref()) {
-        Ok(file) => file,
-        Err(_) => return,
-    };
+// `.env` loading. This and the copy in `arazzo-mcp/src/main.rs` are kept in lockstep: the
+// same file must load and report identically from either binary (audit F20
+// owns deduplicating them).
 
-    let reader = io::BufReader::new(file);
-    for line in reader.lines() {
-        let line = match line {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        // The environment wins: a `.env` value is only a default for a name
-        // that is not already set, even to the empty string (ac-51491).
-        if let Some((key, value)) = parse_env_line(&line) {
-            if std::env::var_os(&key).is_none() {
-                std::env::set_var(key, value);
-            }
+/// What `load_env_file` did with one `.env` file.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EnvLoadReport {
+    /// Names the file set because the environment did not have them.
+    set: usize,
+    /// Names the file defined that were kept from the environment (ac-51491).
+    kept: usize,
+    /// 1-based line numbers of lines that could not be used, with the reason.
+    ignored: Vec<(usize, IgnoredEnvLine)>,
+}
+
+/// Why a `.env` line was ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IgnoredEnvLine {
+    Unreadable,
+    NoSeparator,
+    EmptyName,
+    NulByte,
+}
+
+impl IgnoredEnvLine {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Unreadable => "line could not be read",
+            Self::NoSeparator => "no `=` separator",
+            Self::EmptyName => "empty name",
+            Self::NulByte => "NUL byte in name or value",
         }
     }
 }
 
-/// Parses one `.env` line into the name and value to set, or `None` for a line
-/// the loader skips: blank, `#` comment, no `=`, or one `std::env::set_var`
-/// would panic on — an empty name, or a NUL byte in the name or value
-/// (ac-342bd). A value wrapped in matching quotes is unwrapped and unescaped;
-/// a lone quote is a literal one-character value.
-fn parse_env_line(line: &str) -> Option<(String, String)> {
+/// One parsed `.env` line.
+#[derive(Debug, PartialEq, Eq)]
+enum EnvLine {
+    /// Blank or `#` comment: not a setting, never reported.
+    Blank,
+    Setting(String, String),
+    Ignored(IgnoredEnvLine),
+}
+
+/// Loads `path` into the process environment, or returns `None` when there is
+/// no file to read. The environment wins: a `.env` value is only a default for
+/// a name that is not already set, even to the empty string (ac-51491).
+fn load_env_file(path: impl AsRef<Path>) -> Option<EnvLoadReport> {
+    let file = fs::File::open(path.as_ref()).ok()?;
+
+    let mut report = EnvLoadReport::default();
+    let reader = io::BufReader::new(file);
+    for (index, line) in reader.lines().enumerate() {
+        let parsed = match line {
+            Ok(line) => parse_env_line(&line),
+            Err(_) => EnvLine::Ignored(IgnoredEnvLine::Unreadable),
+        };
+        match parsed {
+            EnvLine::Blank => {}
+            EnvLine::Setting(key, value) => {
+                if std::env::var_os(&key).is_none() {
+                    std::env::set_var(key, value);
+                    report.set += 1;
+                } else {
+                    report.kept += 1;
+                }
+            }
+            EnvLine::Ignored(why) => report.ignored.push((index + 1, why)),
+        }
+    }
+    Some(report)
+}
+
+/// Writes `report` to stderr: one warning per ignored line, then one summary
+/// line. Counts only — a `.env` commonly holds secrets, so no name or value
+/// is ever printed.
+fn eprint_env_load_report(path: &str, report: &EnvLoadReport) {
+    for (line, why) in &report.ignored {
+        eprintln!("warning: {path}:{line}: ignored line: {}", why.reason());
+    }
+    eprintln!(
+        "loaded {path}: set {}, kept {} already in the environment, ignored {}",
+        report.set,
+        report.kept,
+        report.ignored.len()
+    );
+}
+
+/// Parses one `.env` line. A line `std::env::set_var` would panic on — an
+/// empty name, or a NUL byte in the name or value (ac-342bd) — is ignored,
+/// like one with no `=`. A value wrapped in matching quotes is unwrapped and
+/// unescaped; a lone quote is a literal one-character value.
+fn parse_env_line(line: &str) -> EnvLine {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
-        return None;
+        return EnvLine::Blank;
     }
-    let (key, value) = line.split_once('=')?;
+    let Some((key, value)) = line.split_once('=') else {
+        return EnvLine::Ignored(IgnoredEnvLine::NoSeparator);
+    };
     let key = key.trim();
     let trimmed = value.trim();
     let value = if trimmed.len() >= 2
@@ -305,10 +374,13 @@ fn parse_env_line(line: &str) -> Option<(String, String)> {
     } else {
         trimmed.to_string()
     };
-    if key.is_empty() || key.contains('\0') || value.contains('\0') {
-        return None;
+    if key.is_empty() {
+        return EnvLine::Ignored(IgnoredEnvLine::EmptyName);
     }
-    Some((key.to_string(), value))
+    if key.contains('\0') || value.contains('\0') {
+        return EnvLine::Ignored(IgnoredEnvLine::NulByte);
+    }
+    EnvLine::Setting(key.to_string(), value)
 }
 
 #[cfg(test)]
@@ -316,7 +388,27 @@ mod tests {
     use super::*;
 
     fn env_line(line: &str) -> Option<(String, String)> {
-        parse_env_line(line)
+        match parse_env_line(line) {
+            EnvLine::Setting(key, value) => Some((key, value)),
+            EnvLine::Blank | EnvLine::Ignored(_) => None,
+        }
+    }
+
+    #[test]
+    fn ignored_env_lines_carry_their_reason() {
+        for (line, why) in [
+            ("NO_SEPARATOR", IgnoredEnvLine::NoSeparator),
+            ("=v", IgnoredEnvLine::EmptyName),
+            ("  =v", IgnoredEnvLine::EmptyName),
+            ("K\0=v", IgnoredEnvLine::NulByte),
+            ("K=a\0b", IgnoredEnvLine::NulByte),
+            ("K=\"a\0b\"", IgnoredEnvLine::NulByte),
+        ] {
+            assert_eq!(parse_env_line(line), EnvLine::Ignored(why), "{line:?}");
+        }
+        for line in ["", "   ", "# comment", "  # indented"] {
+            assert_eq!(parse_env_line(line), EnvLine::Blank, "{line:?}");
+        }
     }
 
     fn pair(key: &str, value: &str) -> Option<(String, String)> {
