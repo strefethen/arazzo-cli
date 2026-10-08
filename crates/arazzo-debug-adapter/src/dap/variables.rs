@@ -5,9 +5,7 @@ use serde_json::{json, Value};
 
 use super::responses::evaluate_body;
 use super::session::{RuntimeSession, SessionState};
-use super::source_index::{
-    checkpoint_display_name, lookup_line_for_checkpoint, lookup_output_expression, SourceIndex,
-};
+use super::source_index::{checkpoint_display_name, lookup_line_for_checkpoint};
 
 const FRAME_ID_BASE: u64 = 100;
 
@@ -201,12 +199,11 @@ pub(super) fn variables_body(state: &mut SessionState, reference: u64) -> Value 
 }
 
 pub(super) fn evaluate_body_for_expression(state: &mut SessionState, expression: &str) -> Value {
-    let source_index = state.source_index.clone();
     let Some(runtime) = state.runtime.as_mut() else {
         return evaluate_body("runtime not started".to_string());
     };
 
-    let value = evaluate_expression_with_fallback(runtime, source_index.as_ref(), expression)
+    let value = evaluate_expression(runtime, expression)
         .unwrap_or_else(|| Value::String("null".to_string()));
     let child_ref = map_from_value(&value)
         .map(|map| runtime.variable_store.insert_map(map))
@@ -217,18 +214,16 @@ pub(super) fn evaluate_body_for_expression(state: &mut SessionState, expression:
     })
 }
 
-fn evaluate_expression_with_fallback(
-    runtime: &RuntimeSession,
-    source_index: Option<&SourceIndex>,
-    expression: &str,
-) -> Option<Value> {
+fn evaluate_expression(runtime: &RuntimeSession, expression: &str) -> Option<Value> {
     let trimmed = expression.trim();
     if !trimmed.is_empty() && !trimmed.starts_with('$') && !trimmed.starts_with('/') {
         if let Some(stop) = runtime.last_stop.as_ref() {
-            if let Some(mapped) =
-                lookup_output_expression(source_index, &stop.workflow_id, &stop.step_id, trimmed)
-            {
-                return try_evaluate_watch_expression(runtime, mapped);
+            if let Some(output) = runtime.outputs.get(&(
+                stop.workflow_id.clone(),
+                stop.step_id.clone(),
+                trimmed.to_owned(),
+            )) {
+                return runtime.controller.evaluate_output_value(output).ok();
             }
         }
     }

@@ -2,10 +2,13 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
+use arazzo_spec::OutputValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::runtime_core::{evaluate_output_expression, extract_xpath};
+use crate::runtime_core::{
+    evaluate_output_expression, evaluate_output_value_detailed, extract_xpath,
+};
 
 use super::breakpoints::{first_matching_breakpoint, StepBreakpoint, StepCheckpoint};
 use super::{DebugScopes, DebugStackFrame, WatchEvaluation};
@@ -180,6 +183,16 @@ impl DebugController {
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
         Ok(evaluate_watch_expression_from_state(&guard, expression))
+    }
+
+    /// Preview a declared output using the current paused evaluation context.
+    pub fn evaluate_output_value(&self, output: &OutputValue) -> Result<Value, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
+        Ok(evaluate_output_value_detailed(output, &evaluator, None).0)
     }
 
     pub fn evaluate_condition(&self, condition: &str) -> Result<bool, String> {

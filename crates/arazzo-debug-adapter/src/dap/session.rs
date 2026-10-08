@@ -8,6 +8,7 @@ use std::time::Duration;
 use arazzo_runtime::{
     DebugController, DebugStopEvent, DebugStopReason, EngineBuilder, RuntimeError, StepBreakpoint,
 };
+use arazzo_spec::OutputValue;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -43,6 +44,7 @@ pub(super) struct LaunchConfig {
 
 #[derive(Debug)]
 pub(super) struct RuntimeSession {
+    pub(super) outputs: BTreeMap<(String, String, String), OutputValue>,
     pub(super) controller: Arc<DebugController>,
     pub(super) cancel_token: Option<CancellationToken>,
     pub(super) monitor_handle: Option<thread::JoinHandle<()>>,
@@ -88,6 +90,24 @@ pub(super) fn ensure_runtime_started(
     };
 
     let controller = Arc::new(DebugController::new());
+    let outputs = spec
+        .workflows
+        .iter()
+        .flat_map(|workflow| {
+            workflow.steps.iter().flat_map(|step| {
+                step.outputs.iter().map(|(name, output)| {
+                    (
+                        (
+                            workflow.workflow_id.clone(),
+                            step.step_id.clone(),
+                            name.clone(),
+                        ),
+                        output.clone(),
+                    )
+                })
+            })
+        })
+        .collect();
     if !state.runtime_breakpoints.is_empty() {
         controller
             .set_breakpoints(state.runtime_breakpoints.clone())
@@ -150,6 +170,7 @@ pub(super) fn ensure_runtime_started(
     });
 
     state.runtime = Some(RuntimeSession {
+        outputs,
         controller,
         cancel_token,
         monitor_handle: Some(monitor_handle),

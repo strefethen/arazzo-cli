@@ -5,7 +5,10 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{DebugController, EngineBuilder, StepBreakpoint};
-use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
+use arazzo_spec::{
+    ArazzoSpec, ExpressionType, Info, OutputValue, SelectorObject, SelectorType, SourceDescription,
+    SourceType, Step, StepTarget, Workflow,
+};
 use serde_json::json;
 use tiny_http::{Header, Response as TinyResponse, Server, StatusCode};
 
@@ -18,7 +21,18 @@ async fn evaluate_and_watch_expressions_at_pause() {
         panic!("setting breakpoints: {err}");
     }
 
-    let inputs = BTreeMap::from([(String::from("code"), json!(429))]);
+    let inputs = BTreeMap::from([
+        (String::from("code"), json!(429)),
+        (
+            String::from("doc"),
+            json!({"value": "one", "items": [1, 2]}),
+        ),
+        (String::from("other"), json!({"value": "two"})),
+        (
+            String::from("xml"),
+            json!("<root><value>one</value></root>"),
+        ),
+    ]);
     let handle = engine.execute("wf", inputs);
 
     let waited = match controller.wait_for_stop_count(1, Duration::from_secs(1)) {
@@ -42,6 +56,63 @@ async fn evaluate_and_watch_expressions_at_pause() {
         Err(err) => panic!("evaluating step expression: {err}"),
     };
     assert_eq!(step_value, json!(429));
+
+    let selector = |context: &str, query: &str, type_: &str, version: &str| {
+        OutputValue::Selector(SelectorObject {
+            context: context.to_owned(),
+            selector: query.to_owned(),
+            type_: SelectorType::ExpressionType(ExpressionType {
+                type_: type_.to_owned(),
+                version: version.to_owned(),
+                extensions: BTreeMap::new(),
+            }),
+            extensions: BTreeMap::new(),
+        })
+    };
+    for (output, expected) in [
+        (
+            OutputValue::RuntimeExpression("$inputs.code".to_owned()),
+            json!(429),
+        ),
+        (
+            selector("$inputs.doc", "/value", "jsonpointer", ""),
+            json!("one"),
+        ),
+        (
+            selector("$inputs.other", "/value", "jsonpointer", ""),
+            json!("two"),
+        ),
+        (
+            selector("$inputs.doc", "$.items[*]", "jsonpath", "rfc9535"),
+            json!([1, 2]),
+        ),
+        (
+            selector("$inputs.doc", "$.items[*]", "jsonpath", "goessner"),
+            json!(null),
+        ),
+        (
+            selector("$inputs.xml", "//value", "xpath", "xpath-10"),
+            json!("one"),
+        ),
+        (
+            selector("$inputs.xml", "//value", "xpath", "xpath-30"),
+            json!(null),
+        ),
+        (
+            selector("$inputs.absent", "/value", "jsonpointer", ""),
+            json!(null),
+        ),
+    ] {
+        assert_eq!(
+            controller.evaluate_output_value(&output),
+            Ok(expected),
+            "{output:?}"
+        );
+    }
+    assert_eq!(
+        controller.evaluate_watch_expression("missing_alias"),
+        Ok(json!(null))
+    );
 
     let cond = match controller.evaluate_condition("$steps.s1.outputs.code == 429") {
         Ok(value) => value,

@@ -248,10 +248,15 @@
                 "reference={reference}: canonical reference must produce one error, got {:?}",
                 report.errors
             );
-            assert_eq!(report.errors[0].kind, ValidationErrorKind::InvalidReference);
+            let (kind, path) = if reference == "null" {
+                (ValidationErrorKind::InvalidReference, "workflow \"wf\" > step \"step\".onSuccess[0]")
+            } else {
+                (ValidationErrorKind::InvalidExpression, "workflow \"wf\" > step \"step\".onSuccess[0].reference")
+            };
+            assert_eq!(report.errors[0].kind, kind);
             assert_eq!(
                 report.errors[0].path,
-                "workflow \"wf\" > step \"step\".onSuccess[0]"
+                path
             );
         }
 

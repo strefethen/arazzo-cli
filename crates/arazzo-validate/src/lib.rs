@@ -278,15 +278,8 @@ pub fn validate_diagnostics(spec: &ArazzoSpec) -> Result<Vec<Diagnostic>, Error>
     // public model. Only omitted-vs-explicit-null `value` presence requires raw
     // document bytes and remains a parse-boundary distinction.
     let mut resolved = spec.clone();
-    let mut provenance =
-        resolve_components(&mut resolved, None).map_err(Error::ComponentResolution)?;
-    // Resolution records invalid typed wrapper values before it replaces a
-    // Parameter value or discards an action value. The raw parse entry point
-    // performs the equivalent presence-aware pass, so this vector is populated
-    // only for direct typed APIs.
-    let mut diagnostics = std::mem::take(&mut provenance.reusable_value_diagnostics);
-    diagnostics.extend(collect_diagnostics(&resolved, &provenance));
-    partition_diagnostics(diagnostics)
+    let provenance = resolve_components(&mut resolved, None).map_err(Error::ComponentResolution)?;
+    partition_diagnostics(collect_diagnostics(&resolved, &provenance))
 }
 
 /// Splits a diagnostics list into a success (warnings only) or failure
@@ -762,40 +755,7 @@ fn check_raw_action_boundary(
         }
     }
 
-    let reference = raw_mapping_field(action, "reference");
-    let value = raw_mapping_field(action, "value");
-    let reusable_reference_is_invalid = !component
-        && reference.is_some_and(|reference| match reference {
-            serde_yaml_ng::Value::String(reference) => {
-                reference.is_empty() || !reference.starts_with('$')
-            }
-            _ => true,
-        });
-    let reference_is_non_string =
-        reference.is_some_and(|reference| !matches!(reference, serde_yaml_ng::Value::String(_)));
-    if component
-        && (reference_is_non_string
-            || matches!(reference, Some(serde_yaml_ng::Value::String(reference)) if reference.is_empty()))
-    {
-        raw_unknown_action_field(path, "reference", diagnostics);
-    }
-    if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
-        raw_unknown_action_field(path, "value", diagnostics);
-    }
-    if reusable_reference_is_invalid {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::InvalidReference,
-            path: path.to_string(),
-            message: "reference must be a non-empty runtime expression string".to_string(),
-        });
-    }
-    if !component && reference.is_some() && !reusable_reference_is_invalid {
-        check_raw_reusable_value(action, path, diagnostics);
-    }
-    if !component && matches!(value, Some(serde_yaml_ng::Value::Null)) && reference.is_none() {
-        raw_unknown_action_field(path, "value", diagnostics);
-    }
+    expressions::validate_raw_reusable_fields(path, action, component, diagnostics);
 }
 
 fn check_raw_action_list(
@@ -981,6 +941,7 @@ impl DeclarationScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ComponentParameterKey {
     parameter_index: usize,
+    value_is_inherited: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1083,6 +1044,7 @@ struct ComponentActionFixedFieldOrigin {
     /// `local_fields.retry_after`: an explicit local zero remains visible for
     /// applicability, but does not override the component value.
     local_retry_after_overrides: bool,
+    local_criteria: bool,
     local_fields: ActionLocalFields,
 }
 
@@ -1108,8 +1070,7 @@ struct ResolutionProvenance {
     /// override individual fixed fields and must validate those at the use.
     component_action_fixed_field_origins:
         HashMap<DeclarationScope, ComponentActionFixedFieldOrigin>,
-    /// Direct-API-only findings collected immediately before resolution would
-    /// erase the invalid typed wrapper value.
+    /// Findings retained before resolution erases reference/wrapper values.
     reusable_value_diagnostics: Vec<Diagnostic>,
     /// Parse-boundary findings for default-valued legacy wrapper fields. These
     /// are collected only after the component Action type is resolved, because
@@ -1118,7 +1079,7 @@ struct ResolutionProvenance {
 }
 
 fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::<Diagnostic>::new();
+    let mut diagnostics = provenance.reusable_value_diagnostics.clone();
 
     check_unknown_fields("", &spec.extensions, &mut diagnostics);
     check_unknown_fields("info", &spec.info.extensions, &mut diagnostics);
@@ -1264,6 +1225,12 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
         }
         for (action_index, (name, action)) in components.success_actions.iter().enumerate() {
             let action_path = format!("components.successActions.{name}");
+            expressions::validate_criteria(
+                &action_path,
+                &action.criteria,
+                &spec.arazzo,
+                &mut diagnostics,
+            );
             check_unknown_fields(&action_path, &action.extensions, &mut diagnostics);
             warn_action_reusable_fields(&action_path, action, &mut diagnostics);
             validate_action_fixed_fields(
@@ -1292,6 +1259,12 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
         }
         for (action_index, (name, action)) in components.failure_actions.iter().enumerate() {
             let action_path = format!("components.failureActions.{name}");
+            expressions::validate_criteria(
+                &action_path,
+                &action.criteria,
+                &spec.arazzo,
+                &mut diagnostics,
+            );
             check_unknown_fields(&action_path, &action.extensions, &mut diagnostics);
             warn_action_reusable_fields(&action_path, action, &mut diagnostics);
             validate_action_fixed_fields(
@@ -2137,7 +2110,10 @@ fn validate_effective_parameter_context(
     seen: &mut HashSet<(ParameterDeclarationKey, ParameterContextConstraint)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let parameters = effective_parameters(context);
+    let parameters: Vec<_> = effective_parameters(context)
+        .into_iter()
+        .filter(|parameter| !expressions::has_reference_error(&parameter.path, diagnostics))
+        .collect();
     let Some(target) = &context.step.target else {
         return;
     };
@@ -2340,11 +2316,21 @@ fn validate_parameters(
         // A source Reusable Object has already expanded to its component
         // definition. Validate that definition once at components.* and only
         // apply target context at this consuming path below.
-        if !provenance
+        if expressions::has_reference_error(&param_path, &provenance.reusable_value_diagnostics) {
+            continue;
+        }
+        match provenance
             .component_parameter_origins
-            .contains_key(&list_origin.declaration(param_idx))
+            .get(&list_origin.declaration(param_idx))
         {
-            validate_parameter(&param_path, param, arazzo_version, true, diagnostics);
+            None => validate_parameter(&param_path, param, arazzo_version, true, diagnostics),
+            Some(origin) if !origin.value_is_inherited => validate_value_source(
+                &format!("{param_path}.value"),
+                &param.value,
+                arazzo_version,
+                diagnostics,
+            ),
+            _ => {}
         }
     }
 }
@@ -2409,6 +2395,9 @@ fn validate_actions(
     for (action_idx, action) in actions.iter().enumerate() {
         let action_path = format!("{path_prefix}[{action_idx}]");
         let action_key = list_key.declaration(action_idx);
+        if expressions::has_reference_error(&action_path, &provenance.reusable_value_diagnostics) {
+            continue;
+        }
         let action_is_component_owned = provenance
             .component_action_origins
             .contains_key(&action_key);
@@ -2449,10 +2438,10 @@ fn validate_actions(
             target_ids,
             diagnostics,
         );
-        for (criterion_idx, criterion) in action.criteria.iter().enumerate() {
-            validate_criterion(
-                &format!("{action_path}.criteria[{criterion_idx}]"),
-                criterion,
+        if fixed_field_origin.is_none_or(|origin| origin.local_criteria) {
+            expressions::validate_criteria(
+                &action_path,
+                &action.criteria,
                 arazzo_version,
                 diagnostics,
             );
@@ -2996,6 +2985,17 @@ fn resolve_param_refs(
 ) -> Result<(), String> {
     let mut resolved = Vec::with_capacity(params.len());
     for (parameter_index, mut param) in params.drain(..).enumerate() {
+        if expressions::reject_parameter_reference(
+            &format!("{path_prefix}[{parameter_index}]"),
+            raw_parameters
+                .and_then(serde_yaml_ng::Value::as_sequence)
+                .and_then(|values| values.get(parameter_index)),
+            &param,
+            &mut provenance.reusable_value_diagnostics,
+        ) {
+            resolved.push(param);
+            continue;
+        }
         if !param.reference.is_empty() {
             if raw_parameters.is_none() && !typed_reusable_parameter_value_is_valid(&param.value) {
                 provenance
@@ -3044,6 +3044,7 @@ fn resolve_param_refs(
                 list_origin.declaration(parameter_index),
                 ComponentParameterKey {
                     parameter_index: component_parameter_index,
+                    value_is_inherited: value_is_omitted,
                 },
             );
         }
@@ -3116,20 +3117,12 @@ fn resolve_action_ref(
         let local_parameters_are_non_empty = !action.parameters.is_empty();
         let mut component_origin = None;
         let mut fixed_field_origin = None;
-        // The raw parse boundary classifies empty/non-runtime-expression
-        // references as an invalid Reusable Object. Replace its ignored
-        // siblings before typed validation so the one structured reference
-        // diagnostic owns the failure; direct typed callers retain the
-        // existing component-resolution rule.
-        if raw_action
-            .and_then(|action| raw_mapping_field(action, "reference"))
-            .is_some_and(|reference| match reference {
-                serde_yaml_ng::Value::String(reference) => {
-                    reference.is_empty() || !reference.starts_with('$')
-                }
-                _ => true,
-            })
-        {
+        if expressions::reject_reference(
+            &action_path,
+            raw_action.and_then(|action| raw_mapping_field(action, "reference")),
+            &action.reference,
+            &mut provenance.reusable_value_diagnostics,
+        ) {
             *action = OnAction::default();
             continue;
         }
@@ -3166,6 +3159,7 @@ fn resolve_action_ref(
             component_origin = Some(source);
             fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
                 local_retry_after_overrides: false,
+                local_criteria: false,
                 local_fields: ActionLocalFields::default(),
             });
             raw_parameters = raw_component_action(
@@ -3176,6 +3170,7 @@ fn resolve_action_ref(
             .and_then(|component| raw_mapping_field(component, "parameters"));
         } else if !action.name.is_empty() {
             let local_action_type = action.type_;
+            let local_criteria = !action.criteria.is_empty();
             let local_fields = local_action_fixed_fields(raw_action, action);
             let local_retry_after_overrides = action.retry_after != 0.0;
             if let Some(component_name) = resolve_one_action_ref(
@@ -3199,6 +3194,7 @@ fn resolve_action_ref(
                 };
                 fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
                     local_retry_after_overrides,
+                    local_criteria,
                     local_fields,
                 });
                 let raw_component = raw_component_action(

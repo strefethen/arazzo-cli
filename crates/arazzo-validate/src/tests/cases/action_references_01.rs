@@ -328,10 +328,10 @@ workflows:
             panic!("a non-runtime-expression action reference must fail validation");
         };
         assert_eq!(report.errors.len(), 1, "errors={:?}", report.errors);
-        assert_eq!(report.errors[0].kind, ValidationErrorKind::InvalidReference);
+        assert_eq!(report.errors[0].kind, ValidationErrorKind::InvalidExpression);
         assert_eq!(
             report.errors[0].path,
-            "workflow \"wf\" > step \"s1\".onSuccess[0]"
+            "workflow \"wf\" > step \"s1\".onSuccess[0].reference"
         );
     }
 

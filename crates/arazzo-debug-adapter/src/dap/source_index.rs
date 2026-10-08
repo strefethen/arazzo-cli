@@ -23,7 +23,6 @@ pub(super) struct SourceIndex {
     pub(super) path: String,
     pub(super) checkpoints: Vec<IndexedCheckpoint>,
     pub(super) line_contexts: BTreeMap<u32, SourceLineContext>,
-    pub(super) output_expressions: BTreeMap<(String, String, String), String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +68,6 @@ pub(super) fn build_source_index(path: &str) -> Result<SourceIndex, String> {
         path: path.to_string(),
         checkpoints: metadata.checkpoints,
         line_contexts: metadata.line_contexts,
-        output_expressions: metadata.output_expressions,
     })
 }
 
@@ -112,23 +110,6 @@ pub(super) fn lookup_line_for_checkpoint(
             && matches!(candidate.checkpoint, StepCheckpoint::Step)
     });
     fallback.map(|value| value.line)
-}
-
-pub(super) fn lookup_output_expression<'a>(
-    source_index: Option<&'a SourceIndex>,
-    workflow_id: &str,
-    step_id: &str,
-    output_name: &str,
-) -> Option<&'a str> {
-    let index = source_index?;
-    index
-        .output_expressions
-        .get(&(
-            workflow_id.to_string(),
-            step_id.to_string(),
-            output_name.to_string(),
-        ))
-        .map(String::as_str)
 }
 
 /// Resolves DAP source-line breakpoints against the YAML source index, producing
@@ -462,7 +443,6 @@ fn retry_lifecycle_action_checkpoint(checkpoint: &StepCheckpoint) -> Option<Step
 struct SourceMetadata {
     checkpoints: Vec<IndexedCheckpoint>,
     line_contexts: BTreeMap<u32, SourceLineContext>,
-    output_expressions: BTreeMap<(String, String, String), String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -488,7 +468,6 @@ struct MetadataReceiver {
     path: Vec<PathSegment>,
     checkpoints: Vec<IndexedCheckpoint>,
     line_contexts: BTreeMap<u32, SourceLineContext>,
-    output_expressions: BTreeMap<(String, String, String), String>,
     current_workflow_id: String,
     current_step_id: String,
     step_mapping_start_line: Option<u32>,
@@ -506,7 +485,6 @@ impl MetadataReceiver {
             path: Vec::new(),
             checkpoints: Vec::new(),
             line_contexts: BTreeMap::new(),
-            output_expressions: BTreeMap::new(),
             current_workflow_id: String::new(),
             current_step_id: String::new(),
             step_mapping_start_line: None,
@@ -523,7 +501,6 @@ impl MetadataReceiver {
         SourceMetadata {
             checkpoints: self.checkpoints,
             line_contexts: self.line_contexts,
-            output_expressions: self.output_expressions,
         }
     }
 
@@ -886,14 +863,6 @@ impl MetadataReceiver {
                             name: key_name.clone(),
                         },
                     );
-                    self.output_expressions.insert(
-                        (
-                            self.current_workflow_id.clone(),
-                            self.current_step_id.clone(),
-                            key_name,
-                        ),
-                        value,
-                    );
                 } else if key_name == "workflowId" && self.is_in_workflow_mapping() {
                     self.current_workflow_id = value;
                 } else if key_name == "stepId" && self.is_in_step_mapping() {
@@ -1145,7 +1114,7 @@ workflows:
     }
 
     #[test]
-    fn extract_source_metadata_tracks_output_expressions() {
+    fn extract_source_metadata_tracks_output_checkpoint_lines() {
         let text = r#"
 workflows:
   - workflowId: get-hackernews
@@ -1155,15 +1124,12 @@ workflows:
           title_1: //item[1]/title
 "#;
         let metadata = extract_source_metadata(text);
-        let key = (
-            "get-hackernews".to_string(),
-            "fetch-rss".to_string(),
-            "title_1".to_string(),
-        );
-        assert_eq!(
-            metadata.output_expressions.get(&key).map(String::as_str),
-            Some("//item[1]/title")
-        );
+        let output = metadata.checkpoints.iter().find(|entry| {
+            matches!(&entry.checkpoint, StepCheckpoint::Output { name } if name == "title_1")
+        }).unwrap_or_else(|| panic!("missing output checkpoint"));
+        assert_eq!(output.workflow_id, "get-hackernews");
+        assert_eq!(output.step_id, "fetch-rss");
+        assert_eq!(output.line, 7);
     }
 
     #[test]
@@ -1186,7 +1152,6 @@ workflows:
             path: "/tmp/workflow.arazzo.yaml".to_string(),
             checkpoints: metadata.checkpoints,
             line_contexts: metadata.line_contexts,
-            output_expressions: metadata.output_expressions,
         };
         let on_failure_line = u32::try_from(
             text.lines()
@@ -1225,7 +1190,6 @@ workflows:
             path: source_path.clone(),
             checkpoints: metadata.checkpoints,
             line_contexts: metadata.line_contexts,
-            output_expressions: metadata.output_expressions,
         };
 
         let on_failure_line = u32::try_from(
@@ -1275,11 +1239,11 @@ workflows:
                 StepCheckpoint::Output { name } if name == "count"
             )
         }));
-        let key = ("wf".to_string(), "s1".to_string(), "title".to_string());
-        assert_eq!(
-            metadata.output_expressions.get(&key).map(String::as_str),
-            Some("$response.body#/title")
-        );
+        assert!(metadata
+            .checkpoints
+            .iter()
+            .filter(|entry| { matches!(entry.checkpoint, StepCheckpoint::Output { .. }) })
+            .all(|entry| entry.line == 6));
     }
 
     #[test]

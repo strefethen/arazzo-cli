@@ -3,8 +3,8 @@ info:
   title: HTTPBin Condition Expression Tests
   version: 1.0.0
   description: >
-    Tests the full range of Arazzo condition expressions: comparison operators,
-    string operators (contains, matches), and compound conditions (&&, ||).
+    Tests Arazzo comparison and compound operators (&&, ||),
+    plus regex conditions for substring checks.
 sourceDescriptions:
   - name: httpbin
     url: https://httpbin.org
@@ -45,19 +45,23 @@ workflows:
             value: $steps.fetch-data.outputs.fruit
         successCriteria:
           - condition: $statusCode == 200
-          - condition: $response.body.args.check == "apple"
+          - condition: $response.body.args.check == 'apple'
     outputs:
       fruit: $steps.fetch-data.outputs.fruit
 
   - workflowId: contains-operator
-    summary: Test the contains operator on response body strings
+    summary: Test regex substring conditions on response body strings
     steps:
       - stepId: fetch-url
         operationPath: /get
         successCriteria:
           - condition: $statusCode == 200
-          - condition: '$response.body.url contains "httpbin"'
-          - condition: '$response.body.headers.Host contains "httpbin"'
+          - context: $response.body#/url
+            type: regex
+            condition: httpbin
+          - context: $response.body#/headers/Host
+            type: regex
+            condition: httpbin
     outputs: {}
 
   - workflowId: compound-conditions

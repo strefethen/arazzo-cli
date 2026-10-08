@@ -632,7 +632,10 @@ workflows:
             first_provenance
                 .component_parameter_origins
                 .get(&parameter_destination),
-            Some(&super::ComponentParameterKey { parameter_index: 1 }),
+            Some(&super::ComponentParameterKey {
+                parameter_index: 1,
+                value_is_inherited: true,
+            }),
             "BTreeMap order is alpha=0, zeta=1"
         );
 

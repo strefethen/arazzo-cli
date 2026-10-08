@@ -12,6 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+arazzo-expr = { path = "../arazzo-expr" }
 arazzo-spec = { path = "../arazzo-spec" }
 iri-string = "0.7.12"
 serde_yaml_ng = "0.10"

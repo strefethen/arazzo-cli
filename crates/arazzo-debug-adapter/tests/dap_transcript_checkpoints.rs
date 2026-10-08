@@ -266,8 +266,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          title_1: //item[1]/title
-          link_1: //item[1]/link
+          title_1: {{context: $response.body, selector: '//item[1]/title', type: {{type: xpath, version: xpath-10}}}}
+          link_1: {{context: $response.body, selector: '//item[1]/link', type: {{type: xpath, version: xpath-10}}}}
 "#
     );
     if let Err(err) = fs::write(&path, spec) {

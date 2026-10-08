@@ -40,8 +40,14 @@ workflows:
               type: xpath
               version: xpath-10
         outputs:
-          total_count: //ListCustomersResponse/TotalCount
-          first_id: //ListCustomersResponse/Customers/Customer[1]/Id
+          total_count:
+            context: $response.body
+            selector: //ListCustomersResponse/TotalCount
+            type: {type: xpath, version: xpath-10}
+          first_id:
+            context: $response.body
+            selector: //ListCustomersResponse/Customers/Customer[1]/Id
+            type: {type: xpath, version: xpath-10}
 
       - stepId: get-customer
         operationPath: POST /api/soap-mock/service
@@ -72,7 +78,10 @@ workflows:
               type: xpath
               version: xpath-10
         outputs:
-          customer_name: //GetCustomerResponse/Customer/Name
+          customer_name:
+            context: $response.body
+            selector: //GetCustomerResponse/Customer/Name
+            type: {type: xpath, version: xpath-10}
 
       - stepId: create-customer
         operationPath: POST /api/soap-mock/service
@@ -106,8 +115,14 @@ workflows:
               type: xpath
               version: xpath-10
         outputs:
-          new_id: //CreateCustomerResponse/Customer/Id
-          new_name: //CreateCustomerResponse/Customer/Name
+          new_id:
+            context: $response.body
+            selector: //CreateCustomerResponse/Customer/Id
+            type: {type: xpath, version: xpath-10}
+          new_name:
+            context: $response.body
+            selector: //CreateCustomerResponse/Customer/Name
+            type: {type: xpath, version: xpath-10}
 
       - stepId: update-customer
         operationPath: POST /api/soap-mock/service
@@ -151,7 +166,10 @@ workflows:
               type: xpath
               version: xpath-10
         outputs:
-          updated_name: //UpdateCustomerResponse/Customer/Name
+          updated_name:
+            context: $response.body
+            selector: //UpdateCustomerResponse/Customer/Name
+            type: {type: xpath, version: xpath-10}
 
       - stepId: delete-customer
         operationPath: POST /api/soap-mock/service
@@ -182,4 +200,7 @@ workflows:
               type: xpath
               version: xpath-10
         outputs:
-          deleted: //DeleteCustomerResponse/Success
+          deleted:
+            context: $response.body
+            selector: //DeleteCustomerResponse/Success
+            type: {type: xpath, version: xpath-10}

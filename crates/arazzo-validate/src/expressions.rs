@@ -8,6 +8,11 @@
 
 use std::collections::HashSet;
 
+use arazzo_expr::{
+    body_pointer_migration_hint, classify_value_string, parse_runtime_expression,
+    parse_simple_condition, ExpressionStringErrorKind, RuntimeExpressionError,
+    RuntimeExpressionErrorKind,
+};
 use arazzo_spec::{OutputValue, SelectorObject, SelectorType, SuccessCriterion, ValueSource};
 
 use crate::{check_unknown_fields, xpath_advisory, Diagnostic, Severity, ValidationErrorKind};
@@ -18,8 +23,13 @@ pub(crate) fn validate_output_value(
     arazzo_version: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if let OutputValue::Selector(selector) = output {
-        validate_selector(path, selector, arazzo_version, diagnostics);
+    match output {
+        OutputValue::Selector(selector) => {
+            validate_selector(path, selector, arazzo_version, diagnostics);
+        }
+        OutputValue::RuntimeExpression(expression) => {
+            validate_required_expression(path, expression, diagnostics);
+        }
     }
 }
 
@@ -33,8 +43,11 @@ pub(crate) fn validate_output_step_reference(
         OutputValue::RuntimeExpression(expression) => expression,
         OutputValue::Selector(selector) => &selector.context,
     };
-    if let Some(after) = expression.strip_prefix("$steps.") {
-        let step_name = after.split('.').next().unwrap_or_default();
+    let Ok(expression) = parse_runtime_expression(expression) else {
+        return; // The owning output/context syntax check reports this field once.
+    };
+    if let Some(reference) = expression.step_output_reference() {
+        let step_name = reference.step_id();
         if !step_ids.contains(step_name) {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -77,6 +90,9 @@ pub(crate) fn validate_value_source(
                 );
             }
         }
+        ValueSource::Literal(serde_yaml_ng::Value::String(value)) => {
+            validate_template(path, value, diagnostics);
+        }
         ValueSource::Literal(_) => {}
     }
 }
@@ -95,6 +111,8 @@ pub(crate) fn validate_selector(
             path: format!("{path}.context"),
             message: format!("{path}.context is required"),
         });
+    } else {
+        validate_required_expression(&format!("{path}.context"), &selector.context, diagnostics);
     }
 
     let type_name = selector.type_.resolved_name();
@@ -312,6 +330,39 @@ pub(crate) fn validate_criterion(
         });
     }
 
+    if !criterion.context.trim().is_empty() {
+        validate_required_expression(&format!("{path}.context"), &criterion.context, diagnostics);
+    }
+    if !criterion.condition.trim().is_empty() {
+        let condition_path = format!("{path}.condition");
+        match criterion
+            .type_
+            .as_ref()
+            .map(SelectorType::resolved_name)
+            .as_deref()
+        {
+            None | Some("simple") => {
+                if let Err(error) = parse_simple_condition(&criterion.condition) {
+                    let offending = criterion
+                        .condition
+                        .get(error.byte_offset..)
+                        .unwrap_or_default();
+                    let message =
+                        if is_env_namespace(offending.strip_prefix('$').unwrap_or_default()) {
+                            ENV_MESSAGE.to_owned()
+                        } else {
+                            format!("invalid simple condition: {error}")
+                        };
+                    invalid_expression(&condition_path, message, diagnostics);
+                }
+            }
+            Some("regex" | "jsonpath" | "xpath") if criterion.condition.contains("{$") => {
+                validate_template(&condition_path, &criterion.condition, diagnostics);
+            }
+            _ => {}
+        }
+    }
+
     let Some(type_) = &criterion.type_ else {
         return;
     };
@@ -323,4 +374,171 @@ pub(crate) fn validate_criterion(
         arazzo_version,
         diagnostics,
     );
+}
+
+const ENV_MESSAGE: &str =
+    "unsupported runtime-expression namespace '$env'; pass the value explicitly through '$inputs'";
+
+// Diagnostic projection of the canonical parser's offending namespace span;
+// this does not classify strings or recognize expression boundaries.
+fn is_env_namespace(span: &str) -> bool {
+    span.split('.')
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("env"))
+}
+
+fn invalid_expression(path: &str, message: String, diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        kind: ValidationErrorKind::InvalidExpression,
+        path: path.to_owned(),
+        message,
+    });
+}
+
+fn runtime_error_message(input: &str, error: &RuntimeExpressionError) -> String {
+    if error.kind == RuntimeExpressionErrorKind::UnknownNamespace
+        && input
+            .get(error.byte_range.clone())
+            .is_some_and(is_env_namespace)
+    {
+        return ENV_MESSAGE.to_owned();
+    }
+    let mut message = format!("invalid runtime expression: {error}");
+    if let Some(hint) = body_pointer_migration_hint(input, error) {
+        message.push_str("; ");
+        message.push_str(&hint);
+    }
+    message
+}
+
+fn validate_required_expression(path: &str, input: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if let Err(error) = parse_runtime_expression(input) {
+        invalid_expression(path, runtime_error_message(input, &error), diagnostics);
+    }
+}
+
+fn validate_template(path: &str, input: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if let Err(error) = classify_value_string(input) {
+        let message = if error.kind == ExpressionStringErrorKind::EmbeddedRuntimeExpression
+            && input
+                .get(error.byte_range.clone())
+                .is_some_and(is_env_namespace)
+        {
+            ENV_MESSAGE.to_owned()
+        } else {
+            error.to_string()
+        };
+        invalid_expression(path, message, diagnostics);
+    }
+}
+
+pub(crate) fn validate_criteria(
+    action_path: &str,
+    criteria: &[SuccessCriterion],
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (index, criterion) in criteria.iter().enumerate() {
+        validate_criterion(
+            &format!("{action_path}.criteria[{index}]"),
+            criterion,
+            arazzo_version,
+            diagnostics,
+        );
+    }
+}
+
+/// Preserve reference syntax errors before component expansion clears the field.
+/// Raw presence distinguishes an empty authored reference from the typed default.
+pub(crate) fn reject_reference(
+    path: &str,
+    raw_reference: Option<&serde_yaml_ng::Value>,
+    reference: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    if raw_reference.is_some_and(|value| !value.is_string()) {
+        return true; // Existing raw shape validation owns non-string values.
+    }
+    if raw_reference.is_none() && reference.is_empty() {
+        return false;
+    }
+    let reference = raw_reference
+        .and_then(serde_yaml_ng::Value::as_str)
+        .unwrap_or(reference);
+    if let Err(error) = parse_runtime_expression(reference) {
+        invalid_expression(
+            &format!("{path}.reference"),
+            runtime_error_message(reference, &error),
+            diagnostics,
+        );
+        return true;
+    }
+    false
+}
+
+/// Concrete Parameters serialize an empty default reference. Preserve that
+/// existing classification while checking actual Reusable Object references.
+pub(crate) fn reject_parameter_reference(
+    path: &str,
+    raw_parameter: Option<&serde_yaml_ng::Value>,
+    parameter: &arazzo_spec::Parameter,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    if !parameter.name.is_empty() && parameter.reference.is_empty() {
+        return false;
+    }
+    reject_reference(
+        path,
+        raw_parameter.and_then(|value| crate::raw_mapping_field(value, "reference")),
+        &parameter.reference,
+        diagnostics,
+    )
+}
+
+pub(crate) fn has_reference_error(path: &str, diagnostics: &[Diagnostic]) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        diagnostic.kind == ValidationErrorKind::InvalidExpression
+            && diagnostic.path == format!("{path}.reference")
+    })
+}
+
+/// Existing raw Reusable Object shape/value rules, with expression syntax owned
+/// by `reject_reference` during resolution rather than a dollar-prefix heuristic.
+pub(crate) fn validate_raw_reusable_fields(
+    path: &str,
+    action: &serde_yaml_ng::Value,
+    component: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let reference = crate::raw_mapping_field(action, "reference");
+    let value = crate::raw_mapping_field(action, "value");
+    let non_string = reference.is_some_and(|reference| !reference.is_string());
+    let invalid = reference.is_some_and(|reference| {
+        reference
+            .as_str()
+            .is_none_or(|reference| parse_runtime_expression(reference).is_err())
+    });
+    if component
+        && (non_string || reference.is_some_and(|reference| reference.as_str() == Some("")))
+    {
+        crate::raw_unknown_action_field(path, "reference", diagnostics);
+    }
+    if component && matches!(value, Some(serde_yaml_ng::Value::Null)) {
+        crate::raw_unknown_action_field(path, "value", diagnostics);
+    }
+    if !component && non_string {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            kind: ValidationErrorKind::InvalidReference,
+            path: path.to_owned(),
+            message: "reference must be a non-empty runtime expression string".to_owned(),
+        });
+    }
+    if !component && reference.is_some() && !invalid {
+        crate::check_raw_reusable_value(action, path, diagnostics);
+    }
+    if !component && matches!(value, Some(serde_yaml_ng::Value::Null)) && reference.is_none() {
+        crate::raw_unknown_action_field(path, "value", diagnostics);
+    }
 }

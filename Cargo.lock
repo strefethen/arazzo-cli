@@ -134,6 +134,7 @@ name = "arazzo-debug-adapter"
 version = "0.7.0"
 dependencies = [
  "arazzo-runtime",
+ "arazzo-spec",
  "arazzo-validate",
  "serde",
  "serde_json",
@@ -223,6 +224,7 @@ dependencies = [
 name = "arazzo-validate"
 version = "0.7.0"
 dependencies = [
+ "arazzo-expr",
  "arazzo-spec",
  "iri-string",
  "serde_yaml_ng",
