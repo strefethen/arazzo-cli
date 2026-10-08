@@ -1,6 +1,9 @@
-# Plan: Arazzo 1.1 Conformance Evidence and Settled Semantics
+---
+status: accepted
+epic: epic:ac-33d48
+---
 
-Status: Accepted
+# Plan: Arazzo 1.1 Conformance Evidence and Settled Semantics
 
 Reconciled: 2026-08-22 after adversarial transfer review. The amendments below
 are accepted desired-state authority for Runtime Expression parsing and field
@@ -11,7 +14,8 @@ implementation quirks or an unevaluated package candidate as settled design.
 Amended: 2026-09-30, Steve-approved. Runtime Expressions and simple conditions
 are parsed by one pest grammar generated from the specification's ABNF, and the
 simple-condition syntax is accepted. See "Runtime Expression parsing precedes
-field dispatch". Simple-condition evaluation semantics remain gated.
+field dispatch". Evaluation and coordinated cutover were subsequently accepted
+on 2026-10-07; the accepted sections below replace the former decision gates.
 
 ## Goal
 
@@ -273,15 +277,10 @@ silent, except numbers, which Section 5.4 settles.
 | Literals | Lowercase `true`, `false`, `null`, not followed by an identifier character. Single-quoted strings, where `''` is the only escape and a backslash is literal | `'It''s'`, `'a\'` | `"apple"`, `$x contains 'a'`, `$x in [1]` |
 
 Conditions nested deeper than 32 levels of `(` or `!` are a `NestingLimit`
-syntax error, detected by a linear scan before parsing. Evaluation semantics
-remain gated by
-[ac-ec3a1](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ec3a1): the
-operator and type matrix, numeric representation, truthiness, short-circuiting,
-missing-property and index results, and the numeric-string `SHOULD`. The parser
-and evaluator remain separate implementation units, and neither may infer
-evaluation choices from current behavior.
+syntax error, detected by a linear scan before parsing. Evaluation follows the
+accepted contract below; parser and evaluator keep distinct ownership.
 
-Dispatch is field-specific after those decision gates are accepted:
+Dispatch is field-specific:
 
 - Literal-or-expression values — recursive Parameter, Request Body,
   Replacement, and action/subworkflow Parameter values — first accept a valid
@@ -353,15 +352,9 @@ diagnostic guidance
 [ac-5c231](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c231) before the
 evaluator or validator consumer cutover. These are independent prerequisites
 after the DEC-5 decision; shared-file writes remain serialized by reservations.
-The existing evaluator owner retains legacy standalone traversal removal.
-
-Code handoff for evaluator cutover remains blocked by
-[ac-2997b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2997b): current
-simple-condition operand evaluation calls the public standalone evaluator, while
-the planned AST condition evaluator depends on its replacement seam. That
-planning-only gate must settle safe intermediate boundaries and ordering without
-choosing the separately pending condition semantics or adding a fallback.
-DEC-5 A is settled; this implementation-sequencing issue does not reopen it.
+The coordinated cutover owns legacy standalone traversal removal and switches
+the condition AST evaluator and runtime/debug adapter in the same candidate,
+after private resolution and literal-capable dispatch are established.
 
 The disposition is exact-grammar conformance as the desired state, claimable as
 `covered` only after positive and negative executable consumer evidence. This
@@ -370,6 +363,245 @@ debt until removed. The [local upstream-report draft](../assessments/arazzo-dott
 records contradictory published examples and the separate Sonos owning-repository
 migration/verification gate before those consumers upgrade. No cross-repository
 change or upstream publication is authorized here.
+
+### Accepted simple-condition evaluation contract (2026-10-07)
+
+Steve approved the complete bounded package on 2026-10-07, including the
+numeric scope, null ambiguity, structural comparison order, and safe private
+resolver → literal renderer → atomic public/condition/runtime/debug cutover.
+This section is the ongoing desired-state authority; the
+[assessment](../assessments/arazzo-expression-cutover-order.md) retains evidence
+and review history only. No new dependency, precise-storage feature, arithmetic
+engine, compatibility parser, or numeric sidecar map is approved. Existing
+crates, `EvalContext`, JSON/YAML values, loaders and convenience signatures stay.
+Typed JSONPath/XPath numeric behavior and interpolation retirement retain their
+existing owners.
+
+The vendored specification supplies these normative requirements:
+
+- [Literals](../../spec/arazzo/v1.1.0.html#literals): “As part of a condition
+  expression, you can use boolean, null, number, or string data types.”
+- [Operators](../../spec/arazzo/v1.1.0.html#operators): “String comparisons
+  MUST be case insensitive.”
+- [Simple conditions](../../spec/arazzo/v1.1.0.html#simple-conditions):
+  “Numeric strings SHOULD be coerced to numbers when compared with numeric
+  operators.” Also: “null only equals itself (null == null is true).
+  Comparing null with any other value evaluates to false.”
+- [Evaluation errors](../../spec/arazzo/v1.1.0.html#evaluation-errors): “Then
+  the condition MUST evaluate to fail, and implementations SHOULD log or
+  report the error to aid debugging.”
+
+The private resolver retains absence separately from explicit JSON null; public
+expression evaluation projects absence to null and preserves existing lookup
+warnings. Never infer absence from null or warning text.
+
+#### Access, truth conversion and evaluation order
+
+| Operation / value | Result |
+|---|---|
+| `.name` on an object, key present | Exact case-sensitive key lookup |
+| `.name` on an object, key absent | Missing; subsequent accesses remain missing |
+| `[n]` on an array, in range | Selected element |
+| `[n]` on an array, out of range | Missing; subsequent accesses remain missing |
+| Property access on any other present type, including explicit null | Evaluation error |
+| Index access on any other present type, including explicit null | Evaluation error |
+| Syntactically valid index too large for the platform index type | Out of range / missing, without allocating or expanding it |
+| Boolean in final result, `!`, `&&`, or `\|\|` | Its boolean value |
+| Null or missing in those positions | False |
+| Number, string, array or object in those positions | Evaluation error; no implicit truthiness |
+
+Parse the whole condition before evaluation, including branches that will be
+skipped. Evaluate left to right; `&&` stops on false, `||` on true. Skipped
+branches produce neither lookup warnings nor evaluation errors. Preserve
+warnings from evaluated operands in encounter order; the first evaluation
+error ends evaluation and makes the whole condition fail, even inside `!` or
+`||`. Missing property/index alone produces no new warning; retain existing
+root lookup warnings. A missing lookup is absence, not a syntax failure.
+
+Examples: with `{ "customer": {} }`,
+`$response.body.customer.address.city == null` passes. With `customer: 42`,
+the same condition errors at `.address`. With `address: null`, it errors at
+`.city`. `false && $inputs.absent` produces no warning; `true || (` is a
+syntax error. `0`, `'false'`, arrays and objects used as final conditions
+error; `!null` passes. Authors must compare non-boolean values explicitly.
+
+#### Numeric representation and conversion
+
+Use the existing i64/u64/finite-f64 representation. Plain integer literals and
+numeric strings without fraction/exponent must fit `[-2^63, 2^64-1]`; excess
+is an evaluation error, never an implicit float conversion. Fraction/exponent
+forms use finite f64, with explicit rejection of overflow and nonzero underflow
+to zero during condition-literal or numeric-string conversion. Existing values
+already rounded by JSON/YAML loading remain represented values; this does not
+add new ingestion rejection or recover their original spelling.
+
+Compare signed/unsigned integers exactly. Float/float comparisons use the
+represented values with no epsilon; signed zero compares equal. Mixed
+integer/float comparisons compare the integer to the represented binary float
+without rounding the integer to f64. No new package is necessary for that
+bounded comparator. Decimal precision is documented as a limitation, with a
+non-covered conformance disposition owned by the evaluator evidence.
+
+Examples: `9007199254740992 == 9007199254740993` is false;
+`9007199254740993 > 9007199254740992.0` is true; `1 == 1.0`, `1e3 == 1000`
+and `-0 == 0` are true. `18446744073709551615` is accepted as an integer;
+`18446744073709551616`, `1e400` and `1e-400` error during literal conversion.
+`0.10000000000000001 == 0.1` may be true because both represent the same
+float; no end-to-end decimal-exactness claim is made.
+
+Numeric-string conversion applies to all six comparisons when exactly one
+operand is a number and the other a string. The string must fully match the
+existing Pest JSON-number production, without surrounding whitespace;
+conversion then uses the rules above. Invalid spelling or range is an error,
+not a lexical comparison. `'200' == 200` passes; `' 200 ' == 200`, `'01' == 1`
+and `'NaN' < 1` error. With two strings, comparison remains case-insensitive
+text comparison: `'10' < '2'` is true and `'01' == '1'` is false. This is an
+explicit partial adoption of the numeric-string SHOULD: coercion is declined
+for string/string comparisons to avoid content-dependent string ordering.
+Record the rationale and deviation disposition; do not claim full SHOULD coverage.
+
+#### Complete comparison matrix
+
+`N` = bounded numeric comparison; `C` = numeric-string conversion then `N`;
+`S` = Unicode-lowercase string comparison, as already accepted;
+`B` = boolean identity; `A/O` = structural array/object equality;
+`F` = false; `T` = true. The table is for `==` and covers every ordered type pair.
+
+| Left \\ right | Number | String | Boolean | Null/missing | Array | Object |
+|---|---|---|---|---|---|---|
+| Number | N | C | F | F | F | F |
+| String | C | S | F | F | F | F |
+| Boolean | F | F | B | F | F | F |
+| Null/missing | F | F | F | T | F | F |
+| Array | F | F | F | F | A | F |
+| Object | F | F | F | F | F | O |
+
+Arrays first compare length; unequal lengths are unequal without visiting
+elements. Equal-length arrays compare elements left to right and stop at the
+first unequal value or error. Objects first compare exact key sets; a different
+key set is unequal without visiting values. Matching objects compare values in
+ascending case-sensitive key order, independent of insertion order, and stop
+at the first unequal value or error. Nested values use this equality matrix,
+including case-insensitive string values and numeric conversion; object keys
+remain case-sensitive. Only a visited invalid numeric conversion errors.
+For arrays `a=[false,"NaN"]`, `b=[true,1]`, `!($inputs.a == $inputs.b)` passes: comparison
+stops before visiting the conversion. With `a=[true,"NaN"]` and the same `b`,
+it errors and the negation cannot turn the error into success. Use bounded-stack
+traversal for deeply nested runtime values; no unbounded recursive comparison.
+
+For `!=`, negate equality except the null rule below. For ordering (`< <= > >=`),
+number/number uses `N`, number/string in either direction uses `C`, and
+string/string uses `S`. Exactly one null/missing operand yields false. Both
+null/missing operands, or any other type pair, produce an evaluation error.
+Thus booleans and containers support equality but have no invented ordering.
+
+**Null ambiguity, made explicit:** the quoted prose above and the example
+`$response.body.data != null` do not specify a consistent ordinary inequality
+model. The accepted interpretation follows the prose literally: every comparison with exactly
+one null/missing operand, including `!=`, is false. `null == null` is true and
+`null != null` is false. Existence can be tested with `!(value == null)`;
+short-circuit guards should use that spelling. This is the accepted conservative
+interpretation, not a claim that the example agrees. Steve explicitly accepted this row on 2026-10-07; retain the contradiction as an upstream clarification draft,
+without filing publicly or inventing an alternate compatibility mode.
+
+#### Results and diagnostics
+
+The detailed condition result carries a boolean, ordered expression warnings
+and an optional structured `ConditionError`. Syntax, limit and evaluation
+errors produce false; ordinary false has no error. Preserve grammar-derived
+UTF-8 offsets for operands, operators and accesses in private AST metadata;
+no new scanner or public syntax change. Existing boolean/tuple convenience
+methods delegate without inventing a second error channel.
+
+The published surface is `ConditionEvaluation { pub result: bool,
+pub warnings: Vec<ExpressionWarning>, pub error: Option<ConditionError> }`
+and `ExpressionEvaluator::evaluate_condition_detailed(&self, condition: &str)
+-> ConditionEvaluation`. Reuse the existing error kinds and fields.
+
+The runtime must consume the detailed result into its existing
+`CriterionEvaluation.error`, not lose the error through the tuple wrapper.
+The coordinated candidate
+[ac-06b3c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-06b3c) carries the
+transferred runtime/debug adapter scope: retain exact error text
+`invalid simple condition at byte {byte_offset}: {message}`, explicit debugger `Err`,
+invalid-breakpoint non-match, Step failure-action routing and invalid-Action
+ineligibility with later Actions still eligible. These are required controls,
+not duplicate downstream adapter work. Existing trace warning owners propagate it under
+[ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c), with a direct
+prerequisite on the condition cutover added during reconciliation. DAP breakpoint
+boolean evaluation fails closed. Ordinary trace warnings derive from the central
+runtime result. For a Step success-Criterion evaluation error, the existing
+`StepResult.err` carries `successCriteria[i]: {CriterionEvaluation.error}`;
+ordinary false keeps no error. If no failure Action recovers the workflow,
+the existing `RuntimeError.message` carries `step {step_id}: {err}` through
+unchanged CLI/MCP/DAP error envelopes with the existing success-criteria-failed
+code. This terminal transport does not add a successful-workflow warning channel
+to MCP or DAP. Preserve response retention, ordinary failure/later-Action routing
+and recoverable/action trace warnings. No new `RUNTIME_*` code or schema field.
+
+
+### Accepted evaluator ownership and safe sequence (2026-10-07)
+
+All expression implementation stays in `arazzo-expr`: canonical syntax owns
+crate-private form access; private `resolution` owns parsed lookup and absence
+provenance; `simple_condition::evaluation` owns AST execution and its private
+numeric module owns bounded comparison. The classifier owns only syntax; the
+renderer consumes parsed resolution independently of the public standalone
+switch. The crate root gains only wiring/delegation and shrinks when old
+dispatch/traversal is removed. These are bounded repairs/extractions of its
+logged God-module responsibility, not new policy in the facade.
+
+1. Preserve completed grammar and generator work. Complete authored-reference
+   migration and pointer hints before literal dispatch or consumer tightening.
+   The syntax-only expression-string classifier can land independently.
+2. Prepare private parsed resolution under
+   [ac-1ce2d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1ce2d) with explicit missing provenance and
+   isolated tests. Public standalone and condition execution remain unchanged;
+   the legacy route remains their sole public route. Add no parser.
+3. Land literal-capable value dispatch through the classifier and private
+   resolver. `$USD` and standalone dotted body text remain literal; exact
+   expressions retain type and templates retain conversions/diagnostics.
+   Public standalone and condition execution still use the previous routes.
+4. In one reviewed candidate,
+   [ac-06b3c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-06b3c), switch public standalone evaluation to parse-once
+   resolution, conditions to the AST evaluator, and runtime/debug adapters to
+   detailed errors. Remove obsolete standalone traversal and condition scanners,
+   including the condition-only `matches` cache/module and its benchmark; the
+   accepted grammar rejects `contains`, `matches`, and `in`. Typed regex stays
+   with its existing owner.
+   Literal dispatch is already canonical, so its Literal class never passes
+   through an intermediate null projection.
+5. Existing trace, validator, and interpolation-retirement owners consume the
+   resulting surfaces under their existing semantic prerequisites. Trace owns
+   ordinary CLI/MCP/DAP error projection and directly depends on cutover.
+
+The combined candidate carries the former evaluator, condition evaluator, and
+runtime/debug adapter obligations. Private preparation and renderer ordering
+replace their unsafe dependency chain. The legacy `interpolate_string` scanner
+remains until its existing retirement owner: conformant operands retain values,
+while invalid operands adopt direct-evaluator syntax corrections. Unsupported
+standalone traversal through that wrapper is not preserved. Checkout writes
+remain serialized with live reservations.
+
+Each intermediate candidate proves valid postfix and pointer conditions. The
+renderer proves literal dollar/dotted text and type/diagnostic preservation;
+cutover rechecks those, dotted-name identity, direct standalone rejection, and
+conformant legacy interpolation. Numeric proof covers endpoints, adjacent IDs,
+mixed float boundaries, strict conversion errors, and documented ingestion
+limits. Matrix proof covers all ordered type pairs, nested equality precedence,
+missing versus null, skipped branches and errors under `!`/`||`. Compile the
+benchmarks and run focused and pinned-toolchain workspace checks; independent
+review assesses each exact candidate.
+
+One hermetic HTTP workflow must show a valid condition passing and invalid
+access failing with its condition location in ordinary structured CLI output.
+For the invalid-access case, no recovery Action matches; MCP and DAP prove the
+same terminal diagnostic and existing code through their existing error paths.
+Conformance evidence retains
+numeric limitations, partial SHOULD adoption, and the null contradiction as an
+upstream clarification draft without public filing. Passing tests alone never
+claims complete conformance. Rollback restores both evaluators together to the
+previous verified state. No push, release, or cross-repository change is approved.
 
 ### Effective Step dependency ownership
 
@@ -538,14 +770,12 @@ precedent or silently added to an allowlist.
    contract may unlock its implementation unit.
 9. Align operationPath presentation in the disjoint CLI and MCP units without
    changing runtime routing.
-10. Remove direct `$env` evaluation and add the canonical Runtime Expression
-    parser as independent roots; migrate evaluator dispatch after both without
-    growing the expression God module.
-11. Implement simple-condition syntax on the shared grammar (syntax accepted
-    2026-09-30). Accept the evaluation decision, then implement evaluation as a
-    separate unit. Propagate structured failures through runtime and debugger
-    boundaries before recording bounded evidence.
-12. Accept the expression-string brace decision, then add the dedicated
+10. Preserve completed Runtime Expression and condition grammar work; prepare
+    private parsed resolution and complete authored-reference migration/hints.
+11. Land syntax-only classification, then literal-capable rendering before the
+    atomic public/condition/runtime/debug cutover; propagate ordinary trace
+    diagnostics and record bounded evidence under existing downstream owners.
+12. Apply the accepted expression-string brace decision through the dedicated
     expression-string parser and diagnostic-preserving renderer; apply the
     field-mode matrix through the validator, placing field-mode enforcement in
     its sibling expression module per `god-files.md`. Keep the legacy
@@ -585,9 +815,10 @@ final cross-surface guard's edges are drawn, both
 halves count as the routing prerequisite.
 
 For the Runtime Expression slice, `$env` evaluator removal and the syntax-only
-parser are independent roots; the evaluator migration follows both, and
-interpolation follows evaluator migration. Simple-condition syntax follows only
-the Runtime Expression parser. The validator decomposition plan was archived on
+parser are completed roots. Private resolver preparation follows their contracts;
+literal-capable rendering follows that resolver and syntax-only classification,
+after authored migration and hints. The coordinated public/condition/runtime/debug
+cutover follows rendering and accepted condition syntax/semantics. The validator decomposition plan was archived on
 2026-10-05, and validator work follows the incremental containment rule in
 `god-files.md`. Validator field enforcement follows interpolation plus the
 settled simple-condition boundary.
@@ -600,36 +831,13 @@ File overlap alone is not represented as a false semantic dependency. The
 single-writer repository policy still serializes overlapping implementation
 work.
 
-### Intentional ready-root ledger
+### Current queue authority
 
-At the 2026-08-22 graph review, the epic intentionally has these seven ready
-members. They are not ordered against one another because no semantic output of
-one is an input to another at this stage:
-
-- [ac-80673](https://sonos.scapedeck.com/docs/ac-tickets/ac-80673) owns the
-  canonical Runtime Expression parser.
-- [ac-9c811](https://sonos.scapedeck.com/docs/ac-tickets/ac-9c811) removes the
-  non-specification `$env` namespace.
-- [ac-aac49](https://sonos.scapedeck.com/docs/ac-tickets/ac-aac49) performs the
-  isomorphic simple-condition ownership extraction.
-- [ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1) is the human
-  simple-condition semantics decision gate, not an implementation dispatch.
-- [ac-b8d9a](https://sonos.scapedeck.com/docs/ac-tickets/ac-b8d9a) owns the
-  grammar-claim manifest representation.
-- [ac-d1e2f](https://sonos.scapedeck.com/docs/ac-tickets/ac-d1e2f) is the human
-  expression-string literal-brace decision gate, not an implementation
-  dispatch.
-- [ac-a983f](https://sonos.scapedeck.com/docs/ac-tickets/ac-a983f) owns the
-  already-prerequisite-satisfied typed JSONPath rejection surface.
-
-This ledger must be refreshed before kickoff if `tkt ready` changes. It does not
-authorize concurrent writes: [ac-80673](https://sonos.scapedeck.com/docs/ac-tickets/ac-80673),
-[ac-aac49](https://sonos.scapedeck.com/docs/ac-tickets/ac-aac49), and
-[ac-9c811](https://sonos.scapedeck.com/docs/ac-tickets/ac-9c811) all touch
-`crates/arazzo-expr/src/lib.rs` and must be serialized absent exact disjoint live
-reservations. [ac-d1e2f](https://sonos.scapedeck.com/docs/ac-tickets/ac-d1e2f)
-and [ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1) both edit
-this plan and must likewise be serialized.
+The 2026-10-07 re-decomposition replaces the historical ready-root snapshot.
+Use live `tkt ready` and the epic transfer-audit note for current candidates;
+queue eligibility does not prove implementation readiness or start clearance.
+Decision tickets remain open until transfer audit and commit-backed closure.
+Shared-file implementation is serialized even when prerequisites are independent.
 
 ## External owners and prerequisites
 
@@ -662,8 +870,8 @@ this plan and must likewise be serialized.
 - [ac-80673](https://sonos.scapedeck.com/docs/ac-tickets/ac-80673) owns only the
   canonical full-consumption Runtime Expression parser, generated from the
   specification ABNF with no prefix iterator (amended 2026-09-30);
-  [ac-9eaf1](https://sonos.scapedeck.com/docs/ac-tickets/ac-9eaf1) migrates the
-  evaluator to that parser. [ac-d1e2f](https://sonos.scapedeck.com/docs/ac-tickets/ac-d1e2f)
+  the reconciled private resolver and coordinated cutover migrate evaluation
+  to that parser; the old evaluator ticket is transferred during re-decomposition. [ac-d1e2f](https://sonos.scapedeck.com/docs/ac-tickets/ac-d1e2f)
   settles expression-string brace classification before
   [ac-a48b1](https://sonos.scapedeck.com/docs/ac-tickets/ac-a48b1) supplies
   syntax to the renderer owned by
@@ -674,19 +882,12 @@ this plan and must likewise be serialized.
   [ac-bb7ab](https://sonos.scapedeck.com/docs/ac-tickets/ac-bb7ab) remove the
   adapter and regex. This ordering prevents a dependency cycle and keeps the
   temporary compatibility surface explicitly bounded.
-- This plan records the accepted simple Criterion syntax (2026-09-30), and
-  [ac-ec3a1](https://sonos.scapedeck.com/docs/ac-tickets/ac-ec3a1) settles the
-  evaluation matrix. The condition owner was extracted isomorphically by
-  [ac-aac49](https://sonos.scapedeck.com/docs/ac-tickets/ac-aac49), which is
-  closed.
-  [ac-67bf5](https://sonos.scapedeck.com/docs/ac-tickets/ac-67bf5) is limited to
-  syntax on the shared grammar,
-  [ac-60b0b](https://sonos.scapedeck.com/docs/ac-tickets/ac-60b0b) owns
-  evaluation semantics, and
-  [ac-d98bd](https://sonos.scapedeck.com/docs/ac-tickets/ac-d98bd) maps the
-  resulting structured failures into runtime/debugger decisions. Finally,
-  [ac-7b681](https://sonos.scapedeck.com/docs/ac-tickets/ac-7b681) records the
-  bounded evidence after all behavior tickets pass.
+- This plan records accepted simple Criterion syntax and evaluation. The
+  completed syntax and isomorphic extraction remain baselines; the reconciled
+  coordinated cutover carries standalone, condition, and runtime/debug behavior.
+  [ac-7b681](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7b681) records
+  bounded evaluator evidence after the behavior candidate, retaining its
+  post-implementation frontier reconciliation gate.
 - [ac-b8d9a](https://sonos.scapedeck.com/docs/ac-tickets/ac-b8d9a) extends the
   finite manifest for grammar-only claims. The env and interpolation surface
   tickets consume that contract; neither fabricates an RFC 2119 level.
