@@ -97,7 +97,7 @@ impl<'a> ComponentReference<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum RuntimeExpressionForm<'a> {
+pub(crate) enum RuntimeExpressionForm<'a> {
     Scalar,
     Header(&'a str),
     Query(&'a str),
@@ -130,6 +130,9 @@ impl<'a> ParsedRuntimeExpression<'a> {
     }
     pub fn namespace(&self) -> RuntimeExpressionNamespace {
         self.namespace
+    }
+    pub(crate) fn form(&self) -> &RuntimeExpressionForm<'a> {
+        &self.form
     }
     pub fn step_output_reference(&self) -> Option<StepOutputReference<'a>> {
         match self.form {

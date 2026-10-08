@@ -15,6 +15,7 @@ use serde_json::{json, Number, Value};
 mod body_pointer_hint;
 mod expression_string;
 mod matches_operator;
+mod resolution;
 mod runtime_expression;
 mod simple_condition;
 
