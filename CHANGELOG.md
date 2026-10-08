@@ -7,21 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-A variable already set in the environment now wins over the same name in a
-`.env` file in the current directory, and loading a `.env` is reported on
-stderr instead of happening silently.
+## [0.8.0] - 2026-10-08
 
-**Upgrade if** you run `arazzo-cli` or `arazzo-mcp` from a directory with a
-`.env` and rely on exported variables taking effect — or check your setup if
-you relied on `.env` overriding them, which it no longer does.
+Runtime expressions and simple conditions now use one canonical Pest grammar,
+with stricter authoring rules, safer evaluation, and more reliable execution.
 
-- **`.env` supplies defaults** — both binaries set a `.env` name only when it
-  is absent from the environment, matching conventional dotenv loaders.
-- **`.env` loading is visible** — a stderr summary of names set, kept, and
-  ignored, plus a warning per unusable line; never a name or value.
+**Upgrade if** you use expressions, parallel retries, cancellation, or
+operation-specific OpenAPI servers. Review the migration notes below first:
+legacy standalone body traversal and non-spec simple-condition operators are
+rejected, and existing environment variables now take precedence over `.env`.
+
+- **Canonical expressions** — parsed runtime expressions and simple conditions
+  share a grammar; validation provides conservative JSON Pointer migration hints.
+- **Predictable conditions** — complete parsing, short-circuit evaluation,
+  strict boolean/null truth, and exact comparison of represented integers.
+- **Reliable execution** — plain retries stay parallel, step attempts retain
+  their own outputs, and cancellation cannot overwrite a completed outcome.
+- **Correct endpoints** — operation and path-item servers take precedence for
+  operationId targets resolved from source descriptions.
+- **Safer inputs** — XML admission limits, a patched TLS dependency, and visible
+  `.env` loading that preserves existing environment values.
 
 ### Changed
 
+- Required-expression fields, including outputs and Selector/Criterion
+  contexts, reject legacy standalone dotted/bracket body traversal. Replace
+  `$response.body.status` with `$response.body#/status`; use RFC 6901 escaping
+  for literal keys. Wildcards and filters need an appropriate typed JSONPath
+  criterion or Selector Object, not a JSON Pointer substitution. Bare XPath
+  output strings also require a Selector Object with an explicit `xpath-10`
+  version, context, and selector.
+- Literal-capable Parameter/payload fields retain ordinary strings, including
+  `$USD` and unbraced legacy traversal text. Use a canonical expression for
+  selection, or `{$response.body#/status}` to embed it in text. Only `{$`
+  starts an embedded expression; other braces remain literal. Missing values
+  render as `null` in interpolated text and retain diagnostics.
+- Simple conditions reject `contains`, `matches`, `in`, double-quoted string
+  literals, and chained comparisons. Use single quotes, double an apostrophe
+  to escape it, and use typed regex/JSONPath criteria where appropriate.
+  Property/index operators remain valid inside simple conditions.
+- Simple conditions parse fully before short-circuit evaluation. Syntax or
+  evaluation errors make the owning condition false, while ordinary Step
+  failure routing and later eligible Actions remain possible. Detailed
+  evaluation results retain diagnostics; this release does not complete
+  ordinary CLI/MCP/DAP presentation of every condition error.
+- Numbers retain existing i64/u64/finite-f64 storage. Plain integer literals
+  and numeric strings without fractions/exponents must fit `[-2^63, 2^64-1]`;
+  fraction/exponent conversion rejects overflow and nonzero underflow to zero.
+  Represented integers and mixed integer/float comparisons avoid rounding the
+  integer to f64. Loader rounding and decimal precision limits remain.
+- Numeric-string coercion applies to all six comparisons when exactly one
+  operand is numeric; the string must match JSON-number syntax completely.
+  Two strings remain case-insensitive text. Exactly one null/missing operand
+  makes every comparison false, including `!=`; use `!(value == null)` for
+  existence. The specification's null prose/example contradiction remains
+  documented locally, and full Arazzo compliance is not claimed.
+- Plain retries without a step/workflow target now run within parallel
+  dependency levels. Cases that still require sequential execution report
+  their reason through events, verbose CLI output, and trace
+  `run.sequentialFallbacks`.
 - `.env` loading in `arazzo-cli` and `arazzo-mcp` no longer overwrites a
   variable that is already set, including one set to the empty string. To use
   the file's value, unset the variable before running.
@@ -30,6 +74,32 @@ you relied on `.env` overriding them, which it no longer does.
   line number and reason for each line that has no `=`, an empty name, a NUL
   byte, or cannot be read. Previously such lines were dropped silently. stdout,
   including `--json` output and `arazzo-mcp` framing, is unchanged.
+
+### Fixed
+
+- Route source-description operationId targets through operation-level,
+  path-item-level, then document-level OpenAPI servers. Refuse an unusable
+  declared server before dispatch instead of selecting a higher-level server.
+- Preserve each sequential step attempt's own outputs, retain parallel sibling
+  events/traces after a failure, and deliver parallel observer callbacks in
+  stream order. Single-step runs announce and complete attempts consistently.
+- Keep cancelled invocations from being reported as completed, and keep late
+  cancellation from replacing an already reported outcome.
+- Generate canonical body JSON Pointers, and migrate bundled examples to the
+  enforced expression grammar and typed Selector Objects.
+- Preview typed Selector Object outputs correctly in the debugger before the
+  step has executed. Validate inherited component-action parameters once at
+  their definition while continuing to validate local overrides.
+- Reject XML exceeding the nesting limit or containing DTD entity declarations
+  before XPath parsing. Update locked rustls to 0.23.45 for RUSTSEC-2026-0285.
+- Make conformance evidence scanning handle Rust lifetimes and reject
+  unterminated block comments with the source filename.
+
+### Build and release
+
+- Pin Rust 1.98.1 for development, CI, and release builds; MSRV remains 1.88.
+- Fetch checksum-verified vendored specifications before compiling tests, and
+  write their checksum manifest in portable text-mode form on every platform.
 
 ## [0.7.0] - 2026-09-14
 

@@ -51,7 +51,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
 | **JSON output** | `--json` on every command for scripting and CI integration |
-| **Expression language** | `$inputs`, `$steps`, `$response`, XPath, JSON Pointer, interpolation |
+| **Expression language** | `$inputs`, `$steps`, `$response`, JSON Pointer, interpolation |
 | **Arazzo 1.1 selectors** | Typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
 | **Control flow** | `onSuccess`/`onFailure` actions with goto, retry (with backoff), and end |
@@ -61,7 +61,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
-Some of the above (bare XPath outputs and the `operationPath`/`sourceDescriptions[].url` routing idiom) are arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+The `operationPath`/`sourceDescriptions[].url` routing idiom includes arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
 ## Contents
 
@@ -385,11 +385,10 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `reference: $components.parameters.<name>` on a Parameter | Named parameter component, via a Reusable Object's `reference` field |
 | `reference: $components.successActions\|failureActions.<name>` on an action | Resolves the named action component (the specification's Reusable Object form); `value` is ignored for actions |
 | `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; retained for compatibility and overridden by `reference` when both are present |
-| `//xpath/expression` (**arazzo-cli extension**, retained legacy form) | XML/HTML extraction — prefer the [Selector Object](#arazzo-11-selector-objects) form (`type: {type: xpath, version: xpath-10}`) for new workflows |
 
 **Authoring body and payload references:** Use the bare `$request.body`, `$response.body`, or `$message.payload` for the whole value, or append a `#` JSON Pointer for a member. For nested `{ "a": { "b": 1 } }`, use `$response.body#/a/b`; for a literal property named `a.b`, use `$response.body#/a.b`. Escape `~` as `~0` and `/` as `~1` in each token: `{ "a~b/c": 1 }` uses `$response.body#/a~0b~1c`.
 
-The current evaluator still accepts legacy dotted/bracket standalone traversal. Pointer-only authoring is the accepted target; exact-expression enforcement has not landed yet. After that cutover, required-expression fields such as outputs and Selector/Criterion contexts will reject standalone `$response.body.status` with `invalidExpression` and pointer guidance. At that stage, literal-capable Parameter/payload fields will preserve ordinary unbraced text such as `$USD` or `$response.body.status` as literal strings under the accepted classification policy; use `$response.body#/status` when selection is intended. This is separate from simple conditions: `$response.body.status == 'active'` and `$response.body.items[0].id == 7` use valid property/index operators, not standalone dotted expressions. Filters and wildcards require a Selector Object or typed criterion where that field permits one; they have no general pointer replacement.
+Starting with v0.8.0, required-expression fields such as outputs and Selector/Criterion contexts reject standalone `$response.body.status` with `invalidExpression` and pointer guidance. Use `$response.body#/status` when selection is intended. Literal-capable Parameter/payload fields preserve ordinary unbraced text such as `$USD` or `$response.body.status` as literal strings; `{$response.body#/status}` embeds a selection in text. Only `{$` opens an embedded expression; other braces are literal. This is separate from simple conditions: `$response.body.status == 'active'` and `$response.body.items[0].id == 7` use valid property/index operators. Filters and wildcards require a Selector Object or typed criterion where that field permits one; they have no general pointer replacement.
 
 **Not implemented:**
 - `$response.query.<name>` and `$response.path.<name>` are listed by the specification but not resolved by arazzo-cli — they evaluate to `null`. Only `$response.header.<name>` and `$response.body...` are supported on `$response`.
@@ -410,7 +409,7 @@ A criterion is decided by nodelist cardinality alone: one or more selected nodes
 
 Three conservative admission budgets are applied before the parser or the evaluator runs: at most 16,384 UTF-8 bytes per query, at most 128 combined occurrences of the raw bytes `.` `[` `(` `!` `&` `|` in a query (counted in quoted and escaped literals too), and at most 128 nested containers in the queried context. Exceeding one names the resource and the limit. `match()` and `search()` delegate to an [I-Regexp](https://www.rfc-editor.org/rfc/rfc9485.html) matcher and inherit its own pattern, repetition, nesting, and compiled-matcher limits; an invalid pattern yields logical false, while a resource or backend failure invalidates the whole query — even under negation — rather than quietly reading as false. These are explicit resource budgets, **not** a universal CPU, heap, or result-size quota for every query, and arazzo-cli does not claim 100% RFC 9535 Compliance Test Suite conformance. The engine is [`serde_json_path`](https://github.com/hiltontj/serde_json_path) 0.7.2 with one eight-line recursive numeric-equality repair vendored under [`vendor/serde_json_path_core`](vendor/serde_json_path_core/PATCHES.md), which records the provenance, the checksum, and the criterion for dropping the patch.
 
-This typed surface is distinct from JSON Pointer body access and from the legacy runtime-expression traversal awaiting removal — see [JSONPath](#jsonpath) under Success Criteria.
+This typed surface is distinct from JSON Pointer body access and simple-condition property/index operators — see [JSONPath](#jsonpath) under Success Criteria.
 
 ### Arazzo 1.1 Selector Objects
 
@@ -432,7 +431,7 @@ Runtime JSONPath execution accepts an omitted version or `version: rfc9535`; `dr
 
 All selector callers use the same selection engine — RFC 9535 for `jsonpath`. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in query/document order. Invalid syntax, unsupported runtime versions, admission-limit rejections, and zero matches produce trace or dry-run warnings; only the last of those is a legitimate selection, and a JSONPath failure is never written into a request body as `null`. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
 
-For XPath outputs specifically, prefer the Selector Object form with an explicit version (`type: {type: xpath, version: xpath-10}`) over the bare `//xpath/expression` value in the table above — the Selector Object is the specification-conformant 1.1 form; the bare form is a retained arazzo-cli extension kept for compatibility with older workflows.
+For XPath outputs, use a Selector Object with an explicit version (`type: {type: xpath, version: xpath-10}`). Starting with v0.8.0, bare `//xpath/expression` output strings are rejected as invalid runtime expressions; put the XPath in the Selector Object's `selector` field and supply its `context`.
 
 ### Specification Conformance: Extensions and Gaps
 
@@ -648,9 +647,9 @@ successCriteria:
       version: rfc9535
 ```
 
-The current legacy runtime-expression traversal still accepts wildcards, array length (`.#`), and bracket/dot filters. These are existing **arazzo-cli extensions** awaiting removal, not recommended authoring syntax. Simple-condition property de-reference (`.`) and zero-based array indexing (`[0]`) remain separate valid condition operators. A filter can select zero, one, or many values; choose a typed criterion for existence, or a Selector Object for value selection, checking the destination field and intended cardinality. A JSON Pointer selects one known location and cannot substitute for a wildcard or filter.
+Starting with v0.8.0, standalone runtime expressions reject legacy wildcards, array length (`.#`), and bracket/dot filters. Simple-condition property de-reference (`.`) and zero-based array indexing (`[0]`) remain separate valid condition operators. A filter can select zero, one, or many values; choose a typed criterion for existence, or a Selector Object for value selection, checking the destination field and intended cardinality. A JSON Pointer selects one known location and cannot substitute for a wildcard or filter.
 
-The two surfaces do not share syntax. Every GJSON form is rejected on a typed JSONPath criterion, Selector Object, or replacement target with an `invalid JSONPath syntax` diagnostic. Legacy behavior controls remain until the coordinated evaluator cutover; this documentation migration does not claim enforcement is complete.
+The two surfaces do not share syntax. Every GJSON form is rejected on a typed JSONPath criterion, Selector Object, or replacement target with an `invalid JSONPath syntax` diagnostic. In literal-capable fields, an unbraced legacy expression can remain literal text; migrate those fields explicitly rather than relying on validation to identify every intended selection.
 
 ## Control Flow
 
