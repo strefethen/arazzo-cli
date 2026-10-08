@@ -44,6 +44,10 @@ done
 
 : >SHA256SUMS
 for doc in $DOCS; do
-    sha256 "$doc" >>SHA256SUMS
+    # sha256sum defaults to binary mode on Windows (Git Bash) and marks the
+    # path with "*". The digest is identical, so write the text-mode two-space
+    # form everywhere; otherwise SHA256SUMS differs by platform and CI's
+    # "git diff --exit-code" after fetching fails on the Windows runner.
+    sha256 "$doc" | sed 's/ \*/  /' >>SHA256SUMS
 done
 echo "wrote $(pwd)/SHA256SUMS"
