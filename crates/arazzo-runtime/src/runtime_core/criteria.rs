@@ -150,10 +150,15 @@ pub(crate) fn evaluate_criterion_detailed(
                 }
             }
             _ => {
-                let (result, cond_warnings) =
-                    eval.evaluate_condition_with_diagnostics(&criterion.condition);
-                expr_warnings.extend(cond_warnings);
-                result
+                let evaluation = eval.evaluate_condition_detailed(&criterion.condition);
+                expr_warnings.extend(evaluation.warnings);
+                error = evaluation.error.map(|error| {
+                    format!(
+                        "invalid simple condition at byte {}: {}",
+                        error.byte_offset, error.message
+                    )
+                });
+                evaluation.result
             }
         }
     };
@@ -574,5 +579,67 @@ mod tests {
         };
         assert!(error.contains("xpath-31"), "got: {error}");
         assert!(error.contains("xpath-10"), "got: {error}");
+    }
+}
+
+#[cfg(test)]
+mod simple_condition_adapter_tests {
+    use super::{evaluate_criterion_detailed, RegexCache};
+    use arazzo_expr::{EvalContext, ExpressionEvaluator};
+    use arazzo_spec::SuccessCriterion;
+    use serde_json::json;
+
+    #[test]
+    fn detailed_simple_errors_have_exact_text_and_no_synthetic_warning() {
+        let evaluator = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!({"nil":null})),
+            ..EvalContext::default()
+        });
+        let cache = RegexCache::new();
+        for (condition, expected) in [
+            (
+                "1",
+                "invalid simple condition at byte 0: boolean or null required",
+            ),
+            (
+                "$response.body.nil.x == null",
+                "invalid simple condition at byte 18: property access requires an object",
+            ),
+            (
+                "null < null",
+                "invalid simple condition at byte 5: ordering requires numbers or strings",
+            ),
+        ] {
+            let criterion = SuccessCriterion {
+                condition: condition.to_owned(),
+                ..SuccessCriterion::default()
+            };
+            let evaluation = evaluate_criterion_detailed(&criterion, &evaluator, None, &cache);
+            assert_eq!(evaluation.error.as_deref(), Some(expected));
+            assert!(!evaluation.matched);
+            assert!(!evaluation.condition_result);
+            assert!(evaluation.warnings.is_empty());
+        }
+        let criterion = SuccessCriterion {
+            condition: "$inputs.first == null && $inputs.second == null && 1".to_owned(),
+            ..SuccessCriterion::default()
+        };
+        let evaluation = evaluate_criterion_detailed(&criterion, &evaluator, None, &cache);
+        assert!(evaluation.error.is_some());
+        assert_eq!(
+            evaluation
+                .warnings
+                .iter()
+                .map(|warning| warning.expression.as_str())
+                .collect::<Vec<_>>(),
+            ["$inputs.first", "$inputs.second"]
+        );
+        let criterion = SuccessCriterion {
+            condition: "false".to_owned(),
+            ..SuccessCriterion::default()
+        };
+        let evaluation = evaluate_criterion_detailed(&criterion, &evaluator, None, &cache);
+        assert!(!evaluation.matched);
+        assert!(evaluation.error.is_none());
     }
 }

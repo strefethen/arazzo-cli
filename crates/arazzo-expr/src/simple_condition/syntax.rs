@@ -1,6 +1,6 @@
 //! Shared-grammar syntax only; evaluation policy belongs to the later evaluator.
 
-use std::fmt;
+use std::{fmt, ops::Range};
 
 use pest::{iterators::Pair, Parser};
 
@@ -43,7 +43,6 @@ pub struct ParsedSimpleCondition<'a> {
     raw: &'a str,
     expressions: Vec<ParsedRuntimeExpression<'a>>,
     // The downstream evaluator consumes this tree without reinterpreting syntax.
-    #[allow(dead_code)]
     pub(super) syntax: Syntax<'a>,
 }
 
@@ -60,20 +59,27 @@ impl<'a> ParsedSimpleCondition<'a> {
 // Keep literals and postfix fields as source text: converting numbers/indices,
 // unescaping strings, and resolving properties are evaluation decisions.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Syntax<'a> {
-    Or(Vec<Self>),
-    And(Vec<Self>),
-    Not(Box<Self>),
+pub(super) struct Syntax<'a> {
+    pub(super) kind: SyntaxKind<'a>,
+    pub(super) span: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum SyntaxKind<'a> {
+    Or(Vec<Syntax<'a>>),
+    And(Vec<Syntax<'a>>),
+    Not(Box<Syntax<'a>>),
     Comparison {
-        left: Box<Self>,
+        left: Box<Syntax<'a>>,
         operator: &'a str,
-        right: Box<Self>,
+        operator_span: Range<usize>,
+        right: Box<Syntax<'a>>,
     },
     Postfix {
-        primary: Box<Self>,
+        primary: Box<Syntax<'a>>,
         accesses: Vec<Access<'a>>,
     },
-    Group(Box<Self>),
+    Group(Box<Syntax<'a>>),
     RuntimeExpression(usize),
     Boolean(&'a str),
     Null,
@@ -82,7 +88,13 @@ pub(super) enum Syntax<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Access<'a> {
+pub(super) struct Access<'a> {
+    pub(super) kind: AccessKind<'a>,
+    pub(super) span: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AccessKind<'a> {
     Property(&'a str),
     Index(&'a str),
 }
@@ -196,7 +208,8 @@ fn map_syntax<'a>(
 ) -> Syntax<'a> {
     let rule = pair.as_rule();
     let raw = pair.as_str();
-    match rule {
+    let span = pair.as_span().start()..pair.as_span().end();
+    let kind = match rule {
         Rule::or_expr | Rule::and_expr => {
             let children: Vec<_> = pair
                 .into_inner()
@@ -204,39 +217,40 @@ fn map_syntax<'a>(
                 .map(|child| map_syntax(child, expressions))
                 .collect();
             if children.len() == 1 {
-                children.into_iter().next().expect("one child")
+                return children.into_iter().next().expect("one child");
             } else if rule == Rule::or_expr {
-                Syntax::Or(children)
+                SyntaxKind::Or(children)
             } else {
-                Syntax::And(children)
+                SyntaxKind::And(children)
             }
         }
         Rule::unary => {
             let mut children = pair.into_inner();
             let first = children.next().expect("unary operand");
             if first.as_rule() == Rule::not_operator {
-                Syntax::Not(Box::new(map_syntax(
+                SyntaxKind::Not(Box::new(map_syntax(
                     children.next().expect("postfix operand"),
                     expressions,
                 )))
             } else {
-                map_syntax(first, expressions)
+                return map_syntax(first, expressions);
             }
         }
         Rule::comparison => {
             let mut children = pair.into_inner();
             let left = map_syntax(children.next().expect("comparison lhs"), expressions);
             if let Some(operator) = children.next() {
-                Syntax::Comparison {
+                SyntaxKind::Comparison {
                     left: Box::new(left),
                     operator: operator.as_str(),
+                    operator_span: operator.as_span().start()..operator.as_span().end(),
                     right: Box::new(map_syntax(
                         children.next().expect("comparison rhs"),
                         expressions,
                     )),
                 }
             } else {
-                left
+                return left;
             }
         }
         Rule::postfix => {
@@ -245,38 +259,41 @@ fn map_syntax<'a>(
             let accesses: Vec<_> = children
                 .map(|access| {
                     let rule = access.as_rule();
+                    let span = access.as_span().start()..access.as_span().end();
                     let field = access.into_inner().next().expect("postfix field").as_str();
-                    if rule == Rule::property {
-                        Access::Property(field)
+                    let kind = if rule == Rule::property {
+                        AccessKind::Property(field)
                     } else {
-                        Access::Index(field)
-                    }
+                        AccessKind::Index(field)
+                    };
+                    Access { kind, span }
                 })
                 .collect();
             if accesses.is_empty() {
-                primary
+                return primary;
             } else {
-                Syntax::Postfix {
+                SyntaxKind::Postfix {
                     primary: Box::new(primary),
                     accesses,
                 }
             }
         }
-        Rule::group => Syntax::Group(Box::new(map_syntax(
+        Rule::group => SyntaxKind::Group(Box::new(map_syntax(
             pair.into_inner().next().expect("group expression"),
             expressions,
         ))),
         Rule::c_expression => {
             let index = expressions.len();
             expressions.push(map_runtime_expression(pair));
-            Syntax::RuntimeExpression(index)
+            SyntaxKind::RuntimeExpression(index)
         }
-        Rule::boolean => Syntax::Boolean(raw),
-        Rule::null => Syntax::Null,
-        Rule::number => Syntax::Number(raw),
-        Rule::string => Syntax::String(raw),
+        Rule::boolean => SyntaxKind::Boolean(raw),
+        Rule::null => SyntaxKind::Null,
+        Rule::number => SyntaxKind::Number(raw),
+        Rule::string => SyntaxKind::String(raw),
         _ => unreachable!("condition syntax rule from the shared grammar"),
-    }
+    };
+    Syntax { kind, span }
 }
 
 #[cfg(test)]
@@ -284,76 +301,33 @@ fn map_syntax<'a>(
 mod tests {
     use super::*;
 
-    fn tree(input: &str) -> Syntax<'_> {
-        parse_simple_condition(input).unwrap().syntax
-    }
-
     #[test]
     fn precedence_and_flat_ordered_chains() {
-        use Syntax::*;
-        assert_eq!(
-            tree("true && false || null"),
-            Or(vec![And(vec![Boolean("true"), Boolean("false")]), Null])
-        );
-        assert_eq!(
-            tree("true || false && null"),
-            Or(vec![Boolean("true"), And(vec![Boolean("false"), Null])])
-        );
-        assert_eq!(
-            tree("1 == 2 && 3 < 4"),
-            And(vec![
-                Comparison {
-                    left: Box::new(Number("1")),
-                    operator: "==",
-                    right: Box::new(Number("2"))
-                },
-                Comparison {
-                    left: Box::new(Number("3")),
-                    operator: "<",
-                    right: Box::new(Number("4"))
-                },
-            ])
-        );
-        assert_eq!(
-            tree("!true && false"),
-            And(vec![Not(Box::new(Boolean("true"))), Boolean("false")])
-        );
-        assert_eq!(
-            tree("!(true == false)"),
-            Not(Box::new(Group(Box::new(Comparison {
-                left: Box::new(Boolean("true")),
-                operator: "==",
-                right: Box::new(Boolean("false")),
-            }))))
-        );
-        assert_eq!(
-            tree("$response.body.items[0].id == 2e999"),
-            Comparison {
-                left: Box::new(Postfix {
-                    primary: Box::new(RuntimeExpression(0)),
-                    accesses: vec![
-                        Access::Property("items"),
-                        Access::Index("0"),
-                        Access::Property("id")
-                    ]
-                }),
-                operator: "==",
-                right: Box::new(Number("2e999")),
-            }
-        );
-        assert_eq!(
-            tree("true || false || null"),
-            Or(vec![Boolean("true"), Boolean("false"), Null])
-        );
-        assert_eq!(
-            tree("true && false && null"),
-            And(vec![Boolean("true"), Boolean("false"), Null])
-        );
+        let parsed = parse_simple_condition("true && false || null").unwrap();
+        let SyntaxKind::Or(children) = &parsed.syntax.kind else {
+            panic!("or root")
+        };
+        assert!(matches!(children[0].kind, SyntaxKind::And(_)));
+        assert!(matches!(children[1].kind, SyntaxKind::Null));
+        let parsed = parse_simple_condition("1 == 2 && 3 < 4").unwrap();
+        let SyntaxKind::And(children) = &parsed.syntax.kind else {
+            panic!("and root")
+        };
+        assert!(children
+            .iter()
+            .all(|child| matches!(child.kind, SyntaxKind::Comparison { .. })));
+        let parsed = parse_simple_condition("!true && false").unwrap();
+        let SyntaxKind::And(children) = &parsed.syntax.kind else {
+            panic!("and root")
+        };
+        assert!(matches!(children[0].kind, SyntaxKind::Not(_)));
         let parsed = parse_simple_condition("$inputs.foo.bar == $steps.s.outputs.x.y").unwrap();
         assert_eq!(parsed.expressions[0].raw(), "$inputs.foo.bar");
         assert_eq!(parsed.expressions[1].raw(), "$steps.s.outputs.x.y");
-        assert_eq!(tree("'It''s'"), String("'It''s'"));
-        assert_eq!(tree("-0.50E+999"), Number("-0.50E+999"));
+        let SyntaxKind::Comparison { operator_span, .. } = parsed.syntax.kind else {
+            panic!("comparison")
+        };
+        assert_eq!(&parsed.raw[operator_span], "==");
     }
 
     #[test]

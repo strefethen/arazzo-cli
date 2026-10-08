@@ -247,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn intermediate_candidate_keeps_standalone_and_condition_routes_legacy() {
+    fn coordinated_cutover_preserves_conditions_and_rejects_standalone_postfix() {
         let evaluator = evaluator();
         for condition in [
             "$response.body.items[0].id == 7",
@@ -259,10 +259,10 @@ mod tests {
                 "{condition}"
             );
         }
-        assert_eq!(
-            evaluator.evaluate_with_diagnostics("$response.body.items[0].id"),
-            (json!(7), Vec::new())
-        );
+        let (value, warnings) = evaluator.evaluate_with_diagnostics("$response.body.items[0].id");
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("invalid Runtime Expression"));
         assert_eq!(
             evaluator.evaluate_with_diagnostics("$response.body#/items/0/id"),
             (json!(7), Vec::new())

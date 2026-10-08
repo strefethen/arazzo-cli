@@ -511,37 +511,23 @@ async fn gjson_replacement_targets_and_values_leave_the_body_unchanged() {
     }
 }
 
-/// Control for the scope limit: the separate GJSON dot-path extension on
-/// Arazzo runtime expressions (`$response.body.…`) is not a typed JSONPath
-/// surface and is unchanged by the RFC 9535 cutover. The same three forms that
-/// a `type: jsonpath` selector rejects still resolve here, with no warning.
-#[tokio::test]
-async fn runtime_expression_gjson_dot_path_extension_is_unchanged() {
-    let step = output_step(
-        "legacy",
-        vec![
-            (
-                "count",
-                OutputValue::RuntimeExpression("$response.body.items.#".to_string()),
-            ),
-            (
-                "first",
-                OutputValue::RuntimeExpression(r#"$response.body.items.#(sku=="A").q"#.to_string()),
-            ),
-            (
-                "all",
-                OutputValue::RuntimeExpression(
-                    r#"$response.body.items.#(sku=="A")#.q"#.to_string(),
-                ),
-            ),
-        ],
-    );
-    let (result, _) = execute(workflow(vec![step]), BTreeMap::new()).await;
-    outputs(&result);
-
-    let trace = result.trace_steps()[0];
-    assert_eq!(trace.outputs.get("count"), Some(&json!(3)));
-    assert_eq!(trace.outputs.get("first"), Some(&json!(1)));
-    assert_eq!(trace.outputs.get("all"), Some(&json!([1, 2])));
-    assert!(trace.warnings.is_empty(), "{:?}", trace.warnings);
+/// The coordinated evaluator cutover rejects obsolete standalone GJSON suffixes.
+#[test]
+fn runtime_expression_gjson_dot_path_extension_is_unchanged() {
+    let evaluator = arazzo_expr::ExpressionEvaluator::new(arazzo_expr::EvalContext {
+        response_body: Some(parse_json(BODY)),
+        ..Default::default()
+    });
+    for expression in [
+        "$response.body.items.#",
+        r#"$response.body.items.#(sku=="A").q"#,
+        r#"$response.body.items.#(sku=="A")#.q"#,
+    ] {
+        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression);
+        assert_eq!(value, Value::Null);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].expression, expression);
+        assert!(warnings[0].message.contains("invalid Runtime Expression"));
+    }
+    assert_eq!(evaluator.evaluate("$response.body#/items/0/q"), json!(1));
 }

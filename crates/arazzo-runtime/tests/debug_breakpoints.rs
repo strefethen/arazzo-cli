@@ -138,6 +138,41 @@ async fn conditional_breakpoint_respects_expression() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_breakpoint_conditions_never_match() {
+    for condition in [
+        "true || (",
+        "!($inputs.code[0] == 1)",
+        "($inputs.code[0] == 1) || true",
+        "1",
+        "false",
+    ] {
+        let controller = Arc::new(DebugController::new());
+        let engine = build_engine(Arc::clone(&controller));
+        assert!(controller
+            .set_breakpoints(vec![
+                StepBreakpoint::new("wf", "s1").with_condition(condition)
+            ])
+            .is_ok());
+        let handle = engine.execute("wf", inputs_with_code(429));
+        // A bad condition must not stop execution; bound the wait so a regression
+        // can resume and collect the workflow instead of hanging the test.
+        let stopped = controller
+            .wait_for_stop_count(1, Duration::from_millis(100))
+            .unwrap_or_else(|error| panic!("waiting for invalid breakpoint: {error}"));
+        if stopped {
+            let _ = controller.resume();
+        }
+        let result = handle.collect().await;
+        assert!(!stopped, "invalid or false condition matched: {condition}");
+        assert!(result.outputs.is_ok());
+        assert!(controller
+            .stop_events()
+            .unwrap_or_else(|error| panic!("stop events: {error}"))
+            .is_empty());
+    }
+}
+
 fn build_engine(controller: Arc<DebugController>) -> arazzo_runtime::Engine {
     let spec = ArazzoSpec {
         arazzo: "1.0.0".to_string(),

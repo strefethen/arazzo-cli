@@ -49,6 +49,12 @@ async fn evaluate_and_watch_expressions_at_pause() {
     };
     assert!(cond);
 
+    let false_decision = controller.evaluate_condition("false");
+    // Dots belong to an input's exact name; grouping makes this property access.
+    let invalid = "'é' == 'É' && ($inputs.code).x == 1";
+    let invalid_decision = controller.evaluate_condition(invalid);
+    let non_boolean_decision = controller.evaluate_condition("1");
+
     let watches = match controller.evaluate_watches(&[
         "$inputs.code".to_string(),
         "$steps.s1.outputs.code".to_string(),
@@ -69,6 +75,20 @@ async fn evaluate_and_watch_expressions_at_pause() {
     if let Err(err) = result.outputs {
         panic!("workflow execution failed: {err}");
     }
+    assert_eq!(false_decision, Ok(false));
+    assert_eq!(
+        invalid_decision,
+        Err(format!(
+            "invalid simple condition at byte {}: property access requires an object",
+            invalid
+                .find(".x")
+                .unwrap_or_else(|| panic!("access offset"))
+        ))
+    );
+    assert_eq!(
+        non_boolean_decision,
+        Err("invalid simple condition at byte 0: boolean or null required".to_owned())
+    );
 }
 
 fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime::Engine {
@@ -91,7 +111,10 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
                 Step {
                     step_id: "s1".to_string(),
                     target: Some(StepTarget::OperationPath("/echo".to_string())),
-                    outputs: BTreeMap::from([("code".to_string(), "code".to_string().into())]),
+                    outputs: BTreeMap::from([(
+                        "code".to_string(),
+                        "$response.body#/code".to_string().into(),
+                    )]),
                     ..Step::default()
                 },
                 Step {

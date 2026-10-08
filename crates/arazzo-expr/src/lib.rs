@@ -3,19 +3,17 @@
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde_json::{json, Number, Value};
+use serde_json::Value;
 
 mod body_pointer_hint;
 mod expression_string;
 mod interpolation;
-mod matches_operator;
 mod resolution;
 mod runtime_expression;
 mod simple_condition;
@@ -28,7 +26,8 @@ pub use expression_string::{
 pub use body_pointer_hint::body_pointer_migration_hint;
 
 pub use simple_condition::{
-    parse_simple_condition, ConditionError, ConditionErrorKind, ParsedSimpleCondition,
+    parse_simple_condition, ConditionError, ConditionErrorKind, ConditionEvaluation,
+    ParsedSimpleCondition,
 };
 
 pub use runtime_expression::{
@@ -166,296 +165,22 @@ impl ExpressionEvaluator {
     /// Evaluate an expression, returning both the value and any diagnostic
     /// warnings produced when resolution falls back to `Null`.
     pub fn evaluate_with_diagnostics(&self, expr: &str) -> (Value, Vec<ExpressionWarning>) {
-        let mut warnings = Vec::new();
-
-        let Some(rest) = expr.strip_prefix('$') else {
-            return (Value::String(expr.to_string()), warnings);
-        };
-
-        // Split into top-level namespace and remainder after the first `.`.
-        // Standalone keywords (statusCode, method, url) have no remainder.
-        let (namespace, remainder) = match rest.split_once('.') {
-            Some((ns, rem)) => (ns, Some(rem)),
-            None => (rest, None),
-        };
-
-        let value = match namespace {
-            "inputs" => {
-                let full = remainder.unwrap_or("");
-                if full.contains('#') || !full.contains('.') {
-                    resolve_named_value(&self.ctx.inputs, full, expr, &mut warnings, |name| {
-                        format!("input \"{name}\" not found in context")
-                    })
-                } else {
-                    let (key, sub_path) = match full.split_once('.') {
-                        Some((k, rest)) => (k, rest),
-                        None => (full, ""),
-                    };
-                    match self.ctx.inputs.get(key) {
-                        Some(root) => {
-                            if sub_path.is_empty() {
-                                root.clone()
-                            } else {
-                                resolve_dot_path(root, sub_path).unwrap_or(Value::Null)
-                            }
-                        }
-                        None => {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: format!("input \"{key}\" not found in context"),
-                            });
-                            Value::Null
-                        }
-                    }
+        match parse_runtime_expression(expr) {
+            Ok(parsed) => resolution::resolve_parsed(&parsed, self.context()).into_public(),
+            Err(error) => {
+                let mut message = error.to_string();
+                if let Some(hint) = body_pointer_migration_hint(expr, &error) {
+                    message.push_str("; ");
+                    message.push_str(&hint);
                 }
+                (
+                    Value::Null,
+                    vec![ExpressionWarning {
+                        expression: expr.to_owned(),
+                        message,
+                    }],
+                )
             }
-
-            "steps" => {
-                let after = remainder.unwrap_or("");
-                if let Some((step_id, output_name)) = after.split_once(".outputs.") {
-                    match self.ctx.steps.get(step_id) {
-                        Some(outputs) => {
-                            resolve_named_value(outputs, output_name, expr, &mut warnings, |name| {
-                                format!("output \"{name}\" not found in step \"{step_id}\"")
-                            })
-                        }
-                        None => {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: format!("step \"{step_id}\" not found in context"),
-                            });
-                            Value::Null
-                        }
-                    }
-                } else {
-                    warnings.push(ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: "invalid $steps expression: expected $steps.<id>.outputs.<key>"
-                            .to_string(),
-                    });
-                    Value::Null
-                }
-            }
-
-            "statusCode" => self
-                .ctx
-                .status_code
-                .map(|code| json!(code))
-                .unwrap_or(Value::Null),
-
-            "method" => self
-                .ctx
-                .method
-                .as_ref()
-                .map(|m| Value::String(m.clone()))
-                .unwrap_or(Value::Null),
-
-            "url" => self
-                .ctx
-                .url
-                .as_ref()
-                .map(|u| Value::String(u.clone()))
-                .unwrap_or(Value::Null),
-
-            "outputs" => {
-                let after = remainder.unwrap_or("");
-                resolve_named_value(&self.ctx.outputs, after, expr, &mut warnings, |name| {
-                    format!("output \"{name}\" not found in context")
-                })
-            }
-
-            "request" => self.resolve_request(remainder.unwrap_or("")),
-
-            "message" => self.resolve_message(expr, remainder.unwrap_or(""), &mut warnings),
-
-            "self" => {
-                if remainder.is_some() {
-                    warnings.push(ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: "invalid $self expression: no sub-path is supported".to_string(),
-                    });
-                    Value::Null
-                } else {
-                    self.ctx.self_uri.as_ref().map_or_else(
-                        || {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: "self URI not found in context".to_string(),
-                            });
-                            Value::Null
-                        },
-                        |self_uri| Value::String(self_uri.clone()),
-                    )
-                }
-            }
-
-            "sourceDescriptions" => {
-                let after = remainder.unwrap_or("");
-                let Some((name, reference)) = after.split_once('.') else {
-                    warnings.push(ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: "invalid $sourceDescriptions expression: expected $sourceDescriptions.<name>.<reference>".to_string(),
-                    });
-                    return (Value::Null, warnings);
-                };
-                match self.ctx.source_descriptions.get(name) {
-                    Some(source) => match reference {
-                        "url" => Value::String(source.url.clone()),
-                        "type" => Value::String(source.type_.clone()),
-                        _ => {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: format!(
-                                    "source description reference \"{reference}\" for \"{name}\" cannot be resolved without loaded source document metadata"
-                                ),
-                            });
-                            Value::Null
-                        }
-                    },
-                    None => {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!("source description \"{name}\" not found in context"),
-                        });
-                        Value::Null
-                    }
-                }
-            }
-
-            "response" => self.resolve_response(remainder.unwrap_or("")),
-
-            "workflows" => {
-                let after = remainder.unwrap_or("");
-                let (wf_id, tail) = match after.split_once('.') {
-                    Some(pair) => pair,
-                    None => {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: "invalid $workflows expression: expected $workflows.<id>.inputs.<name> or $workflows.<id>.outputs.<name>".to_string(),
-                        });
-                        return (Value::Null, warnings);
-                    }
-                };
-                match self.ctx.workflows.get(wf_id) {
-                    Some(state) => {
-                        if let Some(rest) = tail.strip_prefix("inputs.") {
-                            resolve_named_value(&state.inputs, rest, expr, &mut warnings, |name| {
-                                format!("input \"{name}\" not found in workflow \"{wf_id}\"")
-                            })
-                        } else if let Some(rest) = tail.strip_prefix("outputs.") {
-                            resolve_named_value(&state.outputs, rest, expr, &mut warnings, |name| {
-                                format!("output \"{name}\" not found in workflow \"{wf_id}\"")
-                            })
-                        } else {
-                            warnings.push(ExpressionWarning {
-                                expression: expr.to_string(),
-                                message: format!(
-                                    "invalid $workflows.{wf_id} sub-path: expected \"inputs.<name>\" or \"outputs.<name>\""
-                                ),
-                            });
-                            Value::Null
-                        }
-                    }
-                    None => {
-                        warnings.push(ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: format!("workflow \"{wf_id}\" not found in workflows context"),
-                        });
-                        Value::Null
-                    }
-                }
-            }
-
-            _ => {
-                warnings.push(ExpressionWarning {
-                    expression: expr.to_string(),
-                    message: format!("unknown expression namespace \"${rest}\""),
-                });
-                Value::Null
-            }
-        };
-
-        (value, warnings)
-    }
-
-    /// Dispatch `$request.<sub>` expressions.
-    fn resolve_request(&self, remainder: &str) -> Value {
-        if let Some(name) = remainder.strip_prefix("header.") {
-            get_header_case_insensitive(&self.ctx.request_headers, name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null)
-        } else if let Some(name) = remainder.strip_prefix("query.") {
-            self.ctx
-                .request_query
-                .get(name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null)
-        } else if let Some(name) = remainder.strip_prefix("path.") {
-            self.ctx
-                .request_path
-                .get(name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null)
-        } else if let Some(suffix) = remainder.strip_prefix("body") {
-            resolve_body_access(&self.ctx.request_body, suffix)
-        } else {
-            Value::Null
-        }
-    }
-
-    /// Dispatch `$response.<sub>` expressions.
-    fn resolve_response(&self, remainder: &str) -> Value {
-        if let Some(name) = remainder.strip_prefix("header.") {
-            get_header_case_insensitive(&self.ctx.response_headers, name)
-                .map(|v| Value::String(v.clone()))
-                .unwrap_or(Value::Null)
-        } else if let Some(suffix) = remainder.strip_prefix("body") {
-            resolve_body_access(&self.ctx.response_body, suffix)
-        } else {
-            Value::Null
-        }
-    }
-
-    /// Dispatch `$message.<sub>` expressions without assuming a transport.
-    fn resolve_message(
-        &self,
-        expr: &str,
-        remainder: &str,
-        warnings: &mut Vec<ExpressionWarning>,
-    ) -> Value {
-        if let Some(name) = remainder.strip_prefix("header.") {
-            get_header_case_insensitive(&self.ctx.message_headers, name).map_or_else(
-                || {
-                    warnings.push(ExpressionWarning {
-                        expression: expr.to_string(),
-                        message: format!("message header \"{name}\" not found in context"),
-                    });
-                    Value::Null
-                },
-                |value| Value::String(value.clone()),
-            )
-        } else if let Some(suffix) = remainder.strip_prefix("payload") {
-            let Some(payload) = self.ctx.message_payload.as_ref() else {
-                warnings.push(ExpressionWarning {
-                    expression: expr.to_string(),
-                    message: "message payload not found in context".to_string(),
-                });
-                return Value::Null;
-            };
-
-            resolve_body_value(payload, suffix).unwrap_or_else(|| {
-                warnings.push(ExpressionWarning {
-                    expression: expr.to_string(),
-                    message: format!("message payload suffix \"{suffix}\" did not resolve"),
-                });
-                Value::Null
-            })
-        } else {
-            warnings.push(ExpressionWarning {
-                expression: expr.to_string(),
-                message: "invalid $message expression: expected $message.header.<name> or $message.payload[#/pointer]".to_string(),
-            });
-            Value::Null
         }
     }
 
@@ -503,148 +228,6 @@ fn get_header_case_insensitive<'a>(
         .map(|(_, value)| value)
 }
 
-fn resolve_named_value(
-    values: &BTreeMap<String, Value>,
-    reference: &str,
-    expression: &str,
-    warnings: &mut Vec<ExpressionWarning>,
-    missing_value_message: impl FnOnce(&str) -> String,
-) -> Value {
-    let (name, pointer) = reference
-        .split_once('#')
-        .map_or((reference, None), |(name, pointer)| (name, Some(pointer)));
-    let Some(value) = values.get(name) else {
-        warnings.push(ExpressionWarning {
-            expression: expression.to_string(),
-            message: missing_value_message(name),
-        });
-        return Value::Null;
-    };
-
-    pointer.map_or_else(
-        || value.clone(),
-        |pointer| {
-            value.pointer(pointer).cloned().unwrap_or_else(|| {
-                warnings.push(ExpressionWarning {
-                    expression: expression.to_string(),
-                    message: format!(
-                        "JSON Pointer \"{pointer}\" did not resolve in value \"{name}\""
-                    ),
-                });
-                Value::Null
-            })
-        },
-    )
-}
-
-fn index_outside_quotes(input: &str, needle: &str) -> Option<usize> {
-    let mut in_quote: Option<char> = None;
-    let mut prev_backslash = false;
-    for (idx, ch) in input.char_indices() {
-        if let Some(q) = in_quote {
-            if ch == q && !prev_backslash {
-                in_quote = None;
-            }
-            prev_backslash = ch == '\\' && !prev_backslash;
-            continue;
-        }
-        if (ch == '"' || ch == '\'') && !prev_backslash {
-            in_quote = Some(ch);
-            prev_backslash = false;
-            continue;
-        }
-        prev_backslash = ch == '\\' && !prev_backslash;
-        if input[idx..].starts_with(needle) {
-            return Some(idx);
-        }
-    }
-    None
-}
-
-fn parse_value(token: &str) -> Value {
-    let token = token.trim();
-
-    if let Ok(v) = token.parse::<i64>() {
-        return Value::Number(Number::from(v));
-    }
-    if let Ok(v) = token.parse::<f64>() {
-        if let Some(number) = Number::from_f64(v) {
-            return Value::Number(number);
-        }
-    }
-    match token {
-        "true" => Value::Bool(true),
-        "false" => Value::Bool(false),
-        _ => {
-            if token.len() >= 2 {
-                let bytes = token.as_bytes();
-                if (bytes[0] == b'"' && bytes[token.len() - 1] == b'"')
-                    || (bytes[0] == b'\'' && bytes[token.len() - 1] == b'\'')
-                {
-                    let inner = &token[1..token.len() - 1];
-                    let unescaped = inner
-                        .replace("\\\"", "\"")
-                        .replace("\\'", "'")
-                        .replace("\\\\", "\\");
-                    return Value::String(unescaped);
-                }
-            }
-            Value::String(token.to_string())
-        }
-    }
-}
-
-fn compare_values(a: &Value, b: &Value) -> bool {
-    if a.is_null() && b.is_null() {
-        return true;
-    }
-    if a.is_null() || b.is_null() {
-        return false;
-    }
-
-    if let (Some(lhs), Some(rhs)) = (to_f64(a), to_f64(b)) {
-        return f64_approx_eq(lhs, rhs);
-    }
-
-    to_string_value(a) == to_string_value(b)
-}
-
-/// Approximate f64 equality using a scaled epsilon. Handles the common case
-/// where two JSON numbers representing the same value may differ slightly
-/// due to serialization round-trips.
-fn f64_approx_eq(a: f64, b: f64) -> bool {
-    if a == b {
-        return true; // exact match, ±0, infinities
-    }
-    let diff = (a - b).abs();
-    // Scale epsilon by the magnitude of the larger operand (floor at 1.0
-    // so that values near zero use an absolute epsilon).
-    diff <= f64::EPSILON * a.abs().max(b.abs()).max(1.0)
-}
-
-fn compare_ordered(a: &Value, b: &Value) -> Ordering {
-    if let (Some(lhs), Some(rhs)) = (to_f64(a), to_f64(b)) {
-        if f64_approx_eq(lhs, rhs) {
-            return Ordering::Equal;
-        }
-        if lhs < rhs {
-            return Ordering::Less;
-        }
-        return Ordering::Greater;
-    }
-
-    let lhs = to_string_value(a);
-    let rhs = to_string_value(b);
-    lhs.cmp(&rhs)
-}
-
-fn to_f64(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(n) => n.as_f64(),
-        _ => None,
-    }
-}
-
 pub(crate) fn to_string_value(value: &Value) -> Cow<'_, str> {
     match value {
         Value::String(v) => Cow::Borrowed(v.as_str()),
@@ -664,470 +247,11 @@ pub fn is_truthy(value: &Value) -> bool {
     }
 }
 
-fn resolve_body_access(body: &Option<Value>, suffix: &str) -> Value {
-    body.as_ref()
-        .and_then(|body| resolve_body_value(body, suffix))
-        .unwrap_or(Value::Null)
-}
-
-fn resolve_body_value(body: &Value, suffix: &str) -> Option<Value> {
-    if suffix.is_empty() {
-        return Some(body.clone());
-    }
-    if let Some(pointer) = suffix.strip_prefix('#') {
-        return body.pointer(pointer).cloned();
-    }
-    if let Some(path) = suffix.strip_prefix('.') {
-        return resolve_dot_path(body, path).ok();
-    }
-    // Handle bracket notation directly after body: $response.body['key']
-    if suffix.starts_with('[') {
-        return resolve_dot_path(body, suffix).ok();
-    }
-    None
-}
-
-fn resolve_dot_path(root: &Value, path: &str) -> Result<Value, PathError> {
-    if path.is_empty() {
-        return Ok(root.clone());
-    }
-    let tokens = tokenize_path(path)?;
-    if tokens.is_empty() {
-        return Ok(Value::Null);
-    }
-
-    let mut current = vec![root];
-    for (idx, token) in tokens.iter().copied().enumerate() {
-        let is_last = idx + 1 == tokens.len();
-        if matches!(token, PathToken::Hash) && is_last {
-            return Ok(terminal_hash_value(&current));
-        }
-        current = apply_path_token(&current, token);
-        if current.is_empty() {
-            return Ok(Value::Null);
-        }
-    }
-
-    if current.len() == 1 {
-        Ok(current[0].clone())
-    } else {
-        Ok(Value::Array(current.into_iter().cloned().collect()))
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PathToken<'a> {
-    Field(&'a str),
-    Index(usize),
-    Wildcard,
-    Hash,
-    Filter {
-        expr: FilterExpr<'a>,
-        all_matches: bool,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FilterExpr<'a> {
-    path: &'a str,
-    op: Option<FilterOp>,
-    value_raw: &'a str,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FilterOp {
-    Eq,
-    Ne,
-    Gt,
-    Lt,
-    Ge,
-    Le,
-}
-
-fn apply_path_token<'a>(nodes: &[&'a Value], token: PathToken<'a>) -> Vec<&'a Value> {
-    let mut out = Vec::new();
-
-    match token {
-        PathToken::Field(name) => {
-            for node in nodes {
-                if let Some(obj) = node.as_object() {
-                    if let Some(value) = obj.get(name) {
-                        out.push(value);
-                        continue;
-                    }
-                }
-
-                if let Ok(idx) = name.parse::<usize>() {
-                    if let Some(arr) = node.as_array() {
-                        if let Some(value) = arr.get(idx) {
-                            out.push(value);
-                        }
-                    }
-                }
-            }
-        }
-        PathToken::Index(idx) => {
-            for node in nodes {
-                if let Some(arr) = node.as_array() {
-                    if let Some(value) = arr.get(idx) {
-                        out.push(value);
-                    }
-                }
-            }
-        }
-        PathToken::Wildcard => {
-            for node in nodes {
-                if let Some(arr) = node.as_array() {
-                    out.extend(arr.iter());
-                } else if let Some(obj) = node.as_object() {
-                    out.extend(obj.values());
-                }
-            }
-        }
-        PathToken::Hash => {
-            for node in nodes {
-                if let Some(arr) = node.as_array() {
-                    out.extend(arr.iter());
-                }
-            }
-        }
-        PathToken::Filter { expr, all_matches } => {
-            for node in nodes {
-                if let Some(arr) = node.as_array() {
-                    for item in arr {
-                        if filter_matches(item, expr) {
-                            out.push(item);
-                            if !all_matches {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    out
-}
-
-fn terminal_hash_value(nodes: &[&Value]) -> Value {
-    if nodes.len() == 1 {
-        return node_len(nodes[0]).map_or(Value::Null, |len| json!(len));
-    }
-
-    let values = nodes
-        .iter()
-        .map(|node| node_len(node).map_or(Value::Null, |len| json!(len)))
-        .collect::<Vec<_>>();
-    Value::Array(values)
-}
-
-fn node_len(node: &Value) -> Option<usize> {
-    match node {
-        Value::Array(items) => Some(items.len()),
-        Value::Object(items) => Some(items.len()),
-        _ => None,
-    }
-}
-
-fn filter_matches(item: &Value, expr: FilterExpr<'_>) -> bool {
-    let path = expr.path.strip_prefix("@.").unwrap_or(expr.path);
-    let left = if path.is_empty() || path == "@" || path == "$" {
-        item.clone()
-    } else {
-        resolve_dot_path(item, path).unwrap_or(Value::Null)
-    };
-
-    match expr.op {
-        None => is_truthy(&left),
-        Some(op) => {
-            let right = parse_value(expr.value_raw);
-            match op {
-                FilterOp::Eq => compare_values(&left, &right),
-                FilterOp::Ne => !compare_values(&left, &right),
-                FilterOp::Gt => compare_ordered(&left, &right).is_gt(),
-                FilterOp::Lt => compare_ordered(&left, &right).is_lt(),
-                FilterOp::Ge => compare_ordered(&left, &right).is_ge(),
-                FilterOp::Le => compare_ordered(&left, &right).is_le(),
-            }
-        }
-    }
-}
-
-fn tokenize_path(path: &str) -> Result<Vec<PathToken<'_>>, PathError> {
-    let mut tokens = Vec::new();
-    for segment in split_path_segments(path) {
-        push_segment_tokens(segment, &mut tokens, path)?;
-    }
-    Ok(tokens)
-}
-
-fn split_path_segments(path: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-
-    for (idx, ch) in path.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' | '\'' => in_quote = Some(ch),
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '.' if paren_depth == 0 && bracket_depth == 0 => {
-                if start < idx {
-                    out.push(&path[start..idx]);
-                }
-                start = idx + 1;
-            }
-            _ => {}
-        }
-    }
-
-    if start < path.len() {
-        let tail = &path[start..];
-        if !tail.is_empty() {
-            out.push(tail);
-        }
-    }
-
-    out
-}
-
-fn push_segment_tokens<'a>(
-    segment: &'a str,
-    out: &mut Vec<PathToken<'a>>,
-    full_path: &str,
-) -> Result<(), PathError> {
-    let segment = segment.trim();
-    if segment.is_empty() {
-        return Ok(());
-    }
-
-    if segment == "*" {
-        out.push(PathToken::Wildcard);
-        return Ok(());
-    }
-    if segment == "#" {
-        out.push(PathToken::Hash);
-        return Ok(());
-    }
-
-    if segment.starts_with("#(") {
-        if let Some((inner, all_matches)) = parse_filter_segment(segment) {
-            if let Some(expr) = parse_filter_expr(inner) {
-                out.push(PathToken::Filter { expr, all_matches });
-                return Ok(());
-            }
-        }
-        return Err(PathError::InvalidSyntax {
-            path: full_path.to_string(),
-            detail: format!("unbalanced filter expression: {segment}"),
-        });
-    }
-
-    if segment.contains('[') {
-        push_bracket_tokens(segment, out, full_path)?;
-        return Ok(());
-    }
-
-    out.push(PathToken::Field(segment));
-    Ok(())
-}
-
-fn parse_filter_segment(segment: &str) -> Option<(&str, bool)> {
-    if !segment.starts_with("#(") {
-        return None;
-    }
-    if segment.ends_with(")#") {
-        return Some((&segment[2..segment.len() - 2], true));
-    }
-    if segment.ends_with(')') {
-        return Some((&segment[2..segment.len() - 1], false));
-    }
-    None
-}
-
-fn parse_filter_expr(inner: &str) -> Option<FilterExpr<'_>> {
-    let inner = inner.trim();
-    if inner.is_empty() {
-        return None;
-    }
-
-    for (symbol, op) in [
-        (">=", FilterOp::Ge),
-        ("<=", FilterOp::Le),
-        ("==", FilterOp::Eq),
-        ("!=", FilterOp::Ne),
-        (">", FilterOp::Gt),
-        ("<", FilterOp::Lt),
-    ] {
-        if let Some(idx) = index_outside_quotes(inner, symbol) {
-            let path = inner[..idx].trim();
-            let value_raw = inner[idx + symbol.len()..].trim();
-            if path.is_empty() || value_raw.is_empty() {
-                return None;
-            }
-            return Some(FilterExpr {
-                path,
-                op: Some(op),
-                value_raw,
-            });
-        }
-    }
-
-    Some(FilterExpr {
-        path: inner,
-        op: None,
-        value_raw: "",
-    })
-}
-
-fn push_bracket_tokens<'a>(
-    segment: &'a str,
-    out: &mut Vec<PathToken<'a>>,
-    full_path: &str,
-) -> Result<(), PathError> {
-    let mut cursor = 0usize;
-
-    while cursor < segment.len() {
-        let Some(open_rel) = segment[cursor..].find('[') else {
-            break;
-        };
-        let open = cursor + open_rel;
-
-        if cursor < open {
-            out.push(PathToken::Field(&segment[cursor..open]));
-        }
-
-        let Some(close) = find_matching_bracket(segment, open) else {
-            return Err(PathError::InvalidSyntax {
-                path: full_path.to_string(),
-                detail: format!("unclosed bracket in: {segment}"),
-            });
-        };
-        let index_expr = segment[open + 1..close].trim();
-
-        if index_expr == "*" {
-            out.push(PathToken::Wildcard);
-        } else if let Ok(idx) = index_expr.parse::<usize>() {
-            out.push(PathToken::Index(idx));
-        } else if let Some(inner) = parse_bracket_filter_expr(index_expr) {
-            if let Some(expr) = parse_filter_expr(inner) {
-                out.push(PathToken::Filter {
-                    expr,
-                    all_matches: true,
-                });
-            } else {
-                return Err(PathError::InvalidSyntax {
-                    path: full_path.to_string(),
-                    detail: format!("invalid filter expression: {index_expr}"),
-                });
-            }
-        } else if index_expr.starts_with("?(") {
-            return Err(PathError::InvalidSyntax {
-                path: full_path.to_string(),
-                detail: format!("unbalanced filter expression: {index_expr}"),
-            });
-        } else if !index_expr.is_empty() {
-            // Strip surrounding quotes for bracket key access: ['key'] or ["key"]
-            let key = if (index_expr.starts_with('\'') && index_expr.ends_with('\''))
-                || (index_expr.starts_with('"') && index_expr.ends_with('"'))
-            {
-                &index_expr[1..index_expr.len() - 1]
-            } else {
-                index_expr
-            };
-            out.push(PathToken::Field(key));
-        }
-
-        cursor = close + 1;
-    }
-
-    if cursor < segment.len() {
-        out.push(PathToken::Field(&segment[cursor..]));
-    }
-    Ok(())
-}
-
-fn parse_bracket_filter_expr(segment: &str) -> Option<&str> {
-    let trimmed = segment.trim();
-    if trimmed.starts_with("?(") && trimmed.ends_with(')') {
-        Some(trimmed[2..trimmed.len() - 1].trim())
-    } else {
-        None
-    }
-}
-
-fn find_matching_bracket(input: &str, open: usize) -> Option<usize> {
-    let mut bracket_depth = 0usize;
-    let mut paren_depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
-
-    for (idx, ch) in input[open..].char_indices() {
-        let idx = open + idx;
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' | '\'' => in_quote = Some(ch),
-            '(' => paren_depth = paren_depth.saturating_add(1),
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth = bracket_depth.saturating_add(1),
-            ']' => {
-                bracket_depth = bracket_depth.saturating_sub(1);
-                if bracket_depth == 0 && paren_depth == 0 {
-                    return Some(idx);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
     use std::sync::Arc;
 
-    use super::simple_condition::{compare_simple_ordered, compare_simple_values};
-    use super::{
-        compare_ordered, compare_values, parse_value, EvalContext, ExpressionEvaluator,
-        SourceDescriptionContext,
-    };
+    use super::{EvalContext, ExpressionEvaluator, SourceDescriptionContext};
     use proptest::prelude::*;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -1142,7 +266,7 @@ mod tests {
     #[test]
     fn evaluate_literal_and_unknown_expression() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("hello"), json!("hello"));
+        assert_eq!(eval.evaluate("hello"), Value::Null);
         assert_eq!(eval.evaluate("$unknown.thing"), Value::Null);
     }
 
@@ -1223,31 +347,20 @@ mod tests {
                 ]
             })
         );
-        assert_eq!(eval.evaluate("$response.body.user.name"), json!("Bob"));
-        assert_eq!(eval.evaluate("$response.body.arr[0].id"), json!(7));
-        assert_eq!(eval.evaluate("$response.body.arr.0.id"), json!(7));
-        assert_eq!(eval.evaluate("$response.body.arr.#"), json!(1));
-        assert_eq!(
-            eval.evaluate("$response.body.users.#.name"),
-            json!(["Alice", "Bob", "Cara"])
-        );
-        assert_eq!(
-            eval.evaluate(r#"$response.body.users.#(id==2).name"#),
-            json!("Bob")
-        );
-        assert_eq!(
-            eval.evaluate(r#"$response.body.users.#(group=="a")#.id"#),
-            json!([1, 3])
-        );
-        assert_eq!(
-            eval.evaluate("$response.body.users[*].id"),
-            json!([1, 2, 3])
-        );
-        assert_eq!(
-            eval.evaluate(r#"$response.body.users[?(@.group=="a")].id"#),
-            json!([1, 3])
-        );
-        assert_eq!(eval.evaluate("$response.body.missing"), Value::Null);
+        assert_eq!(eval.evaluate("$response.body#/user/name"), json!("Bob"));
+        assert_eq!(eval.evaluate("$response.body#/arr/0/id"), json!(7));
+        for invalid in [
+            "$response.body.user.name",
+            "$response.body.arr[0].id",
+            "$response.body.arr.#",
+            "$response.body.users[*].id",
+            "$response.body.users.#(id==2).name",
+            "$response.body.users[?(@.group=='a')].id",
+        ] {
+            let (value, warnings) = eval.evaluate_with_diagnostics(invalid);
+            assert_eq!(value, Value::Null);
+            assert_eq!(warnings.len(), 1);
+        }
     }
 
     #[test]
@@ -1281,7 +394,7 @@ mod tests {
         for (value, warnings) in [&present, &absent] {
             assert_eq!(*value, Value::Null);
             assert_eq!(warnings.len(), 1);
-            assert!(warnings[0].message.contains("unknown expression namespace"));
+            assert!(warnings[0].message.contains("unknown namespace"));
             assert!(!warnings[0].message.contains(SENTINEL_VALUE));
             assert!(!warnings[0].expression.contains(SENTINEL_VALUE));
         }
@@ -1293,7 +406,7 @@ mod tests {
         let (value, warnings) = eval.evaluate_with_diagnostics("$notaspace.secret");
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("unknown expression namespace"));
+        assert!(warnings[0].message.contains("unknown namespace"));
     }
 
     #[test]
@@ -1314,53 +427,6 @@ mod tests {
         assert_eq!(eval.evaluate_string("$inputs.t"), "true");
         assert_eq!(eval.evaluate_string("$inputs.f2"), "false");
         assert_eq!(eval.evaluate_string("$inputs.arr"), "");
-    }
-
-    #[test]
-    pub(super) fn compare_ordered_matches_go_rules() {
-        assert_eq!(compare_ordered(&json!(100), &json!(200)), Ordering::Less);
-        assert_eq!(compare_ordered(&json!(200), &json!(200)), Ordering::Equal);
-        assert_eq!(compare_ordered(&json!(300), &json!(200)), Ordering::Greater);
-        assert_eq!(
-            compare_ordered(&json!("apple"), &json!("banana")),
-            Ordering::Less
-        );
-        assert_eq!(compare_ordered(&json!(10), &json!(10.0)), Ordering::Equal);
-        assert_eq!(
-            compare_ordered(&json!("Alpha"), &json!("alpha")),
-            Ordering::Less,
-            "shared JSONPath ordering remains byte-sensitive"
-        );
-        assert_eq!(
-            compare_simple_ordered(&json!("Alpha"), &json!("alpha")),
-            Ordering::Equal
-        );
-    }
-
-    #[test]
-    fn parse_value_variants() {
-        assert_eq!(parse_value("42"), json!(42));
-        assert_eq!(parse_value("2.5"), json!(2.5));
-        assert_eq!(parse_value("true"), json!(true));
-        assert_eq!(parse_value("false"), json!(false));
-        assert_eq!(parse_value(r#""hello""#), json!("hello"));
-        assert_eq!(parse_value("'world'"), json!("world"));
-        assert_eq!(parse_value("abc"), json!("abc"));
-        assert_eq!(parse_value("  200  "), json!(200));
-        assert_eq!(parse_value("'"), json!("'"));
-    }
-
-    #[test]
-    fn compare_values_variants() {
-        assert!(compare_values(&Value::Null, &Value::Null));
-        assert!(!compare_values(&Value::Null, &json!(1)));
-        assert!(!compare_values(&json!("a"), &Value::Null));
-        assert!(compare_values(&json!(200), &json!(200.0)));
-        assert!(compare_values(&json!(42), &json!(42)));
-        assert!(compare_values(&json!("hello"), &json!("hello")));
-        assert!(!compare_values(&json!("hello"), &json!("world")));
-        assert!(!compare_values(&json!("hello"), &json!("HELLO")));
-        assert!(compare_simple_values(&json!("hello"), &json!("HELLO")));
     }
 
     #[test]
@@ -1431,10 +497,7 @@ mod tests {
                 ..EvalContext::default()
             });
 
-            let len_value = eval.evaluate("$response.body.arr.#");
-            prop_assert_eq!(len_value, json!(values.len()));
-
-            let at_value = eval.evaluate(&format!("$response.body.arr[{idx}]"));
+            let at_value = eval.evaluate(&format!("$response.body#/arr/{idx}"));
             if idx < values.len() {
                 prop_assert_eq!(at_value, json!(values[idx]));
             } else {
@@ -1442,94 +505,9 @@ mod tests {
             }
         }
 
-        #[test]
-        fn resolve_dot_path_fuzz_does_not_panic(path in ".{0,128}") {
-            let root = json!({"a": [1, {"b": "c"}, [2, 3]], "d": null});
-            match super::resolve_dot_path(&root, &path) {
-                Ok(_) | Err(_) => {}
-            }
-        }
-
-        #[test]
-        fn resolve_dot_path_valid_field_chain_is_ok(
-            keys in proptest::collection::vec("[a-z]{1,8}", 1..5),
-        ) {
-            let mut value = json!("leaf");
-            for key in keys.iter().rev() {
-                value = json!({ key.as_str(): value });
-            }
-            let path = keys.join(".");
-            match super::resolve_dot_path(&value, &path) {
-                Ok(v) => prop_assert_eq!(v, json!("leaf")),
-                Err(e) => prop_assert!(false, "valid path should be Ok, got {e:?}"),
-            }
-        }
-
-        #[test]
-        fn resolve_dot_path_bracket_index_consistency(
-            values in proptest::collection::vec(any::<i64>(), 0..20),
-            idx in 0usize..30usize,
-        ) {
-            let root = json!(values);
-            match super::resolve_dot_path(&root, &format!("[{idx}]")) {
-                Ok(value) => {
-                    if idx < values.len() {
-                        prop_assert_eq!(value, json!(values[idx]));
-                    } else {
-                        prop_assert_eq!(value, Value::Null);
-                    }
-                }
-                Err(e) => prop_assert!(false, "bracket index should be Ok, got {e:?}"),
-            }
-        }
     }
 
-    #[test]
-    fn resolve_dot_path_unclosed_bracket_is_error() {
-        let root = json!({"foo": [1, 2]});
-        let result = super::resolve_dot_path(&root, "foo[0");
-        assert!(
-            matches!(result, Err(super::PathError::InvalidSyntax { .. })),
-            "expected InvalidSyntax, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn resolve_dot_path_unbalanced_filter_is_error() {
-        let root = json!({"arr": [{"id": 1}]});
-        let result = super::resolve_dot_path(&root, "#(id==1");
-        assert!(
-            matches!(result, Err(super::PathError::InvalidSyntax { .. })),
-            "expected InvalidSyntax, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn resolve_dot_path_bracket_filter_handles_literal_delimiters() {
-        let root = json!({
-            "items": [
-                {"id": 1, "type": "foo)bar", "group": "a"},
-                {"id": 2, "type": "foo]bar", "group": "b"},
-                {"id": 3, "type": "other", "group": "a"}
-            ]
-        });
-
-        assert_eq!(
-            super::resolve_dot_path(&root, "items[?(@.type == 'foo)bar')].id"),
-            Ok(json!(1))
-        );
-        assert_eq!(
-            super::resolve_dot_path(&root, "items[?(@.type == 'foo]bar')].id"),
-            Ok(json!(2))
-        );
-        assert_eq!(
-            super::resolve_dot_path(&root, "items[?(@.group == 'a')].id"),
-            Ok(json!([1, 3]))
-        );
-    }
-
-    /// JSONPath filters continue to use the shared byte-sensitive comparison
-    /// helpers; only Simple Criterion dispatch applies case normalization.
+    /// Public RFC JSONPath retains its independent case-sensitive comparison rules.
     #[test]
     pub(super) fn json_path_filters_remain_case_sensitive_for_equality_and_ordering() {
         let root = json!({
@@ -1546,34 +524,6 @@ mod tests {
         let ordering = selected(&root, "$.items[?(@.name < 'alpha')].name");
         assert_eq!(ordering.value, json!("Alpha"));
         assert_eq!(ordering.match_count, 1);
-    }
-
-    #[test]
-    fn resolve_dot_path_negative_index_on_array_returns_null() {
-        let root = json!([1, 2, 3]);
-        assert_eq!(
-            super::resolve_dot_path(&root, "[-1]"),
-            Ok(Value::Null),
-            "negative index should not be a syntax error"
-        );
-    }
-
-    #[test]
-    fn resolve_dot_path_negative_index_on_object_returns_value() {
-        let root = json!({"-1": "found"});
-        assert_eq!(super::resolve_dot_path(&root, "[-1]"), Ok(json!("found")));
-    }
-
-    #[test]
-    fn resolve_dot_path_null_field_returns_ok_null() {
-        let root = json!({"a": null});
-        assert_eq!(super::resolve_dot_path(&root, "a"), Ok(Value::Null));
-    }
-
-    #[test]
-    fn resolve_dot_path_consecutive_dots_is_lenient() {
-        let root = json!({"a": {"b": 42}});
-        assert_eq!(super::resolve_dot_path(&root, "a..b"), Ok(json!(42)));
     }
 
     #[test]
@@ -1765,7 +715,7 @@ mod tests {
         let (value, warnings) = eval.evaluate_with_diagnostics("$foo.bar");
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("unknown expression namespace"));
+        assert!(warnings[0].message.contains("unknown namespace"));
     }
 
     #[test]
@@ -1853,17 +803,15 @@ mod tests {
     // ── Bug #14: $inputs nested traversal ─────────────────────────
 
     #[test]
-    fn inputs_nested_dot_path_traversal() {
+    fn inputs_dotted_names_are_exact_keys() {
         let ctx = EvalContext {
             inputs: BTreeMap::from([("foo".to_string(), json!({"bar": {"baz": 42}}))]),
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
 
-        // Nested traversal
-        assert_eq!(eval.evaluate("$inputs.foo.bar.baz"), json!(42));
-        // One level deep
-        assert_eq!(eval.evaluate("$inputs.foo.bar"), json!({"baz": 42}));
+        assert_eq!(eval.evaluate("$inputs.foo.bar.baz"), Value::Null);
+        assert_eq!(eval.evaluate("$inputs.foo#/bar/baz"), json!(42));
         // Top-level (flat key) still works
         assert_eq!(eval.evaluate("$inputs.foo"), json!({"bar": {"baz": 42}}));
     }

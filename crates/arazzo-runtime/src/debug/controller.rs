@@ -187,7 +187,15 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate_condition(condition))
+        let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
+            .evaluate_condition_detailed(condition);
+        match evaluation.error {
+            Some(error) => Err(format!(
+                "invalid simple condition at byte {}: {}",
+                error.byte_offset, error.message
+            )),
+            None => Ok(evaluation.result),
+        }
     }
 
     pub fn evaluate_watches(&self, expressions: &[String]) -> Result<Vec<WatchEvaluation>, String> {

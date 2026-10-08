@@ -1824,7 +1824,7 @@ fn scanner_recognizes_nested_evaluator_tests_in_arazzo_expr() {
     // Both nested `tests` items follow the crate's first lifetime, so
     // recognizing them proves the scanner reads past it.
     for test_name in [
-        "compare_ordered_matches_go_rules",
+        "evaluate_inputs_and_step_outputs",
         "json_path_filters_remain_case_sensitive_for_equality_and_ordering",
     ] {
         assert!(

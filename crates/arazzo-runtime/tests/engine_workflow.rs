@@ -543,7 +543,10 @@ async fn build_outputs_with_interpolation_and_outputs_ref() {
             steps: vec![Step {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/a".to_string())),
-                outputs: BTreeMap::from([("sum".to_string(), "total".to_string().into())]),
+                outputs: BTreeMap::from([(
+                    "sum".to_string(),
+                    "$response.body#/total".to_string().into(),
+                )]),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([

@@ -113,19 +113,19 @@ fn bench_evaluate(c: &mut Criterion) {
     group.bench_function("deep_nested_path", |b| {
         b.iter(|| {
             eval.evaluate(black_box(
-                "$steps.getUser.outputs.body.data.user.profile.bio",
+                "$steps.getUser.outputs.body#/data/user/profile/bio",
             ))
         })
     });
 
     // Array index access
     group.bench_function("array_index", |b| {
-        b.iter(|| eval.evaluate(black_box("$steps.getUser.outputs.body.data.items[0].name")))
+        b.iter(|| eval.evaluate(black_box("$steps.getUser.outputs.body#/data/items/0/name")))
     });
 
     // Response body access
     group.bench_function("response_body", |b| {
-        b.iter(|| eval.evaluate(black_box("$response.body.data.user.name")))
+        b.iter(|| eval.evaluate(black_box("$response.body#/data/user/name")))
     });
 
     // Response header access
@@ -137,7 +137,7 @@ fn bench_evaluate(c: &mut Criterion) {
     group.bench_function("missing_key", |b| {
         b.iter(|| {
             eval.evaluate(black_box(
-                "$steps.getUser.outputs.body.data.user.nonexistent",
+                "$steps.getUser.outputs.body#/data/user/nonexistent",
             ))
         })
     });
@@ -201,41 +201,6 @@ fn bench_evaluate_condition(c: &mut Criterion) {
     group.finish();
 }
 
-/// The ` matches ` operator resolves its pattern at evaluation time, so it is
-/// the one operator whose cost is dominated by regex compilation rather than by
-/// expression resolution. `uncached_baseline` is what the operator cost before
-/// the compiled-pattern cache; the gap between it and `cached_pattern` is the
-/// per-evaluation win, and it is the reason this bench exists.
-fn bench_matches_operator(c: &mut Criterion) {
-    let eval = ExpressionEvaluator::new(rich_context());
-    let pattern = r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$";
-    let subject = "alice@example.com";
-
-    let mut group = c.benchmark_group("matches_operator");
-
-    group.bench_function("cached_pattern", |b| {
-        let condition =
-            format!(r#"$steps.getUser.outputs.body.data.user.email matches "{pattern}""#);
-        b.iter(|| eval.evaluate_condition(black_box(&condition)))
-    });
-
-    group.bench_function("uncached_baseline", |b| {
-        b.iter(|| {
-            let re = regex::Regex::new(black_box(pattern)).unwrap();
-            re.is_match(black_box(subject))
-        })
-    });
-
-    // A pattern that does not compile is memoized as a failure, so a retried
-    // step does not re-parse it on every attempt.
-    group.bench_function("uncompilable_pattern", |b| {
-        let condition = r#"$steps.getUser.outputs.body.data.user.email matches "[invalid""#;
-        b.iter(|| eval.evaluate_condition(black_box(condition)))
-    });
-
-    group.finish();
-}
-
 fn bench_interpolate_string(c: &mut Criterion) {
     let eval = ExpressionEvaluator::new(rich_context());
 
@@ -279,8 +244,8 @@ fn bench_path_depth_scaling(c: &mut Criterion) {
         let path: String = (0..depth)
             .map(|i| format!("level{i}"))
             .collect::<Vec<_>>()
-            .join(".");
-        let expr = format!("$response.body.{path}");
+            .join("/");
+        let expr = format!("$response.body#/{path}");
 
         let ctx = EvalContext {
             response_body: Some(nested),
@@ -300,7 +265,6 @@ criterion_group!(
     bench_evaluate,
     bench_resolve_value,
     bench_evaluate_condition,
-    bench_matches_operator,
     bench_interpolate_string,
     bench_path_depth_scaling,
 );

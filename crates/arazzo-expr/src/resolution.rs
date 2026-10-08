@@ -692,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn public_postfix_pointer_literal_and_interpolation_controls_stay_legacy() {
+    fn public_postfix_pointer_literal_and_interpolation_controls_after_cutover() {
         let evaluator = ExpressionEvaluator::new(context());
         for condition in [
             "$response.body.items[0].id == 7",
@@ -701,7 +701,10 @@ mod tests {
         ] {
             assert!(evaluator.evaluate_condition(condition), "{condition}");
         }
-        assert_eq!(evaluator.evaluate("$response.body.items[0].id"), json!(7));
+        assert_eq!(
+            evaluator.evaluate("$response.body.items[0].id"),
+            Value::Null
+        );
         assert_eq!(
             evaluator.resolve_value("ordinary text"),
             json!("ordinary text")
@@ -713,7 +716,7 @@ mod tests {
         );
         assert_eq!(
             evaluator.interpolate_string("id={$response.body.items[0].id}"),
-            "id=7"
+            "id="
         );
         assert_eq!(
             evaluator.interpolate_string("id={$response.body#/items/0/id}"),
