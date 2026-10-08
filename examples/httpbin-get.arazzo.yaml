@@ -16,8 +16,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          origin: $response.body.origin
-          url: $response.body.url
+          origin: $response.body#/origin
+          url: $response.body#/url
     outputs:
       origin: $steps.fetch-ip.outputs.origin
       url: $steps.fetch-ip.outputs.url
@@ -30,8 +30,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          user_agent: $response.body.headers.User-Agent
-          host: $response.body.headers.Host
+          user_agent: $response.body#/headers/User-Agent
+          host: $response.body#/headers/Host
     outputs:
       user_agent: $steps.fetch-headers.outputs.user_agent
       host: $steps.fetch-headers.outputs.host

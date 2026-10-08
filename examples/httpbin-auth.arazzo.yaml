@@ -32,8 +32,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          authenticated: $response.body.authenticated
-          user: $response.body.user
+          authenticated: $response.body#/authenticated
+          user: $response.body#/user
     outputs:
       authenticated: $steps.authenticate.outputs.authenticated
       user: $steps.authenticate.outputs.user
@@ -68,7 +68,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          recovery: $response.body.url
+          recovery: $response.body#/url
     outputs:
       recovery: $steps.handle-auth-error.outputs.recovery
 
@@ -90,8 +90,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          authenticated: $response.body.authenticated
-          token: $response.body.token
+          authenticated: $response.body#/authenticated
+          token: $response.body#/token
     outputs:
       authenticated: $steps.auth-with-token.outputs.authenticated
       token: $steps.auth-with-token.outputs.token

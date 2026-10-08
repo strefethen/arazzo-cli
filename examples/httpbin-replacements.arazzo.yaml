@@ -64,5 +64,5 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          echoed_operation: $response.body.json.operation
-          echoed_conflict: $response.body.json.conflict
+          echoed_operation: $response.body#/json/operation
+          echoed_conflict: $response.body#/json/conflict

@@ -19,7 +19,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          origin: $response.body.origin
+          origin: $response.body#/origin
       - stepId: echo-origin
         operationPath: /get
         parameters:
@@ -29,7 +29,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          echoed_ip: $response.body.args.caller_ip
+          echoed_ip: $response.body#/args/caller_ip
     outputs:
       origin: $steps.get-origin.outputs.origin
       echoed_ip: $steps.echo-origin.outputs.echoed_ip
@@ -53,7 +53,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          message: $response.body.args.message
+          message: $response.body#/args/message
     outputs:
       message: $steps.greet.outputs.message
 
@@ -72,8 +72,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          custom_header: $response.body.headers.X-Custom-Header
-          arazzo_test: $response.body.headers.X-Arazzo-Test
+          custom_header: $response.body#/headers/X-Custom-Header
+          arazzo_test: $response.body#/headers/X-Arazzo-Test
       - stepId: send-cookies
         operationPath: /cookies
         parameters:
@@ -86,8 +86,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          session: $response.body.cookies.session_id
-          theme: $response.body.cookies.theme
+          session: $response.body#/cookies/session_id
+          theme: $response.body#/cookies/theme
     outputs:
       custom_header: $steps.send-headers.outputs.custom_header
       arazzo_test: $steps.send-headers.outputs.arazzo_test
@@ -132,6 +132,6 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          created_url: $response.body.url
+          created_url: $response.body#/url
     outputs:
       created_url: $steps.create-item.outputs.created_url

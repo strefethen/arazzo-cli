@@ -90,8 +90,14 @@ the one recursive numeric-equality repair.
 
 JSON Pointer and XPath selectors keep their own arms in
 `runtime_core::payload` and `runtime_core::xpath`; the legacy GJSON-flavored
-dot-path traversal used by `$response.body...` runtime expressions remains a
-separate code path in `arazzo-expr` and is not part of this owner.
+dot-path traversal remains a separate code path in `arazzo-expr` and is not part
+of this owner. Author standalone body/payload selection with a bare reference
+or JSON Pointer, such as `$response.body` or `$response.body#/items/0/id`.
+Pointer-only standalone syntax is the accepted target; the legacy consumer
+still runs until the coordinated evaluator cutover. Simple-condition `.member`
+and `[0]` operators remain separate from standalone expression parsing. See
+the [authoring guidance](../README.md#expression-language) for nested versus
+literal property names, token escaping, and field-specific cutover behavior.
 
 ## Stability Notes
 

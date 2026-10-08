@@ -87,8 +87,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          api_key: $response.body.headers.X-Api-Key
-          accept: $response.body.headers.Accept
+          api_key: $response.body#/headers/X-Api-Key
+          accept: $response.body#/headers/Accept
 
       - stepId: step-with-override
         description: References the default label component but overrides its value
@@ -102,7 +102,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          label: $response.body.args.label
+          label: $response.body#/args/label
     outputs:
       api_key: $steps.step-with-shared-key.outputs.api_key
       accept: $steps.step-with-shared-key.outputs.accept
@@ -137,7 +137,7 @@ workflows:
         onSuccess:
           - name: "$components.successActions.endAfterSuccess"
         outputs:
-          url: $response.body.url
+          url: $response.body#/url
     outputs:
       url: $steps.will-succeed.outputs.url
 
@@ -163,6 +163,6 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          url: $response.body.url
+          url: $response.body#/url
     outputs:
       url: $steps.api-call.outputs.url

@@ -65,7 +65,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          handler: $response.body.args.handler
+          handler: $response.body#/args/handler
     outputs:
       handler: $steps.handle-server-error.outputs.handler
 
@@ -98,7 +98,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          handler: $response.body.args.handler
+          handler: $response.body#/args/handler
         onSuccess:
           - name: end-after-not-found
             type: end
@@ -111,7 +111,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          handler: $response.body.args.handler
+          handler: $response.body#/args/handler
     outputs:
       handler: $steps.handle-not-found.outputs.handler
 
@@ -158,6 +158,6 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          recovered: $response.body.args.recovered
+          recovered: $response.body#/args/recovered
     outputs:
       recovered: $steps.recover.outputs.recovered

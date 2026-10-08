@@ -372,11 +372,11 @@ mod tests {
         let eval = ExpressionEvaluator::new(EvalContext::default());
         let cases = [
             (
-                goessner_criterion("$response.body.missing", "$.pets[*]"),
+                goessner_criterion("$response.body#/missing", "$.pets[*]"),
                 "unsupported JSONPath version \"draft-goessner-dispatch-jsonpath-00\"",
             ),
             (
-                jsonpath_criterion("$response.body.missing", "$[?("),
+                jsonpath_criterion("$response.body#/missing", "$[?("),
                 "invalid JSONPath syntax",
             ),
         ];
@@ -435,9 +435,9 @@ mod tests {
             ..EvalContext::default()
         });
         let criterion = SuccessCriterion {
-            // A dot path into a string body has no match, so the explicitly
+            // A pointer into a string body has no match, so the explicitly
             // provided context resolves to null.
-            context: "$response.body.missing".to_string(),
+            context: "$response.body#/missing".to_string(),
             condition: "count(//pet) > 0".to_string(),
             type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
             ..SuccessCriterion::default()
@@ -496,7 +496,7 @@ mod tests {
     /// diagnostic.
     #[test]
     fn jsonpath_null_context_fails() {
-        let criterion = jsonpath_criterion("$response.body.missing", "$.pets[*]");
+        let criterion = jsonpath_criterion("$response.body#/missing", "$.pets[*]");
         let eval = ExpressionEvaluator::new(EvalContext::default());
 
         let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());

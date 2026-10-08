@@ -206,7 +206,7 @@ async fn successful_outputs_keep_the_original_response_value() {
     let result = execute_response(
         MockHttpResponse::json(200, &json!({ "token": sentinel }).to_string()),
         200,
-        BTreeMap::from([("token".to_string(), "$response.body.token".to_string())]),
+        BTreeMap::from([("token".to_string(), "$response.body#/token".to_string())]),
     )
     .await;
 

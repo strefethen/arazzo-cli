@@ -22,7 +22,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          a: $response.body.args.label
+          a: $response.body#/args/label
       - stepId: fetch-b
         operationPath: /get
         parameters:
@@ -32,7 +32,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          b: $response.body.args.label
+          b: $response.body#/args/label
       - stepId: fetch-c
         operationPath: /get
         parameters:
@@ -42,7 +42,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          c: $response.body.args.label
+          c: $response.body#/args/label
       - stepId: fetch-d
         operationPath: /get
         parameters:
@@ -52,7 +52,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          d: $response.body.args.label
+          d: $response.body#/args/label
     outputs:
       a: $steps.fetch-a.outputs.a
       b: $steps.fetch-b.outputs.b
@@ -71,7 +71,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.seed
+          val: $response.body#/args/seed
       - stepId: step-2
         operationPath: /get
         parameters:
@@ -81,7 +81,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.echo
+          val: $response.body#/args/echo
       - stepId: step-3
         operationPath: /get
         parameters:
@@ -91,7 +91,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.final
+          val: $response.body#/args/final
     outputs:
       result: $steps.step-3.outputs.val
 
@@ -107,7 +107,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.label
+          val: $response.body#/args/label
       - stepId: left
         operationPath: /get
         parameters:
@@ -120,7 +120,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.branch
+          val: $response.body#/args/branch
       - stepId: right
         operationPath: /get
         parameters:
@@ -133,7 +133,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.args.branch
+          val: $response.body#/args/branch
       - stepId: join
         operationPath: /get
         parameters:
@@ -146,8 +146,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          left: $response.body.args.left
-          right: $response.body.args.right
+          left: $response.body#/args/left
+          right: $response.body#/args/right
     outputs:
       left: $steps.join.outputs.left
       right: $steps.join.outputs.right

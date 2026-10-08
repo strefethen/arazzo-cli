@@ -51,7 +51,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          child_url: $response.body.args.child_url
+          child_url: $response.body#/args/child_url
 
     outputs:
       created_url: $steps.call-child.outputs.created_url
@@ -77,7 +77,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          created_url: $response.body.url
+          created_url: $response.body#/url
 
     outputs:
       created_url: $steps.create-item.outputs.created_url

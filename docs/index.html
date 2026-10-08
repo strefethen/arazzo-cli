@@ -248,7 +248,7 @@
         <span class="ck">successCriteria</span>:
           - <span class="ck">condition</span>: <span class="cv">$statusCode == 200</span>
         <span class="ck">outputs</span>:
-          <span class="ck">token</span>: <span class="cv">$response.body.token</span>
+          <span class="ck">token</span>: <span class="cv">$response.body#/token</span>
       - <span class="ck">stepId</span>: <span class="cn">get-profile</span>
         <span class="ck">operationPath</span>: <span class="cv">GET /users/me</span>
         <span class="ck">parameters</span>:

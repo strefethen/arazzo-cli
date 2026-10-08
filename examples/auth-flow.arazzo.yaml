@@ -49,8 +49,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          authenticated: $response.body.authenticated
-          token: $response.body.token
+          authenticated: $response.body#/authenticated
+          token: $response.body#/token
 
       - stepId: fetch-profile
         operationPath: /headers
@@ -68,7 +68,7 @@ workflows:
           - condition: $statusCode == 200
         outputs:
           echoed_auth_state: $request.query.auth_state
-          echoed_authorization: $response.body.headers.Authorization
+          echoed_authorization: $response.body#/headers/Authorization
 
     outputs:
       authenticated: $steps.bearer-check.outputs.authenticated

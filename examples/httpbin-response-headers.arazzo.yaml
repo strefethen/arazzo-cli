@@ -92,7 +92,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          echoed_trace: $response.body.headers.X-Forwarded-Trace
+          echoed_trace: $response.body#/headers/X-Forwarded-Trace
     outputs:
       trace_id: $steps.get-trace-id.outputs.trace_id
       echoed_trace: $steps.forward-trace-id.outputs.echoed_trace

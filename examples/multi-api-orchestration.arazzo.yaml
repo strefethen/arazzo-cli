@@ -42,7 +42,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          source: $response.body.args.source
+          source: $response.body#/args/source
           url: $url
 
       - stepId: call-secondary

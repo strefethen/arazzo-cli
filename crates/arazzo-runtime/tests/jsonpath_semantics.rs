@@ -230,7 +230,11 @@ async fn null_context_fails_without_evaluating() {
 
     let (result, _) = execute(
         BODY,
-        workflow_with(vec![jsonpath_step("nullctx", "$response.body.absent", "$")]),
+        workflow_with(vec![jsonpath_step(
+            "nullctx",
+            "$response.body#/absent",
+            "$",
+        )]),
     )
     .await;
     assert!(
@@ -400,7 +404,7 @@ async fn invalid_query_with_missing_context_reports_the_error() {
         BODY,
         workflow_with(vec![jsonpath_step(
             "nullctx-syntax",
-            "$response.body.absent",
+            "$response.body#/absent",
             "$[?(",
         )]),
     )
@@ -412,7 +416,7 @@ async fn invalid_query_with_missing_context_reports_the_error() {
         workflow_with(vec![typed_step(
             "nullctx-goessner",
             goessner(),
-            "$response.body.absent",
+            "$response.body#/absent",
             "$",
         )]),
     )

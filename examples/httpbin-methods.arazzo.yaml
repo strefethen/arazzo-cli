@@ -26,8 +26,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          echoed_name: $response.body.json.name
-          echoed_version: $response.body.json.version
+          echoed_name: $response.body#/json/name
+          echoed_version: $response.body#/json/version
     outputs:
       echoed_name: $steps.post-data.outputs.echoed_name
       echoed_version: $steps.post-data.outputs.echoed_version
@@ -45,8 +45,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          echoed_id: $response.body.json.id
-          echoed_status: $response.body.json.status
+          echoed_id: $response.body#/json/id
+          echoed_status: $response.body#/json/status
     outputs:
       echoed_id: $steps.put-data.outputs.echoed_id
       echoed_status: $steps.put-data.outputs.echoed_status
@@ -64,14 +64,14 @@ workflows:
           - condition: $statusCode == 200
           - condition: $response.body.method == "PATCH"
         outputs:
-          method: $response.body.method
+          method: $response.body#/method
       - stepId: delete-item
         operationPath: DELETE /anything
         successCriteria:
           - condition: $statusCode == 200
           - condition: $response.body.method == "DELETE"
         outputs:
-          method: $response.body.method
+          method: $response.body#/method
     outputs:
       patch_method: $steps.patch-item.outputs.method
       delete_method: $steps.delete-item.outputs.method

@@ -1260,7 +1260,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        outputs: {title: "$response.body.title", count: "$response.body.count"}
+        outputs: {title: "$response.body#/title", count: "$response.body#/count"}
 "#;
         let metadata = extract_source_metadata(text);
         assert!(metadata.checkpoints.iter().any(|entry| {
@@ -1278,7 +1278,7 @@ workflows:
         let key = ("wf".to_string(), "s1".to_string(), "title".to_string());
         assert_eq!(
             metadata.output_expressions.get(&key).map(String::as_str),
-            Some("$response.body.title")
+            Some("$response.body#/title")
         );
     }
 

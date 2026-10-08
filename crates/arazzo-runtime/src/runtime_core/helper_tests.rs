@@ -85,7 +85,7 @@ fn evaluate_criterion_modes() {
     };
     assert!(evaluate_criterion(&plain, &eval, None, &cache));
 
-    let regex = named_criterion("regex", "$response.body.name", "^[a-z]+$");
+    let regex = named_criterion("regex", "$response.body#/name", "^[a-z]+$");
     assert!(evaluate_criterion(&regex, &eval, None, &cache));
 
     let jsonpath = jsonpath_criterion("$response.body", "$.name");
@@ -100,25 +100,25 @@ fn evaluate_criterion_modes() {
     let jp_missing = jsonpath_criterion("$response.body", "$.nonexistent");
     assert!(!evaluate_criterion(&jp_missing, &eval, None, &cache));
 
-    let jp_filter_at_ok = jsonpath_criterion("$response.body.items", "$[?(@.ok == true)]");
+    let jp_filter_at_ok = jsonpath_criterion("$response.body#/items", "$[?(@.ok == true)]");
     assert!(evaluate_criterion(&jp_filter_at_ok, &eval, None, &cache));
 
-    let jp_filter_none = jsonpath_criterion("$response.body.items", "$[?(@.id == 999)]");
+    let jp_filter_none = jsonpath_criterion("$response.body#/items", "$[?(@.id == 999)]");
     assert!(!evaluate_criterion(&jp_filter_none, &eval, None, &cache));
 
-    let jp_count = jsonpath_criterion("$response.body.items", "$[?(count(@.pets) > 0)]");
+    let jp_count = jsonpath_criterion("$response.body#/items", "$[?(count(@.pets) > 0)]");
     assert!(evaluate_criterion(&jp_count, &eval, None, &cache));
 
-    let jp_and = jsonpath_criterion("$response.body.items", "$[?(@.ok == true && @.id == 2)]");
+    let jp_and = jsonpath_criterion("$response.body#/items", "$[?(@.ok == true && @.id == 2)]");
     assert!(evaluate_criterion(&jp_and, &eval, None, &cache));
 
-    let jp_or = jsonpath_criterion("$response.body.items", "$[?(@.id == 99 || @.id == 1)]");
+    let jp_or = jsonpath_criterion("$response.body#/items", "$[?(@.id == 99 || @.id == 1)]");
     assert!(evaluate_criterion(&jp_or, &eval, None, &cache));
 
-    let jp_comparison = jsonpath_criterion("$response.body.items", "$[?(@.id > 1)]");
+    let jp_comparison = jsonpath_criterion("$response.body#/items", "$[?(@.id > 1)]");
     assert!(evaluate_criterion(&jp_comparison, &eval, None, &cache));
 
-    let jp_root_count = jsonpath_criterion("$response.body.items", "$[?(count($) > 0)]");
+    let jp_root_count = jsonpath_criterion("$response.body#/items", "$[?(count($) > 0)]");
     assert!(evaluate_criterion(&jp_root_count, &eval, None, &cache));
 }
 

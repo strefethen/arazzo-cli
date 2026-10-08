@@ -283,14 +283,14 @@ async fn gjson_criteria_fail_before_missing_context_and_short_circuit() {
     let (result, _) = execute(
         workflow(vec![criterion_step(
             "nullctx",
-            "$response.body.absent",
+            "$response.body#/absent",
             form,
         )]),
         BTreeMap::new(),
     )
     .await;
     let trace_context = result.trace_steps()[0].criteria[0].context.clone();
-    assert_eq!(trace_context, "$response.body.absent");
+    assert_eq!(trace_context, "$response.body#/absent");
     assert_criterion_rejected(&result, form, SYNTAX_ERROR);
 
     // Short-circuit: the left operand alone selects one node, so a parser that

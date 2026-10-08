@@ -38,7 +38,7 @@ workflows:
     - name: fail-fast
       type: end
     outputs:
-      id: $response.body.id
+      id: $response.body#/id
   - stepId: read-pet
     description: Get a single pet
     operationPath: GET {swagger-petstore-openapi-3-0}./pet/{petId}
@@ -92,7 +92,7 @@ workflows:
     - name: fail-fast
       type: end
     outputs:
-      id: $response.body.id
+      id: $response.body#/id
   - stepId: read-order
     description: Get a single order
     operationPath: GET {swagger-petstore-openapi-3-0}./store/order/{orderId}
@@ -146,7 +146,7 @@ workflows:
     - name: fail-fast
       type: end
     outputs:
-      id: $response.body.id
+      id: $response.body#/id
   - stepId: read-user
     description: Get a single user
     operationPath: GET {swagger-petstore-openapi-3-0}./user/{username}

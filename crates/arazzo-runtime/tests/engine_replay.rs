@@ -26,7 +26,7 @@ fn replay_spec() -> arazzo_spec::ArazzoSpec {
                 }],
                 outputs: BTreeMap::from([(
                     "value".to_string(),
-                    "$response.body.value".to_string().into(),
+                    "$response.body#/value".to_string().into(),
                 )]),
                 ..Step::default()
             }],

@@ -58,7 +58,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          recovered: $response.body.args.recovered
+          recovered: $response.body#/args/recovered
 
     outputs:
       recovered: $steps.recover.outputs.recovered

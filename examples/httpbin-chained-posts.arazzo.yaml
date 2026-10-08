@@ -54,8 +54,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          origin: $response.body.origin
-          echoed_url: $response.body.url
+          origin: $response.body#/origin
+          echoed_url: $response.body#/url
 
       - stepId: post-enriched
         description: Take step 1's outputs and post them as an enriched payload
@@ -69,8 +69,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          enriched_action: $response.body.json.action
-          enriched_origin: $response.body.json.source_origin
+          enriched_action: $response.body#/json/action
+          enriched_origin: $response.body#/json/source_origin
 
       - stepId: post-final
         description: Summarize the chain by posting the enriched data
@@ -84,7 +84,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          final_action: $response.body.json.action
+          final_action: $response.body#/json/action
     outputs:
       origin: $steps.post-initial.outputs.origin
       enriched_action: $steps.post-enriched.outputs.enriched_action
@@ -130,7 +130,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          status: $response.body.args.status
+          status: $response.body#/args/status
     outputs:
       status: $steps.final-report.outputs.status
 
@@ -163,7 +163,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          created_name: $response.body.json.name
+          created_name: $response.body#/json/name
 
       - stepId: update-resource
         description: Update the resource using interpolation to build a descriptive label
@@ -177,8 +177,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          updated_label: $response.body.json.label
-          original: $response.body.json.original_name
+          updated_label: $response.body#/json/label
+          original: $response.body#/json/original_name
     outputs:
       created_name: $steps.create-resource.outputs.created_name
       updated_label: $steps.update-resource.outputs.updated_label

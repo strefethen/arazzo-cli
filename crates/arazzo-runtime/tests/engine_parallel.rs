@@ -189,7 +189,7 @@ async fn execute_parallel_with_dependencies() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "id".to_string(),
-                        "$response.body.id".to_string().into(),
+                        "$response.body#/id".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -206,7 +206,7 @@ async fn execute_parallel_with_dependencies() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "name".to_string(),
-                        "$response.body.name".to_string().into(),
+                        "$response.body#/name".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -981,7 +981,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "x".to_string(),
-                        "$response.body.val".to_string().into(),
+                        "$response.body#/val".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -998,7 +998,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "y".to_string(),
-                        "$response.body.val".to_string().into(),
+                        "$response.body#/val".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -1015,7 +1015,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "z".to_string(),
-                        "$response.body.val".to_string().into(),
+                        "$response.body#/val".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -1317,7 +1317,7 @@ async fn trace_records_sequential_include_request_response_criteria_decision() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "value".to_string(),
-                    "$response.body.value".to_string().into(),
+                    "$response.body#/value".to_string().into(),
                 )]),
                 ..Step::default()
             }],

@@ -2781,7 +2781,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
         outputs:
-          val: $response.body.origin
+          val: $response.body#/origin
       - stepId: second
         operationPath: /get
         parameters:

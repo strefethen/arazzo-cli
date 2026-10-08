@@ -153,7 +153,7 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
                     let mut m = BTreeMap::new();
                     m.insert(
                         "value".to_string(),
-                        "$response.body.value".to_string().into(),
+                        "$response.body#/value".to_string().into(),
                     );
                     m
                 },

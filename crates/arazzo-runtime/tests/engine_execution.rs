@@ -2045,7 +2045,7 @@ async fn execute_retry_workflow_reference_recovers_then_retries() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
-                    "$response.body.token".to_string().into(),
+                    "$response.body#/token".to_string().into(),
                 )]),
                 ..Step::default()
             }],
@@ -2238,7 +2238,7 @@ async fn execute_retry_step_reference_executes_with_outputs_visible() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
-                    "$response.body.token".to_string().into(),
+                    "$response.body#/token".to_string().into(),
                 )]),
                 ..Step::default()
             },
@@ -2718,7 +2718,7 @@ async fn execute_sub_workflow_step() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
-                    "$response.body.token".to_string().into(),
+                    "$response.body#/token".to_string().into(),
                 )]),
                 ..Step::default()
             }],
@@ -2873,7 +2873,7 @@ async fn execute_goto_workflow() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "ok".to_string(),
-                    "$response.body.fallback".to_string().into(),
+                    "$response.body#/fallback".to_string().into(),
                 )]),
                 ..Step::default()
             }],
@@ -3704,7 +3704,7 @@ async fn replacements_with_dependent_step_outputs_resolves_in_order() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "id".to_string(),
-                    "$response.body.id".to_string().into(),
+                    "$response.body#/id".to_string().into(),
                 )]),
                 ..Step::default()
             },
@@ -3996,7 +3996,7 @@ async fn dry_run_multi_step_and_custom_headers() {
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "id".to_string(),
-                    "$response.body.id".to_string().into(),
+                    "$response.body#/id".to_string().into(),
                 )]),
                 ..Step::default()
             },
@@ -4074,7 +4074,7 @@ async fn execute_step_standalone_no_deps() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "v".to_string(),
-                        "$response.body.v".to_string().into(),
+                        "$response.body#/v".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -4084,7 +4084,7 @@ async fn execute_step_standalone_no_deps() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "v".to_string(),
-                        "$response.body.v".to_string().into(),
+                        "$response.body#/v".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -4131,7 +4131,7 @@ async fn execute_step_with_transitive_deps() {
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "id".to_string(),
-                        "$response.body.id".to_string().into(),
+                        "$response.body#/id".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -4148,7 +4148,7 @@ async fn execute_step_with_transitive_deps() {
                     }],
                     outputs: BTreeMap::from([(
                         "result".to_string(),
-                        "$response.body.result".to_string().into(),
+                        "$response.body#/result".to_string().into(),
                     )]),
                     ..Step::default()
                 },
@@ -4243,7 +4243,10 @@ async fn execute_step_no_deps_flag_standalone_succeeds() {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath("/a".to_string())),
                 success_criteria: success_200(),
-                outputs: BTreeMap::from([("v".to_string(), "$response.body.v".to_string().into())]),
+                outputs: BTreeMap::from([(
+                    "v".to_string(),
+                    "$response.body#/v".to_string().into(),
+                )]),
                 ..Step::default()
             }],
             ..Workflow::default()

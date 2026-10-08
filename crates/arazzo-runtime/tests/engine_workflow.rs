@@ -79,7 +79,7 @@ async fn execute_inputs_expression_header() {
             success_criteria: success_200(),
             outputs: BTreeMap::from([(
                 "auth".to_string(),
-                "$response.body.auth".to_string().into(),
+                "$response.body#/auth".to_string().into(),
             )]),
             ..Step::default()
         }],
@@ -760,7 +760,7 @@ async fn request_body_expression_in_outputs() {
                     ("full_body".to_string(), "$request.body".to_string().into()),
                     (
                         "body_name".to_string(),
-                        "$request.body.name".to_string().into(),
+                        "$request.body#/name".to_string().into(),
                     ),
                     (
                         "body_count_ptr".to_string(),
