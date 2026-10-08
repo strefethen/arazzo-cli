@@ -9,8 +9,20 @@
       "normativeLevels": ["MUST"],
       "claim": "Simple Criterion conditions accept only the Arazzo 1.1 literals and operators.",
       "status": "deviation",
-      "owner": "ac-67bf5",
-      "reason": "Simple Criterion grammar enforcement is scheduled in ac-67bf5."
+      "owner": "ac-7b681",
+      "reason": "The canonical Pest grammar and evaluator now enforce the Arazzo 1.1 literal/operator surface, including rejection of contains, matches and in. The specification requires case-insensitive string comparisons and failed evaluation for syntax/context/runtime errors, recommends reporting those errors, and recommends numeric-string coercion. The implemented error makes the owning condition false and is reported through the detailed/runtime criterion result; ordinary Step failure routing and later eligible Actions remain possible, so this is not a global no-side-effects guarantee. Maintainer-selected rules settle otherwise underspecified precedence, operand boundaries, strict boolean/null truth, missing-versus-present access, deterministic structural comparisons, and Unicode-lowercase text comparison. The accepted interpretation of the conflicting null prose/example makes every comparison with exactly one null or missing operand false, including !=; null == null is true, null != null is false, and !(value == null) is the existence spelling. Numeric support is deliberately bounded to existing i64/u64/finite-f64 storage: plain integer condition literals and numeric strings without a fraction or exponent must fit [-2^63, 2^64-1] without float fallback; fraction/exponent conversion rejects overflow and nonzero underflow to zero. Integers and mixed integer/represented-float values compare without rounding the integer to f64; represented floats use no epsilon and signed zero compares equal. Existing JSON/YAML loader rounding is unchanged and cannot be recovered; admitted decimal values may already coincide, so no end-to-end decimal exactness or typed JSONPath/XPath precision is claimed. Numeric-string coercion is adopted for all six comparisons only when exactly one operand is numeric and the other is a string fully matching JSON-number syntax without whitespace; invalid spelling/range fails evaluation. Two strings remain Unicode-lowercase text, deliberately declining that part of the SHOULD to avoid content-dependent string ordering. This aggregate boundary remains deviation for its bounded numeric support and partial SHOULD adoption, rather than covered or uniformly failClosed; the local null-clarification draft records the unresolved specification contradiction without claiming upstream resolution.",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-expr/tests/simple_condition_syntax.rs#conformance_simple_condition_syntax_positive_evidence",
+          "crates/arazzo-expr/tests/simple_condition_evaluation.rs#conformance_simple_condition_evaluation_positive_evidence"
+        ],
+        "negative": [
+          "crates/arazzo-expr/tests/simple_condition_syntax.rs#conformance_simple_condition_syntax_negative_evidence",
+          "crates/arazzo-expr/tests/simple_condition_evaluation.rs#conformance_simple_condition_evaluation_negative_evidence",
+          "crates/arazzo-runtime/tests/simple_condition_runtime.rs#invalid_step_success_condition_allows_failure_routing",
+          "crates/arazzo-runtime/tests/simple_condition_runtime.rs#invalid_action_condition_skips_only_owning_action"
+        ]
+      }
     },
     {
       "id": "expr.typed-jsonpath-rejects-gjson",

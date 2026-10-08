@@ -399,7 +399,7 @@ The current evaluator still accepts legacy dotted/bracket standalone traversal. 
 
 **Multi-source routing (arazzo-cli extension):** `{sourceName}./path` — e.g. `operationPath: "{petstore}./pets"`, or with a method prefix, `operationPath: "GET {petstore}./pets"` — selects a source description's base URL for a step. This, and the bare-path form used elsewhere in this README (e.g. `operationPath: /protected` in [Sub-Workflows](#sub-workflows)), are not the specification's `operationPath` syntax — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
-**Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`
+**Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `!`, `&&`, `||`, grouping `()`, property access `.`, and zero-based array indexing `[]`. `contains`, `matches`, and `in` are rejected; see [Simple conditions](#simple-default).
 
 <a id="typed-jsonpath-rfc-9535"></a>
 **Typed JSONPath (RFC 9535):** `type: jsonpath` success criteria, [Selector Objects](#arazzo-11-selector-objects), and `targetSelectorType: jsonpath` payload replacement targets all run on one [RFC 9535](https://www.rfc-editor.org/rfc/rfc9535.html) query engine. That is the full query language: child and descendant segments (`$.items[0].name`, `$..sku`), wildcards (`$.items[*].id`, `$.*`), array slices (`$.items[0:2]`), negative indices, unions, filter expressions (`$.items[?@.price > 10 && @.active]`) with existence tests and comparisons, and the standard function extensions `length()`, `count()`, `value()`, `match()` and `search()` — the latter two taking a literal pattern or a pattern drawn from the queried document (`$.items[?search(@.description, @.tag)]`).
@@ -571,16 +571,24 @@ Each step can define success criteria — conditions that must pass for the step
 
 ### Simple (default)
 
-Boolean expressions evaluated against the runtime context:
+Simple conditions (the default when `type` is omitted) combine runtime expressions with boolean, null, number and single-quoted string literals:
 
 ```yaml
 successCriteria:
   - condition: $statusCode == 200
-  - condition: $response.body.status == "active"
-  - condition: $response.body.items.length > 0
+  - condition: $response.body.status == 'active'
+  - condition: $response.body.items[0].id == 7
 ```
 
-Supports all comparison and logical operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `contains`, `matches`, `in`.
+Use `==`, `!=`, `>`, `<`, `>=`, `<=`, `!`, `&&`, `||`, grouping `()`, property access `.`, and zero-based array indexing `[]`. `contains`, `matches`, and `in` are rejected. Escape an apostrophe inside a string by doubling it (`'It''s'`); double quotes are not condition-string delimiters. Comparisons do not chain. Boolean values decide the condition directly; null or missing is false, while a bare number, string, array or object is an evaluation error. Compare those values explicitly.
+
+Property/index access on a missing value stays missing; access on a present wrong type, including explicit null, is an error. Conditions parse completely before evaluation and then short-circuit left to right. A syntax or evaluation error makes the owning condition false; its diagnostic is available in the detailed evaluation result. Ordinary Step failure routing or a later eligible Action can still run.
+
+Numbers use the existing i64/u64/finite-f64 storage. Plain integer literals and numeric strings without a fraction or exponent must fit `[-2^63, 2^64-1]`; excess does not fall back to floating point. Fraction/exponent conversion rejects overflow and nonzero underflow to zero. Integers compare exactly as represented, including against represented floats without rounding the integer; float comparisons use no epsilon, and signed zero compares equal. JSON/YAML loader rounding remains unchanged. Decimal values can coincide after rounding (`0.10000000000000001 == 0.1` is true), so this is not an end-to-end decimal-exactness guarantee and says nothing about typed JSONPath/XPath precision.
+
+For all six comparisons, exactly one number and one string triggers numeric conversion: the string must fully match JSON-number syntax without surrounding whitespace, and invalid spelling/range fails evaluation. `'200' == 200` is true; `' 200 ' == 200` and `'01' == 1` are errors. Two strings remain Unicode-lowercase text: `'10' < '2'` is true and `'01' == '1'` is false. This deliberately adopts only part of the specification's numeric-string SHOULD to keep text ordering independent of its contents.
+
+The accepted interpretation of the specification's conflicting null prose and example makes every comparison with exactly one null or missing operand false, including `!=`. `null == null` is true and `null != null` is false. Test existence with `!(value == null)`, for example `!($response.body.data == null)`. The [local clarification draft](plans/assessments/arazzo-simple-condition-null-clarification.md) records this unresolved ambiguity. These bounded semantics do not establish full Arazzo 1.1 compliance.
 
 ### Regex
 
