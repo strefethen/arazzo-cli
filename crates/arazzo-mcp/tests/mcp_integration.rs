@@ -1129,6 +1129,20 @@ fn run_mcp_binary(dir: &Path, stdin: &[u8]) -> std::process::Output {
         .unwrap_or_else(|| panic!("arazzo-mcp stdin was not piped"))
         .write_all(stdin)
         .unwrap_or_else(|err| panic!("writing arazzo-mcp stdin: {err}"));
+    // A regressed `.env` loader spins forever; fail the test instead of
+    // hanging the suite.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while child
+        .try_wait()
+        .unwrap_or_else(|err| panic!("polling arazzo-mcp: {err}"))
+        .is_none()
+    {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("arazzo-mcp did not exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
     child
         .wait_with_output()
         .unwrap_or_else(|err| panic!("waiting for arazzo-mcp: {err}"))
@@ -1217,8 +1231,14 @@ fn test_env_directory_does_not_hang_the_server() {
     let _ = fs::remove_dir_all(&base);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 2, "{stderr}");
     assert!(
-        stderr.starts_with("warning: .env:1: stopped reading: "),
+        lines[0].starts_with("warning: .env:1: stopped reading: "),
+        "{stderr}"
+    );
+    assert_eq!(
+        lines[1], "loaded .env: set 0, kept 0 already in the environment, ignored 0",
         "{stderr}"
     );
     assert_eq!(
