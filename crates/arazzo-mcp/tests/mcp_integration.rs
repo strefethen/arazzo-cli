@@ -1190,3 +1190,44 @@ fn test_env_file_report_stays_off_the_stdout_framing() {
         .as_str()
         .is_some_and(|name| name == "arazzo-mcp"));
 }
+
+#[test]
+fn test_env_directory_does_not_hang_the_server() {
+    static SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let base = std::env::temp_dir().join(format!(
+        "arazzo-mcp-env-dir-{}-{nanos}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let with_env = base.join("with-env");
+    let without_env = base.join("without-env");
+    fs::create_dir_all(with_env.join(".env"))
+        .unwrap_or_else(|err| panic!("creating .env directory: {err}"));
+    fs::create_dir_all(&without_env)
+        .unwrap_or_else(|err| panic!("creating {}: {err}", without_env.display()));
+
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+    ]);
+    let output = run_mcp_binary(&with_env, &messages);
+    let baseline = run_mcp_binary(&without_env, &messages);
+    let _ = fs::remove_dir_all(&base);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("warning: .env:1: stopped reading: "),
+        "{stderr}"
+    );
+    assert_eq!(
+        output.stdout, baseline.stdout,
+        "stdout framing changed by .env"
+    );
+    let responses = parse_responses(&output.stdout);
+    assert_eq!(responses.len(), 1, "{responses:?}");
+    assert!(responses[0]["result"]["serverInfo"]["name"]
+        .as_str()
+        .is_some_and(|name| name == "arazzo-mcp"));
+}

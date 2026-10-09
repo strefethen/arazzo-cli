@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A `.env` that is a directory no longer hangs `arazzo-cli` or `arazzo-mcp` at
+startup.
+
+**Upgrade if** a `.env` path in your working directory is a directory or
+otherwise fails to read.
+
+- **No startup hang** — a hard read error on `.env` is reported once and
+  loading stops, instead of looping forever.
+
+### Fixed
+
+- `.env` loading in both binaries stops at the first read error other than
+  invalid UTF-8 and prints `warning: .env:<line>: stopped reading: <error>`.
+  Names read before the error stay set. A directory named `.env` previously
+  made every read fail and the loader spin forever, growing memory since
+  0.8.0's load report. Invalid-UTF-8 lines are still skipped one at a time.
+
 ## [0.8.0] - 2026-10-08
 
 Runtime expressions and simple conditions now use one canonical Pest grammar,

@@ -274,6 +274,9 @@ struct EnvLoadReport {
     kept: usize,
     /// 1-based line numbers of lines that could not be used, with the reason.
     ignored: Vec<(usize, IgnoredEnvLine)>,
+    /// The 1-based line number and error where a hard I/O error ended
+    /// reading — `.env` is a directory, say (ac-d11dc).
+    stopped: Option<(usize, String)>,
 }
 
 /// Why a `.env` line was ignored.
@@ -316,7 +319,15 @@ fn load_env_file(path: impl AsRef<Path>) -> Option<EnvLoadReport> {
     for (index, line) in reader.lines().enumerate() {
         let parsed = match line {
             Ok(line) => parse_env_line(&line),
-            Err(_) => EnvLine::Ignored(IgnoredEnvLine::Unreadable),
+            // Invalid UTF-8: the line was consumed, so the next read moves on.
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+                EnvLine::Ignored(IgnoredEnvLine::Unreadable)
+            }
+            // Any other error would repeat on every read; stop here.
+            Err(err) => {
+                report.stopped = Some((index + 1, err.to_string()));
+                break;
+            }
         };
         match parsed {
             EnvLine::Blank => {}
@@ -340,6 +351,9 @@ fn load_env_file(path: impl AsRef<Path>) -> Option<EnvLoadReport> {
 fn eprint_env_load_report(path: &str, report: &EnvLoadReport) {
     for (line, why) in &report.ignored {
         eprintln!("warning: {path}:{line}: ignored line: {}", why.reason());
+    }
+    if let Some((line, err)) = &report.stopped {
+        eprintln!("warning: {path}:{line}: stopped reading: {err}");
     }
     eprintln!(
         "loaded {path}: set {}, kept {} already in the environment, ignored {}",

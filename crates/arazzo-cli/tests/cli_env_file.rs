@@ -326,3 +326,52 @@ fn unreadable_line_is_reported_and_later_lines_still_load() {
          loaded .env: set 2, kept 0 already in the environment, ignored 1\n"
     );
 }
+
+#[test]
+fn env_directory_stops_reading_instead_of_spinning() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let temp = TempDir::new("arazzo-cli-env-dir");
+    fs::create_dir(temp.path().join(".env"))
+        .unwrap_or_else(|err| panic!("creating .env directory: {err}"));
+
+    // Before ac-d11dc every read failed and the loader looped forever, so a
+    // plain `output()` would hang the suite; bound the wait instead.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+        .arg("--version")
+        .current_dir(temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawning arazzo-cli: {err}"));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while child
+        .try_wait()
+        .unwrap_or_else(|err| panic!("polling arazzo-cli: {err}"))
+        .is_none()
+    {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("arazzo-cli did not exit with a .env directory");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("collecting arazzo-cli output: {err}"));
+
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "{stderr}");
+    let mut lines = stderr.lines();
+    let stop = lines.next().unwrap_or_default();
+    assert!(
+        stop.starts_with("warning: .env:1: stopped reading: "),
+        "{stderr}"
+    );
+    assert_eq!(
+        lines.collect::<Vec<_>>(),
+        ["loaded .env: set 0, kept 0 already in the environment, ignored 0"],
+        "{stderr}"
+    );
+}
