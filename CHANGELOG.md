@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-A `.env` that is a directory no longer hangs `arazzo-cli` or `arazzo-mcp` at
-startup.
+## [0.8.1] - 2026-10-08
 
-**Upgrade if** a `.env` path in your working directory is a directory or
-otherwise fails to read.
+Restore non-null guards in simple conditions and prevent startup hangs when
+`.env` cannot be read.
 
+**Upgrade if** you use `value != null` conditions or a `.env` path that is a
+directory or otherwise fails to read.
+
+- **Non-null guards restored** — `value != null` agrees with `!(value == null)`:
+  present non-null values pass, while null or missing values fail.
 - **No startup hang** — a hard read error on `.env` is reported once and
   loading stops, instead of looping forever.
 

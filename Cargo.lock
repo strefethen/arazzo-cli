@@ -106,7 +106,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arazzo-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-generate",
  "arazzo-mcp",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-debug-adapter"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-runtime",
  "arazzo-spec",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-expr"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "abnf_to_pest",
  "criterion",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-generate"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-spec",
  "indexmap 2.13.0",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-mcp"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-generate",
  "arazzo-runtime",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-runtime"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-expr",
  "arazzo-spec",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-spec"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "arazzo-validate"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arazzo-expr",
  "arazzo-spec",
