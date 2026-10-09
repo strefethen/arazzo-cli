@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -17,6 +17,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+mod paths;
+pub(crate) use paths::validate_destination;
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -339,95 +342,6 @@ fn sanitize_runtime_error(message: &str) -> String {
         }
     }
     redact_text_patterns(message)
-}
-
-pub fn validate_destination(
-    export: &Path,
-    trace: Option<&Path>,
-    sources: &[&Path],
-) -> Result<(), String> {
-    if export.as_os_str().is_empty() {
-        return Err("--export-run path must not be empty".to_string());
-    }
-    if let Some(trace) = trace {
-        if paths_alias(export, trace)? {
-            return Err("--export-run and --trace must name distinct files".to_string());
-        }
-    }
-    for source in sources {
-        if paths_alias(export, source)? {
-            return Err(format!(
-                "--export-run must not overwrite input file {}",
-                source.display()
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn paths_alias(a: &Path, b: &Path) -> Result<bool, String> {
-    if resolved_path(a)? == resolved_path(b)? {
-        return Ok(true);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if let (Ok(a), Ok(b)) = (fs::metadata(a), fs::metadata(b)) {
-            if a.dev() == b.dev() && a.ino() == b.ino() {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn resolved_path(path: &Path) -> Result<PathBuf, String> {
-    resolved_path_inner(path, 0)
-}
-
-fn resolved_path_inner(path: &Path, depth: usize) -> Result<PathBuf, String> {
-    if depth > 8 {
-        return Err(format!(
-            "too many destination symlinks at {}",
-            path.display()
-        ));
-    }
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|err| format!("determining current directory: {err}"))?
-            .join(path)
-    };
-    let mut resolved = PathBuf::new();
-    let mut components = absolute.components();
-    while let Some(component) = components.next() {
-        match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                resolved.push(component.as_os_str());
-            }
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            std::path::Component::Normal(name) => {
-                resolved.push(name);
-                if let Ok(canonical) = fs::canonicalize(&resolved) {
-                    resolved = canonical;
-                } else if let Ok(target) = fs::read_link(&resolved) {
-                    // A dangling symlink may still become valid after a trace
-                    // writer creates its parent. Resolve it before `..` too.
-                    let target = if target.is_absolute() {
-                        target
-                    } else {
-                        resolved.parent().unwrap_or(Path::new(".")).join(target)
-                    };
-                    return resolved_path_inner(&target.join(components.as_path()), depth + 1);
-                }
-            }
-        }
-    }
-    Ok(resolved)
 }
 
 pub fn write_atomic(path: &Path, export: &RunExport) -> Result<(), String> {

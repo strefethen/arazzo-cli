@@ -459,6 +459,110 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
 }
 
 #[test]
+fn prospective_case_aliases_follow_the_host_filesystem() {
+    let temp = TempDir::new();
+    temp.write("case-sensitivity-probe", "probe");
+    let case_insensitive = temp.path("CASE-SENSITIVITY-PROBE").exists();
+    let server = Server::start(|_, _| (200, "{}".into(), vec![]));
+    let workflows =
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+    let spec = spec(&temp, &server.url, workflows);
+
+    let trace = temp.path("case-run.json");
+    let export = temp.path("CASE-RUN.json");
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            trace.to_str().unwrap(),
+            "--export-run",
+            export.to_str().unwrap(),
+        ],
+    );
+    if case_insensitive {
+        assert!(!output.status.success());
+        assert_eq!(json_stdout(&output)["code"], "RUN_EXPORT_PATH");
+        assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+        assert!(!trace.exists());
+        assert!(!export.exists());
+    } else {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(trace.is_file());
+        assert!(export.is_file());
+        assert_ne!(fs::read(&trace).unwrap(), fs::read(&export).unwrap());
+    }
+
+    let missing_trace = temp.path("fresh/trace.json");
+    let missing_export = temp.path("fresh/TRACE.json");
+    let hits_before = server.hits.load(Ordering::SeqCst);
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            missing_trace.to_str().unwrap(),
+            "--export-run",
+            missing_export.to_str().unwrap(),
+        ],
+    );
+    if case_insensitive {
+        assert!(!output.status.success());
+        assert_eq!(json_stdout(&output)["code"], "RUN_EXPORT_PATH");
+        assert_eq!(server.hits.load(Ordering::SeqCst), hits_before);
+        assert!(!temp.path("fresh").exists());
+    } else {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(missing_trace.is_file());
+        assert!(missing_export.is_file());
+        assert_ne!(
+            fs::read(&missing_trace).unwrap(),
+            fs::read(&missing_export).unwrap()
+        );
+    }
+
+    let parent_trace = temp.path("other/trace.json");
+    let parent_export = temp.path("OTHER/TRACE.json");
+    let hits_before = server.hits.load(Ordering::SeqCst);
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            parent_trace.to_str().unwrap(),
+            "--export-run",
+            parent_export.to_str().unwrap(),
+        ],
+    );
+    if case_insensitive {
+        assert!(!output.status.success());
+        assert_eq!(json_stdout(&output)["code"], "RUN_EXPORT_PATH");
+        assert_eq!(server.hits.load(Ordering::SeqCst), hits_before);
+        assert!(!temp.path("other").exists());
+    } else {
+        assert!(!output.status.success());
+        assert_eq!(json_stdout(&output)["code"], "RUN_EXPORT_WRITE");
+        assert!(parent_trace.is_file());
+        assert!(!parent_export.exists());
+    }
+    assert!(fs::read_dir(&temp.0).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".arazzo-run-export-probe-")
+    }));
+}
+
+#[test]
 fn retries_nested_workflows_and_redaction_keep_order_and_identity() {
     let temp = TempDir::new();
     let server = Server::start(|n, path| {
