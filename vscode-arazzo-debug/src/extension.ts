@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ArazzoAdapterDescriptorFactory } from "./adapterClient";
 import { ArazzoAdapterTrackerFactory } from "./adapterTracker";
 import { ArazzoDebugConfigurationProvider } from "./debugConfigProvider";
+import { ArazzoEvaluatableExpressionProvider } from "./evaluatableExpressionProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const channel = vscode.window.createOutputChannel("Arazzo Debug");
@@ -18,6 +19,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.debug.registerDebugAdapterTrackerFactory(
       "arazzo",
       new ArazzoAdapterTrackerFactory(channel)
+    ),
+    vscode.languages.registerEvaluatableExpressionProvider(
+      "arazzo",
+      new ArazzoEvaluatableExpressionProvider()
     ),
     factory
   );

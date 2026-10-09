@@ -216,6 +216,12 @@ pub(super) fn evaluate_body_for_expression(state: &mut SessionState, expression:
 
 fn evaluate_expression(runtime: &RuntimeSession, expression: &str) -> Option<Value> {
     let trimmed = expression.trim();
+    if let Some(value) = evaluate_debug_scope_alias(runtime, trimmed) {
+        return Some(value);
+    }
+    if let Some(value) = evaluate_condition_expression(runtime, trimmed) {
+        return Some(value);
+    }
     if !trimmed.is_empty() && !trimmed.starts_with('$') && !trimmed.starts_with('/') {
         if let Some(stop) = runtime.last_stop.as_ref() {
             if let Some(output) = runtime.outputs.get(&(
@@ -229,6 +235,47 @@ fn evaluate_expression(runtime: &RuntimeSession, expression: &str) -> Option<Val
     }
 
     try_evaluate_watch_expression(runtime, trimmed)
+}
+
+fn evaluate_debug_scope_alias(runtime: &RuntimeSession, expression: &str) -> Option<Value> {
+    let alias = match expression {
+        "$request" => DebugScopeAlias::Request,
+        "$response" => DebugScopeAlias::Response,
+        _ => return None,
+    };
+    let scopes = runtime.controller.current_scopes().ok()?;
+    let http_scopes = http_scopes_from_locals(&scopes.locals);
+    let mut map = match alias {
+        DebugScopeAlias::Request => http_scopes.request?,
+        DebugScopeAlias::Response => http_scopes.response?,
+    };
+
+    let body_expr = match alias {
+        DebugScopeAlias::Request => "$request.body",
+        DebugScopeAlias::Response => "$response.body",
+    };
+    if let Ok(body) = runtime.controller.evaluate_watch_expression(body_expr) {
+        if !body.is_null() {
+            map.insert("body".to_string(), body);
+        }
+    }
+
+    Some(Value::Object(map.into_iter().collect()))
+}
+
+fn evaluate_condition_expression(runtime: &RuntimeSession, expression: &str) -> Option<Value> {
+    runtime
+        .controller
+        .try_evaluate_condition_expression(expression)
+        .ok()
+        .flatten()
+        .map(Value::Bool)
+}
+
+#[derive(Clone, Copy)]
+enum DebugScopeAlias {
+    Request,
+    Response,
 }
 
 fn try_evaluate_watch_expression(runtime: &RuntimeSession, expression: &str) -> Option<Value> {

@@ -154,7 +154,8 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p .",
     "watch": "tsc -w -p .",
-    "lint": "tsc -p . --noEmit"
+    "lint": "tsc -p . --noEmit",
+    "test": "npm run build && node --test dist/test/*.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

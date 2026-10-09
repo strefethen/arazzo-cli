@@ -51,52 +51,76 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
             "seq": 5,
             "type": "request",
             "command": "evaluate",
-            "arguments": { "expression": "title_1" }
+            "arguments": { "expression": "$response" }
         }),
         json!({
             "seq": 6,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": { "expression": "$response.body" }
+        }),
+        json!({
+            "seq": 7,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": { "expression": "$statusCode == 200" }
+        }),
+        json!({
+            "seq": 8,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": { "expression": "$response.body != null" }
+        }),
+        json!({
+            "seq": 9,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": { "expression": "title_1" }
+        }),
+        json!({
+            "seq": 10,
             "type": "request",
             "command": "next",
             "arguments": {}
         }),
         json!({
-            "seq": 7,
+            "seq": 11,
             "type": "request",
             "command": "scopes",
             "arguments": { "frameId": 100 }
         }),
         json!({
-            "seq": 8,
+            "seq": 12,
             "type": "request",
             "command": "variables",
             "arguments": { "variablesReference": 1 }
         }),
         json!({
-            "seq": 9,
+            "seq": 13,
             "type": "request",
             "command": "variables",
             "arguments": { "variablesReference": 2 }
         }),
         json!({
-            "seq": 10,
+            "seq": 14,
             "type": "request",
             "command": "variables",
             "arguments": { "variablesReference": 3 }
         }),
         json!({
-            "seq": 11,
+            "seq": 15,
             "type": "request",
             "command": "evaluate",
             "arguments": { "expression": "//item[1]/link" }
         }),
         json!({
-            "seq": 12,
+            "seq": 16,
             "type": "request",
             "command": "continue",
             "arguments": {}
         }),
         json!({
-            "seq": 13,
+            "seq": 17,
             "type": "request",
             "command": "disconnect",
             "arguments": {}
@@ -150,7 +174,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("scopes")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(7)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(11)
         })
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -170,7 +194,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("variables")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(9)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(13)
         })
         .and_then(|message| message.pointer("/body/variables"))
         .and_then(|v| v.as_array())
@@ -192,7 +216,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("variables")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(10)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(14)
         })
         .and_then(|message| message.pointer("/body/variables"))
         .and_then(|v| v.as_array())
@@ -214,7 +238,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(5)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(9)
         })
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -225,11 +249,85 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         Some("one")
     );
 
+    let evaluate_response_alias = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(5)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let response_alias_result = evaluate_response_alias
+        .pointer("/body/result")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        response_alias_result.contains("\"statusCode\":200"),
+        "$response hover should expose the response status, got {response_alias_result:?}"
+    );
+    assert!(
+        response_alias_result.contains("<rss>"),
+        "$response hover should include the same body available through $response.body"
+    );
+    assert!(
+        evaluate_response_alias
+            .pointer("/body/variablesReference")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|reference| reference > 0),
+        "$response hover should be expandable"
+    );
+
+    let evaluate_response_body = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(6)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    assert!(
+        evaluate_response_body
+            .pointer("/body/result")
+            .and_then(|v| v.as_str())
+            .is_some_and(|value| value.contains("<rss>")),
+        "$response.body should continue to expose the response body"
+    );
+
+    let evaluate_status_condition = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(7)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    assert_eq!(
+        evaluate_status_condition
+            .pointer("/body/result")
+            .and_then(|v| v.as_str()),
+        Some("true")
+    );
+
+    let evaluate_body_condition = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(8)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    assert_eq!(
+        evaluate_body_condition
+            .pointer("/body/result")
+            .and_then(|v| v.as_str()),
+        Some("true")
+    );
+
     let evaluate_response = messages
         .iter()
         .find(|message| {
             message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
-                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(11)
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(15)
         })
         .cloned()
         .unwrap_or_else(|| json!({}));
@@ -238,6 +336,108 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
             .pointer("/body/result")
             .and_then(|v| v.as_str()),
         Some("https://example.com/one")
+    );
+
+    let _ = fs::remove_file(spec_path);
+}
+
+#[test]
+fn dap_evaluate_condition_with_response_json_pointer() {
+    let server = start_server();
+    let spec_path = write_temp_geo_spec(&server.base_url);
+    let input = dap_test_support::encode_dap_stream(&[
+        json!({
+            "seq": 1,
+            "type": "request",
+            "command": "initialize",
+            "arguments": {}
+        }),
+        json!({
+            "seq": 2,
+            "type": "request",
+            "command": "launch",
+            "arguments": {
+                "spec": spec_path.to_string_lossy(),
+                "workflowId": "geocode",
+                "stopOnEntry": true
+            }
+        }),
+        json!({
+            "seq": 3,
+            "type": "request",
+            "command": "configurationDone",
+            "arguments": {}
+        }),
+        json!({
+            "seq": 4,
+            "type": "request",
+            "command": "next",
+            "arguments": {}
+        }),
+        json!({
+            "seq": 5,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": {
+                "expression": "$response.body#/features/0/properties/display_name != null"
+            }
+        }),
+        json!({
+            "seq": 6,
+            "type": "request",
+            "command": "evaluate",
+            "arguments": {
+                "expression": "$response.body#/features/0/properties/display_name"
+            }
+        }),
+        json!({
+            "seq": 7,
+            "type": "request",
+            "command": "continue",
+            "arguments": {}
+        }),
+        json!({
+            "seq": 8,
+            "type": "request",
+            "command": "disconnect",
+            "arguments": {}
+        }),
+    ]);
+
+    let reader = Cursor::new(input);
+    let mut output = Vec::<u8>::new();
+    let run = run_dap_stdio(reader, &mut output);
+    assert!(run.is_ok(), "running DAP loop");
+
+    let messages = dap_test_support::decode_dap_stream(&output);
+    let evaluate_condition = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(5)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    assert_eq!(
+        evaluate_condition
+            .pointer("/body/result")
+            .and_then(|v| v.as_str()),
+        Some("true")
+    );
+
+    let evaluate_value = messages
+        .iter()
+        .find(|message| {
+            message.get("command").and_then(|v| v.as_str()) == Some("evaluate")
+                && message.get("request_seq").and_then(|v| v.as_u64()) == Some(6)
+        })
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    assert_eq!(
+        evaluate_value
+            .pointer("/body/result")
+            .and_then(|v| v.as_str()),
+        Some("Apple Park Way, Cupertino")
     );
 
     let _ = fs::remove_file(spec_path);
@@ -276,6 +476,36 @@ workflows:
     path
 }
 
+fn write_temp_geo_spec(base_url: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let path = std::env::temp_dir().join(format!("arazzo-debug-geo-{nanos}.yaml"));
+    let spec = format!(
+        r#"
+arazzo: "1.0.0"
+info:
+  title: Geo
+  version: "1.0.0"
+sourceDescriptions:
+  - name: test
+    url: {base_url}
+    type: openapi
+workflows:
+  - workflowId: geocode
+    steps:
+      - stepId: lookup
+        operationPath: /geo
+        successCriteria:
+          - condition: $statusCode == 200
+"#
+    );
+    if let Err(err) = fs::write(&path, spec) {
+        panic!("writing temp spec: {err}");
+    }
+    path
+}
+
 #[derive(Debug)]
 struct TestServer {
     base_url: String,
@@ -304,6 +534,20 @@ fn start_server() -> TestServer {
         while !stop_flag.load(Ordering::Relaxed) {
             match server.recv_timeout(Duration::from_millis(20)) {
                 Ok(Some(request)) => {
+                    let path = request.url().to_string();
+                    if path == "/geo" {
+                        let body = r#"{"features":[{"properties":{"display_name":"Apple Park Way, Cupertino"}}]}"#;
+                        let mut response =
+                            TinyResponse::from_string(body).with_status_code(StatusCode(200));
+                        if let Ok(header) =
+                            Header::from_bytes(b"Content-Type".as_slice(), b"application/json")
+                        {
+                            response = response.with_header(header);
+                        }
+                        let _ = request.respond(response);
+                        continue;
+                    }
+
                     let body = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss>
   <channel>

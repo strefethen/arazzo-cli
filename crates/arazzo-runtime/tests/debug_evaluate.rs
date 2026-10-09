@@ -119,6 +119,24 @@ async fn evaluate_and_watch_expressions_at_pause() {
         Err(err) => panic!("evaluating condition expression: {err}"),
     };
     assert!(cond);
+    assert_eq!(
+        controller.try_evaluate_condition_expression("$steps.s1.outputs.code == 429"),
+        Ok(Some(true))
+    );
+    assert_eq!(
+        controller
+            .try_evaluate_condition_expression("$inputs.doc#/value != null")
+            .unwrap_or_else(|err| panic!("evaluating json pointer condition: {err}")),
+        Some(true)
+    );
+    assert_eq!(
+        controller.try_evaluate_condition_expression("$inputs.doc"),
+        Ok(None)
+    );
+    assert_eq!(
+        controller.try_evaluate_condition_expression("//value"),
+        Ok(None)
+    );
 
     let false_decision = controller.evaluate_condition("false");
     // Dots belong to an input's exact name; grouping makes this property access.

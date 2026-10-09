@@ -1,7 +1,9 @@
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use arazzo_expr::{EvalContext, ExpressionEvaluator};
+use arazzo_expr::{
+    parse_simple_condition, ConditionError, ConditionErrorKind, EvalContext, ExpressionEvaluator,
+};
 use arazzo_spec::OutputValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -203,11 +205,39 @@ impl DebugController {
         let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
             .evaluate_condition_detailed(condition);
         match evaluation.error {
-            Some(error) => Err(format!(
-                "invalid simple condition at byte {}: {}",
-                error.byte_offset, error.message
-            )),
+            Some(error) => Err(format_condition_error(&error)),
             None => Ok(evaluation.result),
+        }
+    }
+
+    /// Evaluate only complete boolean condition expressions.
+    ///
+    /// Debug frontends also send standalone watch expressions through DAP
+    /// `evaluate`; those should stay on the watch path even though they may be
+    /// valid condition operands.
+    pub fn try_evaluate_condition_expression(
+        &self,
+        expression: &str,
+    ) -> Result<Option<bool>, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        let trimmed = expression.trim();
+        let parsed = match parse_simple_condition(trimmed) {
+            Ok(parsed) => parsed,
+            Err(error) if error.kind == ConditionErrorKind::Syntax => return Ok(None),
+            Err(error) => return Err(format_condition_error(&error)),
+        };
+        if !parsed.is_condition_decision() {
+            return Ok(None);
+        }
+
+        let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
+            .evaluate_condition_detailed(trimmed);
+        match evaluation.error {
+            Some(error) => Err(format_condition_error(&error)),
+            None => Ok(Some(evaluation.result)),
         }
     }
 
@@ -407,6 +437,13 @@ fn evaluate_watch_expression_from_state(guard: &ControllerState, expression: &st
     }
 
     ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(trimmed)
+}
+
+fn format_condition_error(error: &ConditionError) -> String {
+    format!(
+        "invalid simple condition at byte {}: {}",
+        error.byte_offset, error.message
+    )
 }
 
 fn should_stop_for_step_mode(run_mode: RunMode, candidate_seq: u64, depth: usize) -> bool {

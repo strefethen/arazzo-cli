@@ -54,6 +54,12 @@ impl<'a> ParsedSimpleCondition<'a> {
     pub fn runtime_expressions(&self) -> &[ParsedRuntimeExpression<'a>] {
         &self.expressions
     }
+
+    /// Whether this parsed input contains intrinsic boolean condition syntax
+    /// rather than only a standalone value literal or expression.
+    pub fn is_condition_decision(&self) -> bool {
+        self.syntax.is_condition_decision()
+    }
 }
 
 // Keep literals and postfix fields as source text: converting numbers/indices,
@@ -62,6 +68,22 @@ impl<'a> ParsedSimpleCondition<'a> {
 pub(super) struct Syntax<'a> {
     pub(super) kind: SyntaxKind<'a>,
     pub(super) span: Range<usize>,
+}
+
+impl Syntax<'_> {
+    fn is_condition_decision(&self) -> bool {
+        use SyntaxKind as Kind;
+        match &self.kind {
+            Kind::Or(_) | Kind::And(_) | Kind::Not(_) | Kind::Comparison { .. } => true,
+            Kind::Group(child) => child.is_condition_decision(),
+            Kind::Boolean(_) => true,
+            Kind::Postfix { .. }
+            | Kind::RuntimeExpression(_)
+            | Kind::Null
+            | Kind::Number(_)
+            | Kind::String(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,5 +397,26 @@ mod tests {
         );
         // A completed unary grouped postfix must not accumulate with the next.
         assert!(parse_simple_condition(&format!("{} && {}", mixed(16), mixed(16))).is_ok());
+    }
+
+    #[test]
+    fn condition_decision_classification_separates_standalone_values() {
+        for (input, expected) in [
+            ("$response.body", false),
+            ("$response.body#/features/0/properties/display_name", false),
+            ("$statusCode == 200", true),
+            (
+                "$response.body#/features/0/properties/display_name != null",
+                true,
+            ),
+            ("true", true),
+            ("'literal'", false),
+            ("42", false),
+            ("null", false),
+        ] {
+            let parsed =
+                parse_simple_condition(input).unwrap_or_else(|error| panic!("{input}: {error}"));
+            assert_eq!(parsed.is_condition_decision(), expected, "{input}");
+        }
     }
 }
