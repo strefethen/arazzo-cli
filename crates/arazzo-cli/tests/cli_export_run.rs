@@ -373,6 +373,43 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
     let input_alias = run_json(&spec, "wf", &["--export-run", spec.to_str().unwrap()]);
     assert!(!input_alias.status.success());
     assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    let missing_dir = temp.path("new");
+    let lexical_spec_alias = temp.path("new/../workflow.yaml");
+    let nested_trace = temp.path("new/trace.json");
+    let original_spec = fs::read(&spec).unwrap();
+    let input_alias = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            nested_trace.to_str().unwrap(),
+            "--export-run",
+            lexical_spec_alias.to_str().unwrap(),
+        ],
+    );
+    assert!(!input_alias.status.success());
+    assert_eq!(json_stdout(&input_alias)["code"], "RUN_EXPORT_PATH");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    assert!(!missing_dir.exists());
+    assert_eq!(fs::read(&spec).unwrap(), original_spec);
+
+    let lexical_trace_alias = temp.path("new/../run.json");
+    let export = temp.path("run.json");
+    let trace_alias = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            lexical_trace_alias.to_str().unwrap(),
+            "--export-run",
+            export.to_str().unwrap(),
+        ],
+    );
+    assert!(!trace_alias.status.success());
+    assert_eq!(json_stdout(&trace_alias)["code"], "RUN_EXPORT_PATH");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    assert!(!missing_dir.exists());
+    assert!(!export.exists());
     let openapi = temp.write("api.yaml", "openapi: 3.0.3\ninfo:\n  title: Local source\n  version: 1.0.0\nservers:\n  - url: http://127.0.0.1\npaths: {}\n");
     let local_spec = temp.write("local.yaml", "arazzo: 1.1.0\ninfo:\n  title: Local source\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: ./api.yaml\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n");
     let input_alias = run_json(
@@ -405,6 +442,20 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
     assert!(!failed.status.success());
     assert_eq!(json_stdout(&failed)["code"], "RUN_EXPORT_WRITE");
     assert!(directory_target.is_dir());
+    #[cfg(unix)]
+    {
+        // The destination is a regular file, but the atomic temp name
+        // exceeds the filesystem's filename limit and cannot be created.
+        let long_name = "a".repeat(245);
+        let existing = temp.write(&long_name, "previous run artifact\n");
+        let failed = run_json(&spec, "wf", &["--export-run", existing.to_str().unwrap()]);
+        assert!(!failed.status.success());
+        assert_eq!(json_stdout(&failed)["code"], "RUN_EXPORT_WRITE");
+        assert_eq!(
+            fs::read_to_string(&existing).unwrap(),
+            "previous run artifact\n"
+        );
+    }
 }
 
 #[test]
@@ -510,6 +561,32 @@ fn url_userinfo_and_string_leaves_are_sanitized() {
         "Bearer [REDACTED]"
     );
     assert!(!value.to_string().contains("body-secret"));
+}
+
+#[test]
+fn content_type_classification_redacts_embedded_credentials() {
+    let temp = TempDir::new();
+    let server = Server::start(|_, _| {
+        (
+            200,
+            "{}".into(),
+            vec![("Content-Type", "text/plain; token=review-secret".into())],
+        )
+    });
+    let workflows =
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+    let spec = spec(&temp, &server.url, workflows);
+    let path = temp.path("run.json");
+    let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value = artifact(&path);
+    let response = &value["workflows"]["wf"]["steps"]["one"]["executions"][0]["response"];
+    assert_eq!(response["contentType"], "text/plain; token=[REDACTED]");
+    assert!(!value.to_string().contains("review-secret"));
 }
 
 #[test]

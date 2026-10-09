@@ -228,7 +228,7 @@ fn execution_from_record(record: &RunStepRecord) -> Result<Execution, String> {
         Response {
             status_code: response.status_code,
             headers,
-            content_type: response.content_type.to_string(),
+            content_type: redact_text_patterns(&response.content_type.to_string()),
             body_bytes: response.body_bytes,
         }
     });
@@ -392,17 +392,6 @@ fn resolved_path_inner(path: &Path, depth: usize) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    if let Ok(canonical) = fs::canonicalize(path) {
-        return Ok(canonical);
-    }
-    if let Ok(target) = fs::read_link(path) {
-        let target = if target.is_absolute() {
-            target
-        } else {
-            path.parent().unwrap_or(Path::new(".")).join(target)
-        };
-        return resolved_path_inner(&target, depth + 1);
-    }
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -410,9 +399,35 @@ fn resolved_path_inner(path: &Path, depth: usize) -> Result<PathBuf, String> {
             .map_err(|err| format!("determining current directory: {err}"))?
             .join(path)
     };
-    let parent = absolute.parent().unwrap_or(Path::new("."));
-    let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
-    Ok(parent.join(absolute.file_name().unwrap_or_default()))
+    let mut resolved = PathBuf::new();
+    let mut components = absolute.components();
+    while let Some(component) = components.next() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                resolved.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Normal(name) => {
+                resolved.push(name);
+                if let Ok(canonical) = fs::canonicalize(&resolved) {
+                    resolved = canonical;
+                } else if let Ok(target) = fs::read_link(&resolved) {
+                    // A dangling symlink may still become valid after a trace
+                    // writer creates its parent. Resolve it before `..` too.
+                    let target = if target.is_absolute() {
+                        target
+                    } else {
+                        resolved.parent().unwrap_or(Path::new(".")).join(target)
+                    };
+                    return resolved_path_inner(&target.join(components.as_path()), depth + 1);
+                }
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 pub fn write_atomic(path: &Path, export: &RunExport) -> Result<(), String> {
