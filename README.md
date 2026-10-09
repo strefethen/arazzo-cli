@@ -16,7 +16,7 @@ arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, a
 
 ## Demo
 
-[![asciicast](https://asciinema.org/a/NFjjca0b1lKZ9hNA.png)](https://asciinema.org/a/NFjjca0b1lKZ9hNA)
+[![Watch the CLI demo](docs/images/cli-demo.png)](https://asciinema.org/a/NFjjca0b1lKZ9hNA)
 
 ## Quick Start
 
