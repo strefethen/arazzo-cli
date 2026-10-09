@@ -123,6 +123,7 @@ Global flags:
 - `--openapi <path>` — operationId source spec (repeatable)
 - `--expr-diagnostics <off|warn|error>` — expression warning level (default `off`)
 - `--trace <path>` — write a trace.v1 execution artifact
+- `--export-run <path>` — write a versioned JSON run artifact with declared outputs and step history
 - `--trace-max-body-bytes <n>` — max body size in trace (default `2048`)
 
 `replay` flags:
@@ -174,9 +175,14 @@ arazzo-cli generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
 # Write a trace file
 arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=429 --trace ./trace.json
 
+# Write a JSON run artifact alongside ordinary stdout
+arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=200 --export-run ./run.json
+
 # Replay a trace offline
 arazzo-cli replay ./trace.json
 ```
+
+The `run.v1` export keeps typed declared outputs, ordered attempts, HTTP status and body-size metadata, and UTC production timestamps. It also writes completed attempts after a runtime failure. See the [run export contract](docs/run-export-v1.md) or run `arazzo-cli schema export-run` for the schema.
 
 ## Execution Traces
 

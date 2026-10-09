@@ -95,6 +95,11 @@ fn schema_run_matches_checked_in_file() {
 }
 
 #[test]
+fn schema_export_run_matches_checked_in_file() {
+    assert_schema_matches_file("export-run", "export-run.schema.json");
+}
+
+#[test]
 fn schema_replay_matches_checked_in_file() {
     assert_schema_matches_file("replay", "replay.schema.json");
 }

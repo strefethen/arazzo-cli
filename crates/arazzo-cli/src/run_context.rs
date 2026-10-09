@@ -31,6 +31,7 @@ pub struct RunOptions {
     pub dry_run: bool,
     pub strict_inputs: bool,
     pub trace: Option<String>,
+    pub export_run: Option<String>,
     pub trace_max_body_bytes: usize,
     pub max_response_size: Option<usize>,
     pub transport: TransportFlags,

@@ -108,6 +108,10 @@ pub enum Commands {
         #[arg(long = "trace")]
         trace: Option<String>,
 
+        /// Write a versioned JSON artifact with declared outputs and step history.
+        #[arg(long = "export-run", value_name = "PATH")]
+        export_run: Option<String>,
+
         /// Maximum response body preview bytes stored per trace step.
         #[arg(
             long = "trace-max-body-bytes",

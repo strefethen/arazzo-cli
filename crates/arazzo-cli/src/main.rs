@@ -9,7 +9,9 @@ mod cli;
 mod generate;
 mod handlers;
 mod output;
+mod run;
 mod run_context;
+mod run_export;
 mod test_runner;
 mod trace;
 mod transport;
@@ -113,6 +115,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             dry_run,
             strict_inputs,
             trace,
+            export_run,
             trace_max_body_bytes,
             max_response_size,
             insecure_host,
@@ -139,6 +142,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                     dry_run,
                     strict_inputs,
                     trace,
+                    export_run,
                     trace_max_body_bytes,
                     max_response_size,
                     transport: transport::TransportFlags {
