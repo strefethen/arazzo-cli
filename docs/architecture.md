@@ -7,46 +7,68 @@ This document describes the runtime and CLI architecture.
 1. CLI shell (`crates/arazzo-cli/src/main.rs`)
 2. Command parsing (`crates/arazzo-cli/src/cli.rs`)
 3. Command handlers (`crates/arazzo-cli/src/handlers.rs`)
-4. Output formatters (`crates/arazzo-cli/src/output.rs`)
-5. Trace artifact plumbing (`crates/arazzo-cli/src/trace.rs`)
-6. Execution runtime (`crates/arazzo-runtime`)
-7. Debug adapter (`crates/arazzo-debug-adapter`)
-8. Spec model + validation (`crates/arazzo-spec`, `crates/arazzo-validate`)
-9. Expression evaluator (`crates/arazzo-expr`)
-10. VSCode extension scaffold (`vscode-arazzo-debug`)
+4. Run orchestration (`crates/arazzo-cli/src/run.rs`)
+5. Output formatters (`crates/arazzo-cli/src/output.rs`)
+6. Run export contract and persistence (`crates/arazzo-cli/src/run_export.rs`)
+7. Trace artifact plumbing (`crates/arazzo-cli/src/trace.rs`)
+8. Execution runtime (`crates/arazzo-runtime`)
+9. Debug adapter (`crates/arazzo-debug-adapter`)
+10. Spec model + validation (`crates/arazzo-spec`, `crates/arazzo-validate`)
+11. Expression evaluator (`crates/arazzo-expr`)
+12. VSCode extension scaffold (`vscode-arazzo-debug`)
 
 ## CLI Command Flow
 
 1. Parse flags and subcommands with clap in `cli.rs`.
 2. Convert global flags into `GlobalOptions`.
 3. Build a `RunContext` for `run` requests (`run_context.rs`).
-4. Dispatch to handler functions in `handlers.rs`.
+4. Dispatch to handler functions in `handlers.rs`; the run handler delegates to `run.rs`.
 5. Render output via `output.rs` (JSON or human text).
 6. For `run --trace`, build/redact/write trace files in `trace.rs`.
+7. For `run --export-run`, enable body-free runtime capture, then build/redact/write the versioned artifact through `run_export.rs`.
 
-The command UX is intentionally unchanged by this split.
+Ordinary stdout formatting remains in `output.rs`. Export serialization and
+filesystem policy belong to the export owner, not the command dispatcher or
+runtime. See the [run export contract](run-export-v1.md) for fields and semantics.
+Within that owner, private `run_export/paths.rs` handles destination identity,
+prospective paths and filesystem naming equivalence. Artifact types and
+conversion remain in `run_export.rs`; path checks do not depend on the run model.
 
 ## Run Context
 
 `RunContext` is the central object for run execution. It includes:
 
 - Global output settings (`json`, `verbose`)
-- Run settings (`workflow`, timeout, headers, parallel, dry-run, trace flags)
-This keeps run-time feature growth out of clap structs and handlers.
+- Run settings (`workflow`, timeout, headers, parallel, dry-run, trace and export paths)
+
+Clap declarations and shell wiring pass these settings to the run owner;
+execution and artifact policy stay outside the shell and dispatcher.
 
 ## Runtime Event/Trace Model
 
-The runtime exposes two complementary views:
+The runtime exposes three complementary views:
 
 - `ExecutionEvent` stream (`BeforeStep`, `AfterStep`) with deterministic sequence numbers
 - `TraceStepRecord` attempt-level execution records (request/response/criteria/decision)
+- `RunStepRecord` attempt-level retained outputs and body-free HTTP metadata
 
-Parallel execution guarantees deterministic ordering for both:
+Parallel execution guarantees deterministic ordering for these views:
 
 - Level ordering from dependency graph
 - Stable per-level step index ordering
 - Each step's attempts, retries included, recorded together in attempt order
 - No ordering dependence on thread completion timing
+
+`EngineBuilder::capture_run` enables run records independently of tracing.
+The shared attempt protocol delegates capture to `runtime_core/run_record.rs`,
+and `ExecutionResult::run_steps` exposes the collected records. Sequential,
+parallel and single-step execution use this same capture boundary. Runtime
+records contain execution facts; CLI code owns the persisted `run.v1` envelope,
+grouping, redaction and atomic writing. Undeclared request/response bodies are
+absent from run records; a body explicitly selected as an output remains data.
+
+The [cumulative structure assessment](../plans/assessments/project-structure.md)
+records dated measurements, ownership guidance and remaining structural debt.
 
 ## Debugger Surfaces
 
