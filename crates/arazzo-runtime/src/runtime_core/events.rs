@@ -8,6 +8,8 @@ use super::*;
 #[allow(clippy::large_enum_variant)]
 pub enum EngineEvent {
     TraceStep(TraceStepRecord),
+    /// Body-free facts for one settled step attempt when run capture is enabled.
+    RunStep(RunStepRecord),
     DryRunRequest(DryRunRequest),
     Execution(ExecutionEvent),
     Observer(ObserverEvent),
@@ -111,6 +113,17 @@ pub struct ExecutionResult {
 }
 
 impl ExecutionResult {
+    /// Filter run capture records in emission order.
+    pub fn run_steps(&self) -> Vec<&RunStepRecord> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::RunStep(r) => Some(r),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Filter trace step records from the event stream.
     pub fn trace_steps(&self) -> Vec<&TraceStepRecord> {
         self.events

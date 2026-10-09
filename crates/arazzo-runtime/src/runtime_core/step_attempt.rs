@@ -70,7 +70,7 @@ pub(super) struct RouteScope<'a> {
 #[must_use = "an announced attempt is recorded only by `Engine::finish_attempt`"]
 #[derive(Debug)]
 pub(super) struct BegunAttempt {
-    /// Trace attempt number; 0 when tracing is off.
+    /// Attempt number; 0 when both tracing and run capture are off.
     attempt: u32,
     started: Instant,
 }
@@ -82,12 +82,12 @@ pub(super) struct SettledAttempt {
     /// What the attempt produced. A runtime error is already settled into a
     /// failed result.
     pub(super) execution: StepExecution,
-    duration: Duration,
+    pub(super) duration: Duration,
     /// The routing decision, as traced.
-    decision: TraceDecision,
+    pub(super) decision: TraceDecision,
     /// The error the trace record names: routing's own when routing ends the
     /// workflow, otherwise the attempt's.
-    trace_error: Option<String>,
+    pub(super) trace_error: Option<String>,
 }
 
 /// A retry counted against its site's budget, reported by
@@ -141,6 +141,8 @@ impl Engine {
         let (settled, flow) = SettledAttempt::new(execution, duration, routed);
         self.trace_attempt(ctx, scope.workflow_id, step, attempt, &settled)
             .await;
+        self.capture_attempt(ctx, scope.workflow_id, step, attempt, &settled)
+            .await;
         (settled, flow)
     }
 
@@ -186,6 +188,8 @@ impl Engine {
             .await;
         self.trace_attempt(ctx, workflow_id, step, number, attempt)
             .await;
+        self.capture_attempt(ctx, workflow_id, step, number, attempt)
+            .await;
     }
 
     /// Reports a counted retry that will run: the scheduler calls this after
@@ -212,9 +216,9 @@ impl Engine {
     }
 
     /// The next attempt number of `step` in this invocation, or 0 when
-    /// tracing is off.
+    /// tracing and run capture are both off.
     fn number_attempt(&self, ctx: &ExecutionContext, workflow_id: &str, step: &Step) -> u32 {
-        if self.inner.trace_enabled {
+        if self.inner.trace_enabled || self.inner.capture_run {
             Engine::next_attempt(ctx, workflow_id, &step.step_id)
         } else {
             0

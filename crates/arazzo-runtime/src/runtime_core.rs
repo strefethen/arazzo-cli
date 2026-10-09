@@ -51,6 +51,7 @@ mod jsonpath;
 mod payload;
 mod redaction;
 mod replay;
+mod run_record;
 mod state;
 mod step_attempt;
 mod url;
@@ -93,6 +94,7 @@ use payload::{
     resolve_value_source, to_json_path, value_to_string,
 };
 use replay::{validate_replay_request, ReplayKey, ReplayState};
+pub use run_record::{RunRequestMetadata, RunResponseMetadata, RunStepOutcome, RunStepRecord};
 pub use state::Engine;
 use state::ExecutionContext;
 pub(crate) use state::VarStore;

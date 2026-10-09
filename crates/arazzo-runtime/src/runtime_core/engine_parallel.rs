@@ -315,6 +315,7 @@ impl Engine {
             event_tx: tx,
             role: ContextRole::AttemptBuffer,
             trace_seq: AtomicU64::new(0),
+            run_seq: AtomicU64::new(0),
             execution_event_seq: AtomicU64::new(0),
             step_attempts: Mutex::new(BTreeMap::new()),
             cancel: ctx.cancel.clone(),

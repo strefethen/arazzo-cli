@@ -8,6 +8,7 @@ pub(super) struct ExecutionContext {
     /// Whether `event_tx` is the invocation's stream or an attempt's buffer.
     pub role: ContextRole,
     pub trace_seq: AtomicU64,
+    pub run_seq: AtomicU64,
     pub execution_event_seq: AtomicU64,
     pub step_attempts: Mutex<BTreeMap<(String, String), u32>>,
     pub cancel: CancellationToken,
@@ -391,6 +392,7 @@ pub(super) struct EngineInner {
     pub(super) parallel_mode: bool,
     pub(super) dry_run_mode: bool,
     pub(super) trace_enabled: bool,
+    pub(super) capture_run: bool,
     pub(super) strict_inputs: bool,
     pub(super) channel_capacity: usize,
     pub(super) trace_hook: Option<Arc<dyn TraceHook>>,

@@ -13,6 +13,7 @@ pub struct EngineBuilder {
     parallel: bool,
     dry_run: bool,
     trace: bool,
+    capture_run: bool,
     replay_trace_steps: Option<Vec<TraceStepRecord>>,
     strict_inputs: bool,
     channel_capacity: usize,
@@ -34,6 +35,7 @@ impl EngineBuilder {
             parallel: false,
             dry_run: false,
             trace: false,
+            capture_run: false,
             replay_trace_steps: None,
             strict_inputs: false,
             channel_capacity: DEFAULT_CHANNEL_CAPACITY,
@@ -78,6 +80,12 @@ impl EngineBuilder {
     /// Enables or disables detailed per-step trace recording during execution.
     pub fn trace(mut self, enabled: bool) -> Self {
         self.trace = enabled;
+        self
+    }
+
+    /// Enables body-free records for each settled step attempt, independently of tracing.
+    pub fn capture_run(mut self, enabled: bool) -> Self {
+        self.capture_run = enabled;
         self
     }
 
@@ -222,6 +230,7 @@ impl EngineBuilder {
                 parallel_mode: self.parallel,
                 dry_run_mode: self.dry_run,
                 trace_enabled: self.trace,
+                capture_run: self.capture_run,
                 strict_inputs: self.strict_inputs,
                 channel_capacity: self.channel_capacity,
                 trace_hook: self.trace_hook.map(|h| h as Arc<dyn TraceHook>),
