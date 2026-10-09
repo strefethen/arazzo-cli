@@ -489,20 +489,25 @@ stops before visiting the conversion. With `a=[true,"NaN"]` and the same `b`,
 it errors and the negation cannot turn the error into success. Use bounded-stack
 traversal for deeply nested runtime values; no unbounded recursive comparison.
 
-For `!=`, negate equality except the null rule below. For ordering (`< <= > >=`),
+For `!=`, negate successful equality for every operand pair, including null/missing.
+Equality evaluation errors remain errors under both `!=` and negated `==`. For ordering (`< <= > >=`),
 number/number uses `N`, number/string in either direction uses `C`, and
 string/string uses `S`. Exactly one null/missing operand yields false. Both
 null/missing operands, or any other type pair, produce an evaluation error.
 Thus booleans and containers support equality but have no invented ordering.
 
-**Null ambiguity, made explicit:** the quoted prose above and the example
-`$response.body.data != null` do not specify a consistent ordinary inequality
-model. The accepted interpretation follows the prose literally: every comparison with exactly
-one null/missing operand, including `!=`, is false. `null == null` is true and
-`null != null` is false. Existence can be tested with `!(value == null)`;
-short-circuit guards should use that spelling. This is the accepted conservative
-interpretation, not a claim that the example agrees. Steve explicitly accepted this row on 2026-10-07; retain the contradiction as an upstream clarification draft,
-without filing publicly or inventing an alternate compatibility mode.
+**Null ambiguity, decision revised 2026-10-08:** the quoted prose above and
+the example `$response.body.data != null` are ambiguous when the prose is
+applied to every comparison operator. Steve explicitly rejected the previous
+2026-10-07 decision because it made `!=` disagree with negated `==`. The accepted
+interpretation now reads the null sentence as equality guidance, consistent
+with the operator definition “Not equal” and the example. Equality and
+inequality are complements whenever equality succeeds: exactly one null/missing
+operand makes `==` false and `!=` true; both null/missing makes `==` true and
+`!=` false. `value != null` and `!(value == null)` are equivalent non-null
+guards. Existing missing propagation, dereference errors and ordering rules
+remain unchanged. Retain the ambiguity as an upstream clarification draft,
+without filing publicly or adding an alternate compatibility mode.
 
 #### Results and diagnostics
 

@@ -168,13 +168,13 @@ fn public_value(value: &ResolvedValue) -> &Value {
 
 fn compare(left: &ResolvedValue, right: &ResolvedValue, operator: &str) -> Result<bool, String> {
     let (left, right) = (public_value(left), public_value(right));
-    // The accepted null prose applies to all six operators, including !=.
-    if left.is_null() != right.is_null() {
-        return Ok(false);
-    }
     if matches!(operator, "==" | "!=") {
         let equal = structural_equal(left, right)?;
         return Ok(if operator == "==" { equal } else { !equal });
+    }
+    // Null ordering remains false; inequality always complements equality above.
+    if left.is_null() != right.is_null() {
+        return Ok(false);
     }
     let ordering = ordered(left, right)?;
     Ok(match operator {

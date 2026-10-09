@@ -587,7 +587,7 @@ Numbers use the existing i64/u64/finite-f64 storage. Plain integer literals and 
 
 For all six comparisons, exactly one number and one string triggers numeric conversion: the string must fully match JSON-number syntax without surrounding whitespace, and invalid spelling/range fails evaluation. `'200' == 200` is true; `' 200 ' == 200` and `'01' == 1` are errors. Two strings remain Unicode-lowercase text: `'10' < '2'` is true and `'01' == '1'` is false. This deliberately adopts only part of the specification's numeric-string SHOULD to keep text ordering independent of its contents.
 
-The accepted interpretation of the specification's conflicting null prose and example makes every comparison with exactly one null or missing operand false, including `!=`. `null == null` is true and `null != null` is false. Test existence with `!(value == null)`, for example `!($response.body.data == null)`. The [local clarification draft](plans/assessments/arazzo-simple-condition-null-clarification.md) records this unresolved ambiguity. These bounded semantics do not establish full Arazzo 1.1 compliance.
+Equality and inequality are complements whenever comparison succeeds: `value != null` agrees with `!(value == null)`. Null and missing compare equal; any non-null value compares unequal to them. `null == null` is true and `null != null` is false. Test for present non-null data with `$response.body.data != null`; `false`, `0`, empty strings and empty containers all pass that test. Ordering with exactly one null or missing operand remains false. The [local clarification draft](plans/assessments/arazzo-simple-condition-null-clarification.md) records this unresolved ambiguity. These bounded semantics do not establish full Arazzo 1.1 compliance.
 
 ### Regex
 

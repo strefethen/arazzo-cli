@@ -57,7 +57,7 @@ fn conformance_simple_condition_evaluation_positive_evidence() {
         ("'01' == '1'", false),
         ("null == null", true),
         ("null != null", false),
-        ("7 != null", false),
+        ("7 != null", true),
         ("!(7 == null)", true),
         ("null < 7", false),
         ("7 >= null", false),
@@ -68,6 +68,89 @@ fn conformance_simple_condition_evaluation_positive_evidence() {
         ("true || $response.body.nil.x == 1", true),
     ] {
         decision(&evaluator, condition, expected);
+    }
+}
+
+#[test]
+fn inequality_is_negated_equality_including_null_and_missing() {
+    let evaluator = ExpressionEvaluator::new(EvalContext {
+        response_body: Some(json!({"nil": null})),
+        inputs: BTreeMap::from([
+            ("array".to_owned(), json!([null, 7])),
+            ("object".to_owned(), json!({"nil": null})),
+        ]),
+        ..EvalContext::default()
+    });
+    let operands = [
+        "null",
+        "$inputs.absent",
+        "false",
+        "true",
+        "0",
+        "7",
+        "'7'",
+        "'x'",
+        "$inputs.array",
+        "$inputs.object",
+    ];
+    for left in operands {
+        for right in operands {
+            let equal = evaluator.evaluate_condition_detailed(&format!("{left} == {right}"));
+            let unequal = evaluator.evaluate_condition_detailed(&format!("{left} != {right}"));
+            let negated = evaluator.evaluate_condition_detailed(&format!("!({left} == {right})"));
+            assert_eq!(unequal.result, negated.result, "{left}, {right}");
+            assert_eq!(unequal.error.is_some(), equal.error.is_some());
+            assert_eq!(negated.error.is_some(), equal.error.is_some());
+            assert_eq!(unequal.warnings, equal.warnings);
+            assert_eq!(negated.warnings, equal.warnings);
+            if equal.error.is_none() {
+                assert_eq!(unequal.result, !equal.result, "{left}, {right}");
+            } else {
+                assert!(!equal.result && !unequal.result && !negated.result);
+            }
+        }
+    }
+    for condition in [
+        "$response.body.nil.x != null",
+        "!($response.body.nil.x == null)",
+    ] {
+        let result = evaluator.evaluate_condition_detailed(condition);
+        assert!(!result.result);
+        assert_eq!(
+            result.error.unwrap().kind,
+            ConditionErrorKind::InvalidEvaluation
+        );
+    }
+}
+
+#[test]
+fn spec_non_null_data_guard_accepts_only_present_non_null_data() {
+    for data in [
+        Some(json!({})),
+        Some(json!([])),
+        Some(json!(false)),
+        Some(json!(0)),
+        Some(json!("")),
+        Some(Value::Null),
+        None,
+    ] {
+        let expected = data.as_ref().is_some_and(|value| !value.is_null());
+        let body = data.map_or_else(|| json!({}), |value| json!({"data": value}));
+        let evaluator = ExpressionEvaluator::new(EvalContext {
+            status_code: Some(200),
+            response_body: Some(body),
+            ..EvalContext::default()
+        });
+        decision(
+            &evaluator,
+            "$statusCode == 200 && $response.body.data != null",
+            expected,
+        );
+        decision(
+            &evaluator,
+            "$statusCode == 200 && !($response.body.data == null)",
+            expected,
+        );
     }
 }
 
@@ -165,7 +248,7 @@ fn every_ordered_type_pair_and_operator_obeys_the_matrix() {
                 let result = evaluator.evaluate_condition_detailed(&condition);
                 let one_null = (left_type == 3) != (right_type == 3);
                 let equality = left_type == right_type || (left_type < 2 && right_type < 2);
-                if one_null {
+                if one_null && !matches!(operator, "==" | "!=") {
                     assert!(!result.result, "{condition} [{left_type},{right_type}]");
                     assert!(result.error.is_none());
                 } else if matches!(operator, "==" | "!=") {

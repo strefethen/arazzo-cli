@@ -18,6 +18,12 @@ otherwise fails to read.
 
 ### Fixed
 
+- Restore simple-condition `!=` as the complement of `==`, including null
+  and missing operands. `value != null` now agrees with `!(value == null)`:
+  present non-null data passes, while null or missing data fails. This reverses
+  the 0.8.0 interpretation of the specification's ambiguous null prose and
+  matches its non-null data example. Evaluation errors still fail the condition.
+
 - `.env` loading in both binaries stops at the first read error other than
   invalid UTF-8 and prints `warning: .env:<line>: stopped reading: <error>`.
   Names read before the error stay set. A directory named `.env` previously

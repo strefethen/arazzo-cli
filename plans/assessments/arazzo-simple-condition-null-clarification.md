@@ -17,17 +17,19 @@ The same section gives this example:
 - condition: $statusCode == 200 && $response.body.data != null
 ```
 
-With status 200 and `data: {}`, the example advertises passing. Literal application of the quoted prose instead makes `data != null` false because exactly one operand is null. With absent or explicit-null data, that comparison is also false under the accepted local interpretation. The example therefore does not provide the advertised existence test.
+With status 200 and `data: {}`, the example advertises passing. Literal application of the quoted prose instead makes `data != null` false because exactly one operand is null. With absent or explicit-null data, that comparison is also false under the former local interpretation. The example therefore does not provide the advertised existence test.
 
-Upstream clarification requested: does “Comparing null with any other value” include `!=`? Please align the prose and example so authors can determine the intended comparison and existence semantics. This draft selects no new upstream rule and does not claim that a clarification has been accepted.
+Upstream clarification requested: does “Comparing null with any other value” include `!=`? Please align the prose and example so authors can determine the intended comparison and existence semantics. This draft does not claim that an upstream clarification has been accepted. The revised local decision below follows equality/inequality complementarity and the example.
 
-## Accepted local interpretation
+## Accepted local interpretation — revised 2026-10-08
 
 The [accepted plan](../current/arazzo-1.1-conformance-evidence.md#accepted-simple-condition-evaluation-contract-2026-10-07) defines the following local behavior:
 
-- Exactly one null or missing operand yields false for all six comparisons: `==`, `!=`, `<`, `<=`, `>`, and `>=`.
+- Steve reversed the prior all-comparisons-false decision because `!=` must agree with negated `==`.
+- Exactly one null or missing operand yields false for `==` and true for `!=`. Ordering (`<`, `<=`, `>`, `>=`) remains false.
+- Inequality negates successful equality for every operand pair. Errors remain errors under inequality and negation.
 - Both operands null or missing yield true for `==`, false for `!=`, and an evaluation error for ordering.
-- `!(value == null)` is the supported existence spelling, for example `!($response.body.data == null)`.
+- `value != null` and `!(value == null)` are equivalent non-null guards. They reject null and missing, and accept every non-null value, including false, zero, empty strings and empty containers.
 - Property/index access on a missing value propagates missing; dereferencing present explicit null produces an evaluation error.
 
 Executable evidence is provided by [conformance_simple_condition_evaluation_positive_evidence](../../crates/arazzo-expr/tests/simple_condition_evaluation.rs#conformance_simple_condition_evaluation_positive_evidence) and [conformance_simple_condition_evaluation_negative_evidence](../../crates/arazzo-expr/tests/simple_condition_evaluation.rs#conformance_simple_condition_evaluation_negative_evidence). These are evidence of accepted local behavior, not normative specification text. There is no alternate compatibility mode.
