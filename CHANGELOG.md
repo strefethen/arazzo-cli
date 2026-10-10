@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-09
+
+Add a compact JSON run export for agents and improve debugger hover evaluation.
+
+**Upgrade if** you want durable run artifacts for examples, tests, and agent
+handoffs, or if you use the VS Code debugger to inspect response expressions.
+
+- **Run artifacts** — `arazzo-cli run --export-run <path>` writes a redacted
+  `run.v1` JSON artifact with typed declared outputs, ordered step attempts,
+  request/response metadata, timestamps, and runtime status.
+- **Safer export destinations** — run exports refuse paths that alias the trace,
+  input spec, explicit `--openapi` files, or local OpenAPI sources loaded from
+  `sourceDescriptions`, including filesystem-equivalent paths.
+- **Debugger hover drilldown** — VS Code hovers now evaluate `$response`,
+  `$response.body`, JSON Pointer prefixes, scalar pointer values, and whole
+  simple conditions distinctly.
+
+### Added
+
+- Add `run --export-run <path>` for producing a versioned `run.v1` JSON
+  artifact without changing normal stdout. The artifact includes selected run
+  metadata, parsed inputs before defaults, final outputs, and per-step execution
+  records suitable for `jq`, docs, and agent handoffs.
+- Add `schema export-run` and the bundled
+  `docs/schemas/export-run.schema.json` contract for consumers that validate or
+  generate tooling around exported run artifacts.
+- Capture body-free settled step attempts in the runtime so run artifacts can
+  describe retries, failures, dry-runs, and HTTP metadata without implicitly
+  copying response bodies.
+
+### Fixed
+
+- Refuse unsafe or ambiguous run export destinations, including paths that are
+  the same file as the trace output, the input Arazzo spec, explicit OpenAPI
+  files, or local `sourceDescriptions` files after filesystem equivalence is
+  resolved.
+- Preserve both the runtime failure and the export or trace write failure in
+  JSON error messages when multiple end-of-run reporting steps fail.
+- Improve DAP evaluate handling so `$request` and `$response` hovers are
+  expandable, `$response.body` and JSON Pointer prefixes evaluate to their
+  actual values, and whole simple-condition hovers evaluate as booleans.
+
 ## [0.8.1] - 2026-10-08
 
 Restore non-null guards in simple conditions and prevent startup hangs when

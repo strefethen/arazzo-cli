@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.7] - 2026-10-09
+
+### Fixed
+- Debug hover now drills into runtime expressions again. Hovering `$response`
+  shows the response object, `$response.body` shows the body, each JSON Pointer
+  segment shows the corresponding nested value, and hovering the condition
+  operator still evaluates the full boolean expression.
+- `$request` and `$response` hover values are expandable and consistently
+  include the body when it is available.
+- Simple condition hovers such as
+  `$response.body#/features/0/properties/display_name != null` now evaluate as
+  booleans only when the whole condition is selected, avoiding misleading
+  `null` results for valid sub-expressions.
+
 ## [0.0.6] - 2026-08-03
 
 ### Fixed
