@@ -201,12 +201,15 @@ fn create_probe_directory(anchor: &Path) -> Result<PathBuf, String> {
             ".arazzo-run-export-probe-{}-{stamp}-{sequence}",
             std::process::id()
         ));
-        let mut builder = DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = DirBuilder::new();
         match builder.create(&probe) {
             Ok(()) => return Ok(probe),
             Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
