@@ -340,9 +340,6 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
         "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
     let spec = spec(&temp, &server.url, workflows);
     let trace = temp.path("trace.json");
-    let alias = temp.path("trace-alias.json");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&trace, &alias).expect("symlink");
     let same = run_json(
         &spec,
         "wf",
@@ -357,6 +354,8 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
     assert_eq!(server.hits.load(Ordering::SeqCst), 0);
     #[cfg(unix)]
     {
+        let alias = temp.path("trace-alias.json");
+        std::os::unix::fs::symlink(&trace, &alias).expect("symlink");
         let same = run_json(
             &spec,
             "wf",
