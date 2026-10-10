@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse a JSONPath query nested more than 8 `[`…`]` levels deep before
+  parsing it. Parse time doubled with each nested filter, so a criterion,
+  selector, or replacement target of about 100 bytes could stall a run for
+  minutes, and `--execution-timeout` could not interrupt it. Brackets inside
+  string literals and sibling brackets do not count toward the limit.
+
 ## [0.8.2] - 2026-10-09
 
 Add a compact JSON run export for agents and improve debugger hover evaluation.

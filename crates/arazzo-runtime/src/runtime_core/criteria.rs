@@ -370,15 +370,21 @@ mod tests {
     }
 
     /// Version admission and parsing run before the context is resolved, so
-    /// a context that evaluates to null cannot hide an unsupported version or
-    /// a syntax error behind the spec's silent null-context failure.
+    /// a context that evaluates to null cannot hide an unsupported version, a
+    /// resource refusal, or a syntax error behind the spec's silent
+    /// null-context failure.
     #[test]
     fn jsonpath_errors_take_precedence_over_null_context() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
+        let over_nested = format!("$[?{}@.a{}]", "@[?".repeat(8), "]".repeat(8));
         let cases = [
             (
                 goessner_criterion("$response.body#/missing", "$.pets[*]"),
                 "unsupported JSONPath version \"draft-goessner-dispatch-jsonpath-00\"",
+            ),
+            (
+                jsonpath_criterion("$response.body#/missing", &over_nested),
+                "JSONPath query bracket nesting depth limit of 8 exceeded",
             ),
             (
                 jsonpath_criterion("$response.body#/missing", "$[?("),

@@ -8,7 +8,8 @@
 //!
 //! The admission limits below are explicit, conservative resource budgets
 //! applied before the upstream parser or evaluator runs. They are not a
-//! lexer, not a grammar check, and not a CPU, heap or result-size quota.
+//! grammar check and not a CPU, heap or result-size quota; the bracket
+//! nesting count recognizes string-literal boundaries and nothing else.
 
 mod iregexp_adapter;
 
@@ -30,12 +31,22 @@ const QUERY_BYTE_LIMIT: usize = 16_384;
 /// a string.
 const QUERY_STRUCTURAL_LIMIT: usize = 128;
 
+/// Maximum depth of `[`…`]` nesting in a query, counted outside string
+/// literals.
+///
+/// The upstream parser parses a filter nested inside another filter twice,
+/// so parse time doubles per level and the structural budget, which counts
+/// characters, does not bound it. Brackets inside a quoted literal neither
+/// raise nor lower the depth, and sibling brackets add none.
+const QUERY_NESTING_LIMIT: usize = 8;
+
 /// Maximum number of nested containers in a query context. The root container
 /// counts as one; siblings are counted independently and add no depth.
 const CONTEXT_DEPTH_LIMIT: usize = 128;
 
 const RESOURCE_QUERY_BYTES: &str = "query bytes";
 const RESOURCE_QUERY_STRUCTURAL: &str = "query structural characters";
+const RESOURCE_QUERY_NESTING: &str = "query bracket nesting depth";
 const RESOURCE_CONTEXT_DEPTH: &str = "context nesting depth";
 
 /// Failure produced by [`JsonPathQuery::parse`] or [`JsonPathQuery::query`].
@@ -117,9 +128,9 @@ impl JsonPathQuery {
     ///
     /// `version` admits only `None` or `Some("rfc9535")`; every other explicit
     /// version returns [`JsonPathError::UnsupportedVersion`] before the
-    /// expression is examined. The byte and structural admission limits are
-    /// checked next, and only an admitted expression reaches the upstream
-    /// parser, which validates it completely.
+    /// expression is examined. The byte, structural and bracket nesting
+    /// admission limits are checked next, and only an admitted expression
+    /// reaches the upstream parser, which validates it completely.
     pub fn parse(expression: &str, version: Option<&str>) -> Result<Self, JsonPathError> {
         match version {
             None | Some(SUPPORTED_VERSION) => {}
@@ -202,7 +213,8 @@ pub fn resolve_json_path_pointers(
         .collect())
 }
 
-/// Apply the byte and structural budgets to a raw expression.
+/// Apply the byte, structural and bracket nesting budgets to a raw
+/// expression, in that order.
 fn admit_expression(expression: &str) -> Result<(), JsonPathError> {
     if expression.len() > QUERY_BYTE_LIMIT {
         return Err(JsonPathError::ResourceLimit {
@@ -219,6 +231,45 @@ fn admit_expression(expression: &str) -> Result<(), JsonPathError> {
             resource: RESOURCE_QUERY_STRUCTURAL,
             limit: QUERY_STRUCTURAL_LIMIT,
         });
+    }
+    admit_nesting(expression)
+}
+
+/// Reject `[`…`]` nesting deeper than the budget, counted outside string
+/// literals.
+///
+/// A quote opens a literal of its kind, a backslash inside one skips the
+/// next byte, and the matching quote closes it; no byte inside a literal
+/// counts. An unterminated literal ends the pass without a refusal so the
+/// parser reports the syntax error. Every delimiter is ASCII, so the byte
+/// pass never splits a UTF-8 sequence.
+fn admit_nesting(expression: &str) -> Result<(), JsonPathError> {
+    let mut bytes = expression.bytes();
+    let mut depth = 0usize;
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'\'' | b'"' => loop {
+                match bytes.next() {
+                    Some(b'\\') => {
+                        bytes.next();
+                    }
+                    Some(closing) if closing == byte => break,
+                    Some(_) => {}
+                    None => return Ok(()),
+                }
+            },
+            b'[' => {
+                depth += 1;
+                if depth > QUERY_NESTING_LIMIT {
+                    return Err(JsonPathError::ResourceLimit {
+                        resource: RESOURCE_QUERY_NESTING,
+                        limit: QUERY_NESTING_LIMIT,
+                    });
+                }
+            }
+            b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
     }
     Ok(())
 }

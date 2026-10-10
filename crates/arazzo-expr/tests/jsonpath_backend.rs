@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 const QUERY_BYTE_LIMIT: usize = 16_384;
 const QUERY_STRUCTURAL_LIMIT: usize = 128;
+const QUERY_NESTING_LIMIT: usize = 8;
 const CONTEXT_DEPTH_LIMIT: usize = 128;
 
 fn parse(expression: &str) -> JsonPathQuery {
@@ -431,6 +432,108 @@ fn structural_character_limit_counts_quoted_punctuation_conservatively() {
         parse_error(&escaped, None),
         JsonPathError::ResourceLimit { .. }
     ));
+}
+
+/// `@.k0[?@.k1[?…@.k{levels}]…]`: a filter body holding `levels` nested
+/// filters, valid at every depth.
+fn filter_chain(levels: usize) -> String {
+    let mut body = format!("@.k{levels}");
+    for level in (0..levels).rev() {
+        body = format!("@.k{level}[?{body}]");
+    }
+    body
+}
+
+/// `$[?@.k0[?@.k1[?…]]]` with `depth` levels of bracket nesting.
+fn nested_filter_query(depth: usize) -> String {
+    format!("$[?{}]", filter_chain(depth - 1))
+}
+
+/// The audit I3 shape, `$[?@[?@[?…@.a…]]]`, with `depth` levels of nesting.
+fn existence_chain_query(depth: usize) -> String {
+    format!(
+        "$[?{}@.a{}]",
+        "@[?".repeat(depth - 1),
+        "]".repeat(depth - 1)
+    )
+}
+
+fn nesting_limit_error() -> JsonPathError {
+    JsonPathError::ResourceLimit {
+        resource: "query bracket nesting depth",
+        limit: QUERY_NESTING_LIMIT,
+    }
+}
+
+#[test]
+fn bracket_nesting_limit_counts_depth_outside_string_literals() {
+    for depth in [QUERY_NESTING_LIMIT - 1, QUERY_NESTING_LIMIT] {
+        for expression in [nested_filter_query(depth), existence_chain_query(depth)] {
+            assert!(
+                JsonPathQuery::parse(&expression, None).is_ok(),
+                "{expression}"
+            );
+        }
+    }
+    let over = nested_filter_query(QUERY_NESTING_LIMIT + 1);
+    assert_eq!(parse_error(&over, None), nesting_limit_error());
+    assert_eq!(
+        parse_error(&over, None).to_string(),
+        "JSONPath query bracket nesting depth limit of 8 exceeded"
+    );
+    // Over the limit and syntactically invalid: the parser never sees it.
+    let mut over_invalid = nested_filter_query(QUERY_NESTING_LIMIT + 1);
+    over_invalid.pop();
+    assert_eq!(parse_error(&over_invalid, None), nesting_limit_error());
+    // The audit's 24-deep reproducer, which the structural budget admitted.
+    assert_eq!(
+        parse_error(&existence_chain_query(24), None),
+        nesting_limit_error()
+    );
+    // Over both character budgets: the structural check still reports first.
+    assert_eq!(
+        parse_error(&existence_chain_query(QUERY_STRUCTURAL_LIMIT + 1), None),
+        JsonPathError::ResourceLimit {
+            resource: "query structural characters",
+            limit: QUERY_STRUCTURAL_LIMIT
+        }
+    );
+
+    // Brackets inside a string literal never raise the depth, whatever the
+    // quote kind, and an escaped quote does not close the literal early.
+    let brackets = "[".repeat(QUERY_NESTING_LIMIT + 2);
+    for expression in [
+        format!("$[?@.a == '{brackets}']"),
+        format!("$[?@.a == \"{brackets}\"]"),
+        format!("$[?@.a == 'it\\'s{brackets}']"),
+        format!("$[?@.a == \"say \\\"{brackets}\"]"),
+    ] {
+        assert!(
+            JsonPathQuery::parse(&expression, None).is_ok(),
+            "{expression}"
+        );
+    }
+    // Nor do they lower it: nine closing brackets in an early literal leave
+    // all nine real levels counted.
+    let early_close = format!(
+        "$[?@.a == '{}' && {}]",
+        "]".repeat(QUERY_NESTING_LIMIT + 1),
+        filter_chain(QUERY_NESTING_LIMIT)
+    );
+    assert_eq!(parse_error(&early_close, None), nesting_limit_error());
+    // An escaped backslash consumes one byte, so its literal still closes.
+    let escaped_backslash = format!("$[?@.a == '\\\\' && {}]", filter_chain(QUERY_NESTING_LIMIT));
+    assert_eq!(parse_error(&escaped_backslash, None), nesting_limit_error());
+
+    // Siblings add no depth, whether index selectors or filter segments.
+    let indices: String = (0..20).map(|index| format!("[{index}]")).collect();
+    let sibling_filters = format!("${}", "[?@.a]".repeat(10));
+    for expression in [format!("$.a{indices}"), sibling_filters] {
+        assert!(
+            JsonPathQuery::parse(&expression, None).is_ok(),
+            "{expression}"
+        );
+    }
 }
 
 fn nested_arrays(containers: usize) -> Value {
