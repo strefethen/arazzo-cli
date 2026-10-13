@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{redact_dry_run_request, DryRunRequest, TraceStepRecord, TransportWarning};
+use arazzo_runtime::{
+    redact_dry_run_request, redact_url_query, DryRunRequest, TraceStepRecord, TransportWarning,
+};
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Diagnostic, Error as ValidateError};
 use schemars::JsonSchema;
@@ -620,11 +622,15 @@ pub fn emit_run_steps(steps: &[TraceStepRecord]) {
             .map(|r| r.method.as_str())
             .unwrap_or("???");
 
-        let url = step
-            .request
-            .as_ref()
-            .map(|r| r.url.as_str())
-            .unwrap_or(&step.operation_path);
+        // Redact a copy, as `redact_trace_file` does for the trace file.
+        let url = step.request.as_ref().map_or_else(
+            || step.operation_path.clone(),
+            |r| {
+                let mut url = r.url.clone();
+                redact_url_query(&mut url);
+                url
+            },
+        );
 
         let retry_suffix = if step.attempt > 1 {
             format!(" (attempt {})", step.attempt)

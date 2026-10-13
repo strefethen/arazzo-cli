@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run --verbose` step lines redact sensitive query parameter values in the
+  request URL, as trace files do. A value such as `access_token` previously
+  reached the terminal and CI logs in clear.
 - Check Step and Workflow `dependsOn` cycles without recursion. A chain of a
   few thousand `dependsOn` links overflowed the stack and aborted `validate`,
   `run`, the MCP server, and the debug adapter; the same document now
