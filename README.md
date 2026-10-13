@@ -967,7 +967,7 @@ in the release notes.
 
 Issues, bug reports, and feature requests are welcome.
 
-This project accepts PRs to demonstrate a fix or approach, though the maintainer may independently implement changes after review. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+This is a personal, single-maintainer project. Outside PRs are welcome as illustrations of a bug or proposed fix, but won't be merged directly. I'll independently decide whether and how to address submissions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details before spending time on a change.
 
 ## Acknowledgments
 
