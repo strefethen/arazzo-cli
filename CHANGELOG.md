@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures that had none now use `TEST_*` codes, and its `-i`,
   `--input-json`, and `--openapi` errors print the object instead of plain
   text.
+- `schema` and `serve` failures with `--json` now print the JSON error object
+  instead of plain text on stderr: `SCHEMA_UNKNOWN_COMMAND` for an unknown
+  `schema` name, and `SERVE_SPEC_DISCOVERY`, `SERVE_NO_SPECS`,
+  `SERVE_TASK_PANIC`, or `SERVE_MCP` for `serve`.
 
 ### Fixed
 

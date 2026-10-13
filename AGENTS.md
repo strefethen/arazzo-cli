@@ -124,8 +124,10 @@ fix — new ticket, not an inline decision.
 ## Conventions
 
 - Generic Arazzo executor — no domain-specific logic. Smithy is out of scope.
-- Every command keeps a `--json` contract with structured errors; diagnostics to
-  stderr. Changing one means refreshing `docs/schemas/`.
+- With `--json`, stdout carries only JSON, never YAML or prose. Every failure
+  is one object, `{"kind":"error","error":…,"code":…}`, plus optional
+  command-specific fields. It is built as a `CliError` and printed by `main`.
+  Diagnostics go to stderr. Changing one means refreshing `docs/schemas/`.
 - Hermetic tests, no network (`tiny_http` for servers).
 - Spec-surface tests need a negative case rejecting the non-conformant shape,
   not just a positive one.

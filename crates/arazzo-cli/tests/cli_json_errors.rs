@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! The `--json` error object `main` prints for every migrated command:
+//! The `--json` error object `main` prints for every command:
 //! `{"kind":"error","error":…,"code":…}` on stdout, the plain message on
-//! stderr without `--json`. Later command migrations add their cases here.
+//! stderr without `--json`. The sweep at the end has one `sweep_<name>` case
+//! per subcommand; a unit test in `src/cli.rs` fails when one is missing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -719,4 +720,109 @@ fn schema_generate_is_an_unknown_command() {
         "{}",
         stderr(&output)
     );
+}
+
+// ── Sweep: one failing `--json` invocation per subcommand ────────
+
+/// Runs `args` with `--json` first and asserts a non-zero exit and that
+/// stdout is exactly one JSON object with `kind: "error"`, a non-empty
+/// `error`, and `code` equal to `code`. Command-specific fields may follow.
+fn assert_sweep(args: &[&str], code: &str) {
+    let mut json_args = vec!["--json"];
+    json_args.extend_from_slice(args);
+    let output = run(&json_args);
+    assert!(!output.status.success(), "{json_args:?} must fail");
+    let text = stdout(&output);
+    let body: Value = serde_json::from_str(&text).unwrap_or_else(|err| {
+        panic!("{json_args:?}: stdout is not one JSON value ({err}): {text}")
+    });
+    assert!(body.is_object(), "{json_args:?}: {body}");
+    assert_eq!(body["kind"], "error", "{json_args:?}: {body}");
+    assert!(
+        body["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{json_args:?}: error must be a non-empty string: {body}"
+    );
+    assert_eq!(body["code"], code, "{json_args:?}: {body}");
+}
+
+const SWEEP_MISSING: &str = "/nonexistent/arazzo-cli-sweep/missing.arazzo.yaml";
+const SWEEP_MISSING_DIR: &str = "/nonexistent/arazzo-cli-sweep/dir";
+
+#[test]
+fn sweep_run() {
+    assert_sweep(&["run", SWEEP_MISSING, "wf"], "RUN_SPEC_READ_FILE");
+}
+
+#[test]
+fn sweep_replay() {
+    assert_sweep(
+        &["replay", "/nonexistent/arazzo-cli-sweep/trace.json"],
+        "REPLAY_TRACE_LOAD",
+    );
+}
+
+#[test]
+fn sweep_validate() {
+    assert_sweep(&["validate", SWEEP_MISSING], "VALIDATE_SPEC_READ_FILE");
+}
+
+#[test]
+fn sweep_list() {
+    assert_sweep(&["list", SWEEP_MISSING], "LIST_SPEC_READ_FILE");
+}
+
+#[test]
+fn sweep_catalog() {
+    assert_sweep(&["catalog", SWEEP_MISSING_DIR], "CATALOG_DIR_READ");
+}
+
+#[test]
+fn sweep_show() {
+    assert_sweep(&["show", "wf", "--dir", SWEEP_MISSING_DIR], "SHOW_DIR_READ");
+}
+
+#[test]
+fn sweep_steps() {
+    assert_sweep(&["steps", SWEEP_MISSING, "wf"], "STEPS_SPEC_READ_FILE");
+}
+
+#[test]
+fn sweep_generate() {
+    assert_sweep(
+        &["generate", "--spec", "missing.openapi.yaml"],
+        "GENERATE_JSON_UNSUPPORTED",
+    );
+}
+
+#[test]
+fn sweep_schema() {
+    assert_sweep(&["schema", "bogus"], "SCHEMA_UNKNOWN_COMMAND");
+    let plain = run(&["schema", "bogus"]);
+    assert_eq!(plain.status.code(), Some(1));
+    assert!(stdout(&plain).is_empty(), "{}", stdout(&plain));
+    assert!(
+        stderr(&plain).starts_with("unknown command: \"bogus\""),
+        "{}",
+        stderr(&plain)
+    );
+}
+
+#[test]
+fn sweep_test() {
+    assert_sweep(&["test", SWEEP_MISSING], "TEST_PATH_NOT_FOUND");
+}
+
+#[test]
+fn sweep_serve() {
+    assert_sweep(&["serve"], "SERVE_NO_SPECS");
+    assert_sweep(
+        &["serve", "--dir", SWEEP_MISSING_DIR],
+        "SERVE_SPEC_DISCOVERY",
+    );
+    assert_sweep(&["serve", SWEEP_MISSING], "SERVE_MCP");
+}
+
+#[test]
+fn sweep_usage_error() {
+    assert_sweep(&["no-such-subcommand"], "CLI_USAGE");
 }

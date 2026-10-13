@@ -478,7 +478,7 @@ pub(crate) fn parse_input_kv(raw: &str) -> Result<(String, &str), String> {
     Ok((key.to_string(), value))
 }
 
-pub fn schema(command: Option<&str>) -> Result<(), String> {
+pub fn schema(command: Option<&str>) -> Result<(), CliError> {
     use schemars::schema_for;
 
     use crate::output::{
@@ -486,7 +486,7 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         ValidateOutput,
     };
 
-    match command {
+    let written = match command {
         Some("validate") => output::output_json(&schema_for!(ValidateOutput)),
         Some("list") => output::output_json(&schema_for!(ListOutput)),
         Some("catalog") => output::output_json(&schema_for!(CatalogOutput)),
@@ -496,13 +496,19 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         Some("export-run") => output::output_json(&schema_for!(crate::run_export::RunExport)),
         Some("replay") => output::output_json(&schema_for!(ReplayOutput)),
         Some("test") => output::output_json(&schema_for!(TestOutput)),
-        Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, export-run, replay, test"
-        )),
+        Some(other) => {
+            return Err(CliError::new(
+                "SCHEMA_UNKNOWN_COMMAND",
+                format!(
+                    "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, export-run, replay, test"
+                ),
+            ))
+        }
         None => output::output_json(&[
             "validate", "list", "catalog", "show", "steps", "run", "export-run", "replay", "test",
         ]),
-    }
+    };
+    written.map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err))
 }
 
 pub(crate) fn parse_input_value(raw: &str) -> Value {

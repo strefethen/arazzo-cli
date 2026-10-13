@@ -58,17 +58,11 @@ async fn async_main() {
         );
     match run(cli).await {
         Ok(()) => {}
-        Err(Failure::Cli(CliFailure::Error(err))) => {
+        Err(CliFailure::Error(err)) => {
             print_error(&err, json_mode);
             std::process::exit(1);
         }
-        Err(Failure::Cli(CliFailure::ResultsReported)) => std::process::exit(1),
-        Err(Failure::Legacy(err)) => {
-            if !err.is_empty() {
-                eprintln!("{err}");
-            }
-            std::process::exit(1);
-        }
+        Err(CliFailure::ResultsReported) => std::process::exit(1),
     }
 }
 
@@ -155,29 +149,7 @@ fn normalize_generate_positional_spec(args: &mut Vec<OsString>) {
     }
 }
 
-/// How `run` fails while commands migrate to `CliError`.
-enum Failure {
-    Cli(CliFailure),
-    /// Transitional pass-through for commands not migrated yet: a `String`
-    /// error printed to stderr, or the empty string meaning "already
-    /// printed". Private to `main.rs`; migrated code must not use it, and
-    /// ac-ad7cf deletes it.
-    Legacy(String),
-}
-
-impl From<CliFailure> for Failure {
-    fn from(failure: CliFailure) -> Self {
-        Self::Cli(failure)
-    }
-}
-
-impl From<CliError> for Failure {
-    fn from(err: CliError) -> Self {
-        Self::Cli(CliFailure::Error(err))
-    }
-}
-
-async fn run(cli: Cli) -> Result<(), Failure> {
+async fn run(cli: Cli) -> Result<(), CliFailure> {
     let global = GlobalOptions {
         json: cli.json,
         verbose: cli.verbose,
@@ -240,7 +212,9 @@ async fn run(cli: Cli) -> Result<(), Failure> {
                     },
                 },
             );
-            handlers::run_workflow(context).await.map_err(Failure::from)
+            handlers::run_workflow(context)
+                .await
+                .map_err(CliFailure::from)
         }
         Commands::Replay {
             trace,
@@ -257,28 +231,30 @@ async fn run(cli: Cli) -> Result<(), Failure> {
             global,
         )
         .await
-        .map_err(Failure::from),
+        .map_err(CliFailure::from),
         Commands::Validate { spec } => {
-            handlers::validate_spec(&spec, global).map_err(Failure::from)
+            handlers::validate_spec(&spec, global).map_err(CliFailure::from)
         }
-        Commands::List { spec } => handlers::list_workflows(&spec, global).map_err(Failure::from),
+        Commands::List { spec } => {
+            handlers::list_workflows(&spec, global).map_err(CliFailure::from)
+        }
         Commands::Catalog { dir } => {
-            handlers::catalog_workflows(&dir, global).map_err(Failure::from)
+            handlers::catalog_workflows(&dir, global).map_err(CliFailure::from)
         }
         Commands::Show { workflow_id, dir } => {
-            handlers::show_workflow(&workflow_id, &dir, global).map_err(Failure::from)
+            handlers::show_workflow(&workflow_id, &dir, global).map_err(CliFailure::from)
         }
         Commands::Steps { spec, workflow_id } => {
-            handlers::list_steps(&spec, &workflow_id, global).map_err(Failure::from)
+            handlers::list_steps(&spec, &workflow_id, global).map_err(CliFailure::from)
         }
         Commands::Generate {
             spec,
             scenario,
             output,
         } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global)
-            .map_err(Failure::from),
+            .map_err(CliFailure::from),
         Commands::Schema { command } => {
-            handlers::schema(command.as_deref()).map_err(Failure::Legacy)
+            handlers::schema(command.as_deref()).map_err(CliFailure::from)
         }
         Commands::Test {
             paths,
@@ -300,39 +276,40 @@ async fn run(cli: Cli) -> Result<(), Failure> {
             allow_downgrade_redirects,
             max_redirects,
             no_transport_warnings,
-        } => handlers::run_tests(
-            paths,
-            format,
-            input,
-            input_json,
-            http_timeout,
-            execution_timeout,
-            header,
-            openapi,
-            expr_diagnostics,
-            parallel,
-            strict_inputs,
-            max_response_size,
-            fail_fast,
-            filter,
-            transport::TransportFlags {
-                insecure_hosts: insecure_host,
-                insecure_all: insecure,
-                allow_downgrade_redirects,
-                max_redirects,
-                no_transport_warnings,
-            },
-            global,
-        )
-        .await
-        .map_err(Failure::from),
+        } => {
+            handlers::run_tests(
+                paths,
+                format,
+                input,
+                input_json,
+                http_timeout,
+                execution_timeout,
+                header,
+                openapi,
+                expr_diagnostics,
+                parallel,
+                strict_inputs,
+                max_response_size,
+                fail_fast,
+                filter,
+                transport::TransportFlags {
+                    insecure_hosts: insecure_host,
+                    insecure_all: insecure,
+                    allow_downgrade_redirects,
+                    max_redirects,
+                    no_transport_warnings,
+                },
+                global,
+            )
+            .await
+        }
         Commands::Serve {
             specs,
             dir,
             allowed_dir,
         } => serve(specs, dir, allowed_dir)
             .await
-            .map_err(Failure::Legacy),
+            .map_err(CliFailure::from),
     }
 }
 
@@ -340,15 +317,19 @@ async fn serve(
     specs: Vec<String>,
     dir: Option<String>,
     allowed_dir: Vec<String>,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     let mut paths = specs;
     if let Some(d) = dir {
-        let discovered = arazzo_mcp::state::discover_specs(&d)
-            .map_err(|err| format!("discovering specs: {err}"))?;
+        let discovered = arazzo_mcp::state::discover_specs(&d).map_err(|err| {
+            CliError::new("SERVE_SPEC_DISCOVERY", format!("discovering specs: {err}"))
+        })?;
         paths.extend(discovered);
     }
     if paths.is_empty() {
-        return Err("no spec files provided. Pass file paths or use --dir <directory>".to_string());
+        return Err(CliError::new(
+            "SERVE_NO_SPECS",
+            "no spec files provided. Pass file paths or use --dir <directory>",
+        ));
     }
     let allowed = if allowed_dir.is_empty() {
         None
@@ -363,7 +344,8 @@ async fn serve(
         arazzo_mcp::run_mcp_stdio(reader, &mut writer, &paths, allowed)
     })
     .await
-    .map_err(|err| format!("serve task panicked: {err}"))?
+    .map_err(|err| CliError::new("SERVE_TASK_PANIC", format!("serve task panicked: {err}")))?
+    .map_err(|err| CliError::new("SERVE_MCP", err))
 }
 
 // `.env` loading. This and the copy in `arazzo-mcp/src/main.rs` are kept in lockstep: the

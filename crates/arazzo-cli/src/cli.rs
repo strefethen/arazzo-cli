@@ -382,3 +382,27 @@ pub fn parse_duration_value(raw: &str) -> Result<Duration, String> {
     }
     humantime::parse_duration(raw).map_err(|err| format!("invalid timeout \"{raw}\": {err}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// Every subcommand needs a `sweep_<name>` case in
+    /// `tests/cli_json_errors.rs`, so a new command cannot skip the `--json`
+    /// error object unnoticed.
+    #[test]
+    fn every_subcommand_has_a_json_error_sweep_case() {
+        let sweep = include_str!("../tests/cli_json_errors.rs");
+        let missing: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|cmd| cmd.get_name().replace('-', "_"))
+            .filter(|name| !sweep.contains(&format!("fn sweep_{name}()")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "subcommands without a sweep case in tests/cli_json_errors.rs: {missing:?}"
+        );
+    }
+}
