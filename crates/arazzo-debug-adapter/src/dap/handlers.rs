@@ -85,7 +85,13 @@ fn handle_launch<W: Write>(
     writer: &mut W,
     outbound: &mut OutboundSequence,
 ) -> Result<(), String> {
-    let launch = parse_launch_config(&request.arguments)?;
+    let launch = match parse_launch_config(&request.arguments) {
+        Ok(launch) => launch,
+        Err(err) => {
+            let response = error_response(outbound.alloc(), &request.command, request.seq, err);
+            return write_dap_message(writer, &response);
+        }
+    };
     state.launch = Some(launch.clone());
     state.source_index = try_build_source_index(&launch.spec);
     rebuild_runtime_breakpoints(state);
@@ -249,23 +255,21 @@ fn handle_continue<W: Write>(
     outbound: &mut OutboundSequence,
     event_rx: &mpsc::Receiver<EngineEvent>,
 ) -> Result<(), String> {
-    let response = response_with_body(
-        outbound.alloc(),
-        &request.command,
-        continue_body(),
-        request.seq,
-    );
-    write_dap_message(writer, &response)?;
-    if let Some(runtime) = state.runtime.as_ref() {
+    let result = state.runtime.as_ref().map(|runtime| {
         runtime
             .controller
             .continue_execution()
-            .map_err(|err| format!("continuing runtime: {err}"))?;
-    }
-    if state.runtime.is_some() {
-        inline_event_check(event_rx, state, writer, outbound)?;
-    }
-    Ok(())
+            .map_err(|err| format!("continuing runtime: {err}"))
+    });
+    respond_to_resume(
+        request,
+        state,
+        writer,
+        outbound,
+        event_rx,
+        result,
+        continue_body(),
+    )
 }
 
 fn handle_next<W: Write>(
@@ -275,23 +279,21 @@ fn handle_next<W: Write>(
     outbound: &mut OutboundSequence,
     event_rx: &mpsc::Receiver<EngineEvent>,
 ) -> Result<(), String> {
-    let response = response_with_body(
-        outbound.alloc(),
-        &request.command,
-        empty_body(),
-        request.seq,
-    );
-    write_dap_message(writer, &response)?;
-    if let Some(runtime) = state.runtime.as_ref() {
+    let result = state.runtime.as_ref().map(|runtime| {
         runtime
             .controller
             .step_over()
-            .map_err(|err| format!("step over: {err}"))?;
-    }
-    if state.runtime.is_some() {
-        inline_event_check(event_rx, state, writer, outbound)?;
-    }
-    Ok(())
+            .map_err(|err| format!("step over: {err}"))
+    });
+    respond_to_resume(
+        request,
+        state,
+        writer,
+        outbound,
+        event_rx,
+        result,
+        empty_body(),
+    )
 }
 
 fn handle_step_in<W: Write>(
@@ -301,23 +303,21 @@ fn handle_step_in<W: Write>(
     outbound: &mut OutboundSequence,
     event_rx: &mpsc::Receiver<EngineEvent>,
 ) -> Result<(), String> {
-    let response = response_with_body(
-        outbound.alloc(),
-        &request.command,
-        empty_body(),
-        request.seq,
-    );
-    write_dap_message(writer, &response)?;
-    if let Some(runtime) = state.runtime.as_ref() {
+    let result = state.runtime.as_ref().map(|runtime| {
         runtime
             .controller
             .step_in()
-            .map_err(|err| format!("step in: {err}"))?;
-    }
-    if state.runtime.is_some() {
-        inline_event_check(event_rx, state, writer, outbound)?;
-    }
-    Ok(())
+            .map_err(|err| format!("step in: {err}"))
+    });
+    respond_to_resume(
+        request,
+        state,
+        writer,
+        outbound,
+        event_rx,
+        result,
+        empty_body(),
+    )
 }
 
 fn handle_step_out<W: Write>(
@@ -327,20 +327,49 @@ fn handle_step_out<W: Write>(
     outbound: &mut OutboundSequence,
     event_rx: &mpsc::Receiver<EngineEvent>,
 ) -> Result<(), String> {
-    let response = response_with_body(
-        outbound.alloc(),
-        &request.command,
-        empty_body(),
-        request.seq,
-    );
-    write_dap_message(writer, &response)?;
-    if let Some(runtime) = state.runtime.as_ref() {
+    let result = state.runtime.as_ref().map(|runtime| {
         runtime
             .controller
             .step_out()
-            .map_err(|err| format!("step out: {err}"))?;
+            .map_err(|err| format!("step out: {err}"))
+    });
+    respond_to_resume(
+        request,
+        state,
+        writer,
+        outbound,
+        event_rx,
+        result,
+        empty_body(),
+    )
+}
+
+/// Answers a `continue`/`next`/`stepIn`/`stepOut` request after the controller
+/// call has run. `result` is `None` when there is no runtime (the request is
+/// acknowledged as before), `Some(Err)` when the controller refused it (for
+/// example because the engine is not paused): that becomes this request's
+/// error response and the session keeps running.
+fn respond_to_resume<W: Write>(
+    request: &DapRequest,
+    state: &mut SessionState,
+    writer: &mut W,
+    outbound: &mut OutboundSequence,
+    event_rx: &mpsc::Receiver<EngineEvent>,
+    result: Option<Result<(), String>>,
+    success_body: Value,
+) -> Result<(), String> {
+    if let Some(Err(err)) = result {
+        let response = error_response(outbound.alloc(), &request.command, request.seq, err);
+        return write_dap_message(writer, &response);
     }
-    if state.runtime.is_some() {
+    let response = response_with_body(
+        outbound.alloc(),
+        &request.command,
+        success_body,
+        request.seq,
+    );
+    write_dap_message(writer, &response)?;
+    if result.is_some() {
         inline_event_check(event_rx, state, writer, outbound)?;
     }
     Ok(())

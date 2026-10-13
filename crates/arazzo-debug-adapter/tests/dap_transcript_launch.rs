@@ -213,6 +213,51 @@ fn dap_launch_lifecycle_populates_debug_views() {
     let _ = fs::remove_file(spec_path);
 }
 
+/// A `launch` without `spec` is answered with an error response, and the
+/// session keeps running until `disconnect`.
+#[test]
+fn dap_launch_without_spec_answers_error_and_keeps_session() {
+    let input = dap_test_support::encode_dap_stream(&[
+        json!({ "seq": 1, "type": "request", "command": "initialize", "arguments": {} }),
+        json!({
+            "seq": 2,
+            "type": "request",
+            "command": "launch",
+            "arguments": { "stopOnEntry": true }
+        }),
+        json!({ "seq": 3, "type": "request", "command": "disconnect", "arguments": {} }),
+    ]);
+
+    let reader = Cursor::new(input);
+    let mut output = Vec::<u8>::new();
+
+    let run = run_dap_stdio(reader, &mut output);
+    assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
+
+    let messages = dap_test_support::decode_dap_stream(&output);
+    let response_for = |request_seq: u64| {
+        messages
+            .iter()
+            .find(|m| {
+                m.get("type").and_then(|v| v.as_str()) == Some("response")
+                    && m.get("request_seq").and_then(|v| v.as_u64()) == Some(request_seq)
+            })
+            .unwrap_or_else(|| panic!("no response to request {request_seq}: {messages:#?}"))
+    };
+
+    let launch = response_for(2);
+    assert_eq!(launch.get("command"), Some(&json!("launch")));
+    assert_eq!(launch.get("success"), Some(&json!(false)));
+    assert_eq!(
+        launch.get("message"),
+        Some(&json!("launch requires non-empty 'spec'"))
+    );
+
+    let disconnect = response_for(3);
+    assert_eq!(disconnect.get("command"), Some(&json!("disconnect")));
+    assert_eq!(disconnect.get("success"), Some(&json!(true)));
+}
+
 fn write_temp_spec(base_url: &str) -> Result<PathBuf, String> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

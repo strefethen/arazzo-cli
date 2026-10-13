@@ -88,6 +88,85 @@ fn stepping_off_last_checkpoint_emits_terminated() {
     let _ = fs::remove_file(spec_path);
 }
 
+/// After the engine has finished, `continue` and `next` are answered with an
+/// error response (the controller is not paused) and the session stays up:
+/// a following `disconnect` is answered and the DAP loop exits cleanly.
+#[test]
+fn stepping_after_termination_answers_error_and_keeps_session() {
+    let server = start_server();
+    let spec_path = write_temp_spec(&server.base_url);
+
+    let input = dap_test_support::encode_dap_stream(&[
+        json!({ "seq": 1, "type": "request", "command": "initialize", "arguments": {} }),
+        json!({
+            "seq": 2,
+            "type": "request",
+            "command": "launch",
+            "arguments": {
+                "spec": spec_path.to_string_lossy(),
+                "workflowId": "single-step",
+                "stopOnEntry": true
+            }
+        }),
+        json!({ "seq": 3, "type": "request", "command": "configurationDone", "arguments": {} }),
+        json!({ "seq": 4, "type": "request", "command": "next", "arguments": {} }),
+        json!({ "seq": 5, "type": "request", "command": "next", "arguments": {} }),
+        json!({ "seq": 6, "type": "request", "command": "next", "arguments": {} }),
+        // Steps off the last checkpoint: the engine finishes.
+        json!({ "seq": 7, "type": "request", "command": "next", "arguments": {} }),
+        json!({ "seq": 8, "type": "request", "command": "continue", "arguments": {} }),
+        json!({ "seq": 9, "type": "request", "command": "next", "arguments": {} }),
+        json!({ "seq": 10, "type": "request", "command": "disconnect", "arguments": {} }),
+    ]);
+
+    let reader = Cursor::new(input);
+    let mut output = Vec::<u8>::new();
+
+    let run = run_dap_stdio(reader, &mut output);
+    assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
+
+    let messages = dap_test_support::decode_dap_stream(&output);
+    let response_for = |request_seq: u64| {
+        messages
+            .iter()
+            .find(|m| {
+                m.get("type").and_then(|v| v.as_str()) == Some("response")
+                    && m.get("request_seq").and_then(|v| v.as_u64()) == Some(request_seq)
+            })
+            .unwrap_or_else(|| panic!("no response to request {request_seq}: {messages:#?}"))
+    };
+
+    // The step that finished the engine still succeeds.
+    assert_eq!(response_for(7).get("success"), Some(&json!(true)));
+
+    for (seq, command, prefix) in [
+        (8, "continue", "continuing runtime: "),
+        (9, "next", "step over: "),
+    ] {
+        let response = response_for(seq);
+        assert_eq!(response.get("command"), Some(&json!(command)));
+        assert_eq!(
+            response.get("success"),
+            Some(&json!(false)),
+            "{response:#?}"
+        );
+        let message = response
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            message.starts_with(prefix) && message.contains("not paused"),
+            "unexpected {command} error message: {message}"
+        );
+    }
+
+    let disconnect = response_for(10);
+    assert_eq!(disconnect.get("command"), Some(&json!("disconnect")));
+    assert_eq!(disconnect.get("success"), Some(&json!(true)));
+
+    let _ = fs::remove_file(spec_path);
+}
+
 fn write_temp_spec(base_url: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

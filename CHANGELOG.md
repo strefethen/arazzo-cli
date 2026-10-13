@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pass constant `workflowId` step parameter values (numbers, strings,
   booleans, mappings, sequences) to the child workflow's `$inputs`. They
   previously arrived as `null`, with no warning.
+- The debug adapter answers `continue`, `next`, `stepIn`, or `stepOut` sent
+  while the workflow is not paused, and `launch` without `spec`, with an
+  error response. It used to report success and then exit, ending the
+  debug session.
 
 ## [0.8.2] - 2026-10-09
 
