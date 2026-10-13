@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `generate` writes YAML only. `generate --json` now fails with
+  `code: "GENERATE_JSON_UNSUPPORTED"`, with or without `--output`, and
+  `--output` must end in `.yaml` or `.yml` (`GENERATE_OUTPUT_NOT_YAML`
+  otherwise, with no file written). The `--json` metadata object and
+  `schema generate` are gone. Without `--json`, output is unchanged.
 - With `--json`, a usage error such as an unknown flag or a missing argument
   prints a JSON error object with `code: "CLI_USAGE"` on stdout and still
   exits 2. `replay` and `test` error objects always carry a `code`; `test`

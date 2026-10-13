@@ -643,3 +643,80 @@ fn schemas_for_list_steps_show_catalog_describe_the_error_branch() {
         );
     }
 }
+
+// ── generate is YAML-only ───────────────────────────────────────
+
+#[test]
+fn generate_json_is_unsupported_with_and_without_output() {
+    let dir = TempDir::new("generate-json");
+    let out = dir.path().join("out.arazzo.yaml");
+    let out = out.to_string_lossy().into_owned();
+    for args in [
+        vec!["--json", "generate", "--spec", "missing.openapi.yaml"],
+        vec![
+            "--json",
+            "generate",
+            "--spec",
+            "missing.openapi.yaml",
+            "--output",
+            &out,
+        ],
+    ] {
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let message = assert_error_object(&output, "GENERATE_JSON_UNSUPPORTED");
+        assert_eq!(message, "generate writes YAML only; remove --json");
+        assert!(!Path::new(&out).exists(), "{args:?} must not write a file");
+    }
+}
+
+#[test]
+fn generate_output_must_be_yaml_or_yml() {
+    let dir = TempDir::new("generate-output-ext");
+    for name in ["out.json", "out", "out.yaml.txt"] {
+        let out = dir.path().join(name);
+        let out_str = out.to_string_lossy().into_owned();
+        let output = run(&[
+            "generate",
+            "--spec",
+            "missing.openapi.yaml",
+            "--output",
+            &out_str,
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+        let message = stderr(&output);
+        assert!(message.contains(&out_str), "{message}");
+        assert!(message.contains(".yaml or .yml"), "{message}");
+        assert!(!out.exists(), "{name} must not be created");
+    }
+    // Accepted extensions get past the check and fail on the missing spec.
+    for name in ["out.yml", "out.YAML"] {
+        let out = dir.path().join(name);
+        let out_str = out.to_string_lossy().into_owned();
+        let output = run(&[
+            "generate",
+            "--spec",
+            "missing.openapi.yaml",
+            "--output",
+            &out_str,
+        ]);
+        let message = stderr(&output);
+        assert!(
+            message.contains("reading OpenAPI spec"),
+            "{name}: {message}"
+        );
+        assert!(!message.contains(".yaml or .yml"), "{name}: {message}");
+    }
+}
+
+#[test]
+fn schema_generate_is_an_unknown_command() {
+    let output = run(&["schema", "generate"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("unknown command"),
+        "{}",
+        stderr(&output)
+    );
+}

@@ -276,7 +276,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
             scenario,
             output,
         } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global)
-            .map_err(Failure::Legacy),
+            .map_err(Failure::from),
         Commands::Schema { command } => {
             handlers::schema(command.as_deref()).map_err(Failure::Legacy)
         }

@@ -50,7 +50,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
-| **JSON output** | `--json` on every command for scripting and CI integration |
+| **JSON output** | `--json` on every command except `generate` (YAML only), for scripting and CI integration |
 | **Expression language** | `$inputs`, `$steps`, `$response`, JSON Pointer, interpolation |
 | **Arazzo 1.1 selectors** | Typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
@@ -104,7 +104,7 @@ arazzo-cli serve [specs...] [--dir <dir>]  Start an MCP server for AI agent inte
 
 Global flags:
 
-- `--json` — structured JSON output (all commands)
+- `--json` — structured JSON output (all commands except `generate`, which writes YAML only and rejects it)
 - `--verbose` — step-by-step execution details
 
 `run` flags:

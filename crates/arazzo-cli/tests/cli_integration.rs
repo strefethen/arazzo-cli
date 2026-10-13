@@ -5705,7 +5705,6 @@ fn generate_output_into_different_directory_dry_run_round_trip() {
     let out_path = out_dir.path().join("generated.arazzo.yaml");
     let generate_output = run(
         [
-            "--json",
             "generate",
             "--spec",
             "petstore.openapi.yaml",
@@ -5719,11 +5718,6 @@ fn generate_output_into_different_directory_dry_run_round_trip() {
         generate_output.status.success(),
         "{}",
         combined_text(&generate_output)
-    );
-    let generate_body = stdout_json(&generate_output);
-    assert_eq!(
-        generate_body.get("file").and_then(Value::as_str),
-        Some(out_path.to_string_lossy().as_ref())
     );
 
     let generated_yaml = fs::read_to_string(&out_path)
@@ -5862,45 +5856,5 @@ fn generate_dry_run_round_trip_with_server_variable_default() {
     assert_eq!(
         create.get("url").and_then(Value::as_str),
         Some("https://api.example.com/v2/items")
-    );
-}
-
-#[test]
-fn generate_json_envelope_shape_unchanged() {
-    // AC: "The generate --json envelope keeps its existing shape and
-    // fields." — the envelope never carried the source url, so it is
-    // unaffected by this change; this pins the field set so a regression
-    // shows up here rather than only in the schema-drift golden.
-    let temp = TempDir::new("arazzo-generate-json-envelope");
-    write_file(
-        &temp.path().join("petstore.openapi.yaml"),
-        &petstore_openapi_yaml(),
-    );
-    let out_path = temp.path().join("generated.arazzo.yaml");
-
-    let output = run(
-        [
-            "--json",
-            "generate",
-            "--spec",
-            "petstore.openapi.yaml",
-            "--output",
-            &out_path.to_string_lossy(),
-        ]
-        .as_slice(),
-        Some(temp.path()),
-    );
-    assert!(output.status.success(), "{}", combined_text(&output));
-
-    let body = stdout_json(&output);
-    let obj = body
-        .as_object()
-        .unwrap_or_else(|| panic!("expected a JSON object: {body}"));
-    let mut fields: Vec<&str> = obj.keys().map(String::as_str).collect();
-    fields.sort_unstable();
-    assert_eq!(
-        fields,
-        vec!["authDetected", "file", "resources", "steps", "workflows"],
-        "generate --json envelope field set changed: {body}"
     );
 }

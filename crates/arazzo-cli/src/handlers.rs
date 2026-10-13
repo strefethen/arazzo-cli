@@ -104,25 +104,60 @@ pub fn generate_workflow(
     scenario: &str,
     output_path: Option<&str>,
     global: GlobalOptions,
-) -> Result<(), String> {
-    let bytes = fs::read(spec_path)
-        .map_err(|err| format!("reading OpenAPI spec \"{spec_path}\": {err}"))?;
+) -> Result<(), CliError> {
+    if global.json {
+        return Err(CliError::new(
+            "GENERATE_JSON_UNSUPPORTED",
+            "generate writes YAML only; remove --json",
+        ));
+    }
+    if let Some(path) = output_path {
+        let is_yaml = Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"));
+        if !is_yaml {
+            return Err(CliError::new(
+                "GENERATE_OUTPUT_NOT_YAML",
+                format!("--output \"{path}\" must end in .yaml or .yml; generate writes YAML only"),
+            ));
+        }
+    }
 
-    crate::generate::ensure_supported_openapi_version(&bytes)?;
+    let bytes = fs::read(spec_path).map_err(|err| {
+        CliError::new(
+            "GENERATE_OPENAPI_READ_FILE",
+            format!("reading OpenAPI spec \"{spec_path}\": {err}"),
+        )
+    })?;
 
-    let openapi: openapiv3::OpenAPI =
-        serde_yaml_ng::from_slice(&bytes).map_err(|err| format!("parsing OpenAPI spec: {err}"))?;
+    crate::generate::ensure_supported_openapi_version(&bytes)
+        .map_err(|err| CliError::new("GENERATE_OPENAPI_UNSUPPORTED_VERSION", err))?;
+
+    let openapi: openapiv3::OpenAPI = serde_yaml_ng::from_slice(&bytes).map_err(|err| {
+        CliError::new(
+            "GENERATE_OPENAPI_PARSE",
+            format!("parsing OpenAPI spec: {err}"),
+        )
+    })?;
 
     if scenario != "crud" {
-        return Err(format!("unknown scenario \"{scenario}\"; available: crud"));
+        return Err(CliError::new(
+            "GENERATE_UNKNOWN_SCENARIO",
+            format!("unknown scenario \"{scenario}\"; available: crud"),
+        ));
     }
 
     // `sourceDescriptions[].url` must resolve, via the runtime's document-
     // semantics loader, from the generated Arazzo document's own directory —
     // an `--output` file's parent, or the current working directory when
     // writing to stdout — never an absolute filesystem path.
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("determining current working directory: {err}"))?;
+    let cwd = std::env::current_dir().map_err(|err| {
+        CliError::new(
+            "GENERATE_CWD",
+            format!("determining current working directory: {err}"),
+        )
+    })?;
     let output_dir: PathBuf = match output_path {
         Some(path) => Path::new(path)
             .parent()
@@ -130,24 +165,35 @@ pub fn generate_workflow(
             .unwrap_or_else(|| PathBuf::from(".")),
         None => PathBuf::from("."),
     };
-    let document_url = crate::generate::relative_document_url(spec_path, &output_dir, &cwd)?;
+    let document_url = crate::generate::relative_document_url(spec_path, &output_dir, &cwd)
+        .map_err(|err| CliError::new("GENERATE_SOURCE_URL", err))?;
 
-    let result = crate::generate::generate_crud(&openapi, spec_path, &document_url)?;
+    let result = crate::generate::generate_crud(&openapi, spec_path, &document_url)
+        .map_err(|err| CliError::new("GENERATE_CRUD", err))?;
 
-    let yaml = serde_yaml_ng::to_string(&result.spec)
-        .map_err(|err| format!("serializing Arazzo spec: {err}"))?;
+    let yaml = serde_yaml_ng::to_string(&result.spec).map_err(|err| {
+        CliError::new(
+            "GENERATE_SERIALIZE",
+            format!("serializing Arazzo spec: {err}"),
+        )
+    })?;
 
     for warning in &result.warnings {
         eprintln!("warning: {warning}");
     }
 
     if let Some(path) = output_path {
-        fs::write(path, &yaml).map_err(|err| format!("writing output file \"{path}\": {err}"))?;
-        output::emit_generate_result(path, &result, global.json)
+        fs::write(path, &yaml).map_err(|err| {
+            CliError::new(
+                "GENERATE_OUTPUT_WRITE",
+                format!("writing output file \"{path}\": {err}"),
+            )
+        })?;
+        output::emit_generate_result(path, &result);
     } else {
         print!("{yaml}");
-        Ok(())
     }
+    Ok(())
 }
 
 const VALIDATE_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
@@ -436,8 +482,8 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
     use crate::output::{
-        CatalogOutput, GenerateResult, ListOutput, ReplayOutput, RunOutput, ShowOutput,
-        StepsOutput, TestOutput, ValidateOutput,
+        CatalogOutput, ListOutput, ReplayOutput, RunOutput, ShowOutput, StepsOutput, TestOutput,
+        ValidateOutput,
     };
 
     match command {
@@ -449,13 +495,12 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
         Some("run") => output::output_json(&schema_for!(RunOutput)),
         Some("export-run") => output::output_json(&schema_for!(crate::run_export::RunExport)),
         Some("replay") => output::output_json(&schema_for!(ReplayOutput)),
-        Some("generate") => output::output_json(&schema_for!(GenerateResult)),
         Some("test") => output::output_json(&schema_for!(TestOutput)),
         Some(other) => Err(format!(
-            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, export-run, replay, generate, test"
+            "unknown command: \"{other}\". Available: validate, list, catalog, show, steps, run, export-run, replay, test"
         )),
         None => output::output_json(&[
-            "validate", "list", "catalog", "show", "steps", "run", "export-run", "replay", "generate", "test",
+            "validate", "list", "catalog", "show", "steps", "run", "export-run", "replay", "test",
         ]),
     }
 }

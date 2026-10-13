@@ -223,7 +223,7 @@ pub enum Commands {
     },
     /// Generate Arazzo workflows from an OpenAPI specification
     #[command(
-        after_help = "For agents:\n  - Generated YAML is written to stdout unless --output is set.\n  - Use --json to receive generation metadata instead of YAML.\n  - Use schema generate to inspect the JSON output contract."
+        after_help = "generate writes YAML only: to --output (a .yaml or .yml path) or to stdout. It does not support --json."
     )]
     Generate {
         /// Path to the OpenAPI 3.x spec (YAML or JSON)
@@ -234,7 +234,7 @@ pub enum Commands {
         #[arg(long = "scenario", default_value = "crud")]
         scenario: String,
 
-        /// Write YAML to file instead of stdout
+        /// Write YAML to this .yaml or .yml file instead of stdout
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
     },
