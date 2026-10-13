@@ -1,6 +1,6 @@
 # Arazzo Debugger
 
-Step-through debugging for [Arazzo 1.0](https://spec.openapis.org/arazzo/v1.0.0) API workflow specifications — set breakpoints, inspect variables, and trace execution in VS Code.
+Step-through debugging for [Arazzo](https://spec.openapis.org/arazzo/v1.1.0) API workflows, including supported Arazzo 1.1 features — set breakpoints, inspect variables, and follow execution in VS Code. See the [runtime's specification coverage](https://github.com/strefethen/arazzo-cli#specification-conformance-extensions-and-gaps) for extensions and remaining gaps.
 
 ![Debug session](https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/screenshots/debug-session.png)
 
@@ -8,7 +8,9 @@ Step-through debugging for [Arazzo 1.0](https://spec.openapis.org/arazzo/v1.0.0)
 
 - **Breakpoints** on workflow steps, success criteria, and actions
 - **Variable inspection** — view Locals, Request, Response, Inputs, and Steps when paused
-- **Watch expressions** using full Arazzo expression syntax (`$steps.login.outputs.token`, `$response.body.id`)
+- **Watch expressions** using supported Arazzo runtime expressions (`$steps.login.outputs.token`, `$response.body#/id`)
+- **Hover inspection** — inspect runtime expressions and nested JSON Pointer values while paused
+- **Debug output channel** — see session events, workflow failures, and adapter diagnostics
 - **Step controls** — Step Over, Step In, Step Out, Continue, Pause
 - **Stop on entry** — pause at workflow entry before the first step
 - **Conditional breakpoints** — break only when an expression evaluates to true
@@ -60,25 +62,39 @@ Conditional breakpoints are supported — right-click a breakpoint and enter an 
 
 ## Variable Inspection
 
-When paused at a breakpoint, the Variables panel shows:
+When paused at a breakpoint, the Variables panel shows the available scopes. Request and Response appear when their data is available at the current execution checkpoint:
 
 | Scope | Contents |
 |-------|----------|
 | **Locals** | Current step ID, workflow ID, status |
-| **Request** | Method, URL, headers, body of the pending/completed HTTP request |
-| **Response** | Status code, headers, body of the last HTTP response |
+| **Request** | Available HTTP request method, URL, headers, and body |
+| **Response** | HTTP response status code, headers, content type, and body preview |
 | **Inputs** | Workflow input values |
 | **Steps** | Outputs from previously completed steps |
 
 ## Watch Expressions
 
-Add any Arazzo expression to the Watch panel:
+Add supported Arazzo runtime expressions to the Watch panel:
 
 - `$steps.getUser.outputs.userId`
-- `$response.body.data[0].name`
+- `$response.body#/data/0/name`
 - `$response.header.Content-Type`
 - `$statusCode`
 - `$inputs.baseUrl`
+
+Use JSON Pointer syntax after `#` to access nested body values. Evaluate `$response.body` to inspect the full parsed response body when available.
+
+## Hover Inspection
+
+While paused, hover over an expression in the workflow file to inspect its value. Hovering `$request` or `$response` shows an expandable object, including its body when available. Within an expression such as `$response.body#/data/0/name`, hovering individual JSON Pointer segments shows the corresponding nested value.
+
+For a simple condition such as `$statusCode == 200`, hovering the operator evaluates the whole condition as a boolean; hovering `$statusCode` shows the status value.
+
+## Troubleshooting
+
+Open **View → Output** and select **Arazzo Debug** to see session start/end events, the adapter binary being launched, workflow exit codes, and error messages. The channel opens automatically when the adapter reports an error or its process exits with a non-zero code.
+
+Workflow execution failures also appear in the **Debug Console**.
 
 ## Requirements
 
@@ -115,13 +131,13 @@ Build the adapter first with `cargo build --release -p arazzo-debug-adapter`.
 
 ## Known Limitations
 
-This is a **preview release**. Some features are still in development:
+This is a **preview release**:
 
-- Breakpoint positions are mapped by YAML line index — complex multi-document specs may have offset issues
+- Only supported runtime expressions and specification features are available; see the specification coverage linked above
 - No hot-reload when the spec file changes during a debug session
 
 ## Links
 
-- [Arazzo 1.0 Specification](https://spec.openapis.org/arazzo/v1.0.0)
+- [Arazzo 1.1 Specification](https://spec.openapis.org/arazzo/v1.1.0)
 - [Source Code](https://github.com/strefethen/arazzo-cli/tree/main/vscode-arazzo-debug)
 - [Report an Issue](https://github.com/strefethen/arazzo-cli/issues)
