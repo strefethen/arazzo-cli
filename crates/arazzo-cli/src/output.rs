@@ -223,6 +223,35 @@ pub struct ValidateIssue {
     pub message: String,
 }
 
+/// Schema-only description of a failing `validate --json` run: the shared
+/// error object plus the fields that predate it. `main` prints it from a
+/// `CliError` built by `validate_error`.
+#[derive(Debug, Serialize, JsonSchema)]
+#[allow(dead_code)]
+pub struct ValidateErrorResult {
+    /// Always `"error"`.
+    pub kind: String,
+    pub error: String,
+    pub code: String,
+    /// Always `false`.
+    pub valid: bool,
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<ValidateIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ValidateIssue>,
+}
+
+/// Combined schema type for the `validate` command output: the success shape
+/// or the error object.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum ValidateOutput {
+    Result(ValidateResult),
+    Error(ValidateErrorResult),
+}
+
 /// Combined schema type for the `run` command output.
 ///
 /// The actual shape depends on flags and exit code:
@@ -360,21 +389,21 @@ pub fn emit_validate_result(
     Ok(())
 }
 
-pub fn emit_validate_error(path: &str, err: &ValidateError, json: bool) -> Result<(), String> {
-    if json {
-        output_json(&ValidateResult {
-            valid: false,
-            file: path.to_string(),
-            version: None,
-            title: None,
-            workflows: None,
-            sources: None,
-            errors: build_validate_issues(err),
-            warnings: build_validate_warnings(err),
-        })?;
-        return Err(String::new());
+/// The failure `main` prints for `validate`: the shared error object plus the
+/// `valid`, `file`, `errors`, and `warnings` fields callers already read.
+pub fn validate_error(path: &str, err: &ValidateError, code: &'static str) -> CliError {
+    let mut error = CliError::new(code, format!("validation failed: {err}"))
+        .with_field("valid", Value::Bool(false))
+        .with_field("file", Value::String(path.to_string()));
+    for (key, issues) in [
+        ("errors", build_validate_issues(err)),
+        ("warnings", build_validate_warnings(err)),
+    ] {
+        if !issues.is_empty() {
+            error = error.with_field(key, serde_json::to_value(issues).unwrap_or(Value::Null));
+        }
     }
-    Err(format!("validation failed: {err}"))
+    error
 }
 
 /// Warnings collected before validation failed, so the error envelope carries

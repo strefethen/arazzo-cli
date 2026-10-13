@@ -150,22 +150,30 @@ pub fn generate_workflow(
     }
 }
 
-pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), String> {
+const VALIDATE_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
+    read_file: "VALIDATE_SPEC_READ_FILE",
+    parse_yaml: "VALIDATE_SPEC_PARSE_YAML",
+    validation: "VALIDATE_SPEC_VALIDATION",
+    component_resolution: "VALIDATE_SPEC_COMPONENT_RESOLUTION",
+};
+
+pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), CliError> {
+    let failure = |err: &arazzo_validate::Error| {
+        let code = cli_error::spec_error(err, &VALIDATE_SPEC_CODES).code();
+        output::validate_error(path, err, code)
+    };
     match arazzo_validate::parse_with_diagnostics(path) {
         Ok((_, warnings)) if global.strict && !warnings.is_empty() => {
-            output::emit_validate_error(path, &promote_warnings(Vec::new(), warnings), global.json)
+            Err(failure(&promote_warnings(Vec::new(), warnings)))
         }
-        Ok((spec, warnings)) => output::emit_validate_result(path, &spec, &warnings, global.json),
+        Ok((spec, warnings)) => output::emit_validate_result(path, &spec, &warnings, global.json)
+            .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err)),
         Err(arazzo_validate::Error::Validation(report))
             if global.strict && !report.warnings.is_empty() =>
         {
-            output::emit_validate_error(
-                path,
-                &promote_warnings(report.errors, report.warnings),
-                global.json,
-            )
+            Err(failure(&promote_warnings(report.errors, report.warnings)))
         }
-        Err(err) => output::emit_validate_error(path, &err, global.json),
+        Err(err) => Err(failure(&err)),
     }
 }
 
@@ -386,11 +394,11 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
 
     use crate::output::{
         CatalogEntry, GenerateResult, ReplayOutput, RunOutput, StepInfo, TestOutput,
-        ValidateResult, WorkflowDetail, WorkflowInfo,
+        ValidateOutput, WorkflowDetail, WorkflowInfo,
     };
 
     match command {
-        Some("validate") => output::output_json(&schema_for!(ValidateResult)),
+        Some("validate") => output::output_json(&schema_for!(ValidateOutput)),
         Some("list") => output::output_json(&schema_for!(Vec<WorkflowInfo>)),
         Some("catalog") => output::output_json(&schema_for!(Vec<CatalogEntry>)),
         Some("show") => output::output_json(&schema_for!(WorkflowDetail)),

@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With `--json`, a failing `validate` prints the shared error object, with
+  `kind`, `error`, and a `VALIDATE_SPEC_*` `code`, beside the `valid`, `file`,
+  `errors`, and `warnings` fields it already had. `--strict` promotions use
+  `VALIDATE_SPEC_VALIDATION`. Successful output and human output are
+  unchanged; `schema validate` now describes both shapes.
 - With `--json`, every `run` failure prints the error object with a `code`.
   A bad `-i` or `--input-json` value (`RUN_INPUT_FORMAT`), an engine-build
   failure such as a missing local source description (the engine's

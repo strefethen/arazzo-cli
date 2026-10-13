@@ -407,3 +407,103 @@ fn run_trace_write_failure_after_success_carries_the_trace_error_alone() {
     assert!(message.starts_with("writing trace: "), "{message}");
     assert!(!message.contains("; "), "{message}");
 }
+
+// ── validate failures keep their fields beside the error object ──
+
+/// Runs `validate` with `--json` and plain; asserts the shared object with
+/// `code` plus `valid: false` and `file`, and that plain mode prints the same
+/// message on stderr. Returns the parsed object.
+fn assert_validate_failure(file: &str, extra: &[&str], code: &str) -> Value {
+    let mut json_args = vec!["--json"];
+    json_args.extend_from_slice(extra);
+    json_args.extend_from_slice(&["validate", file]);
+    let output = run(&json_args);
+    assert_eq!(output.status.code(), Some(1), "{json_args:?}");
+    let text = stdout(&output);
+    let body: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|err| panic!("stdout is not one JSON value ({err}): {text}"));
+    assert_eq!(body["kind"], "error", "{body}");
+    assert_eq!(body["code"], code, "{body}");
+    assert_eq!(body["valid"], false, "{body}");
+    assert_eq!(body["file"], file, "{body}");
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(message.starts_with("validation failed: "), "{body}");
+    // Field order in the raw text: the shared object first, then the validate fields.
+    let at = |key: &str| text.find(&format!("\"{key}\":")).unwrap_or(usize::MAX);
+    assert!(
+        at("kind") < at("error") && at("error") < at("code"),
+        "{text}"
+    );
+    assert!(
+        at("code") < at("errors") && at("code") < at("valid"),
+        "{text}"
+    );
+
+    let mut plain_args = extra.to_vec();
+    plain_args.extend_from_slice(&["validate", file]);
+    let plain = run(&plain_args);
+    assert_eq!(plain.status.code(), Some(1), "{plain_args:?}");
+    assert!(stdout(&plain).is_empty(), "{}", stdout(&plain));
+    assert_eq!(stderr(&plain), format!("{message}\n"));
+    body
+}
+
+#[test]
+fn validate_missing_file_is_validate_spec_read_file() {
+    let dir = TempDir::new("validate-missing");
+    let missing = dir.path().join("missing.arazzo.yaml");
+    let body = assert_validate_failure(&missing.to_string_lossy(), &[], "VALIDATE_SPEC_READ_FILE");
+    assert_eq!(body["errors"][0]["source"], "readFile", "{body}");
+    assert!(body.get("warnings").is_none(), "{body}");
+}
+
+#[test]
+fn validate_unparseable_yaml_is_validate_spec_parse_yaml() {
+    let dir = TempDir::new("validate-yaml");
+    let file = dir.file("bad.arazzo.yaml", "arazzo: [not a spec");
+    let body = assert_validate_failure(&file, &[], "VALIDATE_SPEC_PARSE_YAML");
+    assert_eq!(body["errors"][0]["source"], "parseYaml", "{body}");
+}
+
+#[test]
+fn validate_invalid_document_is_validate_spec_validation() {
+    let dir = TempDir::new("validate-invalid");
+    let file = dir.file(
+        "invalid.arazzo.yaml",
+        "arazzo: 1.0.1\ninfo: {title: t, version: '1'}\nsourceDescriptions: []\nworkflows: []\n",
+    );
+    let body = assert_validate_failure(&file, &[], "VALIDATE_SPEC_VALIDATION");
+    assert_eq!(body["errors"][0]["source"], "validation", "{body}");
+}
+
+#[test]
+fn validate_strict_promotion_is_validate_spec_validation() {
+    let file = format!(
+        "{}/../../testdata/unsupported-operation-path.arazzo.yaml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let body = assert_validate_failure(&file, &["--strict"], "VALIDATE_SPEC_VALIDATION");
+    assert_eq!(body["errors"].as_array().map(Vec::len), Some(1), "{body}");
+    assert!(body.get("warnings").is_none(), "{body}");
+}
+
+#[test]
+fn schema_validate_describes_the_error_branch() {
+    let output = run(&["schema", "validate"]);
+    assert_eq!(output.status.code(), Some(0));
+    let schema: Value = serde_json::from_str(&stdout(&output))
+        .unwrap_or_else(|err| panic!("schema is not JSON: {err}"));
+    let branches = schema["anyOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("schema must be anyOf success or error: {schema}"));
+    assert_eq!(branches.len(), 2, "{schema}");
+    let error = &schema["$defs"]["ValidateErrorResult"]["properties"];
+    for field in [
+        "kind", "error", "code", "valid", "file", "errors", "warnings",
+    ] {
+        assert!(error.get(field).is_some(), "missing {field}: {schema}");
+    }
+    assert!(schema["$defs"]["ValidateResult"]["properties"]
+        .get("valid")
+        .is_some());
+}
