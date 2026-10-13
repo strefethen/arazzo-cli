@@ -13,7 +13,7 @@ use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::read_trace_file;
 use crate::transport::{self, TransportFlags};
 
-pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
+pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
     crate::run::run_workflow(ctx).await
 }
 

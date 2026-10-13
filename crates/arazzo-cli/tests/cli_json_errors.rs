@@ -302,3 +302,108 @@ fn test_run_with_failures_prints_results_and_exits_1() {
         assert!(!text.contains("\"kind\""), "{format}: {text}");
     }
 }
+
+// ── run failures that printed plain text before ac-9d64c ─────────
+
+/// A local server answering 500 on `/fail` and 200 elsewhere.
+fn start_server() -> String {
+    let server = tiny_http::Server::http("127.0.0.1:0")
+        .unwrap_or_else(|err| panic!("binding local server: {err}"));
+    let url = format!("http://{}", server.server_addr());
+    std::thread::spawn(move || {
+        for request in server.incoming_requests() {
+            let status = if request.url().starts_with("/fail") {
+                500
+            } else {
+                200
+            };
+            let response = tiny_http::Response::from_string("{}")
+                .with_status_code(tiny_http::StatusCode(status));
+            let _ = request.respond(response);
+        }
+    });
+    url
+}
+
+fn run_spec(dir: &TempDir, source_url: &str, operation_path: &str) -> String {
+    dir.file(
+        "run.arazzo.yaml",
+        &format!(
+            "arazzo: 1.1.0\ninfo:\n  title: Run errors\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: {source_url}\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: {operation_path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
+        ),
+    )
+}
+
+#[test]
+fn run_bad_inputs_are_run_input_format() {
+    let dir = TempDir::new("run-input");
+    let spec = run_spec(&dir, "http://127.0.0.1:9", "/one");
+    for flags in [
+        ["-i", "bad"],
+        ["--input-json", "key=notjson"],
+        ["--input-json", "bad"],
+    ] {
+        let output = run(&["--json", "run", &spec, "wf", flags[0], flags[1]]);
+        assert_eq!(output.status.code(), Some(1), "{flags:?}");
+        let message = assert_error_object(&output, "RUN_INPUT_FORMAT");
+        assert!(message.contains("input format"), "{flags:?}: {message}");
+
+        let plain = run(&["run", &spec, "wf", flags[0], flags[1]]);
+        assert_eq!(plain.status.code(), Some(1), "{flags:?}");
+        assert!(stdout(&plain).is_empty(), "{flags:?}");
+        assert_eq!(stderr(&plain), format!("{message}\n"), "{flags:?}");
+    }
+}
+
+#[test]
+fn run_missing_local_source_carries_the_engine_code() {
+    let dir = TempDir::new("run-engine");
+    let spec = run_spec(&dir, "./missing.openapi.yaml", "/one");
+    let output = run(&["--json", "run", &spec, "wf"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stdout(&output);
+    let body: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|err| panic!("stdout is not one JSON value ({err}): {text}"));
+    let code = body["code"].as_str().unwrap_or_default();
+    assert!(code.starts_with("RUNTIME_SOURCE_DESCRIPTION_"), "{body}");
+    let message = assert_error_object(&output, code);
+    assert!(
+        message.starts_with("creating runtime engine: "),
+        "{message}"
+    );
+}
+
+#[test]
+fn run_trace_write_failure_after_criteria_failure_keeps_both_causes() {
+    let dir = TempDir::new("run-trace-fail");
+    let url = start_server();
+    let spec = run_spec(&dir, &url, "/fail");
+    let trace = dir.path().join("trace-dir");
+    fs::create_dir(&trace).unwrap_or_else(|err| panic!("creating trace dir: {err}"));
+    let trace = trace.to_string_lossy();
+
+    let output = run(&["--json", "run", &spec, "wf", "--trace", &trace]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = assert_error_object(&output, "RUN_TRACE_WRITE");
+    let (run_error, trace_error) = message
+        .split_once("; writing trace: ")
+        .unwrap_or_else(|| panic!("message must join both causes: {message}"));
+    assert!(!run_error.is_empty(), "{message}");
+    assert!(!trace_error.is_empty(), "{message}");
+}
+
+#[test]
+fn run_trace_write_failure_after_success_carries_the_trace_error_alone() {
+    let dir = TempDir::new("run-trace-ok");
+    let url = start_server();
+    let spec = run_spec(&dir, &url, "/one");
+    let trace = dir.path().join("trace-dir");
+    fs::create_dir(&trace).unwrap_or_else(|err| panic!("creating trace dir: {err}"));
+    let trace = trace.to_string_lossy();
+
+    let output = run(&["--json", "run", &spec, "wf", "--trace", &trace]);
+    assert_eq!(output.status.code(), Some(1));
+    let message = assert_error_object(&output, "RUN_TRACE_WRITE");
+    assert!(message.starts_with("writing trace: "), "{message}");
+    assert!(!message.contains("; "), "{message}");
+}

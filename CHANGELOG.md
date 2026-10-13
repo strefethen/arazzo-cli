@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With `--json`, every `run` failure prints the error object with a `code`.
+  A bad `-i` or `--input-json` value (`RUN_INPUT_FORMAT`), an engine-build
+  failure such as a missing local source description (the engine's
+  `RUNTIME_*` code), and a trace that cannot be written (`RUN_TRACE_WRITE`)
+  printed plain text to stderr and nothing on stdout. Human output is
+  unchanged.
 - `run --verbose` step lines redact sensitive query parameter values in the
   request URL, as trace files do. A value such as `access_token` previously
   reached the terminal and CI logs in clear.

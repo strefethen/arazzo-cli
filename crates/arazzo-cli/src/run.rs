@@ -7,10 +7,10 @@ use arazzo_runtime::{
     is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, SequentialFallback,
     TraceStepRecord, TransportWarning, REDACTED,
 };
-use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
+use crate::cli_error::{self, CliError, SpecErrorCodes, CLI_OUTPUT_WRITE};
 use crate::handlers::{parse_input_kv, parse_input_value};
 use crate::output;
 use crate::run_context::RunContext;
@@ -20,7 +20,14 @@ use crate::trace::{
 };
 use crate::transport;
 
-pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
+const RUN_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
+    read_file: "RUN_SPEC_READ_FILE",
+    parse_yaml: "RUN_SPEC_PARSE_YAML",
+    validation: "RUN_SPEC_VALIDATION",
+    component_resolution: "RUN_SPEC_COMPONENT_RESOLUTION",
+};
+
+pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
     let _trace_pipeline_version = crate::trace::INTERNAL_TRACE_PIPELINE_VERSION;
     let run = ctx.run;
     let global = ctx.global;
@@ -36,7 +43,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             run.trace.as_deref().map(Path::new),
             &sources,
         ) {
-            return output::emit_run_error(global.json, &err, Some("RUN_EXPORT_PATH"), &[], &[]);
+            return Err(output::run_error("RUN_EXPORT_PATH", err, &[], &[]));
         }
     }
     let trace_enabled = run.trace.is_some()
@@ -56,17 +63,13 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,
         Err(err) => {
-            return if global.json {
-                output::emit_run_error(
-                    true,
-                    &err.to_string(),
-                    Some(run_parse_error_code(&err)),
-                    &[],
-                    &transport_warnings,
-                )
+            let code = cli_error::spec_error(&err, &RUN_SPEC_CODES).code();
+            let message = if global.json {
+                err.to_string()
             } else {
-                Err(format!("parsing spec: {err}"))
+                format!("parsing spec: {err}")
             };
+            return Err(output::run_error(code, message, &[], &transport_warnings));
         }
     };
 
@@ -82,25 +85,28 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             run.trace.as_deref().map(Path::new),
             &source_refs,
         ) {
-            return output::emit_run_error(
-                global.json,
-                &err,
-                Some("RUN_EXPORT_PATH"),
+            return Err(output::run_error(
+                "RUN_EXPORT_PATH",
+                err,
                 &[],
                 &transport_warnings,
-            );
+            ));
         }
     }
 
+    let input_error =
+        |message: String| output::run_error("RUN_INPUT_FORMAT", message, &[], &transport_warnings);
     let mut inputs = BTreeMap::<String, Value>::new();
     for item in run.input_flags {
-        let (key, raw_value) = parse_input_kv(&item)?;
+        let (key, raw_value) = parse_input_kv(&item).map_err(input_error)?;
         inputs.insert(key, parse_input_value(raw_value));
     }
     for item in run.input_json_flags {
-        let (key, raw_value) = parse_input_kv(&item)?;
+        let (key, raw_value) = parse_input_kv(&item).map_err(input_error)?;
         let value = serde_json::from_str::<Value>(raw_value).map_err(|err| {
-            format!("invalid JSON input format for \"{key}\": {err} (expected key=<json>)")
+            input_error(format!(
+                "invalid JSON input format for \"{key}\": {err} (expected key=<json>)"
+            ))
         })?;
         inputs.insert(key, value);
     }
@@ -159,26 +165,25 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         let bytes = match fs::read(openapi_path) {
             Ok(bytes) => bytes,
             Err(err) => {
-                let msg = format!("reading OpenAPI file \"{openapi_path}\": {err}");
-                return if global.json {
-                    output::emit_run_error(
-                        true,
-                        &msg,
-                        Some("RUN_OPENAPI_READ_FILE"),
-                        &[],
-                        &transport_warnings,
-                    )
-                } else {
-                    Err(msg)
-                };
+                return Err(output::run_error(
+                    "RUN_OPENAPI_READ_FILE",
+                    format!("reading OpenAPI file \"{openapi_path}\": {err}"),
+                    &[],
+                    &transport_warnings,
+                ));
             }
         };
         builder = builder.openapi_spec(bytes, Some(PathBuf::from(openapi_path)));
     }
 
-    let engine = builder
-        .build()
-        .map_err(|err| format!("creating runtime engine: {err}"))?;
+    let engine = builder.build().map_err(|err| {
+        output::run_error(
+            err.code(),
+            format!("creating runtime engine: {err}"),
+            &[],
+            &transport_warnings,
+        )
+    })?;
 
     let execution_timeout = run.execution_timeout;
 
@@ -204,11 +209,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
     let run_duration = run_started_inst.elapsed();
 
     let run_error_text = exec_result.outputs.as_ref().err().map(ToString::to_string);
-    let run_error_code = exec_result
-        .outputs
-        .as_ref()
-        .err()
-        .map(|e| e.kind.code().to_string());
+    let run_error_code = exec_result.outputs.as_ref().err().map(|e| e.kind.code());
 
     // Engine-emitted transport warnings (already on stderr when not
     // squelched) join the structured list for --json output and traces.
@@ -320,30 +321,34 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             causes.push(format!("writing trace: {trace_error}"));
         }
         causes.push(format!("writing run export: {export_error}"));
-        return output::emit_run_error(
-            global.json,
-            &causes.join("; "),
-            Some("RUN_EXPORT_WRITE"),
+        return Err(output::run_error(
+            "RUN_EXPORT_WRITE",
+            causes.join("; "),
             &expression_warnings,
             &transport_warnings,
-        );
-    }
-
-    if let Some(run_error) = run_error_text {
-        if let Some(trace_error) = trace_write_error {
-            return Err(format!("{run_error}; writing trace: {trace_error}"));
-        }
-        return output::emit_run_error(
-            global.json,
-            &run_error,
-            run_error_code.as_deref(),
-            &expression_warnings,
-            &transport_warnings,
-        );
+        ));
     }
 
     if let Some(trace_error) = trace_write_error {
-        return Err(format!("writing trace: {trace_error}"));
+        let message = match &run_error_text {
+            Some(run_error) => format!("{run_error}; writing trace: {trace_error}"),
+            None => format!("writing trace: {trace_error}"),
+        };
+        return Err(output::run_error(
+            "RUN_TRACE_WRITE",
+            message,
+            &expression_warnings,
+            &transport_warnings,
+        ));
+    }
+
+    if let (Some(run_error), Some(code)) = (run_error_text, run_error_code) {
+        return Err(output::run_error(
+            code,
+            run_error,
+            &expression_warnings,
+            &transport_warnings,
+        ));
     }
 
     if !expression_warnings.is_empty() {
@@ -355,16 +360,15 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
                 }
             }
             ExpressionDiagnosticsMode::Error => {
-                return output::emit_run_error(
-                    global.json,
-                    &format!(
+                return Err(output::run_error(
+                    "RUNTIME_EXPRESSION_DIAGNOSTICS",
+                    format!(
                         "expression diagnostics reported {} warning(s)",
                         expression_warnings.len()
                     ),
-                    Some("RUNTIME_EXPRESSION_DIAGNOSTICS"),
                     &expression_warnings,
                     &transport_warnings,
-                );
+                ));
             }
         }
     }
@@ -375,7 +379,8 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
             dry_run_requests,
             &expression_warnings,
             &transport_warnings,
-        );
+        )
+        .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err));
     }
 
     let outputs = exec_result.outputs.unwrap_or_default();
@@ -388,15 +393,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), String> {
         &expression_warnings,
         &transport_warnings,
     )
-}
-
-fn run_parse_error_code(err: &ValidateError) -> &'static str {
-    match err {
-        ValidateError::ReadFile(_) => "RUN_SPEC_READ_FILE",
-        ValidateError::ParseYaml(_) => "RUN_SPEC_PARSE_YAML",
-        ValidateError::Validation(_) => "RUN_SPEC_VALIDATION",
-        ValidateError::ComponentResolution(_) => "RUN_SPEC_COMPONENT_RESOLUTION",
-    }
+    .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err))
 }
 
 fn collect_expression_warnings(steps: &[TraceStepRecord]) -> Vec<String> {

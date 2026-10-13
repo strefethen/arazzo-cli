@@ -36,10 +36,7 @@
       "type": "object",
       "properties": {
         "code": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "error": {
           "type": "string"
@@ -63,7 +60,8 @@
       },
       "required": [
         "kind",
-        "error"
+        "error",
+        "code"
       ]
     },
     {

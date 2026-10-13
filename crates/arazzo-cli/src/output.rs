@@ -9,6 +9,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::cli_error::{CliError, CLI_OUTPUT_WRITE};
+
 // ── Test command output types ────────────────────────────────────
 
 /// Combined schema type for the `test` command output.
@@ -239,10 +241,10 @@ pub enum RunOutput {
         #[serde(rename = "transportWarnings")]
         transport_warnings: Vec<TransportWarning>,
     },
+    // `main` prints this shape from a `CliError` built by `run_error`.
     Error {
         error: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        code: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -555,25 +557,27 @@ pub fn emit_workflow_detail(
     Ok(())
 }
 
-pub fn emit_run_error(
-    json: bool,
-    err: &str,
-    code: Option<&str>,
+/// Builds a `run` failure in the `RunOutput::Error` shape: the non-empty
+/// warning lists ride along as extra fields of the error object.
+pub fn run_error(
+    code: &'static str,
+    message: impl Into<String>,
     warnings: &[String],
     transport_warnings: &[TransportWarning],
-) -> Result<(), String> {
-    if json {
-        output_json(&RunOutput::Error {
-            error: err.to_string(),
-            code: code.map(String::from),
-            warnings: warnings.to_vec(),
-            transport_warnings: transport_warnings.to_vec(),
-        })?;
-        // Return Err so main() exits with code 1. Empty string signals
-        // that the error message was already written to stdout as JSON.
-        return Err(String::new());
+) -> CliError {
+    let mut err = CliError::new(code, message);
+    if !warnings.is_empty() {
+        err = err.with_field("warnings", Value::from(warnings.to_vec()));
     }
-    Err(err.to_string())
+    if !transport_warnings.is_empty() {
+        match serde_json::to_value(transport_warnings) {
+            Ok(value) => err = err.with_field("transportWarnings", value),
+            Err(json_err) => {
+                return CliError::new(CLI_OUTPUT_WRITE, format!("writing JSON: {json_err}"))
+            }
+        }
+    }
+    err
 }
 
 pub fn emit_dry_run_requests(

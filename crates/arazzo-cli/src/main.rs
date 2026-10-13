@@ -240,9 +240,7 @@ async fn run(cli: Cli) -> Result<(), Failure> {
                     },
                 },
             );
-            handlers::run_workflow(context)
-                .await
-                .map_err(Failure::Legacy)
+            handlers::run_workflow(context).await.map_err(Failure::from)
         }
         Commands::Replay {
             trace,
