@@ -9,6 +9,7 @@ use arazzo_spec::{classify_workflow_dependency, ArazzoSpec, WorkflowDependency};
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
+use crate::cli_error::CliError;
 use crate::output::{
     TestCaseResult, TestOutput, TestStatus, TestStepResult, TestSuiteResult, TestSummary,
 };
@@ -37,25 +38,30 @@ pub struct TestRunOptions {
 ///
 /// Files must end in `.arazzo.yaml` or `.arazzo.yml`. Directories are scanned
 /// recursively using the same convention as `arazzo_mcp::state::discover_specs`.
-pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, String> {
+pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, CliError> {
     let mut specs = Vec::new();
 
     for path_str in paths {
         let path = Path::new(path_str);
         if !path.exists() {
-            return Err(format!("path does not exist: {path_str}"));
+            return Err(CliError::new(
+                "TEST_PATH_NOT_FOUND",
+                format!("path does not exist: {path_str}"),
+            ));
         }
         if path.is_dir() {
-            let discovered = arazzo_mcp::state::discover_specs(path_str)
-                .map_err(|err| format!("scanning {path_str}: {err}"))?;
+            let discovered = arazzo_mcp::state::discover_specs(path_str).map_err(|err| {
+                CliError::new("TEST_PATH_SCAN", format!("scanning {path_str}: {err}"))
+            })?;
             for p in discovered {
                 specs.push(PathBuf::from(p));
             }
         } else if is_arazzo_spec_file(path_str) {
             specs.push(path.to_path_buf());
         } else {
-            return Err(format!(
-                "not an Arazzo spec (expected .arazzo.yaml or .arazzo.yml): {path_str}"
+            return Err(CliError::new(
+                "TEST_PATH_NOT_ARAZZO",
+                format!("not an Arazzo spec (expected .arazzo.yaml or .arazzo.yml): {path_str}"),
             ));
         }
     }
@@ -64,7 +70,10 @@ pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, String> {
     specs.dedup();
 
     if specs.is_empty() {
-        return Err(format!("no test specs found in: {}", paths.join(", ")));
+        return Err(CliError::new(
+            "TEST_NO_SPECS",
+            format!("no test specs found in: {}", paths.join(", ")),
+        ));
     }
 
     Ok(specs)

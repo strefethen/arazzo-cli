@@ -6,6 +6,7 @@
 //! `generate`, `schema`, `serve`.
 
 mod cli;
+mod cli_error;
 mod generate;
 mod handlers;
 mod output;
@@ -21,9 +22,11 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path::Path;
 
+use clap::error::ErrorKind;
 use clap::Parser;
 
-use crate::cli::{Cli, Commands};
+use crate::cli::{Cli, Commands, TestFormat};
+use crate::cli_error::{CliError, CliFailure, CLI_OUTPUT_WRITE, CLI_USAGE};
 use crate::run_context::{GlobalOptions, RunContext, RunOptions};
 
 fn main() {
@@ -40,13 +43,74 @@ fn main() {
 }
 
 async fn async_main() {
-    let cli = Cli::parse_from(normalize_args(std::env::args_os()));
-    if let Err(err) = run(cli).await {
-        if !err.is_empty() {
-            eprintln!("{err}");
+    let args = normalize_args(std::env::args_os());
+    let cli = match Cli::try_parse_from(&args) {
+        Ok(cli) => cli,
+        Err(err) => exit_on_usage_error(err, &args),
+    };
+    let json_mode = cli.json
+        || matches!(
+            cli.command,
+            Commands::Test {
+                format: TestFormat::Json,
+                ..
+            }
+        );
+    match run(cli).await {
+        Ok(()) => {}
+        Err(Failure::Cli(CliFailure::Error(err))) => {
+            print_error(&err, json_mode);
+            std::process::exit(1);
         }
-        std::process::exit(1);
+        Err(Failure::Cli(CliFailure::ResultsReported)) => std::process::exit(1),
+        Err(Failure::Legacy(err)) => {
+            if !err.is_empty() {
+                eprintln!("{err}");
+            }
+            std::process::exit(1);
+        }
     }
+}
+
+/// The only place a CLI error is printed: one JSON object on stdout in JSON
+/// mode, the message on stderr otherwise.
+fn print_error(err: &CliError, json_mode: bool) {
+    if !json_mode {
+        eprintln!("{}", err.message());
+        return;
+    }
+    if let Err(write_err) = cli_error::write_json(io::stdout().lock(), err) {
+        // stdout is gone, so stderr is the only channel left to say so.
+        let failed = CliError::new(CLI_OUTPUT_WRITE, format!("writing JSON: {write_err}"));
+        eprintln!("{}: {}", failed.code(), failed.message());
+        eprintln!("{}", err.message());
+    }
+}
+
+/// Help and version displays, and any usage error without `--json`, keep
+/// clap's own output and exit status. A usage error with `--json` among the
+/// raw arguments prints the error object with `CLI_USAGE` and exits 2.
+fn exit_on_usage_error(err: clap::Error, args: &[OsString]) -> ! {
+    let is_display = matches!(
+        err.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    if is_display || !raw_args_request_json(args) {
+        err.exit();
+    }
+    let message = err.render().to_string();
+    print_error(&CliError::new(CLI_USAGE, message.trim_end()), true);
+    std::process::exit(2);
+}
+
+/// Whether `--json` appears among the raw arguments before any `--`.
+fn raw_args_request_json(args: &[OsString]) -> bool {
+    args.iter()
+        .skip(1)
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--json")
 }
 
 fn normalize_args(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
@@ -91,7 +155,29 @@ fn normalize_generate_positional_spec(args: &mut Vec<OsString>) {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), String> {
+/// How `run` fails while commands migrate to `CliError`.
+enum Failure {
+    Cli(CliFailure),
+    /// Transitional pass-through for commands not migrated yet: a `String`
+    /// error printed to stderr, or the empty string meaning "already
+    /// printed". Private to `main.rs`; migrated code must not use it, and
+    /// ac-ad7cf deletes it.
+    Legacy(String),
+}
+
+impl From<CliFailure> for Failure {
+    fn from(failure: CliFailure) -> Self {
+        Self::Cli(failure)
+    }
+}
+
+impl From<CliError> for Failure {
+    fn from(err: CliError) -> Self {
+        Self::Cli(CliFailure::Error(err))
+    }
+}
+
+async fn run(cli: Cli) -> Result<(), Failure> {
     let global = GlobalOptions {
         json: cli.json,
         verbose: cli.verbose,
@@ -154,7 +240,9 @@ async fn run(cli: Cli) -> Result<(), String> {
                     },
                 },
             );
-            handlers::run_workflow(context).await
+            handlers::run_workflow(context)
+                .await
+                .map_err(Failure::Legacy)
         }
         Commands::Replay {
             trace,
@@ -162,28 +250,38 @@ async fn run(cli: Cli) -> Result<(), String> {
             workflow_id,
             execution_timeout,
             openapi,
-        } => {
-            handlers::replay_trace(
-                &trace,
-                spec.as_deref(),
-                workflow_id.as_deref(),
-                &openapi,
-                execution_timeout,
-                global,
-            )
-            .await
+        } => handlers::replay_trace(
+            &trace,
+            spec.as_deref(),
+            workflow_id.as_deref(),
+            &openapi,
+            execution_timeout,
+            global,
+        )
+        .await
+        .map_err(Failure::from),
+        Commands::Validate { spec } => {
+            handlers::validate_spec(&spec, global).map_err(Failure::Legacy)
         }
-        Commands::Validate { spec } => handlers::validate_spec(&spec, global),
-        Commands::List { spec } => handlers::list_workflows(&spec, global),
-        Commands::Catalog { dir } => handlers::catalog_workflows(&dir, global),
-        Commands::Show { workflow_id, dir } => handlers::show_workflow(&workflow_id, &dir, global),
-        Commands::Steps { spec, workflow_id } => handlers::list_steps(&spec, &workflow_id, global),
+        Commands::List { spec } => handlers::list_workflows(&spec, global).map_err(Failure::Legacy),
+        Commands::Catalog { dir } => {
+            handlers::catalog_workflows(&dir, global).map_err(Failure::Legacy)
+        }
+        Commands::Show { workflow_id, dir } => {
+            handlers::show_workflow(&workflow_id, &dir, global).map_err(Failure::Legacy)
+        }
+        Commands::Steps { spec, workflow_id } => {
+            handlers::list_steps(&spec, &workflow_id, global).map_err(Failure::Legacy)
+        }
         Commands::Generate {
             spec,
             scenario,
             output,
-        } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global),
-        Commands::Schema { command } => handlers::schema(command.as_deref()),
+        } => handlers::generate_workflow(&spec, &scenario, output.as_deref(), global)
+            .map_err(Failure::Legacy),
+        Commands::Schema { command } => {
+            handlers::schema(command.as_deref()).map_err(Failure::Legacy)
+        }
         Commands::Test {
             paths,
             format,
@@ -204,65 +302,70 @@ async fn run(cli: Cli) -> Result<(), String> {
             allow_downgrade_redirects,
             max_redirects,
             no_transport_warnings,
-        } => {
-            handlers::run_tests(
-                paths,
-                format,
-                input,
-                input_json,
-                http_timeout,
-                execution_timeout,
-                header,
-                openapi,
-                expr_diagnostics,
-                parallel,
-                strict_inputs,
-                max_response_size,
-                fail_fast,
-                filter,
-                transport::TransportFlags {
-                    insecure_hosts: insecure_host,
-                    insecure_all: insecure,
-                    allow_downgrade_redirects,
-                    max_redirects,
-                    no_transport_warnings,
-                },
-                global,
-            )
-            .await
-        }
+        } => handlers::run_tests(
+            paths,
+            format,
+            input,
+            input_json,
+            http_timeout,
+            execution_timeout,
+            header,
+            openapi,
+            expr_diagnostics,
+            parallel,
+            strict_inputs,
+            max_response_size,
+            fail_fast,
+            filter,
+            transport::TransportFlags {
+                insecure_hosts: insecure_host,
+                insecure_all: insecure,
+                allow_downgrade_redirects,
+                max_redirects,
+                no_transport_warnings,
+            },
+            global,
+        )
+        .await
+        .map_err(Failure::from),
         Commands::Serve {
             specs,
             dir,
             allowed_dir,
-        } => {
-            let mut paths = specs;
-            if let Some(d) = dir {
-                let discovered = arazzo_mcp::state::discover_specs(&d)
-                    .map_err(|err| format!("discovering specs: {err}"))?;
-                paths.extend(discovered);
-            }
-            if paths.is_empty() {
-                return Err(
-                    "no spec files provided. Pass file paths or use --dir <directory>".to_string(),
-                );
-            }
-            let allowed = if allowed_dir.is_empty() {
-                None
-            } else {
-                Some(allowed_dir)
-            };
-            // Escape the existing tokio runtime before calling run_mcp_stdio,
-            // which creates its own runtime internally.
-            tokio::task::spawn_blocking(move || {
-                let reader = io::BufReader::new(io::stdin());
-                let mut writer = io::BufWriter::new(io::stdout().lock());
-                arazzo_mcp::run_mcp_stdio(reader, &mut writer, &paths, allowed)
-            })
+        } => serve(specs, dir, allowed_dir)
             .await
-            .map_err(|err| format!("serve task panicked: {err}"))?
-        }
+            .map_err(Failure::Legacy),
     }
+}
+
+async fn serve(
+    specs: Vec<String>,
+    dir: Option<String>,
+    allowed_dir: Vec<String>,
+) -> Result<(), String> {
+    let mut paths = specs;
+    if let Some(d) = dir {
+        let discovered = arazzo_mcp::state::discover_specs(&d)
+            .map_err(|err| format!("discovering specs: {err}"))?;
+        paths.extend(discovered);
+    }
+    if paths.is_empty() {
+        return Err("no spec files provided. Pass file paths or use --dir <directory>".to_string());
+    }
+    let allowed = if allowed_dir.is_empty() {
+        None
+    } else {
+        Some(allowed_dir)
+    };
+    // Escape the existing tokio runtime before calling run_mcp_stdio,
+    // which creates its own runtime internally.
+    tokio::task::spawn_blocking(move || {
+        let reader = io::BufReader::new(io::stdin());
+        let mut writer = io::BufWriter::new(io::stdout().lock());
+        arazzo_mcp::run_mcp_stdio(reader, &mut writer, &paths, allowed)
+    })
+    .await
+    .map_err(|err| format!("serve task panicked: {err}"))?
 }
 
 // `.env` loading. This and the copy in `arazzo-mcp/src/main.rs` are kept in lockstep: the
@@ -513,6 +616,22 @@ mod tests {
                 "crud"
             ]
         );
+    }
+
+    #[test]
+    fn json_flag_is_detected_only_before_the_terminator() {
+        let args = |list: &[&str]| -> Vec<OsString> { list.iter().map(OsString::from).collect() };
+        assert!(raw_args_request_json(&args(&[
+            "arazzo", "list", "--json", "--bogus"
+        ])));
+        assert!(raw_args_request_json(&args(&["arazzo", "--json", "list"])));
+        assert!(!raw_args_request_json(&args(&[
+            "arazzo", "list", "--bogus"
+        ])));
+        assert!(!raw_args_request_json(&args(&[
+            "arazzo", "list", "--", "--json"
+        ])));
+        assert!(!raw_args_request_json(&args(&["--json"])));
     }
 
     /// Writes `contents` to a fresh `.env` in a per-test temp directory, loads

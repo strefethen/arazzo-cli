@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- With `--json`, a usage error such as an unknown flag or a missing argument
+  prints a JSON error object with `code: "CLI_USAGE"` on stdout and still
+  exits 2. `replay` and `test` error objects always carry a `code`; `test`
+  failures that had none now use `TEST_*` codes, and its `-i`,
+  `--input-json`, and `--openapi` errors print the object instead of plain
+  text.
+
 ### Fixed
 
 - `run --verbose` step lines redact sensitive query parameter values in the

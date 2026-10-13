@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use arazzo_runtime::{EngineBuilder, EngineEvent, TraceStepRecord};
 use arazzo_spec::ArazzoSpec;
-use arazzo_validate::Error as ValidateError;
 use serde_json::Value;
 
 use crate::cli::{ExpressionDiagnosticsMode, TestFormat};
+use crate::cli_error::{self, CliError, CliFailure, SpecErrorCodes, CLI_OUTPUT_WRITE};
 use crate::output::{self, CatalogEntry};
 use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::read_trace_file;
@@ -24,30 +24,18 @@ pub async fn replay_trace(
     openapi_flags: &[String],
     execution_timeout: std::time::Duration,
     global: GlobalOptions,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     let trace_path_ref = Path::new(trace_path);
-    let trace = match read_trace_file(trace_path_ref) {
-        Ok(trace) => trace,
-        Err(err) => {
-            return output::emit_replay_error(global.json, &err, Some("REPLAY_TRACE_LOAD"));
-        }
-    };
+    let trace =
+        read_trace_file(trace_path_ref).map_err(|err| CliError::new("REPLAY_TRACE_LOAD", err))?;
 
     let workflow_id = workflow_id_override
         .unwrap_or(&trace.run.workflow_id)
         .to_string();
     let spec_path =
         resolve_replay_spec_path(trace_path_ref, spec_override, trace.run.spec_path.as_str());
-    let spec = match arazzo_validate::parse(&spec_path) {
-        Ok(spec) => spec,
-        Err(err) => {
-            return output::emit_replay_error(
-                global.json,
-                &err.to_string(),
-                Some(replay_parse_error_code(&err)),
-            );
-        }
-    };
+    let spec = arazzo_validate::parse(&spec_path)
+        .map_err(|err| cli_error::spec_error(&err, &REPLAY_SPEC_CODES))?;
 
     let mut builder = EngineBuilder::new(spec)
         .parallel(trace.run.parallel)
@@ -59,26 +47,18 @@ pub async fn replay_trace(
     }
 
     for openapi_path in openapi_flags {
-        let bytes = match fs::read(openapi_path) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                let msg = format!("reading OpenAPI file \"{openapi_path}\": {err}");
-                return output::emit_replay_error(
-                    global.json,
-                    &msg,
-                    Some("REPLAY_OPENAPI_READ_FILE"),
-                );
-            }
-        };
+        let bytes = fs::read(openapi_path).map_err(|err| {
+            CliError::new(
+                "REPLAY_OPENAPI_READ_FILE",
+                format!("reading OpenAPI file \"{openapi_path}\": {err}"),
+            )
+        })?;
         builder = builder.openapi_spec(bytes, Some(PathBuf::from(openapi_path)));
     }
 
-    let engine = match builder.build() {
-        Ok(engine) => engine,
-        Err(err) => {
-            return output::emit_replay_error(global.json, &err.to_string(), Some(err.kind.code()));
-        }
-    };
+    let engine = builder
+        .build()
+        .map_err(|err| CliError::new(err.kind.code(), err.to_string()))?;
 
     if global.verbose {
         eprintln!("Replaying trace: {trace_path}");
@@ -102,24 +82,21 @@ pub async fn replay_trace(
         .collect();
     let actual_request_count = replay_steps.iter().filter(|s| s.request.is_some()).count();
 
-    let outputs = match exec_result.outputs {
-        Ok(outputs) => outputs,
-        Err(err) => {
-            return output::emit_replay_error(global.json, &err.to_string(), Some(err.kind.code()));
-        }
-    };
+    let outputs = exec_result
+        .outputs
+        .map_err(|err| CliError::new(err.kind.code(), err.to_string()))?;
 
     if actual_request_count != expected_request_count {
-        return output::emit_replay_error(
-            global.json,
-            &format!(
+        return Err(CliError::new(
+            "REPLAY_REQUEST_COUNT_MISMATCH",
+            format!(
                 "replay request drift: expected {expected_request_count} recorded request(s) but replay executed {actual_request_count}"
             ),
-            Some("REPLAY_REQUEST_COUNT_MISMATCH"),
-        );
+        ));
     }
 
     output::emit_replay_success(&outputs, actual_request_count, global.json)
+        .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err))
 }
 
 pub fn generate_workflow(
@@ -355,14 +332,12 @@ fn is_arazzo_yaml_path(path: &Path) -> bool {
     }
 }
 
-fn replay_parse_error_code(err: &ValidateError) -> &'static str {
-    match err {
-        ValidateError::ReadFile(_) => "REPLAY_SPEC_READ_FILE",
-        ValidateError::ParseYaml(_) => "REPLAY_SPEC_PARSE_YAML",
-        ValidateError::Validation(_) => "REPLAY_SPEC_VALIDATION",
-        ValidateError::ComponentResolution(_) => "REPLAY_SPEC_COMPONENT_RESOLUTION",
-    }
-}
+const REPLAY_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
+    read_file: "REPLAY_SPEC_READ_FILE",
+    parse_yaml: "REPLAY_SPEC_PARSE_YAML",
+    validation: "REPLAY_SPEC_VALIDATION",
+    component_resolution: "REPLAY_SPEC_COMPONENT_RESOLUTION",
+};
 
 fn resolve_replay_spec_path(
     trace_path: &Path,
@@ -494,7 +469,7 @@ pub async fn run_tests(
     filter: Option<String>,
     transport_flags: TransportFlags,
     global: GlobalOptions,
-) -> Result<(), String> {
+) -> Result<(), CliFailure> {
     use crate::test_runner::{discover_test_specs, run_test_suite, TestRunOptions};
 
     // Startup insecure-exception notice, before any suite runs.
@@ -503,34 +478,21 @@ pub async fn run_tests(
         transport::eprint_warning(&warning, squelched);
     }
 
-    let emit_error = |err: String| -> Result<(), String> {
-        let result = output::TestOutput::Error {
-            error: err.clone(),
-            code: None,
-        };
-        if global.json || format == TestFormat::Json {
-            output::output_json(&result)?;
-            Err(String::new())
-        } else {
-            Err(err)
-        }
-    };
-
-    let specs = match discover_test_specs(&paths) {
-        Ok(s) => s,
-        Err(err) => return emit_error(err),
-    };
+    let specs = discover_test_specs(&paths)?;
 
     // Parse inputs (same logic as `run`).
+    let input_error = |err: String| CliError::new("TEST_INPUT_FORMAT", err);
     let mut inputs = BTreeMap::<String, Value>::new();
     for item in input {
-        let (key, raw_value) = parse_input_kv(&item)?;
+        let (key, raw_value) = parse_input_kv(&item).map_err(input_error)?;
         inputs.insert(key, parse_input_value(raw_value));
     }
     for item in input_json {
-        let (key, raw_value) = parse_input_kv(&item)?;
+        let (key, raw_value) = parse_input_kv(&item).map_err(input_error)?;
         let value = serde_json::from_str::<Value>(raw_value).map_err(|err| {
-            format!("invalid JSON input format for \"{key}\": {err} (expected key=<json>)")
+            input_error(format!(
+                "invalid JSON input format for \"{key}\": {err} (expected key=<json>)"
+            ))
         })?;
         inputs.insert(key, value);
     }
@@ -554,8 +516,12 @@ pub async fn run_tests(
     // Load OpenAPI files once.
     let mut openapi_bytes = Vec::new();
     for openapi_path in &openapi {
-        let bytes = fs::read(openapi_path)
-            .map_err(|err| format!("reading OpenAPI file \"{openapi_path}\": {err}"))?;
+        let bytes = fs::read(openapi_path).map_err(|err| {
+            CliError::new(
+                "TEST_OPENAPI_READ_FILE",
+                format!("reading OpenAPI file \"{openapi_path}\": {err}"),
+            )
+        })?;
         openapi_bytes.push((PathBuf::from(openapi_path), bytes));
     }
 
@@ -563,7 +529,13 @@ pub async fn run_tests(
     let filter_re = match filter {
         Some(pattern) => match regex::Regex::new(&pattern) {
             Ok(re) => Some(re),
-            Err(err) => return emit_error(format!("invalid --filter regex: {err}")),
+            Err(err) => {
+                return Err(CliError::new(
+                    "TEST_FILTER_INVALID",
+                    format!("invalid --filter regex: {err}"),
+                )
+                .into())
+            }
         },
         None => None,
     };
@@ -619,7 +591,7 @@ pub async fn run_tests(
 
     match effective_format {
         TestFormat::Json => {
-            output::output_json(&result)?;
+            output::output_json(&result).map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err))?;
         }
         TestFormat::Tap => {
             print!("{}", format_tap(&result));
@@ -632,7 +604,7 @@ pub async fn run_tests(
     }
 
     if has_failures {
-        Err(String::new())
+        Err(CliFailure::ResultsReported)
     } else {
         Ok(())
     }

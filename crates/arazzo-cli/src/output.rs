@@ -28,11 +28,8 @@ pub enum TestOutput {
         transport_warnings: Vec<TransportWarning>,
     },
     /// Could not run tests at all (no specs found, invalid filter regex, etc.)
-    Error {
-        error: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
-    },
+    // `main` prints this shape from a `CliError`.
+    Error { error: String, code: String },
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -265,16 +262,17 @@ pub enum RunOutput {
 /// JSON output contract for `replay`.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[allow(dead_code)]
 pub enum ReplayOutput {
     Success {
         outputs: BTreeMap<String, Value>,
         #[serde(rename = "requestsChecked")]
         requests_checked: usize,
     },
+    // `main` prints this shape from a `CliError`.
     Error {
         error: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
+        code: String,
     },
 }
 
@@ -697,17 +695,6 @@ pub fn emit_replay_success(
         println!("  {key}: {}", format_value(value));
     }
     Ok(())
-}
-
-pub fn emit_replay_error(json: bool, err: &str, code: Option<&str>) -> Result<(), String> {
-    if json {
-        output_json(&ReplayOutput::Error {
-            error: err.to_string(),
-            code: code.map(String::from),
-        })?;
-        return Err(String::new());
-    }
-    Err(err.to_string())
 }
 
 fn format_value(value: &Value) -> String {
