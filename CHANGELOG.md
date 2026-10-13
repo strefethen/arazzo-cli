@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Check Step and Workflow `dependsOn` cycles without recursion. A chain of a
+  few thousand `dependsOn` links overflowed the stack and aborted `validate`,
+  `run`, the MCP server, and the debug adapter; the same document now
+  validates with the same diagnostics.
 - Refuse a JSONPath query nested more than 8 `[`…`]` levels deep before
   parsing it. Parse time doubled with each nested filter, so a criterion,
   selector, or replacement target of about 100 bytes could stall a run for

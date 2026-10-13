@@ -162,6 +162,103 @@
         }));
     }
 
+    const DEEP_CHAIN_LEN: usize = 20_000;
+
+    /// Runs `body` on a thread with a fixed small stack, so a recursive
+    /// traversal overflows regardless of the platform's default stack size.
+    fn run_on_small_stack(body: impl FnOnce() + Send + 'static) {
+        let handle = match std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(body)
+        {
+            Ok(handle) => handle,
+            Err(err) => panic!("spawn small-stack thread: {err}"),
+        };
+        if handle.join().is_err() {
+            panic!("deep-chain check panicked on the small-stack thread");
+        }
+    }
+
+    fn deep_workflow_chain(back_edge: bool) -> ArazzoSpec {
+        let mut spec = valid_spec();
+        spec.workflows = (0..DEEP_CHAIN_LEN)
+            .map(|index| Workflow {
+                workflow_id: format!("wf{index}"),
+                depends_on: if index + 1 < DEEP_CHAIN_LEN {
+                    vec![format!("wf{}", index + 1)]
+                } else if back_edge {
+                    vec!["wf0".to_string()]
+                } else {
+                    Vec::new()
+                },
+                ..Workflow::default()
+            })
+            .collect();
+        spec
+    }
+
+    fn deep_step_chain(back_edge: bool) -> Workflow {
+        Workflow {
+            workflow_id: "wf1".to_string(),
+            steps: (0..DEEP_CHAIN_LEN)
+                .map(|index| Step {
+                    step_id: format!("s{index}"),
+                    depends_on: if index + 1 < DEEP_CHAIN_LEN {
+                        vec![format!("s{}", index + 1)]
+                    } else if back_edge {
+                        vec!["s0".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Step::default()
+                })
+                .collect(),
+            ..Workflow::default()
+        }
+    }
+
+    #[test]
+    fn deep_workflow_depends_on_chain_does_not_overflow_the_stack() {
+        run_on_small_stack(|| {
+            let acyclic = deep_workflow_chain(false);
+            assert!(!crate::step_dependencies::local_workflow_depends_on_has_cycle(&acyclic, 0));
+            assert!(!crate::step_dependencies::local_workflow_depends_on_has_cycle(
+                &acyclic,
+                DEEP_CHAIN_LEN - 1
+            ));
+
+            let cyclic = deep_workflow_chain(true);
+            for start in [0, DEEP_CHAIN_LEN / 2, DEEP_CHAIN_LEN - 1] {
+                assert!(
+                    crate::step_dependencies::local_workflow_depends_on_has_cycle(&cyclic, start),
+                    "workflow {start} reaches the cycle"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn deep_step_depends_on_chain_does_not_overflow_the_stack() {
+        run_on_small_stack(|| {
+            assert!(!crate::step_dependencies::local_step_depends_on_has_cycle(&deep_step_chain(false)));
+            assert!(crate::step_dependencies::local_step_depends_on_has_cycle(&deep_step_chain(true)));
+        });
+    }
+
+    #[test]
+    fn deep_step_depends_on_cycle_reports_one_diagnostic_per_workflow() {
+        run_on_small_stack(|| {
+            let mut spec = valid_spec();
+            spec.workflows[0] = deep_step_chain(true);
+            let errors = expect_validation_errors(validate(&spec));
+            let cycles = errors
+                .iter()
+                .filter(|error| error.kind == ValidationErrorKind::DependencyCycle)
+                .count();
+            assert_eq!(cycles, 1);
+        });
+    }
+
     #[test]
     fn validate_cross_scope_depends_on_references_fail_as_unsupported() {
         for dependency in [

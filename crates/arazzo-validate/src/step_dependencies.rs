@@ -15,38 +15,17 @@ pub(crate) fn local_workflow_depends_on_has_cycle(spec: &ArazzoSpec, start: usiz
         .enumerate()
         .map(|(index, workflow)| (workflow.workflow_id.as_str(), index))
         .collect::<HashMap<_, _>>();
-    let mut states = vec![0_u8; spec.workflows.len()];
 
-    fn visit(
-        index: usize,
-        spec: &ArazzoSpec,
-        positions: &HashMap<&str, usize>,
-        states: &mut [u8],
-    ) -> bool {
-        if states[index] == 1 {
-            return true;
-        }
-        if states[index] == 2 {
-            return false;
-        }
-        states[index] = 1;
-        for dependency in &spec.workflows[index].depends_on {
-            let WorkflowDependency::Local(workflow_id) = classify_workflow_dependency(dependency)
-            else {
-                continue;
-            };
-            let Some(&dependency_index) = positions.get(workflow_id) else {
-                continue;
-            };
-            if visit(dependency_index, spec, positions, states) {
-                return true;
-            }
-        }
-        states[index] = 2;
-        false
-    }
-
-    start < spec.workflows.len() && visit(start, spec, &positions, &mut states)
+    start < spec.workflows.len()
+        && graph_has_cycle(
+            spec.workflows.len(),
+            start..=start,
+            |index| spec.workflows[index].depends_on.as_slice(),
+            |dependency| match classify_workflow_dependency(dependency) {
+                WorkflowDependency::Local(workflow_id) => positions.get(workflow_id).copied(),
+                _ => None,
+            },
+        )
 }
 
 pub(crate) fn local_step_depends_on_has_cycle(workflow: &Workflow) -> bool {
@@ -56,37 +35,66 @@ pub(crate) fn local_step_depends_on_has_cycle(workflow: &Workflow) -> bool {
         .enumerate()
         .map(|(index, step)| (step.step_id.as_str(), index))
         .collect::<HashMap<_, _>>();
-    let mut states = vec![0_u8; workflow.steps.len()];
 
-    fn visit(
-        index: usize,
-        workflow: &Workflow,
-        positions: &HashMap<&str, usize>,
-        states: &mut [u8],
-    ) -> bool {
-        if states[index] == 1 {
-            return true;
+    graph_has_cycle(
+        workflow.steps.len(),
+        0..workflow.steps.len(),
+        |index| workflow.steps[index].depends_on.as_slice(),
+        |dependency| match classify_step_dependency(dependency) {
+            StepDependency::Local(step_id) => positions.get(step_id).copied(),
+            _ => None,
+        },
+    )
+}
+
+/// Depth-first cycle search over `node_count` nodes with an explicit work
+/// stack, so stack use does not grow with chain length. Nodes are unvisited,
+/// in progress, or done; reaching an in-progress node is a cycle. `resolve`
+/// maps a `dependsOn` entry to a local node, or `None` to skip it.
+fn graph_has_cycle<'a>(
+    node_count: usize,
+    starts: impl IntoIterator<Item = usize>,
+    depends_on: impl Fn(usize) -> &'a [String],
+    resolve: impl Fn(&str) -> Option<usize>,
+) -> bool {
+    const IN_PROGRESS: u8 = 1;
+    const DONE: u8 = 2;
+
+    let mut states = vec![0_u8; node_count];
+    // Each frame is a node and the index of its next `dependsOn` entry.
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for start in starts {
+        match states[start] {
+            IN_PROGRESS => return true,
+            DONE => continue,
+            _ => {}
         }
-        if states[index] == 2 {
-            return false;
-        }
-        states[index] = 1;
-        for dependency in &workflow.steps[index].depends_on {
-            let StepDependency::Local(step_id) = classify_step_dependency(dependency) else {
+        states[start] = IN_PROGRESS;
+        stack.push((start, 0));
+        while let Some(&(index, cursor)) = stack.last() {
+            let dependencies = depends_on(index);
+            let Some(dependency) = dependencies.get(cursor) else {
+                states[index] = DONE;
+                stack.pop();
                 continue;
             };
-            let Some(&dependency_index) = positions.get(step_id) else {
+            if let Some(frame) = stack.last_mut() {
+                frame.1 += 1;
+            }
+            let Some(target) = resolve(dependency) else {
                 continue;
             };
-            if visit(dependency_index, workflow, positions, states) {
-                return true;
+            match states[target] {
+                IN_PROGRESS => return true,
+                DONE => {}
+                _ => {
+                    states[target] = IN_PROGRESS;
+                    stack.push((target, 0));
+                }
             }
         }
-        states[index] = 2;
-        false
     }
-
-    (0..workflow.steps.len()).any(|index| visit(index, workflow, &positions, &mut states))
+    false
 }
 
 pub(crate) enum StepDependency<'a> {
