@@ -1,61 +1,37 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WorkflowDetail",
-  "type": "object",
-  "properties": {
-    "file": {
-      "type": "string"
+  "title": "ShowOutput",
+  "description": "Combined schema type for the `show` command output: the workflow detail or\nthe error object.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/WorkflowDetail"
     },
-    "id": {
-      "type": "string"
-    },
-    "inputs": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/InputDetail"
-      }
-    },
-    "outputs": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "sources": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/SourceInfo"
-      }
-    },
-    "step_count": {
-      "type": "integer",
-      "format": "uint",
-      "minimum": 0
-    },
-    "steps": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/StepSummary"
-      }
-    },
-    "summary": {
-      "type": "string"
-    },
-    "title": {
-      "type": "string"
+    {
+      "$ref": "#/$defs/ErrorObject"
     }
-  },
-  "required": [
-    "id",
-    "file",
-    "title",
-    "step_count",
-    "steps",
-    "inputs",
-    "outputs",
-    "sources"
   ],
   "$defs": {
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
+      ]
+    },
     "InputDetail": {
       "type": "object",
       "properties": {
@@ -149,6 +125,62 @@
       },
       "required": [
         "stepId"
+      ]
+    },
+    "WorkflowDetail": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/InputDetail"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceInfo"
+          }
+        },
+        "step_count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StepSummary"
+          }
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "file",
+        "title",
+        "step_count",
+        "steps",
+        "inputs",
+        "outputs",
+        "sources"
       ]
     }
   }

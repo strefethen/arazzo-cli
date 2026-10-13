@@ -1,11 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Array_of_StepInfo",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/StepInfo"
-  },
+  "title": "StepsOutput",
+  "description": "Combined schema type for the `steps` command output: the step array or the\nerror object.",
+  "anyOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StepInfo"
+      }
+    },
+    {
+      "$ref": "#/$defs/ErrorObject"
+    }
+  ],
   "$defs": {
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
+      ]
+    },
     "StepInfo": {
       "type": "object",
       "properties": {

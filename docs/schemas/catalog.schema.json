@@ -1,10 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Array_of_CatalogEntry",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/CatalogEntry"
-  },
+  "title": "CatalogOutput",
+  "description": "Combined schema type for the `catalog` command output: the catalog array or\nthe error object.",
+  "anyOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CatalogEntry"
+      }
+    },
+    {
+      "$ref": "#/$defs/ErrorObject"
+    }
+  ],
   "$defs": {
     "CatalogEntry": {
       "type": "object",
@@ -40,6 +48,27 @@
         "version",
         "sources",
         "workflows"
+      ]
+    },
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
       ]
     },
     "SourceInfo": {

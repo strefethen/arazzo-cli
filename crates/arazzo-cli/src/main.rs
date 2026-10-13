@@ -261,15 +261,15 @@ async fn run(cli: Cli) -> Result<(), Failure> {
         Commands::Validate { spec } => {
             handlers::validate_spec(&spec, global).map_err(Failure::from)
         }
-        Commands::List { spec } => handlers::list_workflows(&spec, global).map_err(Failure::Legacy),
+        Commands::List { spec } => handlers::list_workflows(&spec, global).map_err(Failure::from),
         Commands::Catalog { dir } => {
-            handlers::catalog_workflows(&dir, global).map_err(Failure::Legacy)
+            handlers::catalog_workflows(&dir, global).map_err(Failure::from)
         }
         Commands::Show { workflow_id, dir } => {
-            handlers::show_workflow(&workflow_id, &dir, global).map_err(Failure::Legacy)
+            handlers::show_workflow(&workflow_id, &dir, global).map_err(Failure::from)
         }
         Commands::Steps { spec, workflow_id } => {
-            handlers::list_steps(&spec, &workflow_id, global).map_err(Failure::Legacy)
+            handlers::list_steps(&spec, &workflow_id, global).map_err(Failure::from)
         }
         Commands::Generate {
             spec,

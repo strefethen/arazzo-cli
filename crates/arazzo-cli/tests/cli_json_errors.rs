@@ -507,3 +507,139 @@ fn schema_validate_describes_the_error_branch() {
         .get("valid")
         .is_some());
 }
+
+// ── list, steps, show, catalog failures ─────────────────────────
+
+fn example_spec() -> String {
+    format!(
+        "{}/../../examples/httpbin-get.arazzo.yaml",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
+/// Runs `args` with `--json` and plain; asserts the bare error object with
+/// `code` and exit 1, and that plain mode prints the same message on stderr
+/// with empty stdout. Returns the message.
+fn assert_command_failure(args: &[&str], code: &str) -> String {
+    let mut json_args = vec!["--json"];
+    json_args.extend_from_slice(args);
+    let output = run(&json_args);
+    assert_eq!(output.status.code(), Some(1), "{json_args:?}");
+    let message = assert_error_object(&output, code);
+    assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+
+    let plain = run(args);
+    assert_eq!(plain.status.code(), Some(1), "{args:?}");
+    assert!(stdout(&plain).is_empty(), "{}", stdout(&plain));
+    assert_eq!(stderr(&plain), format!("{message}\n"));
+    message
+}
+
+#[test]
+fn list_missing_file_is_list_spec_read_file() {
+    let dir = TempDir::new("list-missing");
+    let missing = dir.path().join("missing.arazzo.yaml");
+    let message =
+        assert_command_failure(&["list", &missing.to_string_lossy()], "LIST_SPEC_READ_FILE");
+    assert!(message.starts_with("reading arazzo file: "), "{message}");
+}
+
+#[test]
+fn steps_unparseable_yaml_is_steps_spec_parse_yaml() {
+    let dir = TempDir::new("steps-yaml");
+    let file = dir.file("bad.arazzo.yaml", "arazzo: [not a spec");
+    assert_command_failure(&["steps", &file, "any"], "STEPS_SPEC_PARSE_YAML");
+}
+
+#[test]
+fn steps_missing_workflow_is_steps_workflow_not_found() {
+    let spec = example_spec();
+    let message = assert_command_failure(
+        &["steps", &spec, "no-such-workflow"],
+        "STEPS_WORKFLOW_NOT_FOUND",
+    );
+    assert_eq!(
+        message,
+        format!("workflow \"no-such-workflow\" not found in {spec}")
+    );
+}
+
+#[test]
+fn show_unreadable_dir_is_show_dir_read() {
+    let dir = TempDir::new("show-dir");
+    let missing = dir.path().join("missing");
+    let message = assert_command_failure(
+        &["show", "any", "--dir", &missing.to_string_lossy()],
+        "SHOW_DIR_READ",
+    );
+    assert!(message.starts_with("reading directory "), "{message}");
+}
+
+#[test]
+fn show_missing_workflow_is_show_workflow_not_found() {
+    let dir = TempDir::new("show-missing");
+    let dir_str = dir.path().to_string_lossy().into_owned();
+    let message = assert_command_failure(
+        &["show", "no-such-workflow", "--dir", &dir_str],
+        "SHOW_WORKFLOW_NOT_FOUND",
+    );
+    assert_eq!(
+        message,
+        format!("workflow \"no-such-workflow\" not found in {dir_str}")
+    );
+}
+
+#[test]
+fn show_duplicate_workflow_is_show_workflow_ambiguous() {
+    let dir = TempDir::new("show-ambiguous");
+    let spec = fs::read_to_string(example_spec())
+        .unwrap_or_else(|err| panic!("reading example spec: {err}"));
+    dir.file("a.arazzo.yaml", &spec);
+    dir.file("b.arazzo.yaml", &spec);
+    let message = assert_command_failure(
+        &["show", "get-origin", "--dir", &dir.path().to_string_lossy()],
+        "SHOW_WORKFLOW_AMBIGUOUS",
+    );
+    assert!(message.contains("found in multiple files"), "{message}");
+}
+
+#[test]
+fn catalog_unreadable_dir_is_catalog_dir_read() {
+    let dir = TempDir::new("catalog-dir");
+    let missing = dir.path().join("missing");
+    let message =
+        assert_command_failure(&["catalog", &missing.to_string_lossy()], "CATALOG_DIR_READ");
+    assert!(message.starts_with("reading directory "), "{message}");
+}
+
+#[test]
+fn schemas_for_list_steps_show_catalog_describe_the_error_branch() {
+    for (command, success_type) in [
+        ("list", "array"),
+        ("steps", "array"),
+        ("catalog", "array"),
+        ("show", "WorkflowDetail"),
+    ] {
+        let output = run(&["schema", command]);
+        assert_eq!(output.status.code(), Some(0), "{command}");
+        let schema: Value = serde_json::from_str(&stdout(&output))
+            .unwrap_or_else(|err| panic!("{command} schema is not JSON: {err}"));
+        let branches = schema["anyOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{command} schema must be anyOf: {schema}"));
+        assert_eq!(branches.len(), 2, "{schema}");
+        let success = branches[0].to_string();
+        assert!(success.contains(success_type), "{command}: {success}");
+        assert_eq!(
+            branches[1],
+            json!({"$ref": "#/$defs/ErrorObject"}),
+            "{schema}"
+        );
+        let error = &schema["$defs"]["ErrorObject"];
+        assert_eq!(
+            error["required"],
+            json!(["kind", "error", "code"]),
+            "{schema}"
+        );
+    }
+}

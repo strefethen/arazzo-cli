@@ -252,6 +252,57 @@ pub enum ValidateOutput {
     Error(ValidateErrorResult),
 }
 
+/// Schema-only description of the shared `--json` error object `main` prints
+/// from a `CliError` that carries no extra fields.
+#[derive(Debug, Serialize, JsonSchema)]
+#[allow(dead_code)]
+pub struct ErrorObject {
+    /// Always `"error"`.
+    pub kind: String,
+    pub error: String,
+    pub code: String,
+}
+
+/// Combined schema type for the `list` command output: the workflow array or
+/// the error object.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum ListOutput {
+    Workflows(Vec<WorkflowInfo>),
+    Error(ErrorObject),
+}
+
+/// Combined schema type for the `catalog` command output: the catalog array or
+/// the error object.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum CatalogOutput {
+    Entries(Vec<CatalogEntry>),
+    Error(ErrorObject),
+}
+
+/// Combined schema type for the `show` command output: the workflow detail or
+/// the error object.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum ShowOutput {
+    Workflow(WorkflowDetail),
+    Error(ErrorObject),
+}
+
+/// Combined schema type for the `steps` command output: the step array or the
+/// error object.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)] // Used only for schema generation via schema_for!()
+pub enum StepsOutput {
+    Steps(Vec<StepInfo>),
+    Error(ErrorObject),
+}
+
 /// Combined schema type for the `run` command output.
 ///
 /// The actual shape depends on flags and exit code:

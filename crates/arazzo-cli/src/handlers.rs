@@ -195,13 +195,19 @@ fn promote_warnings(
     })
 }
 
-pub fn list_workflows(path: &str, global: GlobalOptions) -> Result<(), String> {
-    let spec = arazzo_validate::parse(path).map_err(|err| err.to_string())?;
-    output::emit_workflow_list(&spec, global.json)
+pub fn list_workflows(path: &str, global: GlobalOptions) -> Result<(), CliError> {
+    let spec = arazzo_validate::parse(path)
+        .map_err(|err| cli_error::spec_error(&err, &LIST_SPEC_CODES))?;
+    output::emit_workflow_list(&spec, global.json).map_err(output_write_error)
 }
 
-pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String> {
-    let entries = fs::read_dir(dir).map_err(|err| format!("reading directory \"{dir}\": {err}"))?;
+pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), CliError> {
+    let entries = fs::read_dir(dir).map_err(|err| {
+        CliError::new(
+            "CATALOG_DIR_READ",
+            format!("reading directory \"{dir}\": {err}"),
+        )
+    })?;
     let mut paths = Vec::<PathBuf>::new();
     for entry in entries {
         let entry = match entry {
@@ -253,31 +259,53 @@ pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), String>
     }
     catalog.sort_unstable_by(|a, b| a.file.cmp(&b.file));
 
-    output::emit_catalog(&catalog, global.json)
+    output::emit_catalog(&catalog, global.json).map_err(output_write_error)
 }
 
-pub fn list_steps(path: &str, workflow_id: &str, global: GlobalOptions) -> Result<(), String> {
-    let spec = arazzo_validate::parse(path).map_err(|err| err.to_string())?;
+pub fn list_steps(path: &str, workflow_id: &str, global: GlobalOptions) -> Result<(), CliError> {
+    let spec = arazzo_validate::parse(path)
+        .map_err(|err| cli_error::spec_error(&err, &STEPS_SPEC_CODES))?;
     let workflow = spec
         .workflows
         .iter()
         .find(|wf| wf.workflow_id == workflow_id)
-        .ok_or_else(|| format!("workflow \"{workflow_id}\" not found in {path}"))?;
-    output::emit_step_list(path, workflow, global.json)
+        .ok_or_else(|| {
+            CliError::new(
+                "STEPS_WORKFLOW_NOT_FOUND",
+                format!("workflow \"{workflow_id}\" not found in {path}"),
+            )
+        })?;
+    output::emit_step_list(path, workflow, global.json).map_err(output_write_error)
 }
 
-pub fn show_workflow(workflow_id: &str, dir: &str, global: GlobalOptions) -> Result<(), String> {
+pub fn show_workflow(workflow_id: &str, dir: &str, global: GlobalOptions) -> Result<(), CliError> {
     let (spec, file) = find_workflow(dir, workflow_id)?;
     let workflow = spec
         .workflows
         .iter()
         .find(|wf| wf.workflow_id == workflow_id)
-        .ok_or_else(|| format!("workflow \"{workflow_id}\" not found in {dir}"))?;
-    output::emit_workflow_detail(&spec, workflow, file, global.json)
+        .ok_or_else(|| show_not_found(workflow_id, dir))?;
+    output::emit_workflow_detail(&spec, workflow, file, global.json).map_err(output_write_error)
 }
 
-fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), String> {
-    let entries = fs::read_dir(dir).map_err(|err| format!("reading directory \"{dir}\": {err}"))?;
+fn show_not_found(workflow_id: &str, dir: &str) -> CliError {
+    CliError::new(
+        "SHOW_WORKFLOW_NOT_FOUND",
+        format!("workflow \"{workflow_id}\" not found in {dir}"),
+    )
+}
+
+fn output_write_error(err: String) -> CliError {
+    CliError::new(CLI_OUTPUT_WRITE, err)
+}
+
+fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), CliError> {
+    let entries = fs::read_dir(dir).map_err(|err| {
+        CliError::new(
+            "SHOW_DIR_READ",
+            format!("reading directory \"{dir}\": {err}"),
+        )
+    })?;
     let mut paths = Vec::<PathBuf>::new();
     for entry in entries {
         let entry = match entry {
@@ -316,17 +344,18 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), S
     matches.sort_unstable();
 
     if matches.is_empty() {
-        return Err(format!("workflow \"{workflow_id}\" not found in {dir}"));
+        return Err(show_not_found(workflow_id, dir));
     }
     if matches.len() > 1 {
-        return Err(format!(
-            "workflow \"{workflow_id}\" found in multiple files: {matches:?}"
+        return Err(CliError::new(
+            "SHOW_WORKFLOW_AMBIGUOUS",
+            format!("workflow \"{workflow_id}\" found in multiple files: {matches:?}"),
         ));
     }
 
     match match_spec {
         Some(spec) => Ok((spec, match_file)),
-        None => Err(format!("workflow \"{workflow_id}\" not found in {dir}")),
+        None => Err(show_not_found(workflow_id, dir)),
     }
 }
 
@@ -339,6 +368,20 @@ fn is_arazzo_yaml_path(path: &Path) -> bool {
         None => false,
     }
 }
+
+const LIST_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
+    read_file: "LIST_SPEC_READ_FILE",
+    parse_yaml: "LIST_SPEC_PARSE_YAML",
+    validation: "LIST_SPEC_VALIDATION",
+    component_resolution: "LIST_SPEC_COMPONENT_RESOLUTION",
+};
+
+const STEPS_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
+    read_file: "STEPS_SPEC_READ_FILE",
+    parse_yaml: "STEPS_SPEC_PARSE_YAML",
+    validation: "STEPS_SPEC_VALIDATION",
+    component_resolution: "STEPS_SPEC_COMPONENT_RESOLUTION",
+};
 
 const REPLAY_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
     read_file: "REPLAY_SPEC_READ_FILE",
@@ -393,16 +436,16 @@ pub fn schema(command: Option<&str>) -> Result<(), String> {
     use schemars::schema_for;
 
     use crate::output::{
-        CatalogEntry, GenerateResult, ReplayOutput, RunOutput, StepInfo, TestOutput,
-        ValidateOutput, WorkflowDetail, WorkflowInfo,
+        CatalogOutput, GenerateResult, ListOutput, ReplayOutput, RunOutput, ShowOutput,
+        StepsOutput, TestOutput, ValidateOutput,
     };
 
     match command {
         Some("validate") => output::output_json(&schema_for!(ValidateOutput)),
-        Some("list") => output::output_json(&schema_for!(Vec<WorkflowInfo>)),
-        Some("catalog") => output::output_json(&schema_for!(Vec<CatalogEntry>)),
-        Some("show") => output::output_json(&schema_for!(WorkflowDetail)),
-        Some("steps") => output::output_json(&schema_for!(Vec<StepInfo>)),
+        Some("list") => output::output_json(&schema_for!(ListOutput)),
+        Some("catalog") => output::output_json(&schema_for!(CatalogOutput)),
+        Some("show") => output::output_json(&schema_for!(ShowOutput)),
+        Some("steps") => output::output_json(&schema_for!(StepsOutput)),
         Some("run") => output::output_json(&schema_for!(RunOutput)),
         Some("export-run") => output::output_json(&schema_for!(crate::run_export::RunExport)),
         Some("replay") => output::output_json(&schema_for!(ReplayOutput)),

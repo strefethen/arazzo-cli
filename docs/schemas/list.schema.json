@@ -1,11 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Array_of_WorkflowInfo",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/WorkflowInfo"
-  },
+  "title": "ListOutput",
+  "description": "Combined schema type for the `list` command output: the workflow array or\nthe error object.",
+  "anyOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/WorkflowInfo"
+      }
+    },
+    {
+      "$ref": "#/$defs/ErrorObject"
+    }
+  ],
   "$defs": {
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
+      ]
+    },
     "WorkflowInfo": {
       "type": "object",
       "properties": {

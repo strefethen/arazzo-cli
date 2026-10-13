@@ -3486,7 +3486,7 @@ fn steps_schema_is_available() {
     let body = stdout_json(&output);
     assert_eq!(
         body.get("title"),
-        Some(&Value::String("Array_of_StepInfo".to_string()))
+        Some(&Value::String("StepsOutput".to_string()))
     );
 
     let schema = body.to_string();

@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RUNTIME_*` code), and a trace that cannot be written (`RUN_TRACE_WRITE`)
   printed plain text to stderr and nothing on stdout. Human output is
   unchanged.
+- With `--json`, a failing `list`, `steps`, `show`, or `catalog` prints the
+  shared error object with a `code` (`LIST_SPEC_*`, `STEPS_SPEC_*`,
+  `STEPS_WORKFLOW_NOT_FOUND`, `SHOW_DIR_READ`, `SHOW_WORKFLOW_NOT_FOUND`,
+  `SHOW_WORKFLOW_AMBIGUOUS`, `CATALOG_DIR_READ`). Stdout was empty. Successful
+  and human output are unchanged; their `schema` output now describes both
+  shapes.
 - `run --verbose` step lines redact sensitive query parameter values in the
   request URL, as trace files do. A value such as `access_token` previously
   reached the terminal and CI logs in clear.
