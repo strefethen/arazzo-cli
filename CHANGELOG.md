@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selector, or replacement target of about 100 bytes could stall a run for
   minutes, and `--execution-timeout` could not interrupt it. Brackets inside
   string literals and sibling brackets do not count toward the limit.
+- Pass constant `workflowId` step parameter values (numbers, strings,
+  booleans, mappings, sequences) to the child workflow's `$inputs`. They
+  previously arrived as `null`, with no warning.
 
 ## [0.8.2] - 2026-10-09
 

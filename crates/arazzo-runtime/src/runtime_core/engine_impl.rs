@@ -838,7 +838,7 @@ impl Engine {
                         // Mixed text + expressions — must stringify
                         Value::String(eval.interpolate_string(&value_str))
                     } else {
-                        eval.evaluate(&value_str)
+                        resolve_value_source(&param.value, &eval).0
                     };
                     (value, Vec::new())
                 }
