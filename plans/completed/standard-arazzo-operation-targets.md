@@ -1,7 +1,8 @@
 ---
-status: decomposed
+status: completed
 epic: ac-33d48
 created: 2026-10-15
+completed: 2026-10-15
 ---
 
 # Standard Arazzo operation targets
@@ -52,4 +53,6 @@ This deliberately breaks documents using shortcuts. Shipped examples, diagnostic
 
 One canonical imported workflow and generated workflows for operations with and without IDs validate and plan against the same provided OpenAPI source. Method, path, effective server, and hermetic captured request agree. Escaped pointers and multiple-source overlap work without cross-source selection. Custom syntax, unbound document URLs/IDs, missing/non-operation pointers, and duplicate generator IDs fail before traffic. CLI/MCP presentation is honest about unresolved methods, DAP execution consumes the same runtime, relevant conformance evidence names passing tests, and the integrated repository gates pass.
 
-**Disposition:** Decomposed under [epic:ac-33d48](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-33d48). All three peers require the completed assessment ac-3557b; none waits for another peer's closure. Implementation dispatch awaits the one fresh-context transfer audit.
+**Observed result:** All three implementation tickets are closed/completed. The imported/generated same-source execution, escaped-pointer/source-isolation, and zero-traffic refusal tests in `crates/arazzo-cli/tests/canonical_operation_targets.rs` passed against the assembled source committed as [a13c357](https://github.com/strefethen/arazzo-cli/commit/a13c35739aca1bc393c27406b961c0af62b9929c) (local; not pushed). Runtime, generator, CLI/MCP/DAP and conformance evidence agree; formatting, strict Clippy, public-crate docs, and one workspace run with passing scoped fixture repairs establish the integrated gate. One fresh independent review passed without findings. After ticket closure, root confirmed that the observed system proof still names the unchanged reviewed source. The ticket closeout notes retain the shared evidence packet at `/tmp/standard-arazzo-targets/shared/evidence.md` and exact review identities.
+
+**Disposition:** Completed on 2026-10-15. The broader [epic:ac-33d48](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-33d48) remains open for its unrelated conformance work.
