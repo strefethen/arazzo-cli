@@ -505,7 +505,7 @@ workflows:
         onSuccess:
           - reference: $components.successActions.imported
         onFailure:
-          - name: $components.failureActions.imported
+          - reference: $components.failureActions.imported
   - workflowId: a
     steps:
       - stepId: 'b" > step "c'
@@ -602,10 +602,10 @@ workflows:
           - reference: $components.parameters.zeta
         onSuccess:
           - reference: $components.successActions.zeta
-          - name: $components.successActions.alpha
+          - reference: $components.successActions.alpha
         onFailure:
           - reference: $components.failureActions.zeta
-          - name: $components.failureActions.alpha
+          - reference: $components.failureActions.alpha
 "#,
             "    steps: []\n",
         );
@@ -682,23 +682,27 @@ workflows:
 "#,
             r#"    successActions:
       - reference: $components.successActions.invalidSuccess
-      - name: $components.successActions.invalidSuccess
+      - reference: $components.successActions.invalidSuccess
     failureActions:
       - reference: $components.failureActions.invalidFailure
-      - name: $components.failureActions.invalidFailure
+      - reference: $components.failureActions.invalidFailure
     steps:
       - stepId: operation
         operationId: invoke
         onSuccess:
           - reference: $components.successActions.invalidSuccess
+          - reference: $components.successActions.invalidSuccess
           - name: $components.successActions.invalidSuccess
-          - name: $components.successActions.invalidSuccess
+            type: goto
+            workflowId: child
             parameters:
               - value: local
         onFailure:
           - reference: $components.failureActions.invalidFailure
+          - reference: $components.failureActions.invalidFailure
           - name: $components.failureActions.invalidFailure
-          - name: $components.failureActions.invalidFailure
+            type: retry
+            workflowId: child
             parameters:
               - value: local
 "#,
@@ -722,7 +726,7 @@ workflows:
                 "workflow \"parent\" > step \"operation\".onFailure[2].parameters[0].name",
                 "workflow \"parent\" > step \"operation\".onSuccess[2].parameters[0].name",
             ],
-            "component-owned parameters report once at source; local legacy overrides stay consumer-owned"
+            "component-owned parameters report once at source; local concrete actions stay consumer-owned"
         );
     }
 

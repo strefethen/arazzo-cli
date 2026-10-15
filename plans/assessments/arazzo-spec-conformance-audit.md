@@ -1117,3 +1117,12 @@ open:
   can fill a `{var}` left in a server url; and operations beside a path-item
   `$ref` ignore the referenced item's `servers`, because the indexer does not
   follow that `$ref`.
+
+### 2026-10-15 — Action names are literal
+
+Resolved in [ac-e71c7](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e71c7):
+removed name-based action component lookup and field merging. Concrete actions
+require their own `type`; `name` remains literal, including reference-looking
+strings. Canonical `reference` reuse replaces the whole action and retains
+ignored-sibling semantics. This supersedes the earlier compatibility exception
+recorded above without changing action ordering or workflow/Step inheritance.

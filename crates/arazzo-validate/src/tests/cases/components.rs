@@ -92,7 +92,7 @@ workflows:
       - stepId: s1
         operationPath: /test
         onSuccess:
-          - name: "$components.successActions.endWorkflow"
+          - reference: "$components.successActions.endWorkflow"
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -130,7 +130,7 @@ workflows:
       - stepId: s1
         operationPath: /test
         onSuccess:
-          - name: "$components.successActions.endWorkflow"
+          - reference: "$components.successActions.endWorkflow"
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -166,7 +166,7 @@ workflows:
       - stepId: s1
         operationPath: /test
         onFailure:
-          - name: "$components.failureActions.retryPolicy"
+          - reference: "$components.failureActions.retryPolicy"
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -205,7 +205,7 @@ workflows:
       - stepId: s1
         operationPath: /test
         onFailure:
-          - name: "$components.failureActions.retryPolicy"
+          - reference: "$components.failureActions.retryPolicy"
           - name: finish
             type: end
 "#;

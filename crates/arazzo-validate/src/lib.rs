@@ -245,7 +245,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // parsed document only inside this boundary pass.
     let raw = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data).map_err(Error::ParseYaml)?;
     let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
-    let mut provenance =
+    let provenance =
         resolve_components(&mut spec, Some(&raw)).map_err(Error::ComponentResolution)?;
 
     // `successCriteria` emptiness cannot be seen in the typed model — see the
@@ -254,7 +254,6 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // the diagnostics pipeline are in hand. `validate`/`validate_diagnostics`
     // take only `&ArazzoSpec` and therefore cannot enforce this rule.
     let mut diagnostics = collect_diagnostics(&spec, &provenance);
-    diagnostics.append(&mut provenance.raw_legacy_action_diagnostics);
     diagnostics.extend(check_raw_required_values(&raw));
     diagnostics.extend(check_raw_action_field_boundaries(&raw));
     diagnostics.extend(check_raw_success_criteria(&raw));
@@ -572,15 +571,6 @@ enum ActionKind {
     Failure,
 }
 
-impl ActionKind {
-    const fn component_prefix(self) -> &'static str {
-        match self {
-            Self::Success => "$components.successActions.",
-            Self::Failure => "$components.failureActions.",
-        }
-    }
-}
-
 fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagnostic>) {
     diagnostics.push(Diagnostic::warning(
         ValidationErrorKind::UnknownField,
@@ -589,13 +579,6 @@ fn raw_unknown_action_field(path: &str, field: &str, diagnostics: &mut Vec<Diagn
             "unrecognized field \"{field}\"; only `x-` prefixed extension fields are permitted here"
         ),
     ));
-}
-
-fn raw_action_is_legacy_component_reference(
-    action: &serde_yaml_ng::Value,
-    kind: ActionKind,
-) -> bool {
-    raw_string_field(action, "name").is_some_and(|name| name.starts_with(kind.component_prefix()))
 }
 
 fn check_raw_action_required_field(
@@ -733,18 +716,13 @@ fn check_raw_action_boundary(
     }
 
     // Only workflow and Step lists admit a Reusable Object. A canonical
-    // `reference` object ignores its siblings; the shipped name-form
-    // component extension similarly sources name/type from its component.
+    // `reference` object ignores its siblings.
     // Components maps always hold concrete Action Objects.
     let canonical_reusable = !component && raw_mapping_has_field(action, "reference");
-    let legacy_reusable = !component && raw_action_is_legacy_component_reference(action, kind);
-    if component || (!canonical_reusable && !legacy_reusable) {
+    if !canonical_reusable {
         check_raw_action_required_field(path, action, "name", diagnostics);
         check_raw_action_required_field(path, action, "type", diagnostics);
         if let Some(action_type) = raw_action_type(action) {
-            // Legacy name-form fields are checked after component resolution so
-            // omitted local `type` can inherit the effective component context.
-            // Canonical Reusable Object siblings remain ignored.
             check_raw_defaulted_action_field_applicability(
                 path,
                 action,
@@ -944,110 +922,6 @@ struct ComponentParameterKey {
     value_is_inherited: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ActionLocalFields {
-    type_: bool,
-    workflow_id: bool,
-    step_id: bool,
-    retry_after: bool,
-    retry_limit: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionFixedField {
-    Type,
-    WorkflowId,
-    StepId,
-    RetryAfter,
-    RetryLimit,
-}
-
-impl ActionLocalFields {
-    const fn contains(self, field: ActionFixedField) -> bool {
-        match field {
-            ActionFixedField::Type => self.type_,
-            ActionFixedField::WorkflowId => self.workflow_id,
-            ActionFixedField::StepId => self.step_id,
-            ActionFixedField::RetryAfter => self.retry_after,
-            ActionFixedField::RetryLimit => self.retry_limit,
-        }
-    }
-}
-
-/// Checks default-valued component fields that become invalid only because a
-/// legacy wrapper supplies a different action type. Positive/non-empty values
-/// remain visible to typed validation; only zero and empty-string presence
-/// needs the raw component declaration here.
-fn check_raw_inherited_component_field_applicability(
-    path: &str,
-    component: &serde_yaml_ng::Value,
-    kind: ActionKind,
-    component_type: ActionType,
-    action_type: ActionType,
-    local_fields: ActionLocalFields,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let component_allows_retry = kind == ActionKind::Failure && component_type == ActionType::Retry;
-    let action_allows_retry = kind == ActionKind::Failure && action_type == ActionType::Retry;
-    if component_allows_retry && !action_allows_retry {
-        for (field, fixed_field) in [
-            ("retryAfter", ActionFixedField::RetryAfter),
-            ("retryLimit", ActionFixedField::RetryLimit),
-        ] {
-            let is_default_value = raw_mapping_field(component, field).is_some_and(|value| {
-                if field == "retryAfter" {
-                    value.as_f64() == Some(0.0)
-                } else {
-                    value.as_u64() == Some(0)
-                }
-            });
-            if !local_fields.contains(fixed_field) && is_default_value {
-                raw_action_field_not_applicable(
-                    path,
-                    field,
-                    ValidationErrorKind::InvalidRetryField,
-                    format!("{path}.{field} is only applicable to a failure retry action"),
-                    diagnostics,
-                );
-            }
-        }
-    }
-
-    if action_allows_target(kind, component_type) && !action_allows_target(kind, action_type) {
-        for (field, fixed_field) in [
-            ("workflowId", ActionFixedField::WorkflowId),
-            ("stepId", ActionFixedField::StepId),
-        ] {
-            if !local_fields.contains(fixed_field)
-                && matches!(
-                    raw_mapping_field(component, field),
-                    Some(serde_yaml_ng::Value::String(value)) if value.is_empty()
-                )
-            {
-                raw_action_field_not_applicable(
-                    path,
-                    field,
-                    ValidationErrorKind::InvalidReference,
-                    format!(
-                        "{path}.{field} is only applicable to a goto action or failure retry action"
-                    ),
-                    diagnostics,
-                );
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ComponentActionFixedFieldOrigin {
-    /// The range source after legacy merge. This deliberately differs from
-    /// `local_fields.retry_after`: an explicit local zero remains visible for
-    /// applicability, but does not override the component value.
-    local_retry_after_overrides: bool,
-    local_criteria: bool,
-    local_fields: ActionLocalFields,
-}
-
 /// Validation-only metadata retained while component references are expanded.
 /// Structural destination and source keys use deterministic collection
 /// indices; rendered diagnostic paths never participate in identity. The
@@ -1062,20 +936,11 @@ struct ResolutionProvenance {
     /// component, mapped to their source in `components.parameters`.
     component_parameter_origins: HashMap<ParameterDeclarationKey, ComponentParameterKey>,
     /// Action declarations whose entire parameter list came from a component
-    /// action through canonical or supported legacy resolution, mapped to the
+    /// action through canonical reference resolution, mapped to the
     /// structural source component action.
     component_action_origins: HashMap<DeclarationScope, DeclarationScope>,
-    /// Fixed action fields inherited from a component action. Canonical
-    /// Reusable Objects have no local fields; legacy name-form references can
-    /// override individual fixed fields and must validate those at the use.
-    component_action_fixed_field_origins:
-        HashMap<DeclarationScope, ComponentActionFixedFieldOrigin>,
     /// Findings retained before resolution erases reference/wrapper values.
     reusable_value_diagnostics: Vec<Diagnostic>,
-    /// Parse-boundary findings for default-valued legacy wrapper fields. These
-    /// are collected only after the component Action type is resolved, because
-    /// the public model cannot retain zero/null/empty field presence.
-    raw_legacy_action_diagnostics: Vec<Diagnostic>,
 }
 
 fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> Vec<Diagnostic> {
@@ -1237,7 +1102,6 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                 &action_path,
                 action,
                 ActionKind::Success,
-                None,
                 provenance.raw_action_boundaries_owned,
                 &mut diagnostics,
             );
@@ -1271,7 +1135,6 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                 &action_path,
                 action,
                 ActionKind::Failure,
-                None,
                 provenance.raw_action_boundaries_owned,
                 &mut diagnostics,
             );
@@ -2401,10 +2264,6 @@ fn validate_actions(
         let action_is_component_owned = provenance
             .component_action_origins
             .contains_key(&action_key);
-        let fixed_field_origin = provenance
-            .component_action_fixed_field_origins
-            .get(&action_key)
-            .copied();
         check_unknown_fields(&action_path, &action.extensions, diagnostics);
         if action.reference.is_empty() && action.value.is_some() {
             diagnostics.push(Diagnostic::warning(
@@ -2423,14 +2282,15 @@ fn validate_actions(
             action_is_component_owned,
             diagnostics,
         );
-        validate_action_fixed_fields(
-            &action_path,
-            action,
-            list_key.kind,
-            fixed_field_origin,
-            provenance.raw_action_boundaries_owned,
-            diagnostics,
-        );
+        if !action_is_component_owned {
+            validate_action_fixed_fields(
+                &action_path,
+                action,
+                list_key.kind,
+                provenance.raw_action_boundaries_owned,
+                diagnostics,
+            );
+        }
         validate_action_target_references(
             &action_path,
             action,
@@ -2438,7 +2298,7 @@ fn validate_actions(
             target_ids,
             diagnostics,
         );
-        if fixed_field_origin.is_none_or(|origin| origin.local_criteria) {
+        if !action_is_component_owned {
             expressions::validate_criteria(
                 &action_path,
                 &action.criteria,
@@ -2454,24 +2314,6 @@ fn action_allows_target(kind: ActionKind, action_type: ActionType) -> bool {
         || (kind == ActionKind::Failure && action_type == ActionType::Retry)
 }
 
-fn action_fields_are_component_owned(
-    origin: Option<ComponentActionFixedFieldOrigin>,
-    fields: &[ActionFixedField],
-) -> bool {
-    origin.is_some_and(|origin| {
-        fields
-            .iter()
-            .all(|field| !origin.local_fields.contains(*field))
-    })
-}
-
-/// Legacy name-form `retryAfter: 0` is a merge sentinel, not an override.
-/// Keep raw local presence for applicability diagnostics, but assign range
-/// validation to the component when the resolved value still comes from it.
-fn retry_after_range_is_component_owned(origin: Option<ComponentActionFixedFieldOrigin>) -> bool {
-    origin.is_some_and(|origin| !origin.local_retry_after_overrides)
-}
-
 /// Checks intrinsic Success/Failure Action fixed-field applicability. Target
 /// existence is intentionally separate: a component action's `stepId` is
 /// relative to the workflow that consumes it, while its type and supplied
@@ -2480,14 +2322,11 @@ fn validate_action_fixed_fields(
     action_path: &str,
     action: &OnAction,
     kind: ActionKind,
-    origin: Option<ComponentActionFixedFieldOrigin>,
     raw_action_boundaries_owned: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let action_type = action.action_type();
-    if (!action.retry_after.is_finite() || action.retry_after < 0.0)
-        && !retry_after_range_is_component_owned(origin)
-    {
+    if !action.retry_after.is_finite() || action.retry_after < 0.0 {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::InvalidRetryField,
@@ -2495,10 +2334,7 @@ fn validate_action_fixed_fields(
             message: format!("{action_path}.retryAfter must be a non-negative finite number"),
         });
     }
-    if !action.has_declared_type()
-        && !raw_action_boundaries_owned
-        && !action_fields_are_component_owned(origin, &[ActionFixedField::Type])
-    {
+    if !action.has_declared_type() && !raw_action_boundaries_owned {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
@@ -2506,10 +2342,7 @@ fn validate_action_fixed_fields(
             message: format!("{action_path}.type is required and must be a string"),
         });
     }
-    if kind == ActionKind::Success
-        && action_type == ActionType::Retry
-        && !action_fields_are_component_owned(origin, &[ActionFixedField::Type])
-    {
+    if kind == ActionKind::Success && action_type == ActionType::Retry {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::InvalidRetryField,
@@ -2522,10 +2355,6 @@ fn validate_action_fixed_fields(
     if !retry_is_applicable {
         if action.retry_limit.is_some()
             && !(raw_action_boundaries_owned && action.retry_limit == Some(0))
-            && !action_fields_are_component_owned(
-                origin,
-                &[ActionFixedField::Type, ActionFixedField::RetryLimit],
-            )
         {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -2536,13 +2365,7 @@ fn validate_action_fixed_fields(
                 ),
             });
         }
-        if action.retry_after.is_finite()
-            && action.retry_after > 0.0
-            && !action_fields_are_component_owned(
-                origin,
-                &[ActionFixedField::Type, ActionFixedField::RetryAfter],
-            )
-        {
+        if action.retry_after.is_finite() && action.retry_after > 0.0 {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 kind: ValidationErrorKind::InvalidRetryField,
@@ -2559,17 +2382,7 @@ fn validate_action_fixed_fields(
             ("workflowId", &action.workflow_id),
             ("stepId", &action.step_id),
         ] {
-            let fixed_field = match field {
-                "workflowId" => ActionFixedField::WorkflowId,
-                "stepId" => ActionFixedField::StepId,
-                _ => unreachable!("the target field list is fixed"),
-            };
-            if !value.is_empty()
-                && !action_fields_are_component_owned(
-                    origin,
-                    &[ActionFixedField::Type, fixed_field],
-                )
-            {
+            if !value.is_empty() {
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     kind: ValidationErrorKind::InvalidReference,
@@ -2585,18 +2398,7 @@ fn validate_action_fixed_fields(
 
     let has_step = !action.step_id.is_empty();
     let has_workflow = !action.workflow_id.is_empty();
-    if action_type == ActionType::Goto
-        && !has_step
-        && !has_workflow
-        && !action_fields_are_component_owned(
-            origin,
-            &[
-                ActionFixedField::Type,
-                ActionFixedField::WorkflowId,
-                ActionFixedField::StepId,
-            ],
-        )
-    {
+    if action_type == ActionType::Goto && !has_step && !has_workflow {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::MissingRequiredField,
@@ -2604,17 +2406,7 @@ fn validate_action_fixed_fields(
             message: format!("{action_path} goto action must specify stepId or workflowId"),
         });
     }
-    if has_step
-        && has_workflow
-        && !action_fields_are_component_owned(
-            origin,
-            &[
-                ActionFixedField::Type,
-                ActionFixedField::WorkflowId,
-                ActionFixedField::StepId,
-            ],
-        )
-    {
+    if has_step && has_workflow {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             kind: ValidationErrorKind::InvalidReference,
@@ -2871,8 +2663,6 @@ fn resolve_components(
                 kind: "successAction",
                 raw_actions: raw_workflow
                     .and_then(|workflow| raw_mapping_field(workflow, "successActions")),
-                raw_components,
-                component_field: "successActions",
                 entity: &wf_label,
                 path_prefix: &format!("{wf_path}.successActions"),
                 list_key: ActionListScope {
@@ -2892,8 +2682,6 @@ fn resolve_components(
                 kind: "failureAction",
                 raw_actions: raw_workflow
                     .and_then(|workflow| raw_mapping_field(workflow, "failureActions")),
-                raw_components,
-                component_field: "failureActions",
                 entity: &wf_label,
                 path_prefix: &format!("{wf_path}.failureActions"),
                 list_key: ActionListScope {
@@ -2936,8 +2724,6 @@ fn resolve_components(
                     prefix: "$components.successActions.",
                     kind: "successAction",
                     raw_actions: raw_step.and_then(|step| raw_mapping_field(step, "onSuccess")),
-                    raw_components,
-                    component_field: "successActions",
                     entity: &step_label,
                     path_prefix: &format!("{step_path}.onSuccess"),
                     list_key: ActionListScope {
@@ -2956,8 +2742,6 @@ fn resolve_components(
                     prefix: "$components.failureActions.",
                     kind: "failureAction",
                     raw_actions: raw_step.and_then(|step| raw_mapping_field(step, "onFailure")),
-                    raw_components,
-                    component_field: "failureActions",
                     entity: &step_label,
                     path_prefix: &format!("{step_path}.onFailure"),
                     list_key: ActionListScope {
@@ -3060,33 +2844,9 @@ struct ActionResolutionContext<'a> {
     prefix: &'a str,
     kind: &'a str,
     raw_actions: Option<&'a serde_yaml_ng::Value>,
-    raw_components: Option<&'a serde_yaml_ng::Value>,
-    component_field: &'a str,
     entity: &'a str,
     path_prefix: &'a str,
     list_key: ActionListScope,
-}
-
-fn local_action_fixed_fields(
-    raw_action: Option<&serde_yaml_ng::Value>,
-    action: &OnAction,
-) -> ActionLocalFields {
-    if let Some(action) = raw_action.filter(|action| action.as_mapping().is_some()) {
-        return ActionLocalFields {
-            type_: raw_mapping_has_field(action, "type"),
-            workflow_id: raw_mapping_has_field(action, "workflowId"),
-            step_id: raw_mapping_has_field(action, "stepId"),
-            retry_after: raw_mapping_has_field(action, "retryAfter"),
-            retry_limit: raw_mapping_has_field(action, "retryLimit"),
-        };
-    }
-    ActionLocalFields {
-        type_: action.type_.is_some(),
-        workflow_id: !action.workflow_id.is_empty(),
-        step_id: !action.step_id.is_empty(),
-        retry_after: action.retry_after != 0.0,
-        retry_limit: action.retry_limit.is_some(),
-    }
 }
 
 fn component_entry<'a, T>(
@@ -3112,11 +2872,7 @@ fn resolve_action_ref(
             .raw_actions
             .and_then(serde_yaml_ng::Value::as_sequence)
             .and_then(|actions| actions.get(action_idx));
-        let mut raw_parameters =
-            raw_action.and_then(|action| raw_mapping_field(action, "parameters"));
-        let local_parameters_are_non_empty = !action.parameters.is_empty();
-        let mut component_origin = None;
-        let mut fixed_field_origin = None;
+        let raw_parameters = raw_action.and_then(|action| raw_mapping_field(action, "parameters"));
         if expressions::reject_reference(
             &action_path,
             raw_action.and_then(|action| raw_mapping_field(action, "reference")),
@@ -3156,99 +2912,10 @@ fn resolve_action_ref(
                 kind: context.list_key.kind,
                 action_index: component_index,
             };
-            component_origin = Some(source);
-            fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
-                local_retry_after_overrides: false,
-                local_criteria: false,
-                local_fields: ActionLocalFields::default(),
-            });
-            raw_parameters = raw_component_action(
-                context.raw_components,
-                context.component_field,
-                &component_name,
-            )
-            .and_then(|component| raw_mapping_field(component, "parameters"));
-        } else if !action.name.is_empty() {
-            let local_action_type = action.type_;
-            let local_criteria = !action.criteria.is_empty();
-            let local_fields = local_action_fixed_fields(raw_action, action);
-            let local_retry_after_overrides = action.retry_after != 0.0;
-            if let Some(component_name) = resolve_one_action_ref(
-                action,
-                context.component_map,
-                context.prefix,
-                context.kind,
-                context.entity,
-            )? {
-                let Some((component_index, component)) =
-                    component_entry(context.component_map, &component_name)
-                else {
-                    return Err(format!(
-                        "{}: component {} \"{component_name}\" not found",
-                        context.entity, context.kind
-                    ));
-                };
-                let source = DeclarationScope::ComponentAction {
-                    kind: context.list_key.kind,
-                    action_index: component_index,
-                };
-                fixed_field_origin = Some(ComponentActionFixedFieldOrigin {
-                    local_retry_after_overrides,
-                    local_criteria,
-                    local_fields,
-                });
-                let raw_component = raw_component_action(
-                    context.raw_components,
-                    context.component_field,
-                    &component_name,
-                );
-                if let Some(raw_action) = raw_action {
-                    check_raw_defaulted_action_field_applicability(
-                        &action_path,
-                        raw_action,
-                        context.list_key.kind,
-                        action.action_type(),
-                        &mut provenance.raw_legacy_action_diagnostics,
-                    );
-                    if let (Some(local_type), Some(component_type), Some(raw_component)) =
-                        (local_action_type, component.type_, raw_component)
-                    {
-                        if local_type != component_type {
-                            check_raw_inherited_component_field_applicability(
-                                &action_path,
-                                raw_component,
-                                context.list_key.kind,
-                                component_type,
-                                action.action_type(),
-                                local_fields,
-                                &mut provenance.raw_legacy_action_diagnostics,
-                            );
-                        }
-                    }
-                }
-                // `resolve_one_action_ref` preserves a non-empty local list,
-                // matching the existing merge behavior. Otherwise the copied
-                // component list needs its own raw presence source.
-                if !local_parameters_are_non_empty {
-                    component_origin = Some(source);
-                    raw_parameters = raw_component
-                        .and_then(|component| raw_mapping_field(component, "parameters"));
-                }
-            }
-        }
-        if let Some(component_origin) = component_origin {
             provenance
                 .component_action_origins
-                .insert(action_key, component_origin);
-        }
-        if let Some(fixed_field_origin) = fixed_field_origin {
-            provenance
-                .component_action_fixed_field_origins
-                .insert(action_key, fixed_field_origin);
-        }
-        // Inherited lists were resolved at their component definition. Only
-        // local lists need resolution here, preserving diagnostic ownership.
-        if component_origin.is_some() {
+                .insert(action_key, source);
+            // Component parameter lists were resolved at their definition.
             continue;
         }
         resolve_param_refs(
@@ -3262,51 +2929,6 @@ fn resolve_action_ref(
         )?;
     }
     Ok(())
-}
-
-fn resolve_one_action_ref(
-    action: &mut OnAction,
-    component_map: &std::collections::BTreeMap<String, OnAction>,
-    prefix: &str,
-    kind: &str,
-    entity: &str,
-) -> Result<Option<String>, String> {
-    if let Some(name) = action.name.strip_prefix(prefix) {
-        let component_name = name.to_string();
-        let Some(resolved) = component_map.get(&component_name) else {
-            return Err(format!(
-                "{entity}: component {kind} \"{component_name}\" not found"
-            ));
-        };
-        // Merge: start with resolved component, overlay locally declared fields
-        let mut merged = resolved.clone();
-        if action.type_.is_some() {
-            merged.type_ = action.type_;
-        }
-        if !action.workflow_id.is_empty() {
-            merged.workflow_id = action.workflow_id.clone();
-        }
-        if !action.step_id.is_empty() {
-            merged.step_id = action.step_id.clone();
-        }
-        if action.retry_after != 0.0 {
-            merged.retry_after = action.retry_after;
-        }
-        if action.retry_limit.is_some() {
-            merged.retry_limit = action.retry_limit;
-        }
-        if !action.criteria.is_empty() {
-            merged.criteria = action.criteria.clone();
-        }
-        if !action.parameters.is_empty() {
-            merged.parameters = action.parameters.clone();
-        }
-        merged.reference.clear();
-        merged.value = None;
-        *action = merged;
-        return Ok(Some(component_name));
-    }
-    Ok(None)
 }
 
 #[cfg(test)]

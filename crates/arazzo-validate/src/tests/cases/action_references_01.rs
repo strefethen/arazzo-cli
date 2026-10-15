@@ -166,9 +166,9 @@ components:
 workflows:
   - workflowId: wf1
     successActions:
-      - name: "$components.successActions.endAll"
+      - reference: "$components.successActions.endAll"
     failureActions:
-      - name: "$components.failureActions.retryAll"
+      - reference: "$components.failureActions.retryAll"
     steps:
       - stepId: s1
         operationPath: /test
@@ -346,7 +346,7 @@ workflows:
     steps:
       - stepId: s1
         operationPath: /s1
-        onSuccess: [{name: $components.successActions.missing, type: end}]
+        onSuccess: [{reference: $components.successActions.missing}]
 "#;
         let err = expect_parse_error(action.as_bytes());
         assert!(format!("{err}").contains("component successAction \"missing\" not found"));

@@ -390,7 +390,8 @@ Neither channel blocks the other. A slow HTTP request does not prevent processin
 | `$sourceDescriptions.<name>.url` | Source description URL |
 | `reference: $components.parameters.<name>` on a Parameter | Named parameter component, via a Reusable Object's `reference` field |
 | `reference: $components.successActions\|failureActions.<name>` on an action | Resolves the named action component (the specification's Reusable Object form); `value` is ignored for actions |
-| `name: $components.successActions\|failureActions.<name>` on an action (**arazzo-cli extension**) | Resolves the named action component; retained for compatibility and overridden by `reference` when both are present |
+
+Action `name` fields are literal strings; component reuse uses `reference` and replaces the whole action.
 
 **Authoring body and payload references:** Use the bare `$request.body`, `$response.body`, or `$message.payload` for the whole value, or append a `#` JSON Pointer for a member. For nested `{ "a": { "b": 1 } }`, use `$response.body#/a/b`; for a literal property named `a.b`, use `$response.body#/a.b`. Escape `~` as `~0` and `/` as `~1` in each token: `{ "a~b/c": 1 }` uses `$response.body#/a~0b~1c`.
 
@@ -450,7 +451,6 @@ arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.or
 | Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: {type: xpath, version: xpath-10}` |
 | `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
 | `sourceDescriptions[].url` read as an absolute request base URL | Identity-based referencing: provide the document the url names and the reference binds to it, resolving requests against that document's own `servers`. An absolute url binds to a provided document whose `$self` matches it; a relative url binds to the file it resolves to. The base-URL reading applies only when nothing provided answers to the url. See "Not implemented" below |
-| `name: $components.successActions\|failureActions.<name>` resolving a Success/Failure Action Object to its named component | `reference: $components.successActions\|failureActions.<name>` is the specification's Reusable Object form; `name` is retained as an **arazzo-cli extension** for compatibility |
 
 The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows. An absolute `url` now resolves by document identity first — a provided document whose identity matches it wins — and the extension reading of that `url` as a base URL applies only when no provided document answers to it. Tracked in the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
 

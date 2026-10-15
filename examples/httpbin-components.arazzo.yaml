@@ -126,7 +126,7 @@ workflows:
           - condition: $statusCode == 200
         # Reference the shared retry policy from components
         onFailure:
-          - name: "$components.failureActions.standardRetry"
+          - reference: "$components.failureActions.standardRetry"
 
       - stepId: will-succeed
         description: Succeeds and uses the shared success action to end the workflow
@@ -135,7 +135,7 @@ workflows:
           - condition: $statusCode == 200
         # Reference the shared success action from components
         onSuccess:
-          - name: "$components.successActions.endAfterSuccess"
+          - reference: "$components.successActions.endAfterSuccess"
         outputs:
           url: $response.body#/url
     outputs:
@@ -152,7 +152,7 @@ workflows:
       this workflow-level retry policy.
     # Workflow-level failure action from components
     failureActions:
-      - name: "$components.failureActions.standardRetry"
+      - reference: "$components.failureActions.standardRetry"
     steps:
       - stepId: api-call
         description: Makes a request; failures handled by workflow-level retry policy

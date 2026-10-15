@@ -263,9 +263,9 @@ fn reusable_references_validate_before_resolution_and_report_field_paths() {
 }
 
 #[test]
-fn component_definitions_are_owned_once_and_local_overrides_report_at_use() {
+fn component_definitions_are_owned_once_and_local_actions_report_at_use() {
     let components = "components:\n  parameters:\n    p: {name: p, in: query, value: '{$env.X}'}\n  successActions:\n    a:\n      name: done\n      type: end\n      criteria:\n        - condition: '$env.X == 1'";
-    let yaml = document("        parameters:\n          - reference: '$components.parameters.p'\n          - {reference: '$components.parameters.p', value: '{$env.Y}'}\n        onSuccess:\n          - reference: '$components.successActions.a'\n          - name: '$components.successActions.a'\n            criteria:\n              - condition: '$env.Y == 1'", components);
+    let yaml = document("        parameters:\n          - reference: '$components.parameters.p'\n          - {reference: '$components.parameters.p', value: '{$env.Y}'}\n        onSuccess:\n          - reference: '$components.successActions.a'\n          - name: '$components.successActions.a'\n            type: end\n            criteria:\n              - condition: '$env.Y == 1'", components);
     let errors = expression_errors(&yaml);
     assert_eq!(
         errors
@@ -284,7 +284,7 @@ fn component_definitions_are_owned_once_and_local_overrides_report_at_use() {
 }
 
 #[test]
-fn component_action_parameter_references_keep_definition_and_override_ownership() {
+fn component_action_parameter_references_keep_definition_and_local_ownership() {
     for (component_field, action_field) in [
         ("successActions", "onSuccess"),
         ("failureActions", "onFailure"),
@@ -297,14 +297,14 @@ fn component_action_parameter_references_keep_definition_and_override_ownership(
             assert_eq!(unused[0].path, definition_path);
             assert_eq!(unused[0].kind, ValidationErrorKind::InvalidExpression);
 
-            let inherited = format!("        {action_field}:\n          - reference: '$components.{component_field}.a'\n          - name: '$components.{component_field}.a'");
+            let inherited = format!("        {action_field}:\n          - reference: '$components.{component_field}.a'\n          - reference: '$components.{component_field}.a'");
             let yaml = document(&inherited, &components).replace(
                 "    steps:",
-                &format!("    {component_field}:\n      - reference: '$components.{component_field}.a'\n      - name: '$components.{component_field}.a'\n    steps:"),
+                &format!("    {component_field}:\n      - reference: '$components.{component_field}.a'\n      - reference: '$components.{component_field}.a'\n    steps:"),
             );
             assert_eq!(both(&yaml), unused, "inherited copies: {yaml}");
 
-            let local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            parameters:\n              - reference: '$env.LOCAL'");
+            let local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            type: goto\n            workflowId: wf\n            parameters:\n              - reference: '$env.LOCAL'");
             let errors = both(&document(&local, &components));
             assert_eq!(errors.len(), 2, "{errors:?}");
             assert_eq!(errors[0], unused[0]);
@@ -317,7 +317,7 @@ fn component_action_parameter_references_keep_definition_and_override_ownership(
 
             let workflow_local = document(&inherited, &components).replace(
                 "    steps:",
-                &format!("    {component_field}:\n      - name: '$components.{component_field}.a'\n        parameters:\n          - reference: '$env.LOCAL'\n    steps:"),
+                &format!("    {component_field}:\n      - name: '$components.{component_field}.a'\n        type: goto\n        workflowId: wf\n        parameters:\n          - reference: '$env.LOCAL'\n    steps:"),
             );
             let errors = both(&workflow_local);
             assert_eq!(errors.len(), 2, "{errors:?}");
@@ -329,7 +329,7 @@ fn component_action_parameter_references_keep_definition_and_override_ownership(
             assert_eq!(errors[1].kind, ValidationErrorKind::InvalidExpression);
             assert_eq!(errors[1].message, ENV_MESSAGE);
 
-            let valid_local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            parameters:\n              - {{name: p, value: literal}}");
+            let valid_local = format!("{inherited}\n          - name: '$components.{component_field}.a'\n            type: goto\n            workflowId: wf\n            parameters:\n              - {{name: p, value: literal}}");
             assert_eq!(both(&document(&valid_local, &components)), unused);
         }
     }

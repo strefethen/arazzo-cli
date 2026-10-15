@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Action `name` fields are always literal. Component reuse requires
+  `reference`; name-based lookup and local field merging have been removed.
 - **Breaking:** `generate` writes YAML only. `generate --json` now fails with
   `code: "GENERATE_JSON_UNSUPPORTED"`, with or without `--output`, and
   `--output` must end in `.yaml` or `.yml` (`GENERATE_OUTPUT_NOT_YAML`

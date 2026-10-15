@@ -312,7 +312,7 @@ workflows:
         onSuccess:
           - reference: $components.successActions.good
             type: retry
-          - name: $components.successActions.bad
+          - reference: $components.successActions.bad
 "#;
         let report = action_validation_report(reusable);
         let component_errors = report
@@ -329,7 +329,7 @@ workflows:
                 .errors
                 .iter()
                 .all(|error| !error.path.contains("onSuccess")),
-            "canonical and legacy reusable actions must not duplicate component diagnostics: {:?}",
+            "canonical reusable actions must not duplicate component diagnostics: {:?}",
             report.errors
         );
 

@@ -262,7 +262,7 @@ workflows:
       - stepId: s1
         operationPath: /test
         onSuccess:
-          - name: "$components.successActions.handoff"
+          - reference: "$components.successActions.handoff"
   - workflowId: fallback
     steps:
       - stepId: fb
