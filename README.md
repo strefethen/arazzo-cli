@@ -41,12 +41,12 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 |---|---|
 | **Run workflows** | Execute HTTP steps, resolve expressions, evaluate success criteria, route control flow |
 | **Run single steps** | Execute one step with automatic dependency resolution (`--step`) |
-| **Generate workflows** | Scaffold CRUD workflows from OpenAPI 3.x specs (`generate`) |
+| **Generate workflows** | Scaffold CRUD workflows from OpenAPI 3.0.x specs (`generate`); OpenAPI 3.1 and 3.2 are rejected |
 | **Validate specs** | Parse and structurally validate Arazzo YAML before running |
 | **Parallel execution** | Run independent steps concurrently with DAG-based scheduling (`--parallel`) |
 | **Dry-run mode** | Resolve all requests without sending them (`--dry-run`) |
 | **Input validation** | Require, type-check, and enforce top-level property enums for workflow inputs, with strict mode (`--strict-inputs`) |
-| **Execution traces** | Write detailed `trace.v1` JSON artifacts with automatic sensitive value redaction |
+| **Execution traces** | Write detailed `trace.v1` JSON artifacts with pattern-based redaction of recognized sensitive values |
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
@@ -61,7 +61,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
-The `operationPath`/`sourceDescriptions[].url` routing idiom includes arazzo-cli extensions, not part of the Arazzo specification — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+The path-based `operationPath` and fallback `sourceDescriptions[].url` routing forms described below are arazzo-cli compatibility extensions, not Arazzo syntax. The specification-defined `operationPath` form is not supported; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
 
 ## Contents
 
@@ -136,7 +136,7 @@ Global flags:
 
 `generate` flags:
 
-- `--spec <path>` — path to an OpenAPI 3.x spec (YAML or JSON; required)
+- `--spec <path>` — path to an OpenAPI 3.0.x spec (YAML or JSON; required; 3.1 and 3.2 are rejected)
 - `--scenario <name>` — generation scenario (default `crud`)
 - `-o`/`--output <path>` — write generated YAML to file instead of stdout
 
@@ -188,10 +188,10 @@ The `run.v1` export keeps typed declared outputs, ordered attempts, HTTP status 
 
 `run --trace <path>` writes a `trace.v1` JSON artifact capturing every step's request, response, criteria evaluation, and routing decision.
 
-Sensitive values are automatically redacted:
+Trace writing redacts values whose names or text match its common sensitive-value patterns. This is best-effort; secrets that do not match those patterns may remain in a trace:
 - Headers: `Authorization`, `Cookie`, `X-API-Key`
 - URL query params: `token`, `password`, `session`
-- JSON body fields with sensitive keys
+- JSON body fields with sensitive keys, and matching secret patterns in non-JSON response bodies
 
 ```json
 {
@@ -442,23 +442,22 @@ For XPath outputs, use a Selector Object with an explicit version (`type: {type:
 
 ### Specification Conformance: Extensions and Gaps
 
-arazzo-cli implements the [Arazzo Specification v1.1.0](https://spec.openapis.org/arazzo/latest.html), plus a small set of constructs the specification does not define. **Policy:** extensions are permitted, must be labeled **arazzo-cli extension** everywhere they are documented, and must never silently change the meaning of an otherwise-conformant document. A workflow that uses a labeled construct runs correctly here but is not guaranteed to validate or run on another Arazzo tool.
+arazzo-cli supports Arazzo Specification v1.1.0 documents with known conformance gaps and retained compatibility forms. These forms are compatibility debt, not approved extensions; they may change as conformance work proceeds. The [conformance manifest](crates/arazzo-cli/tests/conformance/manifest.json) records current coverage and gaps. Documents using a nonstandard form may not validate or run in other Arazzo tools.
 
 **Extensions beyond the specification:**
 
 | Construct | Specification-conformant alternative |
 |---|---|
-| Bare XPath output, e.g. `outputs: { title: //item[1]/title }` | [Selector Object](#arazzo-11-selector-objects) with `type: {type: xpath, version: xpath-10}` |
-| `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | None implemented yet — the specification's form is listed under "Not implemented" below |
+| `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | The specification-defined runtime expression and JSON Pointer form is not implemented; `validate` warns and `run` rejects it. |
 | `sourceDescriptions[].url` read as an absolute request base URL | Identity-based referencing: provide the document the url names and the reference binds to it, resolving requests against that document's own `servers`. An absolute url binds to a provided document whose `$self` matches it; a relative url binds to the file it resolves to. The base-URL reading applies only when nothing provided answers to the url. See "Not implemented" below |
 
-The `operationPath` idiom and the `sourceDescriptions[].url` meaning are the same open decision: this tool's form (`"[METHOD ]{source}.<path>"` plus url-as-base-URL) is internally consistent and is what every example in this repository uses, but it is not the specification's form. The specification's form — a Runtime Expression pointing at a Source Description Object plus a JSON Pointer to an operation, e.g. `{$sourceDescriptions.petstore.url}#/paths/~1pets/get` — is not resolved by this runtime; using it now produces a `validate` warning and a clear `run` error rather than a silently wrong URL. `generate` was updated in ac-91284 to emit a document-pointing, relative `sourceDescriptions[].url` for newly generated workflows. An absolute `url` now resolves by document identity first — a provided document whose identity matches it wins — and the extension reading of that `url` as a base URL applies only when no provided document answers to it. Tracked in the [conformance audit's Recommendation section](plans/assessments/arazzo-spec-conformance-audit.md#recommendation).
+The specification defines `operationPath` as a Runtime Expression identifying a Source Description, combined with a JSON Pointer to an operation, for example `{$sourceDescriptions.petstore.url}#/paths/~1pets/get`. The validator accepts this document shape but warns that the runtime cannot resolve it; execution rejects it. The runtime currently resolves path-based forms such as `"[METHOD ]{source}.<path>"`, bare paths, and absolute URLs as compatibility behavior. The distinct `operationId` route remains supported: use a unique bare operationId or a source-qualified expression such as `$sourceDescriptions.petstore.getPet`. Separately, an absolute `sourceDescriptions[].url` first binds to a provided document with matching identity; only when none matches is it used as a request base URL. See the [conformance audit](plans/assessments/arazzo-spec-conformance-audit.md).
 
 **Specification features not implemented:**
 
 - `$response.query.<name>` and `$response.path.<name>` — listed by the specification's Runtime Expressions grammar; arazzo-cli resolves only `$response.header.<name>` and `$response.body...`, so both evaluate to `null` rather than the request-matched query/path value.
 - `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
-- The specification's `operationPath` form (source reference + JSON Pointer), described above.
+- The specification-defined `operationPath` form (source reference + JSON Pointer), described above. Document validation can accept it with a warning, but runtime execution rejects it. For a supported operationId route, use a unique operationId or qualify it with its source description when needed to disambiguate.
 - Fetching a remote document from `sourceDescriptions[].url` over the network. This is a deliberate decision, not a gap: arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. The specification's own answer for a `url` pointing at a hosted document is identity-based referencing (§9.6) — *provide* the document and the reference binds to it without a request. Vendor a local copy, give it a `$self` matching the url, and hand it over:
 
   ```json
@@ -748,7 +747,7 @@ The child workflow executes with its own input context, and its outputs are avai
 
 ## Generating Workflows
 
-The `generate` command scaffolds Arazzo workflows from existing OpenAPI 3.x specs:
+The `generate` command scaffolds Arazzo workflows from OpenAPI 3.0.x specs. OpenAPI 3.1 and 3.2 are rejected with an error explaining that generation currently supports 3.0.x:
 
 ```bash
 arazzo-cli generate --spec petstore.yaml -o petstore-crud.arazzo.yaml
@@ -761,6 +760,8 @@ The `crud` scenario (currently the only supported scenario) analyzes your OpenAP
 - Realistic request bodies derived from schema examples and property types
 - Authentication detection (bearer, basic, API key) applied to all steps
 - Source descriptions pointing back to the original OpenAPI spec
+
+The `openapiv3` model used by generation targets OpenAPI 3.0.x; documents declaring 3.1 or 3.2 are refused before parsing.
 
 This gives you a runnable starting point that you can customize — add assertions, error handling, conditional logic, or compose into larger workflows.
 
@@ -979,7 +980,7 @@ Built with these open-source crates:
 - [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) — serialization
 - [serde_yml](https://crates.io/crates/serde_yml) — YAML parsing
 - [yaml-rust2](https://crates.io/crates/yaml-rust2) — YAML event parsing with source positions (debug adapter)
-- [openapiv3](https://crates.io/crates/openapiv3) — OpenAPI 3.x spec model
+- [openapiv3](https://crates.io/crates/openapiv3) — OpenAPI 3.0.x spec model used by generation
 - [uppsala](https://crates.io/crates/uppsala) — XPath evaluation
 - [schemars](https://crates.io/crates/schemars) — JSON Schema generation
 - [regex](https://crates.io/crates/regex) — regular expressions
