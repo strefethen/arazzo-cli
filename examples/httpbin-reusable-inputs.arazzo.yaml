@@ -18,7 +18,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 components:
@@ -38,7 +38,7 @@ workflows:
       $ref: "#/components/inputs/nameInput"
     steps:
       - stepId: echo
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: name
             in: query
@@ -51,7 +51,7 @@ workflows:
       $ref: "#/components/inputs/nameInput"
     steps:
       - stepId: post-echo
-        operationPath: /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:

@@ -144,16 +144,6 @@ pub(crate) struct UrlBuildResult {
     pub warnings: Vec<String>,
 }
 
-/// Splits the optional leading `"<METHOD> "` token off an operationPath.
-///
-/// Thin wrapper over the shared classifier in `arazzo-spec`: the runtime and
-/// `arazzo-validate` must never drift on what counts as a method token, which
-/// is exactly the drift that used to disable the validator's unknown-source
-/// check for `"<METHOD> {source}./path"` steps.
-pub(crate) fn parse_method(operation_path: &str) -> (&str, &str) {
-    arazzo_spec::split_operation_method(operation_path)
-}
-
 pub(super) fn replace_path_params(
     path: &str,
     params: &BTreeMap<String, String>,

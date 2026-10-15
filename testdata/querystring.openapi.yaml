@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: Querystring fixture
+  version: 1.0.0
+servers:
+- url: https://search.example.com/v1
+paths:
+  /index:
+    get:
+      responses:
+        default:
+          description: Endpoint response

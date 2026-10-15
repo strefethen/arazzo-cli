@@ -1,6 +1,6 @@
 mod common;
 
-use arazzo_runtime::{EngineBuilder, EngineEvent, ObserverEvent, RuntimeErrorKind};
+use arazzo_runtime::{EngineEvent, ObserverEvent, RuntimeErrorKind};
 use arazzo_spec::{
     ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
 };
@@ -197,7 +197,7 @@ async fn assert_parallel_criteria_complete(criteria_count: usize) {
         &workflow_id,
         vec![step("many", "many", criteria(criteria_count))],
     );
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .parallel(true)
         .build()
@@ -251,7 +251,7 @@ async fn parallel_siblings_replay_complete_event_sequences_in_source_order() {
             step("second", "second", second_criteria),
         ],
     );
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .parallel(true)
         .build()
@@ -294,7 +294,7 @@ async fn sequential_control_keeps_the_same_single_step_event_sequence() {
     });
     let fixture = OpenApiFixture::new(&server.base_url);
     let spec = spec("sequential", vec![step("control", "control", criteria(3))]);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .parallel(false)
         .build()

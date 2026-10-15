@@ -60,15 +60,9 @@ impl ProvidedDocument {
 struct SetMember {
     /// The URI this document answers to. `None` when it declares no absolute
     /// `$self` and was handed over without a retrieval path, which leaves it
-    /// unreachable by reference — it can still be indexed as an explicitly
-    /// provided spec.
+    /// unreachable by reference.
     identity: Option<String>,
-    /// 1-based position among the documents handed to the builder, preserved
-    /// so diagnostics keep naming the same spec after earlier members are
-    /// claimed by a Source Description.
-    ordinal: usize,
     data: Vec<u8>,
-    claimed: bool,
 }
 
 /// A Source Description bound to the document it names.
@@ -109,15 +103,12 @@ impl DocumentSet {
         };
         let members = provided
             .into_iter()
-            .enumerate()
-            .map(|(idx, document)| {
+            .map(|document| {
                 let identity = document_self_uri(&document.data)
                     .or_else(|| document.retrieval_path.as_deref().and_then(file_uri));
                 SetMember {
                     identity,
-                    ordinal: idx + 1,
                     data: document.data,
-                    claimed: false,
                 }
             })
             .collect();
@@ -131,20 +122,24 @@ impl DocumentSet {
 
     /// Phase 3: resolve one Source Description's url and bind it to a document.
     ///
-    /// `Ok(None)` means the source keeps the url-as-base-URL reading this
-    /// runtime has always applied to an absolute non-`file` url: that
-    /// compatibility rule is a labeled extension owned elsewhere, and honoring
-    /// `$self` does not disturb it.
+    /// Non-OpenAPI sources are left to their transport; an OpenAPI source must
+    /// bind to provided bytes or a local file, with no URL-as-request-base path.
     pub(super) fn bind(
         &mut self,
         sd: &SourceDescription,
     ) -> Result<Option<BoundDocument>, RuntimeError> {
-        if sd.type_ != SourceType::OpenApi || sd.url.is_empty() {
+        if sd.type_ != SourceType::OpenApi {
             return Ok(None);
         }
         let authored_is_relative = is_relative_reference(&sd.url);
         let Some(resolved) = self.resolve(sd, authored_is_relative)? else {
-            return Ok(None);
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::SourceDescriptionNotFound,
+                format!(
+                    "sourceDescription \"{}\": invalid document URL \"{}\"",
+                    sd.name, sd.url
+                ),
+            ));
         };
         let identity = identity_of(&resolved);
 
@@ -155,7 +150,6 @@ impl DocumentSet {
         {
             // An identity match binds without touching the filesystem, which
             // is the whole point of §5.5.2: the document is already here.
-            member.claimed = true;
             return Ok(Some(BoundDocument {
                 data: member.data.clone(),
                 label: identity,
@@ -163,9 +157,6 @@ impl DocumentSet {
         }
 
         if resolved.scheme() != "file" {
-            if !authored_is_relative {
-                return Ok(None);
-            }
             return Err(RuntimeError::new(
                 RuntimeErrorKind::SourceDescriptionNotFound,
                 format!(
@@ -209,19 +200,6 @@ impl DocumentSet {
             data,
             label: path.display().to_string(),
         }))
-    }
-
-    /// The provided documents no Source Description claimed, each with the
-    /// 1-based position it was supplied in. They keep being indexed as
-    /// explicitly provided specs; a claimed document belongs to its source and
-    /// must not also be indexed as one, or its operations would be defined
-    /// twice under two different origins.
-    pub(super) fn unclaimed(self) -> Vec<(usize, Vec<u8>)> {
-        self.members
-            .into_iter()
-            .filter(|member| !member.claimed)
-            .map(|member| (member.ordinal, member.data))
-            .collect()
     }
 
     /// Joins an authored url onto the base URI, or refuses when a relative url

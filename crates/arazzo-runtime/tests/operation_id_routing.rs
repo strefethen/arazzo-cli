@@ -358,15 +358,14 @@ async fn unqualified_operation_id_is_refused_when_two_sources_are_defined() {
             "kind for {target}: {err}"
         );
         assert_eq!(err.code(), "RUNTIME_OPERATION_ID_AMBIGUOUS");
-        // The message has to say what to write instead, in both supported
-        // forms, or the operator is left guessing.
+        // The remedy identifies a standard source-qualified operation ID.
         assert!(
             err.message
                 .contains(&format!("$sourceDescriptions.<name>.{target}")),
             "message was: {err}"
         );
         assert!(
-            err.message.contains("{<name>}./<path>"),
+            !err.message.contains("{<name>}./<path>"),
             "message was: {err}"
         );
         assert!(err.message.contains("alpha"), "message was: {err}");
@@ -596,12 +595,10 @@ async fn arazzo_sources_do_not_make_a_bare_operation_id_ambiguous() {
     assert_eq!(url, format!("{}/pets", fixture.alpha.base_url));
 }
 
-/// An explicitly provided spec belongs to no source description. It keeps
-/// winning a bare id, and stays invisible to a qualified target — which is
-/// what makes `$sourceDescriptions.alpha.<id>` mean "from alpha" and nothing
-/// else.
+/// Unclaimed provided documents cannot override the declared source or supply
+/// an operation absent from it, for either bare or qualified targets.
 #[tokio::test]
-async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
+async fn an_unclaimed_spec_never_overrides_or_answers_a_declared_source() {
     let fixture = TwoSources::new();
     let explicit = openapi_document(&fixture.beta.base_url, "/override", "explicitOnly");
 
@@ -643,8 +640,8 @@ async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].url,
-        format!("{}/override", fixture.alpha.base_url),
-        "the explicit spec's path wins, against the engine base it always used"
+        format!("{}/pets", fixture.alpha.base_url),
+        "the declared source supplies both path and server"
     );
 
     // The same explicit spec cannot satisfy a source-qualified target.
@@ -674,9 +671,7 @@ async fn an_explicit_spec_wins_a_bare_id_and_never_answers_a_qualified_one() {
 
 /// An explicitly provided spec does not exempt a document from the MUST: the
 /// refusal counts declared sourceDescriptions, so `--openapi` plus two sources
-/// is still refused. The message must not then recommend the qualified form on
-/// its own, because `in_source` deliberately cannot see an explicit spec — the
-/// operator would follow the advice and land on OperationIdNotFound.
+/// is still refused. The remedy names a standard qualified target.
 #[tokio::test]
 async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
     let fixture = TwoSources::new();
@@ -701,31 +696,11 @@ async fn an_explicit_spec_does_not_exempt_a_multi_source_document() {
     };
     assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
     assert!(
-        err.message.contains("absolute-URL operationPath"),
-        "the remedy must name a form that can actually reach it; message was: {err}"
+        err.message
+            .contains("$sourceDescriptions.<name>.explicitOnly"),
+        "the remedy must name a standard source-qualified target: {err}"
     );
-    assert!(
-        err.message.contains("neither of those forms can reach it"),
-        "message was: {err}"
-    );
-    let conformant = err
-        .message
-        .find("declare that document as a sourceDescription")
-        .unwrap_or_else(|| panic!("the conformant remedy must be offered; message was: {err}"));
-    let debt = err
-        .message
-        .find("absolute-URL operationPath")
-        .unwrap_or_else(|| panic!("message was: {err}"));
-    assert!(
-        conformant < debt,
-        "the sourceDescription remedy is the conformant one and must lead the F1 absolute-URL \
-         form; message was: {err}"
-    );
-    assert!(
-        err.message.contains("<METHOD> <url>"),
-        "without the method token a PUT or DELETE step silently takes the GET/POST default; \
-         message was: {err}"
-    );
+    assert!(!err.message.contains("absolute-URL operationPath"), "{err}");
 }
 
 /// The converse branch: with no separately provided spec there is nothing to
@@ -838,10 +813,10 @@ async fn a_qualified_operation_id_ambiguous_within_its_own_source_is_refused() {
     );
 }
 
-/// Two explicit specs defining the same id used to resolve to whichever was
-/// passed last. Insertion order is not an answer, so the clash is reported.
+/// Duplicate IDs in unclaimed documents never participate in lookup; the
+/// declared source continues to identify one real operation.
 #[tokio::test]
-async fn duplicate_ids_across_explicit_specs_are_refused_rather_than_ordered() {
+async fn duplicate_ids_across_unclaimed_specs_do_not_shadow_the_source() {
     let fixture = TwoSources::new();
     let first = openapi_document("https://first.example.com", "/first", "firstOnly");
     let second = openapi_document("https://second.example.com", "/second", "secondOnly");
@@ -859,16 +834,9 @@ async fn duplicate_ids_across_explicit_specs_are_refused_rather_than_ordered() {
         Ok(engine) => engine,
         Err(err) => panic!("building an engine with two explicit specs: {err}"),
     };
-    let err = match engine
-        .execute_collect(WORKFLOW, BTreeMap::new())
-        .await
-        .outputs
-    {
-        Ok(outputs) => panic!("expected a refusal, got outputs {outputs:?}"),
-        Err(err) => err,
-    };
-    assert_eq!(err.kind, RuntimeErrorKind::OperationIdAmbiguous);
-    assert_eq!(err.code(), "RUNTIME_OPERATION_ID_AMBIGUOUS");
-    assert!(err.message.contains("spec #1"), "message was: {err}");
-    assert!(err.message.contains("spec #2"), "message was: {err}");
+    let result = engine.execute_collect(WORKFLOW, BTreeMap::new()).await;
+    assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+    let requests = result.dry_run_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, format!("{}/pets", fixture.alpha.base_url));
 }

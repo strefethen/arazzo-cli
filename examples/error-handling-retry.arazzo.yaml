@@ -22,7 +22,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -33,7 +33,7 @@ workflows:
         type: end
     steps:
       - stepId: unstable-call
-        operationPath: /status/503
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1503/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -50,7 +50,7 @@ workflows:
               - condition: $statusCode >= 500
 
       - stepId: recover
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: recovered
             in: query

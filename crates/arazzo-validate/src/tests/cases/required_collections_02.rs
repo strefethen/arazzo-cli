@@ -4,7 +4,7 @@
             "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n";
         let absent_steps = required_lists_spec(
             source,
-            "workflows:\n  - workflowId: wf1\n    operationPath: /test\n",
+            "workflows:\n  - workflowId: wf1\n    operationId: fixturetest\n",
         );
         assert_missing_required_path(&absent_steps, "workflow \"wf1\".steps");
 
@@ -22,7 +22,7 @@
     fn anonymous_workflow_missing_steps_uses_indexed_path() {
         let source =
             "sourceDescriptions:\n  - name: api\n    url: https://example.com\n    type: openapi\n";
-        let yaml = required_lists_spec(source, "workflows:\n  - operationPath: /test\n");
+        let yaml = required_lists_spec(source, "workflows:\n  - operationId: fixturetest\n");
         assert_missing_required_path(&yaml, "workflows[0].steps");
     }
 
@@ -62,7 +62,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 {success_criteria}
 "#
             )

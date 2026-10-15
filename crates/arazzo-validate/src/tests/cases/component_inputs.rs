@@ -24,7 +24,7 @@ workflows:
       $ref: "#/components/inputs/shared"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "##;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -69,7 +69,7 @@ workflows:
       $ref: "#/components/inputs/shared"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "##;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -100,7 +100,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         unknownStep: dropped
 "#;
 
@@ -137,7 +137,7 @@ workflows:
       $ref: "#/components/inputs/missing"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "##;
 
         let result = parse_bytes(spec_yaml.as_bytes());
@@ -175,7 +175,7 @@ workflows:
       $ref: "http://external/schema"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "##;
 
         let result = parse_bytes(spec_yaml.as_bytes());
@@ -216,7 +216,7 @@ workflows:
       $ref: "#/components/inputs/shared"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "##;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {

@@ -20,7 +20,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onFailure:
           - name: "$components.failureActions.standardRetry"
             type: end

@@ -11,7 +11,7 @@
     "workflowId": "wf",
     "steps": [{{
       "stepId": "request",
-      "operationPath": "/request",
+      "operationId": "fixturerequest",
       "parameters": [{{"reference": "$components.parameters.shared"{value}}}]
     }}]
   }}]
@@ -31,7 +31,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: request
-        operationPath: /request
+        operationId: fixturerequest
         parameters:
           - reference: "$components.parameters.shared"{value}
 "#
@@ -93,14 +93,14 @@ components:
     shared: {name: shared, reference: "$components.parameters.other"}
 workflows:
   - workflowId: wf
-    steps: [{stepId: request, operationPath: /request}]
+    steps: [{stepId: request, operationId: fixturerequest}]
 "#;
         let json = r#"{
   "arazzo": "1.1.0",
   "info": {"title": "Component parameter", "version": "1.0.0"},
   "sourceDescriptions": [{"name": "api", "url": "https://example.com", "type": "openapi"}],
   "components": {"parameters": {"shared": {"name": "shared", "reference": "$components.parameters.other"}}},
-  "workflows": [{"workflowId": "wf", "steps": [{"stepId": "request", "operationPath": "/request"}]}]
+  "workflows": [{"workflowId": "wf", "steps": [{"stepId": "request", "operationId": "fixturerequest"}]}]
 }"#;
 
         for (format, document) in [("YAML", yaml), ("JSON", json)] {
@@ -158,7 +158,7 @@ workflows:
           - {{name: workflowFailureParam, value: {}}}
     steps:
       - stepId: request
-        operationPath: /request
+        operationId: fixturerequest
         parameters:
           - {{name: stepParam, in: query, value: {}}}
         onSuccess:
@@ -186,7 +186,7 @@ workflows:
   - workflowId: target
     steps:
       - stepId: targetStep
-        operationPath: /target
+        operationId: fixturetarget
 "#,
             values[0],
             values[1],
@@ -233,7 +233,7 @@ workflows:
       "failureActions": [{{"name": "workflowFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "workflowFailureParam", "value": {}}}]}}],
       "steps": [{{
         "stepId": "request",
-        "operationPath": "/request",
+        "operationId": "fixturerequest",
         "parameters": [{{"name": "stepParam", "in": "query", "value": {}}}],
         "onSuccess": [{{"name": "stepSuccess", "type": "goto", "workflowId": "target", "parameters": [{{"name": "stepSuccessParam", "value": {}}}]}}],
         "onFailure": [{{"name": "stepFailure", "type": "goto", "workflowId": "target", "parameters": [{{"name": "stepFailureParam", "value": {}}}]}}],
@@ -243,7 +243,7 @@ workflows:
         ]}}
       }}]
     }},
-    {{"workflowId": "target", "steps": [{{"stepId": "targetStep", "operationPath": "/target"}}]}}
+    {{"workflowId": "target", "steps": [{{"stepId": "targetStep", "operationId": "fixturetarget"}}]}}
   ]
 }}"#,
             values[0],
@@ -341,7 +341,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: request
-        operationPath: /request
+        operationId: fixturerequest
         {malformed}
 "#
             );

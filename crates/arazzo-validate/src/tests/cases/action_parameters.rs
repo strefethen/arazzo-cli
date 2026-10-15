@@ -16,13 +16,13 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /index
+        operationId: fixtureindex
         onFailure:
 {action_yaml}
   - workflowId: fallback
     steps:
       - stepId: fb
-        operationPath: /fallback
+        operationId: fixturefallback
 "#
         )
     }
@@ -260,13 +260,13 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - reference: "$components.successActions.handoff"
   - workflowId: fallback
     steps:
       - stepId: fb
-        operationPath: /fallback
+        operationId: fixturefallback
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -304,7 +304,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - name: handoff
             type: goto
@@ -314,7 +314,7 @@ workflows:
   - workflowId: fallback
     steps:
       - stepId: fb
-        operationPath: /fallback
+        operationId: fixturefallback
 "#;
 
         let result = parse_bytes(spec_yaml.as_bytes());

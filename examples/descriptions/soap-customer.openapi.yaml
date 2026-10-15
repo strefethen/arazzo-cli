@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: SOAP customer mock
+  version: 1.0.0
+servers:
+- url: http://localhost:4010
+paths:
+  /api/soap-mock/service:
+    post:
+      responses:
+        default:
+          description: Endpoint response

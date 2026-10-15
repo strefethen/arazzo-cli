@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +27,7 @@ impl TempDir {
         if let Err(err) = fs::create_dir_all(&path) {
             panic!("creating temp dir {}: {err}", path.display());
         }
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 
@@ -143,13 +146,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixtureGetItems
         outputs:
           bad: $steps.missing.outputs.value
 "#
@@ -170,7 +173,7 @@ workflows:
     summary: Inspect source metadata
     steps:
       - stepId: inspect
-        operationPath: /inspect
+        operationId: fixtureGetInspect
 "#
 }
 
@@ -188,7 +191,7 @@ workflows:
   - workflowId: inspect-async
     steps:
       - stepId: prepare
-        operationPath: /prepare
+        operationId: fixtureGetPrepare
       - stepId: receive-event
         channelPath: '{$sourceDescriptions.events.url}#/channels/events'
         action: receive
@@ -320,11 +323,22 @@ fn hermetic_example_spec(example: &str, base_url: &str, dir: &Path) -> PathBuf {
         Ok(value) => value,
         Err(err) => panic!("reading example {}: {err}", source.display()),
     };
-    assert!(
-        raw.contains("https://httpbin.org"),
-        "example {example} should target https://httpbin.org"
+    let description = repo_root().join("examples/descriptions/httpbin.openapi.yaml");
+    let openapi = fs::read_to_string(&description)
+        .unwrap_or_else(|err| panic!("reading explicit httpbin description: {err}"));
+    write_file(
+        &dir.join("httpbin.openapi.yaml"),
+        &openapi.replace("https://httpbin.org", base_url),
     );
-    let rewritten = raw.replace("https://httpbin.org", base_url);
+    let rewritten = raw
+        .replace(
+            "./descriptions/httpbin.openapi.yaml",
+            "./httpbin.openapi.yaml",
+        )
+        .replace(
+            "descriptions/httpbin.openapi.yaml",
+            "./httpbin.openapi.yaml",
+        );
     let dest = dir.join(example);
     write_file(&dest, &rewritten);
     dest
@@ -348,13 +362,11 @@ fn validate_json_reports_valid_metadata() {
 }
 
 fn warning_fixture_spec() -> PathBuf {
-    let mut path = repo_root();
-    path.push("testdata/unsupported-operation-path.arazzo.yaml");
-    path
+    common::warning_spec()
 }
 
-const WARNING_PATH: &str = "workflow \"probe\" > step \"list-pets\".operationPath";
-const OPERATION_PATH_WARNING: &str = "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method.";
+const OPERATION_PATH_WARNING: &str =
+    "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here";
 
 fn validate_issue_messages(body: &Value, field: &str) -> Vec<String> {
     let Some(items) = body.get(field).and_then(Value::as_array) else {
@@ -385,14 +397,11 @@ fn validate_warning_only_spec_stays_valid_and_exits_zero() {
         "warning-only spec should still report valid; stdout={stdout}"
     );
 
-    // Human mode renders `warning: <path>: <message>`, matching how validation
-    // errors already render.
+    // The enclosing object is the root, so human output has no path prefix.
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
-        stderr.contains(&format!(
-            "warning: {WARNING_PATH}: {OPERATION_PATH_WARNING}"
-        )),
-        "missing unsupported-operation-path warning; stderr={stderr}"
+        stderr.contains(&format!("warning: {OPERATION_PATH_WARNING}")),
+        "missing unknown-field warning; stderr={stderr}"
     );
 }
 
@@ -431,11 +440,11 @@ fn validate_json_reports_warnings_without_failing() {
     );
     assert_eq!(
         first.get("kind"),
-        Some(&Value::String("unsupportedOperationPath".to_string()))
+        Some(&Value::String("unknownField".to_string()))
     );
-    assert_eq!(
-        first.get("path"),
-        Some(&Value::String(WARNING_PATH.to_string()))
+    assert!(
+        first.get("path").is_none(),
+        "root diagnostic path must be omitted: {first:?}"
     );
 }
 
@@ -479,13 +488,13 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
         onSuccess:
           - name: inline
             type: end
@@ -533,13 +542,13 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
         successCriteria:
           - context: $response.body
             condition: //ok
@@ -616,13 +625,13 @@ info:
 __arazzo_cli_internal_reference_present: true
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
         onSuccess:
           - name: finish
             type: end
@@ -678,13 +687,13 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
         onSuccess:
           - reference: null
 "#,
@@ -723,7 +732,7 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 components:
   successActions:
@@ -736,7 +745,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
 "#,
     );
     let spec_path = spec.to_string_lossy().to_string();
@@ -798,13 +807,13 @@ fn validate_component_reference_shapes_warn_and_strict_promote() {
                 &format!(
                     r#"arazzo: "1.1.0"
 info: {{title: Component reference shape, version: "1.0.0"}}
-sourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]
+sourceDescriptions: [{{name: api, url: ./fixture.openapi.json, type: openapi}}]
 components:
   {section}:
     {name}: {{name: action, type: end, reference: {shape}}}
 workflows:
   - workflowId: wf
-    steps: [{{stepId: s1, operationPath: /s1}}]
+    steps: [{{stepId: s1, operationId: fixtureGetS1}}]
 "#
                 ),
             );
@@ -852,13 +861,13 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: "bad source!"
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: "bad workflow!"
     steps:
       - stepId: "bad step!"
-        operationPath: /test
+        operationId: fixtureGetTest
 "#,
     );
     path
@@ -946,14 +955,14 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf1
     sucessCriteriaTypo: not-an-x-extension
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixtureGetTest
 "#,
     );
     path
@@ -1111,13 +1120,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: search
-    url: https://search.example.com/v1
+    url: ./search.openapi.json
     type: openapi
 workflows:
   - workflowId: search-verbatim
     steps:
       - stepId: query-index
-        operationPath: '{search}./index'
+        operationId: fixtureGetIndex
         parameters:
           - name: filter
             in: querystring
@@ -1196,13 +1205,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: search
-    url: https://search.example.com/v1
+    url: ./search.openapi.json
     type: openapi
 workflows:
   - workflowId: wf1
     steps:
       - stepId: probe
-        operationPath: '{search}./index'
+        operationId: fixtureGetIndex
         parameters:
           - name: filter
             in: querystring
@@ -1251,13 +1260,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: mixed
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixtureGetTest
         onSuccess:
           - name: finish
             type: end
@@ -1792,7 +1801,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: s1
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -1841,7 +1850,7 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -1891,7 +1900,7 @@ info:
   version: "1.0.0"
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -1939,13 +1948,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: "{missing}./items"
+        operationPath: "{$sourceDescriptions.missing.url}#/paths/~1items/get"
 "#;
     write_file(&invalid, content);
 
@@ -1995,13 +2004,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixtureGetTest
         outputs:
           "bad key!": $response.body
 "#;
@@ -2041,13 +2050,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixtureGetTest
         outputs:
           result:
             context: $response.body
@@ -2199,13 +2208,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: "{missing}./items"
+        operationPath: "{$sourceDescriptions.missing.url}#/paths/~1items/get"
 "#;
     write_file(&spec_path, spec);
 
@@ -2481,13 +2490,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixtureGetItems
         parameters:
           - name: token
             in: query
@@ -2554,13 +2563,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: /submit
+        operationId: fixturePostSubmit
         requestBody:
           contentType: application/json
           payload:
@@ -2652,12 +2661,11 @@ fn run_trace_write_failure_returns_error() {
 #[test]
 fn replay_json_reexecutes_trace_successfully() {
     let temp = TempDir::new("arazzo-replay-success");
-    let source = fixture_spec();
-    let mut spec_path = temp.path().to_path_buf();
-    spec_path.push("spec.yaml");
-    if let Err(err) = fs::copy(&source, &spec_path) {
-        panic!("copying fixture to {}: {err}", spec_path.display());
-    }
+    let spec_path = hermetic_example_spec(
+        "httpbin-get.arazzo.yaml",
+        "https://httpbin.org",
+        temp.path(),
+    );
     let mut trace_path = temp.path().to_path_buf();
     trace_path.push("trace.json");
 
@@ -2694,12 +2702,11 @@ fn replay_json_reexecutes_trace_successfully() {
 #[test]
 fn replay_json_reports_request_drift_error() {
     let temp = TempDir::new("arazzo-replay-drift");
-    let source = fixture_spec();
-    let mut spec_path = temp.path().to_path_buf();
-    spec_path.push("spec.yaml");
-    if let Err(err) = fs::copy(&source, &spec_path) {
-        panic!("copying fixture to {}: {err}", spec_path.display());
-    }
+    let spec_path = hermetic_example_spec(
+        "httpbin-get.arazzo.yaml",
+        "https://httpbin.org",
+        temp.path(),
+    );
     let mut trace_path = temp.path().to_path_buf();
     trace_path.push("trace.json");
 
@@ -2726,7 +2733,11 @@ fn replay_json_reports_request_drift_error() {
         Ok(raw) => raw,
         Err(err) => panic!("reading {}: {err}", spec_path.display()),
     };
-    let drifted = spec_raw.replace("/status/{code}", "/status/200");
+    let drifted = spec_raw.replace("~1status~1%7Bcode%7D/get", "~1status~1200/get");
+    assert_ne!(
+        spec_raw, drifted,
+        "the authored canonical target must change"
+    );
     if let Err(err) = fs::write(&spec_path, drifted) {
         panic!("writing drifted spec {}: {err}", spec_path.display());
     }
@@ -2753,13 +2764,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: independent
     steps:
       - stepId: a
-        operationPath: /get
+        operationId: fixtureGetGet
         parameters:
           - name: label
             in: query
@@ -2767,7 +2778,7 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
       - stepId: b
-        operationPath: /get
+        operationId: fixtureGetGet
         parameters:
           - name: label
             in: query
@@ -2777,13 +2788,13 @@ workflows:
   - workflowId: dependent
     steps:
       - stepId: first
-        operationPath: /get
+        operationId: fixtureGetGet
         successCriteria:
           - condition: $statusCode == 200
         outputs:
           val: $response.body#/origin
       - stepId: second
-        operationPath: /get
+        operationId: fixtureGetGet
         parameters:
           - name: echo
             in: query
@@ -2844,7 +2855,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./api.yaml
     type: openapi
 workflows:
   - workflowId: opid
@@ -2861,6 +2872,8 @@ openapi: 3.0.3
 info:
   title: Test API
   version: 1.0.0
+servers:
+  - url: https://example.com
 paths:
   /widgets:
     get:
@@ -3131,7 +3144,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: with-inputs
@@ -3146,7 +3159,7 @@ workflows:
         - name
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixtureGetItems
         successCriteria:
           - condition: $statusCode == 200
     outputs:
@@ -3302,8 +3315,16 @@ fn steps_json_returns_step_array_with_expected_fields() {
         step.get("stepId"),
         Some(&Value::String("fetch-ip".to_string()))
     );
-    assert_eq!(step.get("method"), Some(&Value::String("GET".to_string())));
-    assert_eq!(step.get("url"), Some(&Value::String("/get".to_string())));
+    assert!(
+        step.get("method").is_none(),
+        "static presentation cannot guess a method"
+    );
+    assert_eq!(
+        step.get("url"),
+        Some(&Value::String(
+            "{$sourceDescriptions.httpbin.url}#/paths/~1get/get".to_string()
+        ))
+    );
     assert_eq!(step.get("position"), Some(&Value::Number(0.into())));
     for field in [
         "channelPath",
@@ -3437,13 +3458,13 @@ fn steps_json_chained_workflow_returns_multiple_steps() {
         .collect();
     assert_eq!(ids, vec!["post-initial", "post-enriched", "post-final"]);
 
-    // All steps should have POST method (operationPath starts with "POST ")
+    // The authored operation pointer remains visible; static presentation
+    // cannot derive a method from the request body or pointer text.
     for step in steps {
+        assert!(step.get("method").is_none(), "{step}");
         assert_eq!(
-            step.get("method"),
-            Some(&Value::String("POST".to_string())),
-            "expected POST for step {:?}",
-            step.get("stepId")
+            step.get("url").and_then(Value::as_str),
+            Some("{$sourceDescriptions.httpbin.url}#/paths/~1post/post")
         );
     }
 
@@ -3556,8 +3577,16 @@ fn show_json_includes_step_details() {
         step.get("stepId"),
         Some(&Value::String("fetch-ip".to_string()))
     );
-    assert_eq!(step.get("method"), Some(&Value::String("GET".to_string())));
-    assert_eq!(step.get("url"), Some(&Value::String("/get".to_string())));
+    assert!(
+        step.get("method").is_none(),
+        "static presentation cannot guess a method"
+    );
+    assert_eq!(
+        step.get("url"),
+        Some(&Value::String(
+            "{$sourceDescriptions.httpbin.url}#/paths/~1get/get".to_string()
+        ))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3740,13 +3769,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: update
-        operationPath: /items
+        operationId: fixturePostItems
         requestBody:
           contentType: application/json
           payload:
@@ -3812,12 +3841,12 @@ fn run_dry_run_accepts_and_resolves_explicit_null_and_empty_values() {
         r#"arazzo: "1.1.0"
 info: {title: Required Any Values, version: "1.0.0"}
 sourceDescriptions:
-  - {name: api, url: https://example.com, type: openapi}
+  - {name: api, url: ./fixture.openapi.json, type: openapi}
 workflows:
   - workflowId: wf
     steps:
       - stepId: request
-        operationPath: POST /items
+        operationId: fixturePostItems
         parameters:
           - {name: X-Null, in: header, value: null}
           - {name: X-Empty, in: header, value: ""}
@@ -3862,12 +3891,12 @@ fn validate_reports_missing_parameter_and_replacement_value_paths() {
         r#"{
   "arazzo": "1.1.0",
   "info": {"title": "Missing required Any values", "version": "1.0.0"},
-  "sourceDescriptions": [{"name": "api", "url": "https://example.com", "type": "openapi"}],
+  "sourceDescriptions": [{"name": "api", "url": "./fixture.openapi.json", "type": "openapi"}],
   "workflows": [{
     "workflowId": "wf",
     "steps": [{
       "stepId": "request",
-      "operationPath": "POST /items",
+      "operationId": "fixturePostItems",
       "parameters": [{"name": "X-Required", "in": "header"}],
       "requestBody": {
         "contentType": "application/json",
@@ -3956,13 +3985,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixturePostItems
         parameters:
           - name: Authorization
             in: header
@@ -4092,13 +4121,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixturePostItems
         parameters:
           - name: Authorization
             in: header
@@ -4160,7 +4189,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -4175,7 +4204,7 @@ workflows:
           type: string
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixturePostItems
         requestBody:
           contentType: application/json
           payload:
@@ -4261,7 +4290,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: sample
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -4274,7 +4303,7 @@ workflows:
           type: string
     steps:
       - stepId: step-one
-        operationPath: /items
+        operationId: fixtureGetItems
         successCriteria:
           - condition: $statusCode == 200
 "#;
@@ -4373,7 +4402,7 @@ fn run_dry_run_httpbin_example_url_unchanged() {
 }
 
 #[test]
-fn run_dry_run_openapi_flag_overrides_source_with_warning() {
+fn run_dry_run_unclaimed_openapi_flag_cannot_override_bound_source() {
     let spec = repo_root().join("testdata/petstore-relative.arazzo.yaml");
     let spec_str = spec.to_string_lossy().to_string();
     let override_spec = repo_root().join("testdata/petstore-override.openapi.yaml");
@@ -4400,25 +4429,24 @@ fn run_dry_run_openapi_flag_overrides_source_with_warning() {
     let body = stdout_json(&output);
     let requests = run_json_requests(&body);
     assert_eq!(requests.len(), 1, "expected one dry-run request: {body}");
-    // The --openapi definition wins the duplicate operationId.
+    // Supplied bytes must bind to a declared source identity. This unrelated
+    // document cannot replace the operation or its server in the bound source.
     assert_eq!(
         requests[0].get("url").and_then(Value::as_str),
-        Some("https://petstore.example.com/v1/pets-v2")
+        Some("https://petstore.example.com/v1/pets")
     );
-
-    // A stderr warning names both origins.
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert!(
-        stderr.contains("operationId \"listPets\""),
-        "stderr should name the duplicated operationId, got: {stderr}"
+    assert_eq!(
+        requests[0].get("method").and_then(Value::as_str),
+        Some("GET")
     );
     assert!(
-        stderr.contains("sourceDescription \"petstore\""),
-        "stderr should name the source origin, got: {stderr}"
+        run_json_warnings(&body).is_empty(),
+        "unclaimed definitions do not collide: {body}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("OpenAPI spec #1"),
-        "stderr should name the explicit spec origin, got: {stderr}"
+        !stderr.contains("OpenAPI spec #1"),
+        "unclaimed definition must not be indexed: {stderr}"
     );
 }
 
@@ -4484,17 +4512,17 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtureGetS1
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - reference: $components.successActions.gotoS3
       - stepId: s2
-        operationPath: /s2
+        operationId: fixtureGetS2
       - stepId: s3
-        operationPath: /s3
+        operationId: fixtureGetS3
 "#,
-        base_url = server.base_url
+        base_url = common::fixture_url(&server.base_url)
     );
     if let Err(err) = fs::write(&spec, yaml) {
         panic!("write reusable goto spec: {err}");
@@ -4544,6 +4572,7 @@ fn stderr_text(output: &std::process::Output) -> String {
 }
 
 fn transport_spec(dir: &Path, name: &str, base_url: &str, extra_step: &str) -> PathBuf {
+    let base_url = common::fixture_url(base_url);
     let spec = format!(
         r#"
 arazzo: 1.0.0
@@ -4558,7 +4587,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /ok
+        operationId: $sourceDescriptions.api.fixtureGetOk
         successCriteria:
           - condition: $statusCode == 200
 {extra_step}
@@ -4642,6 +4671,7 @@ fn json_ok_route(path: &str) -> (u16, Vec<(String, String)>, String) {
 }
 
 fn dependency_test_spec(base_url: &str, workflows: &str) -> String {
+    let base_url = common::fixture_url(base_url);
     format!(
         r#"arazzo: 1.1.0
 info:
@@ -4661,7 +4691,7 @@ fn dependency_test_workflow(id: &str, path: &str, depends_on: Option<&str>) -> S
         .map(|value| format!("    dependsOn:\n      - {value}\n"))
         .unwrap_or_default();
     format!(
-        "  - workflowId: {id}\n{dependency}    steps:\n      - stepId: request\n        operationPath: {path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
+        "  - workflowId: {id}\n{dependency}    steps:\n      - stepId: request\n        operationId: {path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
     )
 }
 
@@ -4672,9 +4702,9 @@ fn test_json_dependency_order_filter_and_fail_closed_contract() {
     let path = temp.path().join("dependencies.arazzo.yaml");
     let workflows = format!(
         "{}{}{}",
-        dependency_test_workflow("final", "/ok", Some("middle")),
-        dependency_test_workflow("root", "/ok", None),
-        dependency_test_workflow("middle", "/ok", Some("root")),
+        dependency_test_workflow("final", "fixtureGetOk", Some("middle")),
+        dependency_test_workflow("root", "fixtureGetOk", None),
+        dependency_test_workflow("middle", "fixtureGetOk", Some("root")),
     );
     write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
 
@@ -4712,7 +4742,7 @@ fn test_json_dependency_order_filter_and_fail_closed_contract() {
     assert!(filtered_error.contains("filter excludes required workflow"));
 
     let unknown_path = temp.path().join("unknown.arazzo.yaml");
-    let unknown_workflow = dependency_test_workflow("blocked", "/ok", Some("missing"));
+    let unknown_workflow = dependency_test_workflow("blocked", "fixtureGetOk", Some("missing"));
     write_file(
         &unknown_path,
         &dependency_test_spec(&server.base_url, &unknown_workflow),
@@ -4750,8 +4780,8 @@ fn test_json_failure_completion_and_fail_fast_order() {
     let path = temp.path().join("failures.arazzo.yaml");
     let workflows = format!(
         "{}{}",
-        dependency_test_workflow("failed", "/fail", None),
-        dependency_test_workflow("after-failure", "/ok", Some("failed")),
+        dependency_test_workflow("failed", "fixtureGetFail", None),
+        dependency_test_workflow("after-failure", "fixtureGetOk", Some("failed")),
     );
     write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
 
@@ -4809,8 +4839,8 @@ fn run_json_rejects_unmet_workflow_dependency_before_http() {
     let path = temp.path().join("run-dependency.arazzo.yaml");
     let workflows = format!(
         "{}{}",
-        dependency_test_workflow("root", "/ok", None),
-        dependency_test_workflow("blocked", "/ok", Some("root")),
+        dependency_test_workflow("root", "fixtureGetOk", None),
+        dependency_test_workflow("blocked", "fixtureGetOk", Some("root")),
     );
     write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
 
@@ -4841,9 +4871,9 @@ fn test_json_without_workflow_dependencies_preserves_document_order() {
     let path = temp.path().join("document-order.arazzo.yaml");
     let workflows = format!(
         "{}{}{}",
-        dependency_test_workflow("third", "/ok", None),
-        dependency_test_workflow("first", "/ok", None),
-        dependency_test_workflow("second", "/ok", None),
+        dependency_test_workflow("third", "fixtureGetOk", None),
+        dependency_test_workflow("first", "fixtureGetOk", None),
+        dependency_test_workflow("second", "fixtureGetOk", None),
     );
     write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
 
@@ -4876,8 +4906,8 @@ fn filtered_workflow_dependency_failure_makes_zero_http_requests() {
     let path = temp.path().join("filtered-dependency.arazzo.yaml");
     let workflows = format!(
         "{}{}",
-        dependency_test_workflow("root", "/ok", None),
-        dependency_test_workflow("blocked", "/ok", Some("root")),
+        dependency_test_workflow("root", "fixtureGetOk", None),
+        dependency_test_workflow("blocked", "fixtureGetOk", Some("root")),
     );
     write_file(&path, &dependency_test_spec(&server.base_url, &workflows));
 
@@ -5088,15 +5118,19 @@ fn transport_tls_default_fails_insecure_host_succeeds_second_host_verified() {
     );
 
     // A second, unlisted host in the same run still enforces verification.
-    let two_step = format!(
-        r#"      - stepId: s2
-        operationPath: GET {}/ok
+    let two_step = r#"      - stepId: s2
+        operationPath: "{$sourceDescriptions.verified.url}#/paths/~1ok/get"
         successCriteria:
           - condition: $statusCode == 200
-"#,
-        verified.base_url
+"#;
+    let spec2 = transport_spec(dir.path(), "two.yaml", &excepted.base_url, two_step);
+    let second_url = common::fixture_url(&verified.base_url);
+    let document = fs::read_to_string(&spec2).unwrap_or_else(|err| panic!("read spec: {err}"));
+    let document = document.replace(
+        "workflows:",
+        &format!("  - name: verified\n    url: {second_url}\n    type: openapi\nworkflows:"),
     );
-    let spec2 = transport_spec(dir.path(), "two.yaml", &excepted.base_url, &two_step);
+    write_file(&spec2, &document);
     let spec2_str = spec2.to_string_lossy().to_string();
     let output = run(&["run", &spec2_str, "wf", "--insecure-host", &entry], None);
     assert!(!output.status.success(), "verified host must still fail");
@@ -5196,11 +5230,11 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /hop/0
+        operationId: fixtureGetHop0
         successCriteria:
           - condition: $statusCode == 200
 "#,
-        server.base_url
+        common::fixture_url(&server.base_url)
     );
     let path = dir.path().join("limit.yaml");
     if let Err(err) = fs::write(&path, spec) {

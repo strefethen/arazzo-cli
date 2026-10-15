@@ -4,13 +4,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ../examples/descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: test-end-on-failure
     steps:
       - stepId: check-status
-        operationPath: /status/{code}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1%7Bcode%7D/get'
         parameters:
           - name: code
             in: path
@@ -25,7 +25,7 @@ workflows:
   - workflowId: test-goto-on-failure
     steps:
       - stepId: might-fail
-        operationPath: /status/{code}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1%7Bcode%7D/get'
         parameters:
           - name: code
             in: path
@@ -37,14 +37,14 @@ workflows:
             type: goto
             stepId: handle-error
       - stepId: success-path
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - name: end-on-success
             type: end
       - stepId: handle-error
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
     outputs: {}
@@ -52,7 +52,7 @@ workflows:
   - workflowId: test-end-on-success
     steps:
       - stepId: check-and-end
-        operationPath: /status/{code}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1%7Bcode%7D/get'
         parameters:
           - name: code
             in: path
@@ -63,7 +63,7 @@ workflows:
           - name: end-after-check
             type: end
       - stepId: should-not-run
-        operationPath: /status/500
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1500/get'
         successCriteria:
           - condition: $statusCode == 200
     outputs: {}
@@ -71,7 +71,7 @@ workflows:
   - workflowId: test-criteria-matching
     steps:
       - stepId: check-with-criteria
-        operationPath: /status/{code}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1%7Bcode%7D/get'
         parameters:
           - name: code
             in: path
@@ -92,14 +92,14 @@ workflows:
           - name: end-unmatched-failure
             type: end  # default: end for other errors
       - stepId: rate-limited
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - name: end-after-rate-limit
             type: end
       - stepId: server-error
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
     outputs: {}

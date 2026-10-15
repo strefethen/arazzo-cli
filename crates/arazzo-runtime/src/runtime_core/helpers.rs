@@ -17,7 +17,5 @@ pub(super) use super::payload::{
     apply_replacements, resolve_payload_detailed, resolve_value_source, to_json_path,
     value_to_string,
 };
-pub(super) use super::url::{
-    encode_cookie_value, parse_method, replace_path_params, UrlBuildResult,
-};
+pub(super) use super::url::{encode_cookie_value, replace_path_params, UrlBuildResult};
 pub(super) use super::xpath::extract_xpath;

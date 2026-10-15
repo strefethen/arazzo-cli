@@ -1,3 +1,5 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -5,8 +7,8 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{
-    DebugController, DebugStopReason, EngineBuilder, ExecutionObserver, ObserverEvent,
-    StepBreakpoint, StepCheckpoint,
+    DebugController, DebugStopReason, ExecutionObserver, ObserverEvent, StepBreakpoint,
+    StepCheckpoint,
 };
 use arazzo_spec::{
     ActionType, ArazzoSpec, Info, OnAction, SourceDescription, SourceType, Step, StepTarget,
@@ -331,7 +333,9 @@ async fn arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_late
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                target: Some(StepTarget::OperationPath("/rss".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1rss/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -357,7 +361,7 @@ async fn arazzo_11_exhausted_retry_has_no_delay_checkpoint_and_continues_at_late
         components: None,
         ..ArazzoSpec::default()
     };
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .debug_controller(Arc::clone(&controller))
         .build()
     {
@@ -443,7 +447,9 @@ fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_ru
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                target: Some(StepTarget::OperationPath("/rss".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1rss/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -460,7 +466,7 @@ fn build_engine(base_url: String, controller: Arc<DebugController>) -> arazzo_ru
         ..ArazzoSpec::default()
     };
 
-    match EngineBuilder::new(spec)
+    match common::fixture_engine_builder(spec)
         .debug_controller(controller)
         .build()
     {
@@ -490,7 +496,9 @@ fn build_failure_engine(
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                target: Some(StepTarget::OperationPath("/rss".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1rss/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -521,7 +529,7 @@ fn build_failure_engine(
         ..ArazzoSpec::default()
     };
 
-    match EngineBuilder::new(spec)
+    match common::fixture_engine_builder(spec)
         .debug_controller(controller)
         .build()
     {
@@ -554,7 +562,9 @@ fn build_retry_engine(
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "fetch-rss".to_string(),
-                target: Some(StepTarget::OperationPath("/rss".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1rss/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -577,7 +587,7 @@ fn build_retry_engine(
         ..ArazzoSpec::default()
     };
 
-    let mut builder = EngineBuilder::new(spec).debug_controller(controller);
+    let mut builder = common::fixture_engine_builder(spec).debug_controller(controller);
     if let Some(observer) = observer {
         builder = builder.observer(observer);
     }

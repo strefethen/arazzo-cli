@@ -1,0 +1,98 @@
+openapi: 3.0.3
+info:
+  title: HTTPBin example operations
+  version: 1.0.0
+servers:
+- url: https://httpbin.org
+paths:
+  /get:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /headers:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /status/{code}:
+    parameters:
+    - name: code
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /status/200:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /status/404:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /status/500:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /status/503:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /bearer:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /basic-auth/{user}/{passwd}:
+    parameters:
+    - name: user
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: passwd
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /cookies:
+    get:
+      responses:
+        default:
+          description: Endpoint response
+  /post:
+    post:
+      responses:
+        default:
+          description: Endpoint response
+  /put:
+    put:
+      responses:
+        default:
+          description: Endpoint response
+  /anything:
+    patch:
+      responses:
+        default:
+          description: Endpoint response
+    delete:
+      responses:
+        default:
+          description: Endpoint response
+  /response-headers:
+    get:
+      responses:
+        default:
+          description: Endpoint response

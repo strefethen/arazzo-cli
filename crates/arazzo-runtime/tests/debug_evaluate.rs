@@ -1,10 +1,12 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, EngineBuilder, StepBreakpoint};
+use arazzo_runtime::{DebugController, StepBreakpoint};
 use arazzo_spec::{
     ArazzoSpec, ExpressionType, Info, OutputValue, SelectorObject, SelectorType, SourceDescription,
     SourceType, Step, StepTarget, Workflow,
@@ -199,7 +201,9 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/echo".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1echo/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([(
                         "code".to_string(),
                         "$response.body#/code".to_string().into(),
@@ -208,7 +212,9 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/noop".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1noop/get".to_string(),
+                    )),
                     ..Step::default()
                 },
             ],
@@ -218,7 +224,7 @@ fn build_engine(url: String, controller: Arc<DebugController>) -> arazzo_runtime
         ..ArazzoSpec::default()
     };
 
-    match EngineBuilder::new(spec)
+    match common::fixture_engine_builder(spec)
         .debug_controller(controller)
         .build()
     {

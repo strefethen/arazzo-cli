@@ -50,19 +50,6 @@ fn xpath_criterion(context: &str, condition: &str) -> SuccessCriterion {
 }
 
 #[test]
-fn parse_method_supports_known_verbs() {
-    assert_eq!(parse_method("GET /items"), ("GET", "/items"));
-    assert_eq!(parse_method("POST /items"), ("POST", "/items"));
-    assert_eq!(parse_method("DELETE /items/1"), ("DELETE", "/items/1"));
-    assert_eq!(parse_method("PATCH /items/1"), ("PATCH", "/items/1"));
-    assert_eq!(parse_method("HEAD /health"), ("HEAD", "/health"));
-    assert_eq!(parse_method("OPTIONS /api"), ("OPTIONS", "/api"));
-    assert_eq!(parse_method("/items"), ("", "/items"));
-    assert_eq!(parse_method(""), ("", ""));
-    assert_eq!(parse_method("UNKNOWN /items"), ("", "UNKNOWN /items"));
-}
-
-#[test]
 fn evaluate_criterion_modes() {
     let cache = RegexCache::new();
     let eval = ExpressionEvaluator::new(EvalContext {
@@ -157,7 +144,7 @@ fn extract_step_refs_and_control_flow() {
     let step = Step {
         step_id: "s2".to_string(),
         target: Some(StepTarget::OperationPath(
-            "/items/$steps.s1.outputs.id".to_string(),
+            "{$sourceDescriptions.test.url}#/paths/~1items~1$steps.s1.outputs.id/get".to_string(),
         )),
         parameters: vec![arazzo_spec::Parameter {
             name: "q".to_string(),
@@ -187,7 +174,9 @@ fn extract_step_refs_and_control_flow() {
         workflow_id: "no-flow".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/ok".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+            )),
             ..Step::default()
         }],
         ..Workflow::default()
@@ -198,7 +187,9 @@ fn extract_step_refs_and_control_flow() {
         workflow_id: "with-flow".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/ok".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+            )),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Goto),
                 step_id: "fallback".to_string(),
@@ -283,12 +274,16 @@ fn build_levels_supports_independent_chain_and_cycle() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 ..Step::default()
             },
         ],
@@ -305,12 +300,16 @@ fn build_levels_supports_independent_chain_and_cycle() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/one".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1one/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/two".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1two/get".to_string(),
+                )),
                 parameters: vec![arazzo_spec::Parameter {
                     name: "from".to_string(),
                     in_: Some(ParamLocation::Query),
@@ -370,12 +369,16 @@ fn build_levels_supports_diamond_dependency() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
@@ -416,12 +419,16 @@ fn compute_transitive_deps_no_deps_returns_empty() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 ..Step::default()
             },
         ],
@@ -448,12 +455,16 @@ fn compute_transitive_deps_direct_dependency() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 outputs: BTreeMap::from([(
                     "val".to_string(),
                     "$steps.a.outputs.result".to_string().into(),
@@ -480,12 +491,16 @@ fn compute_transitive_deps_transitive_chain() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 outputs: BTreeMap::from([(
                     "val".to_string(),
                     "$steps.a.outputs.result".to_string().into(),
@@ -494,7 +509,9 @@ fn compute_transitive_deps_transitive_chain() {
             },
             Step {
                 step_id: "c".to_string(),
-                target: Some(StepTarget::OperationPath("/c".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1c/get".to_string(),
+                )),
                 outputs: BTreeMap::from([(
                     "val".to_string(),
                     "$steps.b.outputs.val".to_string().into(),
@@ -522,7 +539,9 @@ fn compute_transitive_deps_diamond() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
@@ -665,25 +684,6 @@ fn test_xpath_extraction_invalid_xml() {
 
 proptest! {
     #[test]
-    fn parse_method_round_trips_known_verbs(
-        method in prop_oneof![
-            Just("GET"),
-            Just("POST"),
-            Just("PUT"),
-            Just("PATCH"),
-            Just("DELETE"),
-            Just("HEAD"),
-            Just("OPTIONS"),
-        ],
-        path in "[a-zA-Z0-9/_\\-\\?=&]{0,32}",
-    ) {
-        let operation_path = format!("{method} /{path}");
-        let (parsed_method, parsed_path) = parse_method(&operation_path);
-        prop_assert_eq!(parsed_method, method);
-        prop_assert_eq!(parsed_path, format!("/{path}"));
-    }
-
-    #[test]
     fn build_levels_respects_dependency_order_for_generated_dags(
         size in 1usize..8usize,
         mask in any::<u64>(),
@@ -710,7 +710,7 @@ proptest! {
 
             steps.push(Step {
                 step_id: format!("s{idx}"),
-                target: Some(StepTarget::OperationPath(format!("/s{idx}"))),
+                target: Some(StepTarget::OperationPath(format!("{{$sourceDescriptions.test.url}}#/paths/~1s{idx}/get"))),
                 parameters,
                 ..Step::default()
             });

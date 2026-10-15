@@ -5,7 +5,7 @@
 //! canonical JSON Pointer token, including when its name contains punctuation.
 
 use arazzo_generate::crud::generate_crud;
-use arazzo_spec::OutputValue;
+use arazzo_spec::{OutputValue, StepTarget};
 use serde_json::{json, Value as JsonValue};
 
 fn generated_create_output(property: &str) -> String {
@@ -53,6 +53,13 @@ paths:
         .iter()
         .find(|step| step.step_id == "create-widgets")
         .expect("create step is generated");
+
+    assert_eq!(
+        create_step.target,
+        Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.widgets.url}#/paths/~1widgets/post".into()
+        ))
+    );
 
     match create_step.outputs.get(property) {
         Some(OutputValue::RuntimeExpression(expression)) => expression.clone(),

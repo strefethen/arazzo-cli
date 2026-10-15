@@ -1,261 +1,163 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! One `operationPath` table, driven through both surfaces that read the field.
-//!
-//! `arazzo-runtime` resolves `operationPath` into a request URL and
-//! `arazzo-validate` checks the Source Description it names. They used to hold
-//! separate prefix parsers and disagreed on shipped input: the validator's
-//! never stripped a leading `"<METHOD> "` token, so its unknown-source check
-//! was silently skipped for all 27 `"<METHOD> {source}./path"` steps across
-//! seven `examples/` files. Both now route through
-//! `arazzo_spec::classify_operation_path`; this test is what keeps that true.
-//!
-//! Every row is driven through the shipped CLI rather than through library
-//! internals, so agreement is asserted on what users actually run.
+//! The shared syntax contract through validate, run, steps and show.
+//! Runtime-only pointer lookup is proved by canonical_operation_targets.
 
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use serde_json::Value;
-
-/// What both surfaces must independently conclude about one `operationPath`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Verdict {
-    /// Resolvable: validate is silent, the runtime plans a request.
     Supported,
-    /// Names a Source Description that the document does not declare.
     UnknownSource,
-    /// Specification-valid, but this runtime cannot resolve it.
-    UnsupportedForm,
+    Malformed,
 }
 
-/// The shared table. Adding a row here exercises both surfaces at once.
 const TABLE: &[(&str, Verdict)] = &[
-    ("/pets", Verdict::Supported),
-    ("GET /pets", Verdict::Supported),
-    ("/pets/{petId}", Verdict::Supported),
-    ("{api}./pets", Verdict::Supported),
-    ("POST {api}./pets", Verdict::Supported),
-    ("https://elsewhere.example.com/pets", Verdict::Supported),
-    (
-        "DELETE https://elsewhere.example.com/pets/7",
-        Verdict::Supported,
-    ),
-    ("{missing}./pets", Verdict::UnknownSource),
-    // The regression this consolidation fixes: the method token used to hide
-    // the source reference from the validator entirely.
-    ("POST {missing}./pet", Verdict::UnknownSource),
     (
         "{$sourceDescriptions.api.url}#/paths/~1pets/get",
-        Verdict::UnsupportedForm,
+        Verdict::Supported,
     ),
     (
-        "GET {$sourceDescriptions.api.url}#/paths/~1pets/get",
-        Verdict::UnsupportedForm,
+        "{$sourceDescriptions.api.url}#/paths/~1pets/post",
+        Verdict::Supported,
     ),
-    ("{$sourceDescriptions.api.url}", Verdict::UnsupportedForm),
-    ("#/paths/~1pets/get", Verdict::UnsupportedForm),
+    (
+        "{$sourceDescriptions.api.url}#/paths/~1pets~1%7BpetId%7D/delete",
+        Verdict::Supported,
+    ),
+    (
+        "{$sourceDescriptions.missing.url}#/paths/~1pets/get",
+        Verdict::UnknownSource,
+    ),
+    ("/pets", Verdict::Malformed),
+    ("GET /pets", Verdict::Malformed),
+    ("{api}./pets", Verdict::Malformed),
+    ("POST {api}./pets", Verdict::Malformed),
+    ("https://elsewhere.example.com/pets", Verdict::Malformed),
+    (
+        "GET {$sourceDescriptions.api.url}#/paths/~1pets/get",
+        Verdict::Malformed,
+    ),
+    ("{$sourceDescriptions.api.url}", Verdict::Malformed),
+    ("#/paths/~1pets/get", Verdict::Malformed),
+    (
+        "{$sourceDescriptions.api.url}#/paths/~2pets/get",
+        Verdict::Malformed,
+    ),
 ];
 
-const UNSUPPORTED_CODE: &str = "RUNTIME_UNSUPPORTED_OPERATION_PATH_FORM";
-const UNKNOWN_SOURCE_CODE: &str = "RUNTIME_SOURCE_DESCRIPTION_NOT_FOUND";
-/// `run` validates before executing, so an unknown source is now reported by
-/// the validation gate rather than by the engine. Same verdict, earlier stage —
-/// and reaching that gate at all is the regression this ticket fixes for
-/// `"<METHOD> {source}./path"` values.
-const RUN_VALIDATION_CODE: &str = "RUN_SPEC_VALIDATION";
-const UNSUPPORTED_KIND: &str = "unsupportedOperationPath";
-const UNKNOWN_SOURCE_KIND: &str = "invalidReference";
-
-struct TempDir {
-    path: PathBuf,
-}
-
+struct TempDir(PathBuf);
 impl TempDir {
-    fn new(prefix: &str) -> Self {
-        let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(delta) => delta.as_nanos(),
-            Err(_) => 0,
-        };
-        let mut path = std::env::temp_dir();
-        path.push(format!("{}-{}-{}", prefix, std::process::id(), nanos));
-        if let Err(err) = fs::create_dir_all(&path) {
-            panic!("creating temp dir {}: {err}", path.display());
-        }
-        Self { path }
+    fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "arazzo-agreement-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).expect("fixture directory");
+        Self(path)
     }
 }
-
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        fs::remove_dir_all(&self.0).expect("remove fixture");
     }
 }
 
-fn cli_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_arazzo-cli"))
-}
-
-fn write_spec(dir: &Path, operation_path: &str) -> String {
+fn write_spec(dir: &Path, operation_path: &str) -> PathBuf {
+    let openapi = json!({"openapi": "3.0.3", "info": {"title": "Agreement", "version": "1"},
+        "servers": [{"url": "https://api.example.com/v1"}],
+        "paths": {"/pets": {"get": {"responses": {"200": {"description": "OK"}}}, "post": {"responses": {"200": {"description": "OK"}}}},
+            "/pets/{petId}": {"delete": {"responses": {"200": {"description": "OK"}}}}}});
+    fs::write(dir.join("api.json"), openapi.to_string()).expect("explicit OpenAPI");
+    let spec = json!({"arazzo": "1.1.0", "info": {"title": "Agreement", "version": "1"},
+        "sourceDescriptions": [{"name": "api", "url": "./api.json", "type": "openapi"}],
+        "workflows": [{"workflowId": "wf", "steps": [{"stepId": "probe", "operationPath": operation_path}]}]});
     let path = dir.join("agreement.arazzo.yaml");
-    let spec = format!(
-        r#"arazzo: 1.0.1
-info:
-  title: operationPath agreement
-  version: 1.0.0
-sourceDescriptions:
-  - name: api
-    url: https://api.example.com/v1
-    type: openapi
-workflows:
-  - workflowId: wf
-    steps:
-      - stepId: probe
-        operationPath: {operation_path:?}
-"#
-    );
-    if let Err(err) = fs::write(&path, spec) {
-        panic!("writing {}: {err}", path.display());
-    }
-    path.to_string_lossy().into_owned()
+    fs::write(&path, spec.to_string()).expect("Arazzo fixture");
+    path
 }
 
 fn run_json(args: &[&str]) -> (bool, Value) {
-    let output = match Command::new(cli_bin()).args(args).output() {
-        Ok(output) => output,
-        Err(err) => panic!("running arazzo-cli {args:?}: {err}"),
-    };
-    let body = match serde_json::from_slice::<Value>(&output.stdout) {
-        Ok(body) => body,
-        Err(err) => panic!(
-            "parsing JSON from {args:?}: {err}; stdout={} stderr={}",
+    let output = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+        .args(args)
+        .output()
+        .expect("CLI");
+    let body = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "{args:?}: {err}; stdout={} stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        ),
-    };
+        )
+    });
     (output.status.success(), body)
-}
-
-fn diagnostic_kinds(body: &Value, field: &str) -> Vec<String> {
-    body.get(field)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("kind").and_then(Value::as_str))
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// What `arazzo validate` concludes about one `operationPath`.
-fn validate_verdict(spec: &str) -> Verdict {
-    let (ok, body) = run_json(&["--json", "validate", spec]);
-    let errors = diagnostic_kinds(&body, "errors");
-    let warnings = diagnostic_kinds(&body, "warnings");
-
-    if errors.iter().any(|kind| kind == UNKNOWN_SOURCE_KIND) {
-        assert!(!ok, "an unknown sourceDescription must fail validate");
-        return Verdict::UnknownSource;
-    }
-    if warnings.iter().any(|kind| kind == UNSUPPORTED_KIND) {
-        assert!(
-            ok,
-            "an unresolvable operationPath is a warning, not a validation failure"
-        );
-        return Verdict::UnsupportedForm;
-    }
-    assert!(ok, "unexpected validation failure: {body}");
-    Verdict::Supported
-}
-
-/// What `arazzo run --dry-run` concludes about the same value.
-fn runtime_verdict(spec: &str) -> Verdict {
-    let (ok, body) = run_json(&["--json", "run", spec, "wf", "--dry-run"]);
-    if ok {
-        assert_eq!(
-            body.get("kind").and_then(Value::as_str),
-            Some("dryRun"),
-            "body={body}"
-        );
-        return Verdict::Supported;
-    }
-    let message = body
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    match body.get("code").and_then(Value::as_str) {
-        Some(UNSUPPORTED_CODE) => Verdict::UnsupportedForm,
-        Some(UNKNOWN_SOURCE_CODE) => Verdict::UnknownSource,
-        Some(RUN_VALIDATION_CODE) if message.contains("unknown sourceDescription") => {
-            Verdict::UnknownSource
-        }
-        other => panic!("unexpected runtime failure code {other:?}; body={body}"),
-    }
 }
 
 #[test]
 fn runtime_and_validate_agree_on_every_operation_path_form() {
-    let temp = TempDir::new("arazzo-operation-path-agreement");
-
-    for (operation_path, expected) in TABLE {
-        let spec = write_spec(&temp.path, operation_path);
-
-        let from_validate = validate_verdict(&spec);
-        let from_runtime = runtime_verdict(&spec);
-
-        assert_eq!(
-            from_validate, from_runtime,
-            "validate and runtime disagree on {operation_path:?}"
-        );
-        assert_eq!(
-            from_validate, *expected,
-            "unexpected verdict for {operation_path:?}"
-        );
+    for (target, expected) in TABLE {
+        let dir = TempDir::new();
+        let spec = write_spec(&dir.0, target);
+        let path = spec.to_str().unwrap();
+        let (valid, validation) = run_json(&["--json", "validate", path]);
+        let (runs, plan) = run_json(&["--json", "run", path, "wf", "--dry-run"]);
+        let (steps, rows) = run_json(&["--json", "steps", path, "wf"]);
+        let (show, shown) = run_json(&["--json", "show", "wf", "--dir", dir.0.to_str().unwrap()]);
+        if *expected == Verdict::Supported {
+            assert!(
+                valid && runs && steps && show,
+                "{target}: {validation} {plan} {rows} {shown}"
+            );
+            assert_eq!(rows[0]["url"], *target);
+            assert!(rows[0].get("method").is_none(), "{rows}");
+            assert_eq!(shown["steps"][0]["url"], *target);
+            assert!(shown["steps"][0].get("method").is_none(), "{shown}");
+            assert_eq!(plan["requests"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(
+                !valid && !runs && !steps && !show,
+                "{target}: {validation} {plan} {rows} {shown}"
+            );
+            let kind = if *expected == Verdict::UnknownSource {
+                "invalidReference"
+            } else {
+                "unsupportedOperationPath"
+            };
+            assert!(
+                validation["errors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["kind"] == kind),
+                "{target}: {validation}"
+            );
+            assert_eq!(plan["code"], "RUN_SPEC_VALIDATION");
+            assert_eq!(rows["code"], "STEPS_SPEC_VALIDATION");
+            assert!(plan.get("requests").is_none());
+        }
     }
 }
 
-/// The stable `RUNTIME_*` code the `--json` contract exposes for the new
-/// failure, asserted on the shipped fixture rather than a generated one.
 #[test]
-fn dry_run_json_surfaces_the_stable_unsupported_code() {
-    let spec = "testdata/unsupported-operation-path.arazzo.yaml";
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let spec_path = repo_root.join(spec);
-
+fn dry_run_json_rejects_the_custom_fixture_before_runtime_planning() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/unsupported-operation-path.arazzo.yaml");
     let (ok, body) = run_json(&[
         "--json",
         "run",
-        &spec_path.to_string_lossy(),
+        path.to_str().unwrap(),
         "probe",
         "--dry-run",
     ]);
-
-    assert!(!ok, "an unresolvable operationPath must exit non-zero");
-    assert_eq!(body.get("kind").and_then(Value::as_str), Some("error"));
-    assert_eq!(
-        body.get("code").and_then(Value::as_str),
-        Some(UNSUPPORTED_CODE),
-        "body={body}"
-    );
-
-    let message = body
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    assert!(message.contains("list-pets"), "message was: {message}");
-    assert!(
-        message.contains("{$sourceDescriptions.petstore.url}#/paths/~1pets/get"),
-        "message was: {message}"
-    );
-    // The literal expression and pointer text must never reach a URL.
-    assert!(
-        !message.contains("https://petstore.example.com/v1{$"),
-        "the concatenated URL must not be constructed: {message}"
-    );
+    assert!(!ok);
+    assert_eq!(body["kind"], "error");
+    assert_eq!(body["code"], "RUN_SPEC_VALIDATION");
+    assert!(body["error"].as_str().unwrap().contains("list-pets"));
+    assert!(body.get("requests").is_none());
 }

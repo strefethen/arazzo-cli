@@ -14,7 +14,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
     outputs:
       "{key}": $response.body
 "#
@@ -35,7 +35,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         outputs:
           "{key}": $response.body
 "#
@@ -60,7 +60,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -85,7 +85,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -109,7 +109,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -133,7 +133,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -155,7 +155,7 @@ workflows:
   - workflowId: "{id}"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -174,7 +174,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: "{id}"
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }
@@ -193,7 +193,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#
         )
     }

@@ -48,7 +48,7 @@ workflows:
         paramUnknown: warn
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         x-step-ext: keep
         stepUnknown: warn
         parameters:
@@ -173,7 +173,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         requestBody:
           contentType: application/json
           payload: "{}"
@@ -241,7 +241,7 @@ workflows:
         - type: string
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#;
 
         let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
@@ -268,7 +268,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         sucessCriteria: []
 "#;
 

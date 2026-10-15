@@ -1,5 +1,48 @@
 use serde_json::Value;
 
+/// Write the explicit operation catalog for a transcript beside its Arazzo
+/// document. The operation list is supplied by the fixture, never inferred
+/// from the workflow's target strings.
+#[allow(dead_code)] // Other transcript targets use only the framing helpers.
+pub fn write_openapi_document(
+    spec_path: &std::path::Path,
+    base_url: &str,
+    operations: &[(&str, &str, Option<&str>)],
+) -> Result<String, String> {
+    let document_path = spec_path.with_extension("openapi.yaml");
+    let mut paths = serde_json::Map::new();
+    for (path, method, operation_id) in operations {
+        let mut operation = serde_json::json!({
+            "responses": {"200": {"description": "OK"}}
+        });
+        if let Some(id) = operation_id {
+            operation["operationId"] = serde_json::json!(id);
+        }
+        paths
+            .entry((*path).to_string())
+            .or_insert_with(|| serde_json::json!({}))[*method] = operation;
+    }
+    let document = serde_json::json!({
+        "openapi": "3.0.3",
+        "info": {"title": "DAP transcript fixture", "version": "1"},
+        "servers": [{"url": base_url}],
+        "paths": paths
+    });
+    std::fs::write(&document_path, document.to_string())
+        .map_err(|err| format!("writing transcript OpenAPI document: {err}"))?;
+    document_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| "transcript OpenAPI filename must be UTF-8".to_string())
+}
+
+#[allow(dead_code)] // Other transcript targets do not create fixture documents.
+pub fn remove_temp_spec(spec_path: &std::path::Path) {
+    let _ = std::fs::remove_file(spec_path.with_extension("openapi.yaml"));
+    let _ = std::fs::remove_file(spec_path);
+}
+
 pub fn encode_dap_stream(messages: &[Value]) -> Vec<u8> {
     let mut out = Vec::<u8>::new();
     for message in messages {

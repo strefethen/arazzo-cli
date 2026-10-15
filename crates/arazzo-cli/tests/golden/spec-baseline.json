@@ -1096,7 +1096,7 @@
             {
               "method": "GET",
               "stepId": "fetch",
-              "url": "https://example.com/openapi.yaml/status"
+              "url": "https://petstore.example.com/v1/pets"
             }
           ]
         }
@@ -1107,19 +1107,15 @@
         "diagnostics": [
           {
             "kind": "unsupportedOperationPath",
-            "message": "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method.",
+            "message": "workflow \"probe\" > step \"list-pets\".operationPath must name a source URL using {$sourceDescriptions.<name>.url} followed by # and a JSON Pointer; expected \"{$sourceDescriptions.<name>.url}#<JSON Pointer>\"",
             "path": "workflow \"probe\" > step \"list-pets\".operationPath",
-            "severity": "warning"
+            "severity": "error"
           }
         ],
-        "outcome": "valid"
+        "outcome": "invalid"
       },
-      "workflows": {
-        "probe": {
-          "outcome": "notDryRunnable",
-          "reason": "step list-pets: step \"list-pets\": operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; resolving the specification form (source reference plus JSON Pointer) is not implemented. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method."
-        }
-      }
+      "workflows": {},
+      "workflowsUnavailable": "list failed"
     }
   }
 }

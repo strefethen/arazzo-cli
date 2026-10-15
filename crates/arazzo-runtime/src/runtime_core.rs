@@ -2,14 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{DebugController, DebugScopes, StepCheckpoint};
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 use arazzo_spec::{
     classify_operation_id, classify_operation_path, ActionType, ArazzoSpec, OnAction,
-    OperationIdTarget, OperationPathForm, OutputValue, ParamLocation, Parameter, SelectorObject,
+    OperationIdTarget, OperationPathTarget, OutputValue, ParamLocation, Parameter, SelectorObject,
     SourceType, Step, StepTarget, SuccessCriterion, ValueSource, Workflow,
     SUPPORTED_OPERATION_ID_FORMS, SUPPORTED_OPERATION_PATH_FORMS,
 };
@@ -48,6 +48,7 @@ mod helper_tests;
 mod helpers;
 mod input_validation;
 mod jsonpath;
+mod operation_target;
 mod payload;
 mod redaction;
 mod replay;
@@ -59,7 +60,6 @@ mod xml_admission;
 mod xpath;
 
 use ::url as url_crate;
-use builder::parse_openapi_into_index;
 pub use builder::{relative_openapi_source_paths, EngineBuilder};
 use client::HttpClient;
 pub use client::{
@@ -103,7 +103,6 @@ use state::{
     OperationServer, ServerIssue, ServerLevel, StepExecution, StepResult, StepTraceData,
     UnusableServer, WorkflowIndex,
 };
-pub(crate) use url::parse_method;
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
 pub(crate) use xpath::{extract_xpath, replace_xpath, select_xpath, xpath_version_rejection};
 

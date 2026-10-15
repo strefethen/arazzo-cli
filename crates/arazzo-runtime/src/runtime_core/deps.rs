@@ -354,7 +354,9 @@ mod tests {
     fn step(step_id: &str) -> Step {
         Step {
             step_id: step_id.to_string(),
-            target: Some(StepTarget::OperationPath(format!("/{step_id}"))),
+            target: Some(StepTarget::OperationPath(format!(
+                "{{$sourceDescriptions.test.url}}#/paths/~1{step_id}/get"
+            ))),
             ..Step::default()
         }
     }

@@ -5,6 +5,8 @@
 //! rather than abort the process (ac-342bd, audit I6/H3), and every load is
 //! reported on stderr — never stdout, never a name or value (ac-a2fbd).
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -30,6 +32,7 @@ impl TempDir {
         ));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "http://127.0.0.1:9");
         Self { path }
     }
 
@@ -59,13 +62,13 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: http://127.0.0.1:9/openapi.yaml
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
     steps:
       - stepId: s
-        operationPath: /get
+        operationId: fixtureGetGet
         successCriteria:
           - condition: $statusCode == 200
 ";
@@ -78,7 +81,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: http://127.0.0.1:9/openapi.yaml
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -89,7 +92,7 @@ workflows:
           type: string
     steps:
       - stepId: s
-        operationPath: /get
+        operationId: fixtureGetGet
         parameters:
           - name: q
             in: query

@@ -4,14 +4,14 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com/openapi.yaml
+    url: ./petstore.openapi.yaml
     type: openapi
 workflows:
   - workflowId: warn-only
     summary: Valid failure retry fields.
     steps:
       - stepId: fetch
-        operationPath: '{api}./status'
+        operationId: $sourceDescriptions.api.listPets
         successCriteria:
           - condition: $statusCode == 200
         onFailure:

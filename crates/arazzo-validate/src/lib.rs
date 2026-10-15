@@ -1357,22 +1357,15 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                             });
                         }
                     }
-                    // A warning, not an error: the specification form is valid
-                    // Arazzo, this executor simply does not resolve it. Saying
-                    // "invalid" would blame the document for our gap — but
-                    // reporting nothing at all is how a conformant step used to
-                    // reach the runtime and turn into a nonsense request URL.
-                    if let Some(reason) = classified.unsupported() {
-                        diagnostics.push(Diagnostic::warning(
-                            ValidationErrorKind::UnsupportedOperationPath,
-                            format!("{step_path}.operationPath"),
-                            format!(
-                                "{step_path}.operationPath \"{operation_path}\" carries {reason}; \
-                                 this runtime does not resolve the specification form (source \
-                                 reference plus JSON Pointer), so running this step will fail. \
-                                 Supported forms are {SUPPORTED_OPERATION_PATH_FORMS}."
+                    if let Some(reason) = classified.malformed() {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            kind: ValidationErrorKind::UnsupportedOperationPath,
+                            path: format!("{step_path}.operationPath"),
+                            message: format!(
+                                "{step_path}.operationPath {reason}; expected {SUPPORTED_OPERATION_PATH_FORMS}"
                             ),
-                        ));
+                        });
                     }
                     if step.action.is_some() {
                         diagnostics.push(Diagnostic {

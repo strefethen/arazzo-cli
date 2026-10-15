@@ -12,21 +12,28 @@ constraints, ignored fields, non-conformant output, and undocumented
 extensions. Later passes added F12–F25 — see the addenda at the end, which also
 record which findings have since been closed.
 
-The single most important structural fact: **our `operationPath` idiom and our
-`sourceDescriptions[].url` meaning are entangled deviations.** Our form
-(`"GET {source}./path"` + url-as-base-URL) is internally consistent and
-convenient, but it is not the specification's form, and the specification's
-form does not work at all — it validates and then silently produces a
-nonsense URL (F1). Any decision about one field forces a decision about the
-other.
+**2026-10-15 F1/F5 resolution:** standard operation IDs and canonical
+source-expression JSON Pointers now share bound-document operation lookup.
+The custom path/method syntax, URL-as-request-base behavior, and unclaimed
+provided-document ID lookup are removed. Generation emits standard targets
+and rejects duplicate IDs. The original findings and dated observations below
+are historical; they do not describe the current target contract.
+
+Implementation and proof are owned by [ac-ff633](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ff633),
+[ac-1a904](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1a904), and
+[ac-fc81d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fc81d), following
+the [accepted decision](arazzo-canonical-operation-targets-decision.md).
+The runtime and CLI `canonical_operation_targets` tests cover both imported
+and generated forms. This does not remove the documented relative-server,
+referenced-path-item, or non-routable-operation capability limits.
 
 | # | Deviation | Severity | Surface |
 |---|---|---|---|
-| F1 | Spec-form `operationPath` validates, then builds a garbage URL | P1 | runtime |
+| F1 | Spec-form `operationPath` validates, then builds a garbage URL — resolved 2026-10-15 | P1 | runtime |
 | F2 | `in: querystring` rejects the entire document | P1 | model |
 | F3 | `targetSelectorType` not modeled; selector kind inferred instead | P2 | model/runtime |
 | F4 | `generate` emits base URL as `sourceDescriptions[].url` | P2 | generate |
-| F5 | `generate` emits non-conformant `operationPath` syntax | P2 | generate |
+| F5 | `generate` emits non-conformant `operationPath` syntax — resolved 2026-10-15 | P2 | generate |
 | F6 | Identifier regexes never enforced (two MUST, three SHOULD) | P2 | validate |
 | F7 | `successCriteria: []` accepted | P2 | validate |
 | F8 | Unknown non-`x-` fields silently accepted | P2 | model/validate |
@@ -1102,12 +1109,9 @@ open:
 
 **Remaining debt.**
 
-- §5.7 covers `operationPath` too. The specification's JSON-Pointer form is
-  unresolved (F1); when it is, its resolver must call `operation_server`.
-  Overrides are recorded on operationId-keyed entries, operations without an
-  `operationId` are not indexed, and bound document bytes are dropped after
-  build, so they will not arrive through the index. The `{name}./path`
-  extension keeps the source's document base by design.
+- Resolved 2026-10-15: pointer and ID targets share operation/server lookup,
+  including operations without an ID. Bound documents are retained and the
+  custom path form is rejected; see the F1/F5 resolution above.
 - A document whose OpenAPI Object declares no absolute server still fails the
   build even when every operation declares its own. Such a document is
   conformant; Respect and swagger-client accept it.

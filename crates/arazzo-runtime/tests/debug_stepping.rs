@@ -1,8 +1,10 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, DebugStopReason, EngineBuilder, StepBreakpoint};
+use arazzo_runtime::{DebugController, DebugStopReason, StepBreakpoint};
 use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::json;
 
@@ -124,7 +126,9 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
                     },
                     Step {
                         step_id: "parent-after".to_string(),
-                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1status~1200/get".to_string(),
+                        )),
                         outputs: BTreeMap::from([(
                             "observed".to_string(),
                             "$inputs.code".to_string().into(),
@@ -139,12 +143,16 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
                 steps: vec![
                     Step {
                         step_id: "child-one".to_string(),
-                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1status~1200/get".to_string(),
+                        )),
                         ..Step::default()
                     },
                     Step {
                         step_id: "child-two".to_string(),
-                        target: Some(StepTarget::OperationPath("/status/200".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1status~1200/get".to_string(),
+                        )),
                         ..Step::default()
                     },
                 ],
@@ -156,7 +164,7 @@ fn build_debug_engine() -> (arazzo_runtime::Engine, Arc<DebugController>) {
     };
 
     let controller = Arc::new(DebugController::new());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .debug_controller(Arc::clone(&controller))
         .build()

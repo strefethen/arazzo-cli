@@ -3,6 +3,7 @@
 pub mod crud;
 pub mod examples;
 pub mod openapi_describe;
+mod operation_targets;
 pub mod refs;
 pub mod standalone_example;
 

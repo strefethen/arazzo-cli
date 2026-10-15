@@ -1,6 +1,6 @@
 mod common;
 
-use arazzo_runtime::{EngineBuilder, RuntimeErrorKind};
+use arazzo_runtime::RuntimeErrorKind;
 use arazzo_spec::{
     ArazzoSpec, JsonSchemaType, PropertyDef, SchemaObject, SourceDescription, SourceType, Step,
     StepTarget, Workflow,
@@ -76,7 +76,9 @@ fn workflow_with_required_input() -> Workflow {
         }),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/test".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -146,7 +148,7 @@ paths:
 #[tokio::test]
 async fn strict_inputs_rejects_missing_required() {
     let spec = make_spec(vec![workflow_with_required_input()]);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .strict_inputs(true)
         .build()
@@ -173,7 +175,7 @@ async fn strict_inputs_rejects_missing_required() {
 #[tokio::test]
 async fn non_strict_does_not_reject() {
     let spec = make_spec(vec![workflow_with_required_input()]);
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -194,7 +196,7 @@ async fn non_strict_does_not_reject() {
 #[tokio::test]
 async fn strict_inputs_rejects_property_enum_non_member() {
     let (fixture, spec) = enum_input_spec(None);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .dry_run(true)
         .strict_inputs(true)
@@ -226,7 +228,7 @@ async fn strict_inputs_rejects_property_enum_non_member() {
 #[tokio::test]
 async fn non_strict_property_enum_non_member_warns_and_dry_run_continues() {
     let (fixture, spec) = enum_input_spec(None);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .dry_run(true)
         .build()
@@ -255,7 +257,7 @@ async fn strict_property_enum_accepts_members_and_injected_default() {
     let members = ["sunrise", "sunset", "both"];
     for member in members {
         let (fixture, spec) = enum_input_spec(None);
-        let engine = match EngineBuilder::new(spec)
+        let engine = match common::fixture_engine_builder(spec)
             .source_base_dir(fixture.path())
             .dry_run(true)
             .strict_inputs(true)
@@ -279,7 +281,7 @@ async fn strict_property_enum_accepts_members_and_injected_default() {
     }
 
     let (fixture, spec) = enum_input_spec(Some("both"));
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .source_base_dir(fixture.path())
         .dry_run(true)
         .strict_inputs(true)

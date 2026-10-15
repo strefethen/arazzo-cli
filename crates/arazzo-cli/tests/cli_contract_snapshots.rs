@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -149,12 +151,13 @@ fn snapshot_validate_json_contract() {
 
 #[test]
 fn snapshot_validate_warnings_json_contract() {
-    let output = run([
+    let path = common::warning_spec();
+    let output = run(&[
         "--json",
         "validate",
-        "testdata/unsupported-operation-path.arazzo.yaml",
-    ]
-    .as_slice());
+        path.to_str()
+            .unwrap_or_else(|| panic!("UTF-8 fixture path")),
+    ]);
     assert!(
         output.status.success(),
         "warning-only spec must exit 0; stderr={}",
@@ -189,7 +192,7 @@ fn snapshot_steps_unsupported_operation_path_json_contract() {
     ]
     .as_slice());
     assert!(
-        output.status.success(),
+        !output.status.success(),
         "steps on a warning-only spec must exit 0; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );

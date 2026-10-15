@@ -7,14 +7,14 @@ info:
     steps concurrently. Dependent steps are automatically sequenced.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: independent-steps
     summary: Four independent steps that can all run concurrently
     steps:
       - stepId: fetch-a
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: label
             in: query
@@ -24,7 +24,7 @@ workflows:
         outputs:
           a: $response.body#/args/label
       - stepId: fetch-b
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: label
             in: query
@@ -34,7 +34,7 @@ workflows:
         outputs:
           b: $response.body#/args/label
       - stepId: fetch-c
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: label
             in: query
@@ -44,7 +44,7 @@ workflows:
         outputs:
           c: $response.body#/args/label
       - stepId: fetch-d
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: label
             in: query
@@ -63,7 +63,7 @@ workflows:
     summary: Three steps where each depends on the previous (must run sequentially)
     steps:
       - stepId: step-1
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: seed
             in: query
@@ -73,7 +73,7 @@ workflows:
         outputs:
           val: $response.body#/args/seed
       - stepId: step-2
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: echo
             in: query
@@ -83,7 +83,7 @@ workflows:
         outputs:
           val: $response.body#/args/echo
       - stepId: step-3
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: final
             in: query
@@ -99,7 +99,7 @@ workflows:
     summary: "Diamond pattern: A fans out to B+C, then D depends on both"
     steps:
       - stepId: root
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: label
             in: query
@@ -109,7 +109,7 @@ workflows:
         outputs:
           val: $response.body#/args/label
       - stepId: left
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: from_root
             in: query
@@ -122,7 +122,7 @@ workflows:
         outputs:
           val: $response.body#/args/branch
       - stepId: right
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: from_root
             in: query
@@ -135,7 +135,7 @@ workflows:
         outputs:
           val: $response.body#/args/branch
       - stepId: join
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: left
             in: query

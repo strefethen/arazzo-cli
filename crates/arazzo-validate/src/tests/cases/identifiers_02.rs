@@ -15,7 +15,7 @@ workflows:
   - workflowId: probe
     steps:
       - stepId: getThing
-        operationPath: /things
+        operationId: fixturethings
         successCriteria: []
         outputs:
           "bad key!": $response.body
@@ -61,7 +61,7 @@ workflows:
   - workflowId: "not an identifier!"
     steps:
       - stepId: "not an identifier!"
-        operationPath: /test
+        operationId: fixturetest
 "#;
         if let Err(err) = parse_bytes(yaml.as_bytes()) {
             panic!("SHOULD-level-only violations must not fail validation, got: {err}");
@@ -205,11 +205,11 @@ workflows:
   - workflowId: "bad id!"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
   - workflowId: "bad id!"
     steps:
       - stepId: s2
-        operationPath: /test2
+        operationId: fixturetest2
 "#;
         let Err(Error::Validation(report)) = parse_bytes(yaml.as_bytes()) else {
             panic!("expected duplicate workflowId to fail validation");

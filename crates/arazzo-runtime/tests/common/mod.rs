@@ -501,11 +501,181 @@ pub fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSp
     }
 }
 
+/// The explicit OpenAPI fixture shared by scheduler, transport and expression
+/// tests. Its operation catalog is independent of the authored Arazzo targets:
+/// malformed or missing targets cannot add operations or repair the document.
+pub fn fixture_openapi(base_url: &str, identity: &str) -> Vec<u8> {
+    let operations = [
+        ("/s5", "get"),
+        ("/v1/users", "get"),
+        ("/v2/items", "get"),
+        ("/admitted", "get"),
+        ("/later", "get"),
+        ("/landed", "get"),
+        ("/nested", "get"),
+        ("/a", "delete"),
+        ("/a", "get"),
+        ("/a", "head"),
+        ("/a", "patch"),
+        ("/a", "post"),
+        ("/a", "put"),
+        ("/after", "get"),
+        ("/always-fail", "get"),
+        ("/api", "get"),
+        ("/api/items", "post"),
+        ("/api/test", "get"),
+        ("/auth", "get"),
+        ("/b", "get"),
+        ("/big", "get"),
+        ("/body", "get"),
+        ("/broken", "get"),
+        ("/c", "get"),
+        ("/cancelled", "get"),
+        ("/check", "get"),
+        ("/child", "get"),
+        ("/consumer", "get"),
+        ("/create", "get"),
+        ("/create", "post"),
+        ("/credential", "get"),
+        ("/d", "get"),
+        ("/data", "get"),
+        ("/data", "put"),
+        ("/dependent", "get"),
+        ("/echo", "get"),
+        ("/end", "get"),
+        ("/external", "get"),
+        ("/fail", "get"),
+        ("/failure", "get"),
+        ("/failing", "get"),
+        ("/fallback", "get"),
+        ("/fast", "get"),
+        ("/fetch", "get"),
+        ("/final", "get"),
+        ("/first", "get"),
+        ("/flaky", "get"),
+        ("/forbidden", "get"),
+        ("/get", "get"),
+        ("/get/{id}", "get"),
+        ("/headers", "get"),
+        ("/health", "get"),
+        ("/hop/0", "get"),
+        ("/invalid", "get"),
+        ("/items", "get"),
+        ("/items", "post"),
+        ("/items/42", "patch"),
+        ("/items/{name}", "get"),
+        ("/leaf", "get"),
+        ("/login", "get"),
+        ("/main", "get"),
+        ("/mid", "get"),
+        ("/never", "get"),
+        ("/next", "get"),
+        ("/noop", "get"),
+        ("/ok", "get"),
+        ("/one", "get"),
+        ("/original", "get"),
+        ("/outer", "get"),
+        ("/parent", "get"),
+        ("/pets", "get"),
+        ("/ping", "get"),
+        ("/pong", "get"),
+        ("/prepare", "get"),
+        ("/prerequisite", "get"),
+        ("/probe", "get"),
+        ("/protected", "get"),
+        ("/rate-limit-handler", "get"),
+        ("/read", "get"),
+        ("/read", "post"),
+        ("/recover", "get"),
+        ("/recovered", "get"),
+        ("/recovery", "get"),
+        ("/request", "get"),
+        ("/retry", "get"),
+        ("/rss", "get"),
+        ("/s", "get"),
+        ("/s0", "get"),
+        ("/s1", "get"),
+        ("/s2", "get"),
+        ("/s3", "get"),
+        ("/s4", "get"),
+        ("/second", "get"),
+        ("/seed", "get"),
+        ("/select", "get"),
+        ("/select", "post"),
+        ("/should-not-reach", "get"),
+        ("/sibling", "get"),
+        ("/simulated", "get"),
+        ("/skipped", "get"),
+        ("/slow", "get"),
+        ("/slow-body", "get"),
+        ("/slow-headers", "get"),
+        ("/small", "get"),
+        ("/soap", "post"),
+        ("/stall", "get"),
+        ("/start", "get"),
+        ("/status", "get"),
+        ("/status/200", "get"),
+        ("/step1", "get"),
+        ("/step2", "get"),
+        ("/success", "get"),
+        ("/target", "get"),
+        ("/teapot", "get"),
+        ("/test", "get"),
+        ("/unreachable", "get"),
+        ("/update", "post"),
+        ("/users", "get"),
+        ("/users/123", "delete"),
+        ("/users/123", "put"),
+        ("/users/{id}", "get"),
+        ("/users/{userId}", "get"),
+        ("/users/{userId}/profile", "get"),
+        ("/v1/default", "get"),
+        ("/wait", "get"),
+        ("/write", "get"),
+        ("/x", "get"),
+    ];
+    let mut paths = serde_json::Map::<String, Value>::new();
+    for (path, method) in operations {
+        let item = paths
+            .entry(path.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        item.as_object_mut()
+            .unwrap_or_else(|| panic!("fixture path item must be an object"))
+            .insert(
+                method.to_string(),
+                serde_json::json!({"responses": {"200": {"description": "OK"}}}),
+            );
+    }
+    serde_json::json!({
+        "openapi": "3.1.0", "$self": identity,
+        "info": {"title": "explicit runtime test operations", "version": "1.0.0"},
+        "servers": [{"url": base_url}], "paths": paths,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// Build tests that explicitly use the common `test` description. The supplied
+/// bytes identify the same document as the source URL and declare its server.
+/// Other source documents retain their ordinary local/provided binding rules.
+pub fn fixture_engine_builder(spec: ArazzoSpec) -> EngineBuilder {
+    let fixture = spec
+        .source_descriptions
+        .iter()
+        .find(|source| source.name == "test")
+        .map(|source| fixture_openapi(&source.url, &source.url));
+    let builder = EngineBuilder::new(spec);
+    match fixture {
+        Some(bytes) => builder.openapi_spec(bytes, None),
+        None => builder,
+    }
+}
+
 pub fn new_test_engine(base_url: &str, mut spec: ArazzoSpec) -> Engine {
     if let Some(source) = spec.source_descriptions.get_mut(0) {
         source.url = base_url.to_string();
     }
-    match Engine::new(spec) {
+    match fixture_engine_builder(spec).build() {
         Ok(engine) => engine,
         Err(err) => panic!("creating engine: {err}"),
     }
@@ -638,7 +808,7 @@ impl TestObserver {
 }
 
 pub fn build_observer_engine(spec: ArazzoSpec, observer: Arc<dyn ExecutionObserver>) -> Engine {
-    match EngineBuilder::new(spec).observer(observer).build() {
+    match fixture_engine_builder(spec).observer(observer).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building observer engine: {err}"),
     }

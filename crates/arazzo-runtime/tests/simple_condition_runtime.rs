@@ -4,7 +4,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{EngineBuilder, ExecutionResult};
+use arazzo_runtime::ExecutionResult;
 use arazzo_spec::{
     ActionType, CriterionType, OnAction, Step, StepTarget, SuccessCriterion, Workflow,
 };
@@ -20,7 +20,9 @@ fn criterion(condition: &str) -> SuccessCriterion {
 fn step(id: &str) -> Step {
     Step {
         step_id: id.to_owned(),
-        target: Some(StepTarget::OperationPath(format!("GET /{id}"))),
+        target: Some(StepTarget::OperationPath(format!(
+            "{{$sourceDescriptions.test.url}}#/paths/~1{id}/get"
+        ))),
         ..Step::default()
     }
 }
@@ -49,7 +51,7 @@ async fn execute(steps: Vec<Step>) -> (ExecutionResult, Vec<String>) {
             ..Workflow::default()
         }],
     );
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .trace(true)
         .build()
         .expect("hermetic engine");

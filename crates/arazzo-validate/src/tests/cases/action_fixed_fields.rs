@@ -14,10 +14,10 @@
                     r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","failureActions":[{action}],"steps":[]}}]}}"#
                 ),
                 "step success" => format!(
-                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationPath":"/test","onSuccess":[{action}]}}]}}]}}"#
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationId": "fixturetest","onSuccess":[{action}]}}]}}]}}"#
                 ),
                 "step failure" => format!(
-                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationPath":"/test","onFailure":[{action}]}}]}}]}}"#
+                    r#"{{"arazzo":"1.1.0","info":{{"title":"T","version":"1"}},"sourceDescriptions":[{{"name":"api","url":"https://example.com","type":"openapi"}}],"workflows":[{{"workflowId":"wf","steps":[{{"stepId":"step","operationId": "fixturetest","onFailure":[{action}]}}]}}]}}"#
                 ),
                 other => panic!("unknown action position {other}"),
             };
@@ -38,10 +38,10 @@
                 "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    failureActions: [{action}]\n    steps: []\n"
             ),
             "step success" => format!(
-                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationPath: /test\n        onSuccess: [{action}]\n"
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationId: fixturetest\n        onSuccess: [{action}]\n"
             ),
             "step failure" => format!(
-                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationPath: /test\n        onFailure: [{action}]\n"
+                "arazzo: \"1.1.0\"\ninfo: {{title: T, version: \"1\"}}\nsourceDescriptions: [{{name: api, url: https://example.com, type: openapi}}]\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: step\n        operationId: fixturetest\n        onFailure: [{action}]\n"
             ),
             other => panic!("unknown action position {other}"),
         }
@@ -308,7 +308,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: step
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - reference: $components.successActions.good
             type: retry

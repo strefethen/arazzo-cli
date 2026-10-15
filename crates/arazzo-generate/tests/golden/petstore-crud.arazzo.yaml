@@ -24,7 +24,7 @@ workflows:
   steps:
   - stepId: create-pets
     description: Create a new pets
-    operationPath: POST {petstore}./pets
+    operationId: $sourceDescriptions.petstore.createPet
     requestBody:
       contentType: application/json
       payload:
@@ -41,7 +41,7 @@ workflows:
       petId: $response.body#/petId
   - stepId: list-pets
     description: List all pets
-    operationPath: GET {petstore}./pets
+    operationId: $sourceDescriptions.petstore.listPets
     successCriteria:
     - condition: $statusCode == 200
       context: ''
@@ -50,7 +50,7 @@ workflows:
       type: end
   - stepId: read-pets
     description: Get a single pets
-    operationPath: GET {petstore}./pets/{petId}
+    operationId: $sourceDescriptions.petstore.getPet
     parameters:
     - name: petId
       in: path
@@ -64,7 +64,7 @@ workflows:
       type: end
   - stepId: update-pets
     description: Update a pets
-    operationPath: PUT {petstore}./pets/{petId}
+    operationId: $sourceDescriptions.petstore.updatePet
     parameters:
     - name: petId
       in: path
@@ -84,7 +84,7 @@ workflows:
       type: end
   - stepId: delete-pets
     description: Delete a pets
-    operationPath: DELETE {petstore}./pets/{petId}
+    operationId: $sourceDescriptions.petstore.deletePet
     parameters:
     - name: petId
       in: path

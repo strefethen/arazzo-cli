@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture setup and assertions.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -116,6 +118,7 @@ fn json_stdout(output: &Output) -> Value {
 }
 
 fn spec(temp: &TempDir, base: &str, workflows: &str) -> PathBuf {
+    let base = common::fixture_url(base);
     temp.write(
         "workflow.yaml",
         &format!(
@@ -160,7 +163,7 @@ fn exports_typed_full_outputs_and_body_free_metadata_without_changing_stdout() {
             (200, "undeclared-body-sentinel".into(), vec![])
         }
     });
-    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: full\n        operationPath: /full\n        outputs:\n          full: $response.body\n          item: $response.body#/numbers/0\n      - stepId: hidden\n        operationPath: /hidden\n    outputs:\n      complete: $steps.full.outputs.full\n";
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: full\n        operationId: fixtureGetFull\n        outputs:\n          full: $response.body\n          item: $response.body#/numbers/0\n      - stepId: hidden\n        operationId: fixtureGetHidden\n    outputs:\n      complete: $steps.full.outputs.full\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("run.json");
     let normal = run_json(&spec, "wf", &[]);
@@ -209,7 +212,7 @@ fn partial_failures_redact_body_previews_and_keep_command_error() {
             (503, "failed-body-sentinel".into(), vec![])
         }
     });
-    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: ok\n        operationPath: /ok\n      - stepId: failed\n        operationPath: /failed\n        successCriteria:\n          - condition: $statusCode == 200\n";
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: ok\n        operationId: fixtureGetOk\n      - stepId: failed\n        operationId: fixtureGetFailed\n        successCriteria:\n          - condition: $statusCode == 200\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("failed.json");
     let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
@@ -237,7 +240,7 @@ fn partial_failures_redact_body_previews_and_keep_command_error() {
 fn nested_failure_keeps_status_without_implicit_body_preview() {
     let temp = TempDir::new();
     let server = Server::start(|_, _| (503, "nested-failed-body-sentinel".into(), vec![]));
-    let workflows = "  - workflowId: parent\n    steps:\n      - stepId: call\n        workflowId: child\n  - workflowId: child\n    steps:\n      - stepId: failed\n        operationPath: /failed\n        successCriteria:\n          - condition: $statusCode == 200\n";
+    let workflows = "  - workflowId: parent\n    steps:\n      - stepId: call\n        workflowId: child\n  - workflowId: child\n    steps:\n      - stepId: failed\n        operationId: fixtureGetFailed\n        successCriteria:\n          - condition: $statusCode == 200\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("failed.json");
     let output = run_json(&spec, "parent", &["--export-run", path.to_str().unwrap()]);
@@ -255,7 +258,7 @@ fn nested_failure_keeps_status_without_implicit_body_preview() {
 fn dry_run_step_parallel_and_trace_are_distinct() {
     let temp = TempDir::new();
     let server = Server::start(|_, _| (200, "{}".into(), vec![]));
-    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n      - stepId: two\n        operationPath: /two\n";
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n      - stepId: two\n        operationId: fixtureGetTwo\n";
     let spec = spec(&temp, &server.url, workflows);
     let dry_path = temp.path("dry.json");
     let dry = run_json(
@@ -337,7 +340,7 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
     let temp = TempDir::new();
     let server = Server::start(|_, _| (200, "{}".into(), vec![]));
     let workflows =
-        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n";
     let spec = spec(&temp, &server.url, workflows);
     let trace = temp.path("trace.json");
     let same = run_json(
@@ -410,7 +413,7 @@ fn rejects_aliases_and_preserves_files_on_write_failures() {
     assert!(!missing_dir.exists());
     assert!(!export.exists());
     let openapi = temp.write("api.yaml", "openapi: 3.0.3\ninfo:\n  title: Local source\n  version: 1.0.0\nservers:\n  - url: http://127.0.0.1\npaths: {}\n");
-    let local_spec = temp.write("local.yaml", "arazzo: 1.1.0\ninfo:\n  title: Local source\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: ./api.yaml\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n");
+    let local_spec = temp.write("local.yaml", "arazzo: 1.1.0\ninfo:\n  title: Local source\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: ./api.yaml\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n");
     let input_alias = run_json(
         &local_spec,
         "wf",
@@ -464,7 +467,7 @@ fn prospective_case_aliases_follow_the_host_filesystem() {
     let case_insensitive = temp.path("CASE-SENSITIVITY-PROBE").exists();
     let server = Server::start(|_, _| (200, "{}".into(), vec![]));
     let workflows =
-        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n";
     let spec = spec(&temp, &server.url, workflows);
 
     let trace = temp.path("case-run.json");
@@ -575,7 +578,7 @@ fn retries_nested_workflows_and_redaction_keep_order_and_identity() {
             (200, "{}".into(), vec![])
         }
     });
-    let workflows = "  - workflowId: parent\n    steps:\n      - stepId: call\n        workflowId: child\n  - workflowId: child\n    steps:\n      - stepId: retry\n        operationPath: /retry?token=query-secret\n        parameters:\n          - name: Authorization\n            in: header\n            value: Bearer header-secret\n        successCriteria:\n          - condition: $statusCode == 200\n        onFailure:\n          - name: again\n            type: retry\n            retryLimit: 1\n        outputs:\n          data: $response.body\n";
+    let workflows = "  - workflowId: parent\n    steps:\n      - stepId: call\n        workflowId: child\n  - workflowId: child\n    steps:\n      - stepId: retry\n        operationId: fixtureGetRetry\n        parameters:\n          - name: token\n            in: query\n            value: query-secret\n          - name: Authorization\n            in: header\n            value: Bearer header-secret\n        successCriteria:\n          - condition: $statusCode == 200\n        onFailure:\n          - name: again\n            type: retry\n            retryLimit: 1\n        outputs:\n          data: $response.body\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("run.json");
     let output = run_json(
@@ -633,7 +636,7 @@ fn url_userinfo_and_string_leaves_are_sanitized() {
         )
     });
     let credential_url = server.url.replacen("http://", "http://alice:password@", 1);
-    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n        outputs:\n          note: $response.body#/note\n";
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        outputs:\n          note: $response.body#/note\n";
     let spec = spec(&temp, &credential_url, workflows);
     let path = temp.path("run.json");
     let output = run_json(
@@ -677,7 +680,7 @@ fn content_type_classification_redacts_embedded_credentials() {
         )
     });
     let workflows =
-        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("run.json");
     let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
@@ -700,7 +703,7 @@ fn timeout_and_combined_export_failure_retain_each_cause() {
         (200, "{}".into(), vec![])
     });
     let workflows =
-        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n";
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("timeout.json");
     let output = run_json(
@@ -754,7 +757,7 @@ fn revisit_appends_another_attempt_to_the_same_step() {
         let status = if path == "/a" && n == 0 { 200 } else { 500 };
         (status, "{}".into(), vec![])
     });
-    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: a\n        operationPath: /a\n        successCriteria:\n          - condition: $statusCode == 200\n      - stepId: b\n        operationPath: /b\n        successCriteria:\n          - condition: $statusCode == 200\n        onFailure:\n          - name: again\n            type: goto\n            stepId: a\n";
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: a\n        operationId: fixtureGetA\n        successCriteria:\n          - condition: $statusCode == 200\n      - stepId: b\n        operationId: fixtureGetB\n        successCriteria:\n          - condition: $statusCode == 200\n        onFailure:\n          - name: again\n            type: goto\n            stepId: a\n";
     let spec = spec(&temp, &server.url, workflows);
     let path = temp.path("revisit.json");
     let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
@@ -785,7 +788,7 @@ fn trace_and_export_write_failures_are_both_reported() {
     let spec = spec(
         &temp,
         &server.url,
-        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: /one\n",
+        "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n",
     );
     let trace_target = temp.path("trace-directory");
     fs::create_dir(&trace_target).expect("create trace directory target");

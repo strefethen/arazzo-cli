@@ -1,6 +1,5 @@
 mod common;
 
-use arazzo_runtime::{Engine, EngineBuilder};
 use arazzo_spec::{
     ActionType, Info, OnAction, ParamLocation, Parameter, RequestBody, SourceDescription,
     SourceType, Step, StepTarget, SuccessCriterion, Workflow,
@@ -31,7 +30,9 @@ async fn execute_response_header_expression() {
         workflow_id: "header-extract".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/test".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+            )),
             success_criteria: success_200(),
             outputs: BTreeMap::from([(
                 "request_id".to_string(),
@@ -69,7 +70,9 @@ async fn execute_inputs_expression_header() {
         workflow_id: "inputs-header-test".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/protected".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1protected/get".to_string(),
+            )),
             parameters: vec![arazzo_spec::Parameter {
                 name: "Authorization".to_string(),
                 in_: Some(ParamLocation::Header),
@@ -128,7 +131,9 @@ async fn execute_request_body_content_type_and_method_selection() {
         workflow_id: "put".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("PUT /users/123".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1users~1123/put".to_string(),
+            )),
             request_body: Some(RequestBody {
                 content_type: "application/x-www-form-urlencoded".to_string(),
                 payload: Some(to_yaml(json!({"key":"val"})).into()),
@@ -174,7 +179,9 @@ async fn execute_request_body_content_type_and_method_selection() {
         workflow_id: "delete".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("DELETE /users/123".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1users~1123/delete".to_string(),
+            )),
             success_criteria: vec![SuccessCriterion {
                 condition: "$statusCode == 204".to_string(),
                 ..SuccessCriterion::default()
@@ -210,7 +217,9 @@ async fn execute_request_body_content_type_and_method_selection() {
         workflow_id: "patch".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("PATCH /items/42".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items~142/patch".to_string(),
+            )),
             request_body: Some(RequestBody {
                 payload: Some(to_yaml(json!({"status":"active"})).into()),
                 ..RequestBody::default()
@@ -247,7 +256,9 @@ async fn execute_request_body_content_type_and_method_selection() {
         workflow_id: "fallback-get".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/health".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1health/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -286,7 +297,9 @@ async fn workflow_level_success_actions_as_default() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: vec![SuccessCriterion {
                         condition: "$statusCode == 200".to_string(),
                         ..SuccessCriterion::default()
@@ -295,14 +308,16 @@ async fn workflow_level_success_actions_as_default() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     ..Step::default()
                 },
             ],
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -325,7 +340,9 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: vec![SuccessCriterion {
                         condition: "$statusCode == 200".to_string(),
                         ..SuccessCriterion::default()
@@ -340,7 +357,9 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([(
                         "reached".to_string(),
                         "$statusCode".to_string().into(),
@@ -355,7 +374,7 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -381,7 +400,9 @@ async fn workflow_level_failure_actions_as_default() {
             }],
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -391,7 +412,7 @@ async fn workflow_level_failure_actions_as_default() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -419,13 +440,15 @@ async fn workflow_level_parameters_merge_into_steps() {
             }],
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -455,7 +478,9 @@ async fn step_params_override_workflow_params() {
             }],
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
@@ -467,7 +492,7 @@ async fn step_params_override_workflow_params() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -512,14 +537,16 @@ async fn workflow_params_not_merged_into_subworkflow_steps() {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "child-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
             },
         ],
     );
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -542,7 +569,9 @@ async fn build_outputs_with_interpolation_and_outputs_ref() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 outputs: BTreeMap::from([(
                     "sum".to_string(),
                     "$response.body#/total".to_string().into(),
@@ -562,7 +591,7 @@ async fn build_outputs_with_interpolation_and_outputs_ref() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -585,7 +614,9 @@ async fn url_expression_in_outputs() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/api/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1api~1test/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([
                     ("captured_url".to_string(), "$url".to_string().into()),
@@ -600,7 +631,7 @@ async fn url_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -627,7 +658,9 @@ async fn request_header_expression_in_outputs() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/api/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1api~1test/get".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "X-Auth".to_string(),
                     in_: Some(ParamLocation::Header),
@@ -648,7 +681,7 @@ async fn request_header_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -668,7 +701,9 @@ async fn request_query_expression_in_outputs() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/api/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1api~1test/get".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "page".to_string(),
                     in_: Some(ParamLocation::Query),
@@ -689,7 +724,7 @@ async fn request_query_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -710,7 +745,8 @@ async fn request_path_expression_in_outputs() {
             steps: vec![Step {
                 step_id: "s1".to_string(),
                 target: Some(StepTarget::OperationPath(
-                    "/users/{userId}/profile".to_string(),
+                    "{$sourceDescriptions.test.url}#/paths/~1users~1%7BuserId%7D~1profile/get"
+                        .to_string(),
                 )),
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
@@ -732,7 +768,7 @@ async fn request_path_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -752,7 +788,9 @@ async fn request_body_expression_in_outputs() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("POST /api/items".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1api~1items/post".to_string(),
+                )),
                 request_body: Some(RequestBody {
                     content_type: "application/json".to_string(),
                     payload: Some(to_yaml(json!({"name": "widget", "count": 3})).into()),
@@ -789,7 +827,7 @@ async fn request_body_expression_in_outputs() {
             ..Workflow::default()
         }],
     );
-    let engine = match Engine::new(spec) {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -839,7 +877,9 @@ async fn source_descriptions_url_expression() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/status".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.primary.url}#/paths/~1status/get".to_string(),
+                )),
                 ..Step::default()
             }],
             outputs: BTreeMap::from([
@@ -870,7 +910,14 @@ async fn source_descriptions_url_expression() {
         components: None,
         ..ArazzoSpec::default()
     };
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .openapi_spec(
+            fixture_openapi("http://localhost", "http://localhost"),
+            None,
+        )
+        .dry_run(true)
+        .build()
+    {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -922,19 +969,25 @@ async fn multiple_source_descriptions_routing() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("{api1}./v1/users".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.api1.url}#/paths/~1v1~1users/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("{api2}./v2/items".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.api2.url}#/paths/~1v2~1items/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    target: Some(StepTarget::OperationPath("/v1/default".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.api1.url}#/paths/~1v1~1default/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([("url".to_string(), "$url".to_string().into())]),
                     ..Step::default()
                 },
@@ -958,7 +1011,18 @@ async fn multiple_source_descriptions_routing() {
         components: None,
         ..ArazzoSpec::default()
     };
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .openapi_spec(
+            fixture_openapi("https://api1.example.com", "https://api1.example.com"),
+            None,
+        )
+        .openapi_spec(
+            fixture_openapi("https://api2.example.com", "https://api2.example.com"),
+            None,
+        )
+        .dry_run(true)
+        .build()
+    {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };
@@ -988,7 +1052,9 @@ async fn evaluate_output_expression_routes_dollar_expressions_correctly() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+                )),
                 outputs: BTreeMap::from([
                     ("method_out".to_string(), "$method".to_string().into()),
                     ("input_out".to_string(), "$inputs.name".to_string().into()),
@@ -1008,7 +1074,7 @@ async fn evaluate_output_expression_routes_dollar_expressions_correctly() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("creating engine: {err}"),
     };

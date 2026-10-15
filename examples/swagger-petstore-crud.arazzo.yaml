@@ -6,7 +6,7 @@ info:
   description: ''
 sourceDescriptions:
 - name: swagger-petstore-openapi-3-0
-  url: https://petstore3.swagger.io/api/v3
+  url: ./swagger-petstore.openapi.json
   type: openapi
 workflows:
 - workflowId: crud-pet
@@ -15,7 +15,7 @@ workflows:
   steps:
   - stepId: create-pet
     description: Create a new pet
-    operationPath: POST {swagger-petstore-openapi-3-0}./pet
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.addPet
     requestBody:
       contentType: application/json
       payload:
@@ -41,7 +41,7 @@ workflows:
       id: $response.body#/id
   - stepId: read-pet
     description: Get a single pet
-    operationPath: GET {swagger-petstore-openapi-3-0}./pet/{petId}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.getPetById
     parameters:
     - name: petId
       in: path
@@ -55,7 +55,7 @@ workflows:
       type: end
   - stepId: delete-pet
     description: Delete a pet
-    operationPath: DELETE {swagger-petstore-openapi-3-0}./pet/{petId}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.deletePet
     parameters:
     - name: petId
       in: path
@@ -75,7 +75,7 @@ workflows:
   steps:
   - stepId: create-order
     description: Create a new order
-    operationPath: POST {swagger-petstore-openapi-3-0}./store/order
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.placeOrder
     requestBody:
       contentType: application/json
       payload:
@@ -95,7 +95,7 @@ workflows:
       id: $response.body#/id
   - stepId: read-order
     description: Get a single order
-    operationPath: GET {swagger-petstore-openapi-3-0}./store/order/{orderId}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.getOrderById
     parameters:
     - name: orderId
       in: path
@@ -109,7 +109,7 @@ workflows:
       type: end
   - stepId: delete-order
     description: Delete a order
-    operationPath: DELETE {swagger-petstore-openapi-3-0}./store/order/{orderId}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.deleteOrder
     parameters:
     - name: orderId
       in: path
@@ -129,7 +129,7 @@ workflows:
   steps:
   - stepId: create-user
     description: Create a new user
-    operationPath: POST {swagger-petstore-openapi-3-0}./user
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.createUser
     requestBody:
       contentType: application/json
       payload:
@@ -149,7 +149,7 @@ workflows:
       id: $response.body#/id
   - stepId: read-user
     description: Get a single user
-    operationPath: GET {swagger-petstore-openapi-3-0}./user/{username}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.getUserByName
     parameters:
     - name: username
       in: path
@@ -163,7 +163,7 @@ workflows:
       type: end
   - stepId: update-user
     description: Update a user
-    operationPath: PUT {swagger-petstore-openapi-3-0}./user/{username}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.updateUser
     parameters:
     - name: username
       in: path
@@ -186,7 +186,7 @@ workflows:
       type: end
   - stepId: delete-user
     description: Delete a user
-    operationPath: DELETE {swagger-petstore-openapi-3-0}./user/{username}
+    operationId: $sourceDescriptions.swagger-petstore-openapi-3-0.deleteUser
     parameters:
     - name: username
       in: path

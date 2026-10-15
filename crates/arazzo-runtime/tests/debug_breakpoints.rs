@@ -1,8 +1,10 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arazzo_runtime::{DebugController, DebugStopReason, EngineBuilder, StepBreakpoint};
+use arazzo_runtime::{DebugController, DebugStopReason, StepBreakpoint};
 use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
@@ -192,12 +194,16 @@ fn build_engine(controller: Arc<DebugController>) -> arazzo_runtime::Engine {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/status/200".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1status~1200/get".to_string(),
+                    )),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/status/200".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1status~1200/get".to_string(),
+                    )),
                     ..Step::default()
                 },
             ],
@@ -207,7 +213,7 @@ fn build_engine(controller: Arc<DebugController>) -> arazzo_runtime::Engine {
         ..ArazzoSpec::default()
     };
 
-    match EngineBuilder::new(spec)
+    match common::fixture_engine_builder(spec)
         .dry_run(true)
         .debug_controller(controller)
         .build()

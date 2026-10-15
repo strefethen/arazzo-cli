@@ -9,7 +9,7 @@
 
 mod common;
 
-use arazzo_runtime::{ClientConfig, EngineBuilder};
+use arazzo_runtime::ClientConfig;
 use arazzo_spec::{ParamLocation, Parameter, Step, StepTarget, ValueSource, Workflow};
 use common::{make_spec_with_base, success_200, to_yaml};
 use serde_json::json;
@@ -98,7 +98,9 @@ async fn run_with(defaults: BTreeMap<String, String>, parameters: Vec<Parameter>
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/x".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1x/get".to_string(),
+            )),
             parameters,
             success_criteria: success_200(),
             ..Step::default()
@@ -110,7 +112,10 @@ async fn run_with(defaults: BTreeMap<String, String>, parameters: Vec<Parameter>
         default_headers: defaults,
         ..ClientConfig::default()
     };
-    let engine = match EngineBuilder::new(spec).client_config(config).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .client_config(config)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };

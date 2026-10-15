@@ -7,14 +7,14 @@ info:
     Verifies that httpbin echoes back the submitted data correctly.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: post-json
     summary: POST JSON body and verify echo
     steps:
       - stepId: post-data
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:
@@ -36,7 +36,7 @@ workflows:
     summary: PUT JSON body to update a resource
     steps:
       - stepId: put-data
-        operationPath: PUT /put
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1put/put'
         requestBody:
           contentType: application/json
           payload:
@@ -55,7 +55,7 @@ workflows:
     summary: PATCH then DELETE, verifying method echo via /anything
     steps:
       - stepId: patch-item
-        operationPath: PATCH /anything
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1anything/patch'
         requestBody:
           contentType: application/json
           payload:
@@ -66,7 +66,7 @@ workflows:
         outputs:
           method: $response.body#/method
       - stepId: delete-item
-        operationPath: DELETE /anything
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1anything/delete'
         successCriteria:
           - condition: $statusCode == 200
           - condition: $response.body.method == 'DELETE'

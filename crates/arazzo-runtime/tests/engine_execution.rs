@@ -1,8 +1,7 @@
 mod common;
 
 use arazzo_runtime::{
-    EngineBuilder, ExecutionObserver, ObserverEvent, RuntimeError, RuntimeErrorKind,
-    TraceDecisionPath,
+    ExecutionObserver, ObserverEvent, RuntimeError, RuntimeErrorKind, TraceDecisionPath,
 };
 use arazzo_spec::{
     ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, OnAction, OutputValue,
@@ -80,7 +79,9 @@ async fn workflow_dependencies_fail_closed_and_accept_explicit_completion() {
                 workflow_id: "prepare".to_string(),
                 steps: vec![Step {
                     step_id: "prepare-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/prepare".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1prepare/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -90,7 +91,9 @@ async fn workflow_dependencies_fail_closed_and_accept_explicit_completion() {
                 depends_on: vec!["prepare".to_string()],
                 steps: vec![Step {
                     step_id: "dependent-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1dependent/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -141,7 +144,9 @@ async fn workflow_dependencies_fail_closed_and_accept_explicit_completion() {
             depends_on: vec!["$sourceDescriptions.shared.other".to_string()],
             steps: vec![Step {
                 step_id: "external-step".to_string(),
-                target: Some(StepTarget::OperationPath("/external".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1external/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -178,7 +183,9 @@ async fn nested_workflow_completion_satisfies_later_dependency() {
                 workflow_id: "first-child".to_string(),
                 steps: vec![Step {
                     step_id: "first-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/first".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1first/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -188,7 +195,9 @@ async fn nested_workflow_completion_satisfies_later_dependency() {
                 depends_on: vec!["first-child".to_string()],
                 steps: vec![Step {
                     step_id: "second-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/second".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1second/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -242,7 +251,9 @@ async fn failed_nested_workflow_counts_as_completion_for_goto_dependency() {
                 workflow_id: "first-child".to_string(),
                 steps: vec![Step {
                     step_id: "first-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/first".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1first/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -253,7 +264,9 @@ async fn failed_nested_workflow_counts_as_completion_for_goto_dependency() {
                 depends_on: vec!["first-child".to_string()],
                 steps: vec![Step {
                     step_id: "second-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/second".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1second/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -300,7 +313,9 @@ async fn nested_dependency_rejection_preserves_stable_error_and_makes_no_request
                 depends_on: vec!["missing".to_string()],
                 steps: vec![Step {
                     step_id: "dependent-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1dependent/get".to_string(),
+                    )),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -345,7 +360,9 @@ async fn unrelated_completion_evidence_does_not_satisfy_unknown_dependency() {
             depends_on: vec!["missing".to_string()],
             steps: vec![Step {
                 step_id: "step".to_string(),
-                target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1dependent/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -394,7 +411,10 @@ async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {
 
     let mut observed = Vec::new();
     for dry_run in [false, true] {
-        let engine = match EngineBuilder::new(spec.clone()).dry_run(dry_run).build() {
+        let engine = match common::fixture_engine_builder(spec.clone())
+            .dry_run(dry_run)
+            .build()
+        {
             Ok(engine) => engine,
             Err(err) => panic!("building channel engine: {err}"),
         };
@@ -428,13 +448,17 @@ async fn execute_sequential_steps() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/step1".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1step1/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/step2".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1step2/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -483,7 +507,9 @@ async fn workflow_parameter_merge_matches_validation_effective_list() {
             steps: vec![
                 Step {
                     step_id: "operation".to_string(),
-                    target: Some(StepTarget::OperationPath("/request".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1request/get".to_string(),
+                    )),
                     parameters: vec![query_parameter("shared", "step")],
                     ..Step::default()
                 },
@@ -499,7 +525,9 @@ async fn workflow_parameter_merge_matches_validation_effective_list() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "child-operation".to_string(),
-                target: Some(StepTarget::OperationPath("/child".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1child/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -542,7 +570,9 @@ async fn execute_on_success_goto_interpolation_bug() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/s1".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1s1/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: Some(ActionType::Goto),
@@ -553,7 +583,9 @@ async fn execute_on_success_goto_interpolation_bug() {
                 },
                 Step {
                     step_id: "target_final".to_string(),
-                    target: Some(StepTarget::OperationPath("/final".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1final/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -580,7 +612,9 @@ async fn execute_failure_no_handler() {
         workflow_id: "fail-no-handler".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -612,7 +646,9 @@ async fn execute_on_failure_end() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::End),
@@ -622,7 +658,9 @@ async fn execute_on_failure_end() {
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1should-not-reach/get".to_string(),
+                )),
                 ..Step::default()
             },
         ],
@@ -658,7 +696,9 @@ async fn execute_on_success_end() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
                     type_: Some(ActionType::End),
@@ -668,7 +708,9 @@ async fn execute_on_success_end() {
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1should-not-reach/get".to_string(),
+                )),
                 ..Step::default()
             },
         ],
@@ -712,7 +754,9 @@ async fn execute_on_failure_goto() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -723,12 +767,16 @@ async fn execute_on_failure_goto() {
             },
             Step {
                 step_id: "skipped".to_string(),
-                target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1should-not-reach/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "fallback".to_string(),
-                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fallback/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -772,7 +820,9 @@ async fn execute_on_success_goto() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/start".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1start/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -783,12 +833,16 @@ async fn execute_on_success_goto() {
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/skipped".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1skipped/get".to_string(),
+                )),
                 ..Step::default()
             },
             Step {
                 step_id: "s3".to_string(),
-                target: Some(StepTarget::OperationPath("/target".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1target/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -829,7 +883,9 @@ async fn execute_on_failure_retry() {
         workflow_id: "retry".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -860,7 +916,9 @@ async fn execute_retry_exceeds_max() {
         workflow_id: "retry-max".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -899,7 +957,9 @@ async fn execute_retry_custom_limit() {
         workflow_id: "retry-limit".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -930,7 +990,9 @@ async fn execute_retry_custom_limit_exceeded() {
         workflow_id: "retry-limit-exceeded".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -967,7 +1029,9 @@ async fn execute_retry_limit_zero_means_no_retries() {
         workflow_id: "zero-retry".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -1011,7 +1075,9 @@ async fn arazzo_11_retry_limit_counts_omitted_zero_one_and_two() {
             workflow_id: format!("retry-limit-{case_name}"),
             steps: vec![Step {
                 step_id: "retry-step".to_string(),
-                target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     name: format!("retry-{case_name}"),
@@ -1060,7 +1126,9 @@ async fn arazzo_11_workflow_failure_retry_fallback_uses_the_same_omitted_limit()
         }],
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -1094,7 +1162,9 @@ async fn arazzo_11_exhausted_retry_falls_through_to_matching_end_with_final_trac
         workflow_id: "retry-then-end".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1120,7 +1190,7 @@ async fn arazzo_11_exhausted_retry_falls_through_to_matching_end_with_final_trac
     spec.arazzo = "1.1.0".to_string();
     spec.source_descriptions[0].url = server.base_url.clone();
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building traced engine: {err}"),
     };
@@ -1160,7 +1230,9 @@ async fn arazzo_11_exhausted_retry_skips_nonmatching_actions_then_goto() {
         steps: vec![
             Step {
                 step_id: "retry-step".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![
                     OnAction {
@@ -1193,7 +1265,9 @@ async fn arazzo_11_exhausted_retry_skips_nonmatching_actions_then_goto() {
             },
             Step {
                 step_id: "fallback".to_string(),
-                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fallback/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -1233,7 +1307,9 @@ async fn arazzo_11_exhausted_retry_nonmatching_later_actions_returns_stable_limi
         workflow_id: "retry-no-later-handler".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1304,7 +1380,9 @@ async fn arazzo_11_retry_sites_are_independent_in_serial_and_execute_step_observ
         workflow_id: "independent-retry-sites".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/always-fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1always-fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1328,7 +1406,7 @@ async fn arazzo_11_retry_sites_are_independent_in_serial_and_execute_step_observ
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let serial_observer = Arc::new(TestObserver::default());
-    let serial_engine = match EngineBuilder::new(spec.clone())
+    let serial_engine = match common::fixture_engine_builder(spec.clone())
         .trace(true)
         .observer(Arc::clone(&serial_observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
         .build()
@@ -1379,7 +1457,7 @@ async fn arazzo_11_retry_sites_are_independent_in_serial_and_execute_step_observ
     assert_eq!(serial_result.trace_steps()[1].decision.retry_limit, Some(2));
 
     let step_observer = Arc::new(TestObserver::default());
-    let step_engine = match EngineBuilder::new(spec)
+    let step_engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&step_observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
         .build()
     {
@@ -1432,7 +1510,9 @@ async fn arazzo_11_omitted_retry_limit_stays_absent_in_trace_and_uses_one_observ
         workflow_id: "omitted-trace-limit".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 name: "omitted-retry".to_string(),
@@ -1447,7 +1527,7 @@ async fn arazzo_11_omitted_retry_limit_stays_absent_in_trace_and_uses_one_observ
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(TestObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace(true)
         .observer(Arc::clone(&observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
         .build()
@@ -1491,7 +1571,9 @@ async fn retry_after_trace_and_observer_keep_configured_and_effective_delays_dis
         workflow_id: "retry-after-observer".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -1507,7 +1589,7 @@ async fn retry_after_trace_and_observer_keep_configured_and_effective_delays_dis
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(RetryDelayObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace(true)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .build()
@@ -1549,7 +1631,9 @@ async fn exhausted_retry_does_not_convert_or_schedule_an_unused_finite_overflow_
         workflow_id: "exhausted-overflow".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1571,7 +1655,7 @@ async fn exhausted_retry_does_not_convert_or_schedule_an_unused_finite_overflow_
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(RetryDelayObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .build()
     {
@@ -1605,7 +1689,9 @@ async fn invalid_retry_after_is_rejected_before_exhausted_retry_fallthrough() {
         workflow_id: "invalid-exhausted-retry".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1627,7 +1713,7 @@ async fn invalid_retry_after_is_rejected_before_exhausted_retry_fallthrough() {
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(RetryDelayObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .build()
     {
@@ -1657,7 +1743,9 @@ async fn arazzo_11_later_action_errors_do_not_become_retry_exhaustion() {
         workflow_id: "retry-then-invalid-goto".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1703,7 +1791,9 @@ async fn arazzo_11_later_retry_reference_failure_does_not_resume_action_scanning
         workflow_id: "retry-reference-failure".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1733,7 +1823,7 @@ async fn arazzo_11_later_retry_reference_failure_does_not_resume_action_scanning
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(TestObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn arazzo_runtime::ExecutionObserver>)
         .build()
     {
@@ -1771,7 +1861,9 @@ async fn arazzo_11_later_retry_delay_timeout_does_not_resume_action_scanning() {
         workflow_id: "retry-delay-timeout-fallthrough".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1829,7 +1921,9 @@ async fn arazzo_11_later_retry_delay_cancellation_does_not_resume_action_scannin
         workflow_id: "retry-delay-cancellation-fallthrough".to_string(),
         steps: vec![Step {
             step_id: "retry-step".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -1859,7 +1953,7 @@ async fn arazzo_11_later_retry_delay_cancellation_does_not_resume_action_scannin
     spec.source_descriptions[0].url = server.base_url.clone();
 
     let observer = Arc::new(RetryCancellationObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace(true)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .build()
@@ -1915,7 +2009,9 @@ async fn execute_retry_with_delay() {
         workflow_id: "retry-delay".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -1953,7 +2049,9 @@ async fn execute_retry_delay_honors_execution_timeout() {
         workflow_id: "retry-delay-timeout".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/flaky".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Retry),
@@ -2022,7 +2120,9 @@ async fn execute_retry_workflow_reference_recovers_then_retries() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -2041,7 +2141,9 @@ async fn execute_retry_workflow_reference_recovers_then_retries() {
             workflow_id: "recovery".to_string(),
             steps: vec![Step {
                 step_id: "r1".to_string(),
-                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1recover/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
@@ -2060,7 +2162,7 @@ async fn execute_retry_workflow_reference_recovers_then_retries() {
         source.url = server.base_url.clone();
     }
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -2111,7 +2213,9 @@ async fn execute_retry_workflow_reference_parameters_become_callee_inputs() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -2161,7 +2265,9 @@ async fn execute_retry_workflow_reference_parameters_become_callee_inputs() {
             workflow_id: "recovery".to_string(),
             steps: vec![Step {
                 step_id: "r1".to_string(),
-                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1recover/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -2217,7 +2323,9 @@ async fn execute_retry_step_reference_executes_with_outputs_visible() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -2234,7 +2342,9 @@ async fn execute_retry_step_reference_executes_with_outputs_visible() {
             },
             Step {
                 step_id: "recover".to_string(),
-                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1recover/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
@@ -2291,7 +2401,9 @@ async fn execute_retry_reference_runs_once_per_retried_attempt() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -2307,7 +2419,9 @@ async fn execute_retry_reference_runs_once_per_retried_attempt() {
             workflow_id: "recovery".to_string(),
             steps: vec![Step {
                 step_id: "r1".to_string(),
-                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1recover/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -2346,7 +2460,9 @@ async fn execute_retry_reference_failure_fails_workflow() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -2361,7 +2477,9 @@ async fn execute_retry_reference_failure_fails_workflow() {
             workflow_id: "recovery".to_string(),
             steps: vec![Step {
                 step_id: "r1".to_string(),
-                target: Some(StepTarget::OperationPath("/recover".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1recover/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -2402,7 +2520,9 @@ async fn execute_honors_external_cancel_flag() {
         workflow_id: "cancelled".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/ok".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -2444,7 +2564,9 @@ async fn execute_on_failure_criteria_matching() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/main".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1main/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![
                     OnAction {
@@ -2474,13 +2596,17 @@ async fn execute_on_failure_criteria_matching() {
             },
             Step {
                 step_id: "rate-handler".to_string(),
-                target: Some(StepTarget::OperationPath("/rate-limit-handler".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1rate-limit-handler/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
             Step {
                 step_id: "server-error-handler".to_string(),
-                target: Some(StepTarget::OperationPath("/should-not-reach".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1should-not-reach/get".to_string(),
+                )),
                 ..Step::default()
             },
         ],
@@ -2512,7 +2638,9 @@ async fn execute_on_failure_criteria_none_match() {
         workflow_id: "no-criteria-match".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/teapot".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1teapot/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![
                 OnAction {
@@ -2560,7 +2688,9 @@ async fn execute_goto_errors() {
         workflow_id: "bad-goto".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Goto),
@@ -2590,7 +2720,9 @@ async fn execute_goto_errors() {
         workflow_id: "goto-no-target".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/fail".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+            )),
             success_criteria: success_200(),
             on_failure: vec![OnAction {
                 type_: Some(ActionType::Goto),
@@ -2649,19 +2781,25 @@ async fn execute_default_sequential_without_on_success() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
             Step {
                 step_id: "s3".to_string(),
-                target: Some(StepTarget::OperationPath("/c".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1c/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -2714,7 +2852,9 @@ async fn execute_sub_workflow_step() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "get-token".to_string(),
-                target: Some(StepTarget::OperationPath("/auth".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1auth/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "token".to_string(),
@@ -2773,7 +2913,9 @@ async fn execute_sub_workflow_with_inputs() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "get-user".to_string(),
-                target: Some(StepTarget::OperationPath("/users/{userId}".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1users~1%7BuserId%7D/get".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "userId".to_string(),
                     in_: Some(ParamLocation::Path),
@@ -2821,7 +2963,9 @@ async fn execute_sub_workflow_failure() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -2854,7 +2998,9 @@ async fn execute_goto_workflow() {
             workflow_id: "main-wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/main".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1main/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -2869,7 +3015,9 @@ async fn execute_goto_workflow() {
             workflow_id: "fallback-wf".to_string(),
             steps: vec![Step {
                 step_id: "fb".to_string(),
-                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fallback/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "ok".to_string(),
@@ -2916,7 +3064,9 @@ async fn goto_workflow_action_parameters_become_callee_inputs() {
             workflow_id: "main-wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/main".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1main/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -2958,7 +3108,9 @@ async fn goto_workflow_action_parameters_become_callee_inputs() {
             workflow_id: "fallback-wf".to_string(),
             steps: vec![Step {
                 step_id: "fb".to_string(),
-                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fallback/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -3003,7 +3155,9 @@ async fn goto_workflow_without_parameters_forwards_caller_inputs() {
             workflow_id: "main-wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/main".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1main/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -3018,7 +3172,9 @@ async fn goto_workflow_without_parameters_forwards_caller_inputs() {
             workflow_id: "fallback-wf".to_string(),
             steps: vec![Step {
                 step_id: "fb".to_string(),
-                target: Some(StepTarget::OperationPath("/fallback".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fallback/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -3104,6 +3260,9 @@ async fn load_openapi_spec_and_resolve_operation_ids() {
     }]);
     let openapi = br#"
 openapi: "3.0.0"
+$self: http://localhost
+info: {title: fixture, version: "1"}
+servers: [{url: http://localhost}]
 paths:
   /users:
     get:
@@ -3115,7 +3274,7 @@ paths:
       operationId: deleteUser
 "#;
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = match arazzo_runtime::EngineBuilder::new(spec)
         .openapi_spec(openapi.to_vec(), None)
         .build()
     {
@@ -3147,6 +3306,9 @@ async fn load_openapi_spec_not_found_and_skips_non_http_fields() {
     let spec = make_spec(Vec::new());
     let openapi = br#"
 openapi: "3.0.0"
+$self: http://localhost
+info: {title: fixture, version: "1"}
+servers: [{url: http://localhost}]
 paths:
   /items:
     parameters:
@@ -3155,7 +3317,7 @@ paths:
       operationId: listItems
 "#;
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = match arazzo_runtime::EngineBuilder::new(spec)
         .openapi_spec(openapi.to_vec(), None)
         .build()
     {
@@ -3211,10 +3373,12 @@ async fn execute_operation_id_and_path_params() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = match arazzo_runtime::EngineBuilder::new(spec)
         .openapi_spec(
-            br#"{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"getUser"}}}}"#
-                .to_vec(),
+            json!({"openapi": "3.0.0", "$self": server.base_url,
+                "info": {"title": "fixture", "version": "1"}, "servers": [{"url": server.base_url}],
+                "paths": {"/users/{id}": {"get": {"operationId": "getUser", "responses": {"200": {"description": "OK"}}}}}
+            }).to_string().into_bytes(),
             None,
         )
         .build()
@@ -3332,7 +3496,9 @@ async fn structured_selectors_share_one_runtime_across_callers() {
             workflow_id: "selectors".to_string(),
             steps: vec![Step {
                 step_id: "select".to_string(),
-                target: Some(StepTarget::OperationPath("POST /select".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1select/post".to_string(),
+                )),
                 parameters: vec![
                     Parameter {
                         name: "selected".to_string(),
@@ -3396,7 +3562,7 @@ async fn structured_selectors_share_one_runtime_across_callers() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building selector engine: {error}"),
     };
@@ -3461,7 +3627,9 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
             workflow_id: "selector-diagnostics".to_string(),
             steps: vec![Step {
                 step_id: "select".to_string(),
-                target: Some(StepTarget::OperationPath("/select".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1select/get".to_string(),
+                )),
                 outputs: BTreeMap::from([
                     (
                         "zero".to_string(),
@@ -3497,7 +3665,7 @@ async fn selector_failures_return_null_and_visible_trace_diagnostics() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building diagnostic engine: {error}"),
     };
@@ -3545,7 +3713,9 @@ async fn jsonpath_delimiter_run_fails_criteria_instead_of_panicking() {
             workflow_id: "delimiter-run".to_string(),
             steps: vec![Step {
                 step_id: "check".to_string(),
-                target: Some(StepTarget::OperationPath("/check".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1check/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     context: "$response.body".to_string(),
                     condition: "$[?(@.a &&& @.b)]".to_string(),
@@ -3557,7 +3727,7 @@ async fn jsonpath_delimiter_run_fails_criteria_instead_of_panicking() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).build() {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building delimiter-run engine: {error}"),
     };
@@ -3605,7 +3775,9 @@ async fn replacements_overlay_json_payload_before_send() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "replace".to_string(),
-            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+            )),
             request_body: Some(request_body_with_replacements(
                 json!({"a": 1, "b": [10, 20]}),
                 vec![
@@ -3651,7 +3823,9 @@ async fn replacements_with_expression_value_resolves_against_inputs() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "replace".to_string(),
-            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+            )),
             request_body: Some(request_body_with_replacements(
                 json!({"userId": null}),
                 vec![replacement(
@@ -3700,7 +3874,9 @@ async fn replacements_with_dependent_step_outputs_resolves_in_order() {
         steps: vec![
             Step {
                 step_id: "create".to_string(),
-                target: Some(StepTarget::OperationPath("POST /create".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1create/post".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "id".to_string(),
@@ -3710,7 +3886,9 @@ async fn replacements_with_dependent_step_outputs_resolves_in_order() {
             },
             Step {
                 step_id: "update".to_string(),
-                target: Some(StepTarget::OperationPath("POST /update".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1update/post".to_string(),
+                )),
                 request_body: Some(request_body_with_replacements(
                     json!({"id": null}),
                     vec![replacement(
@@ -3744,7 +3922,9 @@ async fn replacements_dry_run_emits_merged_body() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "replace".to_string(),
-            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+            )),
             request_body: Some(request_body_with_replacements(
                 json!({"a": 1, "b": {"keep": true}}),
                 vec![
@@ -3758,7 +3938,11 @@ async fn replacements_dry_run_emits_merged_body() {
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .dry_run(true)
+        .trace(true)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -3785,7 +3969,9 @@ async fn dry_run_resolves_explicit_null_and_empty_parameter_and_replacement_valu
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "request".to_string(),
-            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+            )),
             parameters: vec![
                 Parameter {
                     name: "X-Null".to_string(),
@@ -3812,7 +3998,7 @@ async fn dry_run_resolves_explicit_null_and_empty_parameter_and_replacement_valu
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building dry-run engine: {err}"),
     };
@@ -3840,7 +4026,9 @@ async fn replacements_warnings_propagate_to_step_trace() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "replace".to_string(),
-            target: Some(StepTarget::OperationPath("POST /items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+            )),
             request_body: Some(request_body_with_replacements(
                 json!({"a": 1}),
                 vec![replacement("/missing/path", to_yaml(json!("x")))],
@@ -3855,7 +4043,7 @@ async fn replacements_warnings_propagate_to_step_trace() {
     if let Some(source) = spec.source_descriptions.get_mut(0) {
         source.url = server.base_url.clone();
     }
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -3880,13 +4068,17 @@ async fn dry_run_captures_requests_and_headers() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("GET /users".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1users/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("POST /items".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+                )),
                 request_body: Some(RequestBody {
                     payload: Some(to_yaml(json!({"name":"test"})).into()),
                     ..RequestBody::default()
@@ -3898,7 +4090,7 @@ async fn dry_run_captures_requests_and_headers() {
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -3933,7 +4125,9 @@ async fn dry_run_resolves_expressions_and_skips_http_calls() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("GET /users/{id}".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1users~1%7Bid%7D/get".to_string(),
+            )),
             parameters: vec![
                 Parameter {
                     name: "id".to_string(),
@@ -3960,7 +4154,7 @@ async fn dry_run_resolves_expressions_and_skips_http_calls() {
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -3992,7 +4186,9 @@ async fn dry_run_multi_step_and_custom_headers() {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/create".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1create/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "id".to_string(),
@@ -4002,7 +4198,9 @@ async fn dry_run_multi_step_and_custom_headers() {
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/get/{id}".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1get~1%7Bid%7D/get".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "id".to_string(),
                     in_: Some(ParamLocation::Path),
@@ -4014,7 +4212,9 @@ async fn dry_run_multi_step_and_custom_headers() {
             },
             Step {
                 step_id: "s3".to_string(),
-                target: Some(StepTarget::OperationPath("PUT /data".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1data/put".to_string(),
+                )),
                 parameters: vec![Parameter {
                     name: "X-Custom".to_string(),
                     in_: Some(ParamLocation::Header),
@@ -4033,7 +4233,7 @@ async fn dry_run_multi_step_and_custom_headers() {
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -4070,7 +4270,9 @@ async fn execute_step_standalone_no_deps() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "v".to_string(),
@@ -4080,7 +4282,9 @@ async fn execute_step_standalone_no_deps() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "v".to_string(),
@@ -4127,7 +4331,9 @@ async fn execute_step_with_transitive_deps() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "id".to_string(),
@@ -4137,7 +4343,9 @@ async fn execute_step_with_transitive_deps() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     parameters: vec![Parameter {
                         name: "ref_id".to_string(),
@@ -4190,7 +4398,9 @@ async fn execute_step_goto_into_filtered_gap_resumes_at_or_after_target() {
     let mut steps: Vec<Step> = (0..6)
         .map(|i| Step {
             step_id: format!("s{i}"),
-            target: Some(StepTarget::OperationPath(format!("/s{i}"))),
+            target: Some(StepTarget::OperationPath(format!(
+                "{{$sourceDescriptions.test.url}}#/paths/~1s{i}/get"
+            ))),
             success_criteria: success_200(),
             ..Step::default()
         })
@@ -4241,7 +4451,9 @@ async fn execute_step_no_deps_flag_standalone_succeeds() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "v".to_string(),
@@ -4276,12 +4488,16 @@ async fn execute_step_no_deps_flag_with_refs_fails() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([(
                         "val".to_string(),
                         "$steps.s1.outputs.id".to_string().into(),
@@ -4319,7 +4535,9 @@ async fn execute_step_unknown_step_errors() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -4348,7 +4566,9 @@ async fn execute_step_unknown_workflow_errors() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -4388,7 +4608,9 @@ async fn execute_step_retries_on_failure() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/flaky".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1flaky/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -4428,7 +4650,9 @@ async fn execute_step_retry_limit_exceeded() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/fail".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -4472,7 +4696,9 @@ async fn execute_step_on_success_end_stops_early() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: Some(ActionType::End),
@@ -4482,7 +4708,9 @@ async fn execute_step_on_success_end_stops_early() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -4551,7 +4779,9 @@ async fn response_exceeding_size_limit_produces_error() {
             workflow_id: "size-limit".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/big".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1big/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -4560,7 +4790,10 @@ async fn response_exceeding_size_limit_produces_error() {
     );
 
     // Set a very small limit (512 bytes) so the 1 KiB response exceeds it.
-    let engine = match EngineBuilder::new(spec).max_response_bytes(512).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .max_response_bytes(512)
+        .build()
+    {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -4586,7 +4819,9 @@ async fn response_within_size_limit_succeeds() {
             workflow_id: "size-ok".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/small".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1small/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -4594,7 +4829,7 @@ async fn response_within_size_limit_succeeds() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .max_response_bytes(1_048_576)
         .build()
     {
@@ -4623,7 +4858,9 @@ async fn execute_circular_goto_returns_iteration_limit_exceeded() {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/ping".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ping/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -4634,7 +4871,9 @@ async fn execute_circular_goto_returns_iteration_limit_exceeded() {
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/pong".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1pong/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_success: vec![OnAction {
                     type_: Some(ActionType::Goto),
@@ -4675,7 +4914,9 @@ async fn execute_path_param_with_special_chars_is_percent_encoded() {
         workflow_id: "enc".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/items/{name}".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items~1%7Bname%7D/get".to_string(),
+            )),
             parameters: vec![Parameter {
                 name: "name".to_string(),
                 in_: Some(ParamLocation::Path),
@@ -4738,7 +4979,9 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "noop".to_string(),
-                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -4796,7 +5039,9 @@ async fn sub_workflow_selector_param_preserves_number_type() {
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "noop".to_string(),
-                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -4869,7 +5114,7 @@ fn list_pets_workflow() -> Vec<Workflow> {
 #[tokio::test]
 async fn relative_source_dry_run_derives_base_from_servers() {
     let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
         .build()
@@ -4900,7 +5145,7 @@ async fn relative_source_dry_run_derives_base_from_servers() {
 #[tokio::test]
 async fn relative_source_missing_file_fails_build() {
     let spec = relative_source_spec("./no-such-file.openapi.yaml", list_pets_workflow());
-    let err = match EngineBuilder::new(spec)
+    let err = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
         .build()
@@ -4927,7 +5172,7 @@ async fn relative_source_missing_file_fails_build() {
 #[tokio::test]
 async fn relative_source_unparseable_file_fails_build() {
     let spec = relative_source_spec("./unparseable.openapi.yaml", list_pets_workflow());
-    let err = match EngineBuilder::new(spec)
+    let err = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
         .build()
@@ -4953,7 +5198,7 @@ async fn relative_source_unparseable_file_fails_build() {
 #[tokio::test]
 async fn relative_source_without_base_dir_fails_build() {
     let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
-    let err = match EngineBuilder::new(spec).dry_run(true).build() {
+    let err = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(_) => panic!("build should fail when no source base dir is provided"),
         Err(err) => err,
     };
@@ -4975,10 +5220,13 @@ async fn explicit_openapi_spec_overrides_source_operation() {
     };
 
     let spec = relative_source_spec("./petstore.openapi.yaml", list_pets_workflow());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
-        .openapi_spec(override_bytes, None)
+        .openapi_spec(
+            override_bytes,
+            Some(resolved_testdata_path("petstore.openapi.yaml")),
+        )
         .build()
     {
         Ok(e) => e,
@@ -4990,20 +5238,22 @@ async fn explicit_openapi_spec_overrides_source_operation() {
         panic!("expected success, got: {err}");
     }
 
-    // The explicitly provided spec wins the duplicate operationId, so the
-    // resolved path is its /pets-v2 (joined to the first source's base).
+    // The supplied document is explicitly bound by its retrieval identity, so
+    // its operation and own server replace re-reading that local source.
     let reqs = exec_result.dry_run_requests();
     assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].url, "https://petstore.example.com/v1/pets-v2");
+    assert_eq!(reqs[0].url, "https://override.example.com/v2/pets-v2");
 }
 
 #[tokio::test]
-async fn legacy_absolute_source_url_stays_literal_in_expressions() {
+async fn bound_absolute_source_url_stays_literal_in_expressions() {
     let mut spec = make_spec(vec![Workflow {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/get".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1get/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -5015,7 +5265,7 @@ async fn legacy_absolute_source_url_stays_literal_in_expressions() {
     }]);
     spec.source_descriptions[0].url = "https://api.example.com".to_string();
 
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match common::fixture_engine_builder(spec).dry_run(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -5056,7 +5306,7 @@ async fn relative_source_openapi_32_json_document_indexes_and_derives_base() {
     );
     spec.source_descriptions[0].name = "bank".to_string();
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .dry_run(true)
         .source_base_dir(testdata_dir())
         .build()

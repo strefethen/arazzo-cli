@@ -61,7 +61,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
-The path-based `operationPath` and fallback `sourceDescriptions[].url` routing forms described below are arazzo-cli compatibility extensions, not Arazzo syntax. The specification-defined `operationPath` form is not supported; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+Operation targets use standard Arazzo syntax: an `operationId`, or a source-description expression with a JSON Pointer in `operationPath`. Both resolve the method, path, and server from a bound OpenAPI document; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps) for remaining limits.
 
 ## Contents
 
@@ -403,7 +403,7 @@ Starting with v0.8.0, required-expression fields such as outputs and Selector/Cr
 
 **String interpolation:** `{$expr}` embeds any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
 
-**Multi-source routing (arazzo-cli extension):** `{sourceName}./path` — e.g. `operationPath: "{petstore}./pets"`, or with a method prefix, `operationPath: "GET {petstore}./pets"` — selects a source description's base URL for a step. This, and the bare-path form used elsewhere in this README (e.g. `operationPath: /protected` in [Sub-Workflows](#sub-workflows)), are not the specification's `operationPath` syntax — see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps).
+**Multi-source routing:** qualify an operation ID with its source description, or use a canonical `operationPath` pointing into that source's document. Resolution stays within the named source even when another document has the same operation ID or path. Static `steps` and `show` output preserves the authored target without guessing a method before the document is resolved.
 
 **Condition operators:** `==`, `!=`, `>`, `<`, `>=`, `<=`, `!`, `&&`, `||`, grouping `()`, property access `.`, and zero-based array indexing `[]`. `contains`, `matches`, and `in` are rejected; see [Simple conditions](#simple-default).
 
@@ -442,23 +442,18 @@ For XPath outputs, use a Selector Object with an explicit version (`type: {type:
 
 ### Specification Conformance: Extensions and Gaps
 
-arazzo-cli supports Arazzo Specification v1.1.0 documents with known conformance gaps and retained compatibility forms. These forms are compatibility debt, not approved extensions; they may change as conformance work proceeds. The [conformance manifest](crates/arazzo-cli/tests/conformance/manifest.json) records current coverage and gaps. Documents using a nonstandard form may not validate or run in other Arazzo tools.
+arazzo-cli supports Arazzo Specification v1.1.0 documents with known conformance gaps. The [conformance manifest](crates/arazzo-cli/tests/conformance/manifest.json) records current coverage and gaps; the [conformance audit](plans/assessments/arazzo-spec-conformance-audit.md) records the supporting findings.
 
-**Extensions beyond the specification:**
+`operationPath` identifies a source document and an operation within it, using a runtime expression plus a JSON Pointer. The runtime resolves that pointer against the bound document and uses the operation's method, path, and effective server. Operations without an `operationId` are supported. The generator prefers a source-qualified operation ID when representable and otherwise emits a canonical pointer; duplicate IDs are rejected.
 
-| Construct | Specification-conformant alternative |
-|---|---|
-| `operationPath` as `"{sourceName}.<path>"`, a bare path, or a `"METHOD "`-prefixed form, e.g. `"GET {petstore}./pets"` | The specification-defined runtime expression and JSON Pointer form is not implemented; `validate` warns and `run` rejects it. |
-| `sourceDescriptions[].url` read as an absolute request base URL | Identity-based referencing: provide the document the url names and the reference binds to it, resolving requests against that document's own `servers`. An absolute url binds to a provided document whose `$self` matches it; a relative url binds to the file it resolves to. The base-URL reading applies only when nothing provided answers to the url. See "Not implemented" below |
-
-The specification defines `operationPath` as a Runtime Expression identifying a Source Description, combined with a JSON Pointer to an operation, for example `{$sourceDescriptions.petstore.url}#/paths/~1pets/get`. The validator accepts this document shape but warns that the runtime cannot resolve it; execution rejects it. The runtime currently resolves path-based forms such as `"[METHOD ]{source}.<path>"`, bare paths, and absolute URLs as compatibility behavior. The distinct `operationId` route remains supported: use a unique bare operationId or a source-qualified expression such as `$sourceDescriptions.petstore.getPet`. Separately, an absolute `sourceDescriptions[].url` first binds to a provided document with matching identity; only when none matches is it used as a request base URL. See the [conformance audit](plans/assessments/arazzo-spec-conformance-audit.md).
+Bare paths, absolute request URLs, source/path shortcuts, and method prefixes are rejected. `sourceDescriptions[].url` always identifies a document; an unmatched URL is an error, never a request base. Provided OpenAPI documents must bind to a declared source before their operations can be used. A bare operation ID is permitted with a single eligible source; multiple sources require qualification.
 
 **Specification features not implemented:**
 
 - `$response.query.<name>` and `$response.path.<name>` — listed by the specification's Runtime Expressions grammar; arazzo-cli resolves only `$response.header.<name>` and `$response.body...`, so both evaluate to `null` rather than the request-matched query/path value.
 - `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
-- The specification-defined `operationPath` form (source reference + JSON Pointer), described above. Document validation can accept it with a warning, but runtime execution rejects it. For a supported operationId route, use a unique operationId or qualify it with its source description when needed to disambiguate.
-- Fetching a remote document from `sourceDescriptions[].url` over the network. This is a deliberate decision, not a gap: arazzo-cli never makes a network request to a `url` value except as the extension base-URL reading described above. The specification's own answer for a `url` pointing at a hosted document is identity-based referencing (§9.6) — *provide* the document and the reference binds to it without a request. Vendor a local copy, give it a `$self` matching the url, and hand it over:
+- Operation pointers through referenced path items, callbacks, webhooks, or other locations without a directly routable path context. Relative server URLs and missing document-level absolute servers also remain unsupported; both ID and pointer routes report these limits explicitly.
+- Fetching a remote document from `sourceDescriptions[].url` over the network. The runtime uses local or provided documents. Identity-based referencing (§9.6) binds a provided document without fetching its URL. Vendor a local copy, give it a `$self` matching the url, and hand it over:
 
   ```json
   { "$self": "https://example.com/v1/openapi/spec.json", "openapi": "3.1.0", "...": "..." }
@@ -468,7 +463,7 @@ The specification defines `operationPath` as a Runtime Expression identifying a 
   arazzo-cli run spec.arazzo.yaml my-workflow --openapi ./vendored.openapi.json
   ```
 
-  The `$self` is what binds it, and the request then resolves against that document's own `servers` base — the conformant result. `--openapi` alone is not enough for an absolute url: a provided document with no `$self` answers only to the path it was read from, which is what binds a *relative* url. A `url` nothing provided answers to falls back to the base-URL reading in the table above.
+  The `$self` is what binds it, and the request resolves against that document's own `servers`. `--openapi` alone is not enough for an absolute url: a provided document with no `$self` answers only to the path it was read from, which binds a relative url. A URL that matches no document is rejected.
 
 ## How It Works
 
@@ -736,7 +731,7 @@ workflows:
           - name: username
             value: $inputs.user
       - stepId: use-token
-        operationPath: GET /protected
+        operationId: $sourceDescriptions.api.protected
         parameters:
           - name: Authorization
             in: header
@@ -760,6 +755,7 @@ The `crud` scenario (currently the only supported scenario) analyzes your OpenAP
 - Realistic request bodies derived from schema examples and property types
 - Authentication detection (bearer, basic, API key) applied to all steps
 - Source descriptions pointing back to the original OpenAPI spec
+- Standard source-qualified operation IDs or JSON Pointer targets for operations without a representable ID
 
 The `openapiv3` model used by generation targets OpenAPI 3.0.x; documents declaring 3.1 or 3.2 are refused before parsing.
 

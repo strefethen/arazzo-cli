@@ -25,7 +25,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{EngineBuilder, ExecutionResult, RuntimeErrorKind};
+use arazzo_runtime::{ExecutionResult, RuntimeErrorKind};
 use arazzo_spec::{
     CriterionType, ExpressionType, OutputValue, Replacement, RequestBody, SelectorObject,
     SelectorType, Step, StepTarget, SuccessCriterion, ValueSource, Workflow,
@@ -63,7 +63,9 @@ fn jsonpath_criterion(context: &str, condition: &str) -> SuccessCriterion {
 fn criterion_step(step_id: &str, context: &str, condition: &str) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("GET /data".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+        )),
         success_criteria: vec![jsonpath_criterion(context, condition)],
         ..Step::default()
     }
@@ -99,7 +101,9 @@ fn selector_output(context: &str, expression: &str) -> OutputValue {
 fn output_step(step_id: &str, outputs: Vec<(&str, OutputValue)>) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("GET /data".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+        )),
         outputs: outputs
             .into_iter()
             .map(|(name, value)| (name.to_string(), value))
@@ -123,7 +127,9 @@ fn jsonpath_replacement(target: &str, value: ValueSource) -> Replacement {
 fn body_step(step_id: &str, payload: Value, replacements: Vec<Replacement>) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("POST /items".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+        )),
         request_body: Some(RequestBody {
             content_type: "application/json".to_string(),
             payload: Some(literal(payload)),
@@ -162,7 +168,7 @@ async fn execute(
         MockHttpResponse::json(200, BODY)
     });
     let spec = make_spec_with_base(&server.base_url, workflows);
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building engine: {error}"),
     };
@@ -173,7 +179,7 @@ async fn execute(
 /// Resolves `wf` in dry-run mode; nothing is sent and each dry-run request
 /// carries the resolved body plus the preparation warnings.
 async fn dry_run(workflows: Vec<Workflow>, inputs: BTreeMap<String, Value>) -> ExecutionResult {
-    let engine = match EngineBuilder::new(make_spec(workflows))
+    let engine = match common::fixture_engine_builder(make_spec(workflows))
         .dry_run(true)
         .trace(true)
         .build()

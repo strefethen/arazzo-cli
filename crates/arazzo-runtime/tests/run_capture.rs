@@ -12,8 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use arazzo_runtime::{
-    EngineBuilder, ExecutionHandle, ExecutionResult, RunStepOutcome, RuntimeErrorKind,
-    TraceDecisionPath,
+    ExecutionHandle, ExecutionResult, RunStepOutcome, RuntimeErrorKind, TraceDecisionPath,
 };
 use arazzo_spec::{ActionType, OnAction, RequestBody, Step, StepTarget, Workflow};
 use common::{
@@ -61,7 +60,7 @@ async fn captures_typed_declared_outputs_and_only_body_free_metadata() {
         assert!(request_body.contains("request-body-sentinel"));
         MockHttpResponse::json(200, &body_for_server)
     });
-    let mut step = http_step("read", "POST /read");
+    let mut step = http_step("read", "{$sourceDescriptions.test.url}#/paths/~1read/post");
     step.request_body = Some(RequestBody {
         payload: Some(to_yaml(json!({"payload": "request-body-sentinel"})).into()),
         ..RequestBody::default()
@@ -71,7 +70,7 @@ async fn captures_typed_declared_outputs_and_only_body_free_metadata() {
     step.outputs
         .insert("nested".to_string(), "$response.body#/items".into());
     let spec = make_spec_with_base(&server.base_url, vec![workflow("wf", vec![step.clone()])]);
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");
@@ -104,10 +103,10 @@ async fn captures_typed_declared_outputs_and_only_body_free_metadata() {
     assert!(!serialized.to_string().contains("request-body-sentinel"));
 
     // Without an output declaration, the same response body never appears in capture.
-    let mut undeclared = http_step("read", "POST /read");
+    let mut undeclared = http_step("read", "{$sourceDescriptions.test.url}#/paths/~1read/post");
     undeclared.request_body = step.request_body;
     let spec = make_spec_with_base(&server.base_url, vec![workflow("wf", vec![undeclared])]);
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");
@@ -122,17 +121,25 @@ async fn capture_defaults_off_and_coexists_with_unchanged_trace_attempts() {
     let server = start_server(|_, _, _, _| MockHttpResponse::empty(200));
     let spec = make_spec_with_base(
         &server.base_url,
-        vec![workflow("wf", vec![http_step("one", "/one")])],
+        vec![workflow(
+            "wf",
+            vec![http_step(
+                "one",
+                "{$sourceDescriptions.test.url}#/paths/~1one/get",
+            )],
+        )],
     );
-    let off = EngineBuilder::new(spec.clone()).build().expect("engine");
+    let off = common::fixture_engine_builder(spec.clone())
+        .build()
+        .expect("engine");
     let off_result = collect(off.execute("wf", BTreeMap::new())).await;
     assert!(off_result.run_steps().is_empty());
-    let trace = EngineBuilder::new(spec.clone())
+    let trace = common::fixture_engine_builder(spec.clone())
         .trace(true)
         .build()
         .expect("engine");
     let trace_result = collect(trace.execute("wf", BTreeMap::new())).await;
-    let both = EngineBuilder::new(spec)
+    let both = common::fixture_engine_builder(spec)
         .trace(true)
         .capture_run(true)
         .build()
@@ -170,7 +177,7 @@ async fn retries_and_revisits_keep_each_attempt_in_order() {
             MockHttpResponse::empty(200)
         }
     });
-    let mut a = http_step("a", "/a");
+    let mut a = http_step("a", "{$sourceDescriptions.test.url}#/paths/~1a/get");
     a.outputs
         .insert("n".to_string(), "$response.body#/n".into());
     a.on_failure.push(OnAction {
@@ -179,7 +186,7 @@ async fn retries_and_revisits_keep_each_attempt_in_order() {
         retry_limit: Some(1),
         ..OnAction::default()
     });
-    let engine = EngineBuilder::new(make_spec_with_base(
+    let engine = common::fixture_engine_builder(make_spec_with_base(
         &server.base_url,
         vec![workflow("wf", vec![a])],
     ))
@@ -217,16 +224,22 @@ async fn retries_and_revisits_keep_each_attempt_in_order() {
             _ => MockHttpResponse::empty(500),
         }
     });
-    let mut b = http_step("b", "/b");
+    let mut b = http_step("b", "{$sourceDescriptions.test.url}#/paths/~1b/get");
     b.on_failure.push(OnAction {
         name: "again".to_string(),
         type_: Some(ActionType::Goto),
         step_id: "a".to_string(),
         ..OnAction::default()
     });
-    let engine = EngineBuilder::new(make_spec_with_base(
+    let engine = common::fixture_engine_builder(make_spec_with_base(
         &server.base_url,
-        vec![workflow("wf", vec![http_step("a", "/a"), b])],
+        vec![workflow(
+            "wf",
+            vec![
+                http_step("a", "{$sourceDescriptions.test.url}#/paths/~1a/get"),
+                b,
+            ],
+        )],
     ))
     .capture_run(true)
     .build()
@@ -246,7 +259,13 @@ async fn retries_and_revisits_keep_each_attempt_in_order() {
 #[tokio::test]
 async fn nested_workflows_and_execute_step_preserve_workflow_identity() {
     let server = start_server(|_, _, _, _| MockHttpResponse::empty(200));
-    let child = workflow("child", vec![http_step("same", "/child")]);
+    let child = workflow(
+        "child",
+        vec![http_step(
+            "same",
+            "{$sourceDescriptions.test.url}#/paths/~1child/get",
+        )],
+    );
     let parent = workflow(
         "parent",
         vec![
@@ -255,11 +274,11 @@ async fn nested_workflows_and_execute_step_preserve_workflow_identity() {
                 target: Some(StepTarget::WorkflowId("child".to_string())),
                 ..Step::default()
             },
-            http_step("same", "/parent"),
+            http_step("same", "{$sourceDescriptions.test.url}#/paths/~1parent/get"),
         ],
     );
     let spec = make_spec_with_base(&server.base_url, vec![parent, child]);
-    let engine = EngineBuilder::new(spec.clone())
+    let engine = common::fixture_engine_builder(spec.clone())
         .capture_run(true)
         .build()
         .expect("engine");
@@ -281,7 +300,7 @@ async fn nested_workflows_and_execute_step_preserve_workflow_identity() {
     assert!(records[1].request.is_none());
     assert!(records[1].response.is_none());
 
-    let engine = EngineBuilder::new(spec.clone())
+    let engine = common::fixture_engine_builder(spec.clone())
         .capture_run(true)
         .build()
         .expect("engine");
@@ -295,7 +314,7 @@ async fn nested_workflows_and_execute_step_preserve_workflow_identity() {
         ["child", "parent"]
     );
 
-    let dry = EngineBuilder::new(spec)
+    let dry = common::fixture_engine_builder(spec)
         .dry_run(true)
         .capture_run(true)
         .build()
@@ -315,11 +334,14 @@ async fn parallel_capture_replays_records_in_step_order() {
         }
         MockHttpResponse::empty(200)
     });
-    let engine = EngineBuilder::new(make_spec_with_base(
+    let engine = common::fixture_engine_builder(make_spec_with_base(
         &server.base_url,
         vec![workflow(
             "wf",
-            vec![http_step("slow", "/slow"), http_step("fast", "/fast")],
+            vec![
+                http_step("slow", "{$sourceDescriptions.test.url}#/paths/~1slow/get"),
+                http_step("fast", "{$sourceDescriptions.test.url}#/paths/~1fast/get"),
+            ],
         )],
     ))
     .parallel(true)
@@ -346,9 +368,15 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
     });
     let spec = make_spec_with_base(
         &server.base_url,
-        vec![workflow("wf", vec![http_step("fail", "/fail")])],
+        vec![workflow(
+            "wf",
+            vec![http_step(
+                "fail",
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get",
+            )],
+        )],
     );
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");
@@ -369,7 +397,13 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
         .expect("serialize failed record")
         .contains("failed-body-sentinel"));
 
-    let child = workflow("child", vec![http_step("child-step", "/fail")]);
+    let child = workflow(
+        "child",
+        vec![http_step(
+            "child-step",
+            "{$sourceDescriptions.test.url}#/paths/~1fail/get",
+        )],
+    );
     let parent = workflow(
         "parent",
         vec![Step {
@@ -379,7 +413,7 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
         }],
     );
     let spec = make_spec_with_base(&server.base_url, vec![parent, child]);
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");
@@ -397,9 +431,15 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
     drop(listener);
     let spec = make_spec_with_base(
         &unused,
-        vec![workflow("wf", vec![http_step("fail", "/fail")])],
+        vec![workflow(
+            "wf",
+            vec![http_step(
+                "fail",
+                "{$sourceDescriptions.test.url}#/paths/~1fail/get",
+            )],
+        )],
     );
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");
@@ -412,9 +452,15 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
 
     let spec = make_spec_with_base(
         &server.base_url,
-        vec![workflow("wf", vec![http_step("simulated", "/simulated")])],
+        vec![workflow(
+            "wf",
+            vec![http_step(
+                "simulated",
+                "{$sourceDescriptions.test.url}#/paths/~1simulated/get",
+            )],
+        )],
     );
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .dry_run(true)
         .capture_run(true)
         .build()
@@ -434,7 +480,7 @@ async fn criterion_transport_and_dry_run_outcomes_are_truthful() {
         }],
     );
     let spec = make_spec_with_base(&server.base_url, vec![missing_child]);
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .dry_run(true)
         .capture_run(true)
         .build()
@@ -453,9 +499,15 @@ async fn timeout_and_cancellation_retain_settled_failures() {
     });
     let spec = make_spec_with_base(
         &server.base_url,
-        vec![workflow("wf", vec![http_step("wait", "/wait")])],
+        vec![workflow(
+            "wf",
+            vec![http_step(
+                "wait",
+                "{$sourceDescriptions.test.url}#/paths/~1wait/get",
+            )],
+        )],
     );
-    let engine = EngineBuilder::new(spec)
+    let engine = common::fixture_engine_builder(spec)
         .capture_run(true)
         .build()
         .expect("engine");

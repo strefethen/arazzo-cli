@@ -8,20 +8,20 @@ info:
     cookie parameters, and sub-workflow invocation with input/output passing.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: chained-outputs
     summary: Step 1 output feeds into step 2 as a query parameter
     steps:
       - stepId: get-origin
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:
           origin: $response.body#/origin
       - stepId: echo-origin
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: caller_ip
             in: query
@@ -45,7 +45,7 @@ workflows:
         - greeting
     steps:
       - stepId: greet
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: message
             in: query
@@ -61,7 +61,7 @@ workflows:
     summary: Send custom headers and cookie parameters, verify they echo back
     steps:
       - stepId: send-headers
-        operationPath: /headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1headers/get'
         parameters:
           - name: X-Custom-Header
             in: header
@@ -75,7 +75,7 @@ workflows:
           custom_header: $response.body#/headers/X-Custom-Header
           arazzo_test: $response.body#/headers/X-Arazzo-Test
       - stepId: send-cookies
-        operationPath: /cookies
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1cookies/get'
         parameters:
           - name: session_id
             in: cookie
@@ -103,7 +103,7 @@ workflows:
           - name: item_name
             value: "test-widget"
       - stepId: verify-child
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: from_child
             in: query
@@ -124,7 +124,7 @@ workflows:
         - item_name
     steps:
       - stepId: create-item
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:

@@ -5,6 +5,8 @@
 //! stderr without `--json`. The sweep at the end has one `sweep_<name>` case
 //! per subcommand; a unit test in `src/cli.rs` fails when one is missing.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,6 +30,7 @@ impl TempDir {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 
@@ -330,7 +333,7 @@ fn run_spec(dir: &TempDir, source_url: &str, operation_path: &str) -> String {
     dir.file(
         "run.arazzo.yaml",
         &format!(
-            "arazzo: 1.1.0\ninfo:\n  title: Run errors\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: {source_url}\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationPath: {operation_path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
+            "arazzo: 1.1.0\ninfo:\n  title: Run errors\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: {source_url}\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: {operation_path}\n        successCriteria:\n          - condition: $statusCode == 200\n"
         ),
     )
 }
@@ -338,7 +341,11 @@ fn run_spec(dir: &TempDir, source_url: &str, operation_path: &str) -> String {
 #[test]
 fn run_bad_inputs_are_run_input_format() {
     let dir = TempDir::new("run-input");
-    let spec = run_spec(&dir, "http://127.0.0.1:9", "/one");
+    let spec = run_spec(
+        &dir,
+        &common::fixture_url("http://127.0.0.1:9"),
+        "fixtureGetOne",
+    );
     for flags in [
         ["-i", "bad"],
         ["--input-json", "key=notjson"],
@@ -359,7 +366,7 @@ fn run_bad_inputs_are_run_input_format() {
 #[test]
 fn run_missing_local_source_carries_the_engine_code() {
     let dir = TempDir::new("run-engine");
-    let spec = run_spec(&dir, "./missing.openapi.yaml", "/one");
+    let spec = run_spec(&dir, "./missing.openapi.yaml", "fixtureGetOne");
     let output = run(&["--json", "run", &spec, "wf"]);
     assert_eq!(output.status.code(), Some(1));
     let text = stdout(&output);
@@ -378,7 +385,7 @@ fn run_missing_local_source_carries_the_engine_code() {
 fn run_trace_write_failure_after_criteria_failure_keeps_both_causes() {
     let dir = TempDir::new("run-trace-fail");
     let url = start_server();
-    let spec = run_spec(&dir, &url, "/fail");
+    let spec = run_spec(&dir, &common::fixture_url(&url), "fixtureGetFail");
     let trace = dir.path().join("trace-dir");
     fs::create_dir(&trace).unwrap_or_else(|err| panic!("creating trace dir: {err}"));
     let trace = trace.to_string_lossy();
@@ -397,7 +404,7 @@ fn run_trace_write_failure_after_criteria_failure_keeps_both_causes() {
 fn run_trace_write_failure_after_success_carries_the_trace_error_alone() {
     let dir = TempDir::new("run-trace-ok");
     let url = start_server();
-    let spec = run_spec(&dir, &url, "/one");
+    let spec = run_spec(&dir, &common::fixture_url(&url), "fixtureGetOne");
     let trace = dir.path().join("trace-dir");
     fs::create_dir(&trace).unwrap_or_else(|err| panic!("creating trace dir: {err}"));
     let trace = trace.to_string_lossy();

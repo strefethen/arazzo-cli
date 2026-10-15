@@ -39,7 +39,9 @@ async fn child_input(value: Value, parent_inputs: BTreeMap<String, Value>) -> Va
             workflow_id: "child".to_string(),
             steps: vec![Step {
                 step_id: "noop".to_string(),
-                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],

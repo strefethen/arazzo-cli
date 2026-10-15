@@ -11,7 +11,7 @@
 //! and `operation_path_forms.rs` owns `operationPath` classification; none of
 //! them exercise an object-valued `query` parameter, a parameter carrying no
 //! `in:` location, a `querystring` meeting a target that already has a query,
-//! or the method a step inherits when its `operationPath` names none.
+//! or a bound operation's method regardless of request-body presence.
 //!
 //! The two rules here that need a response are proved through a replay engine
 //! rather than a server, so the module stays hermetic.
@@ -60,11 +60,17 @@ fn spec_with(workflows: Vec<Workflow>) -> ArazzoSpec {
     }
 }
 
+fn fixture_builder(spec: ArazzoSpec) -> EngineBuilder {
+    let document = json!({"openapi": "3.2.0", "$self": BASE,
+        "info": {"title": "inline HTTP", "version": "1"},
+        "servers": [{"url": BASE}], "paths": {"/items": {"get": {}, "post": {}, "put": {}}, "/items/{id}": {"get": {}}, "/search": {"get": {}}}});
+    EngineBuilder::new(spec).openapi_spec(document.to_string().into_bytes(), None)
+}
+
 fn fixture_engine() -> Engine {
-    match Engine::new(spec_with(Vec::new())) {
-        Ok(engine) => engine,
-        Err(err) => panic!("building fixture engine: {err}"),
-    }
+    fixture_builder(spec_with(Vec::new()))
+        .build()
+        .unwrap_or_else(|err| panic!("building fixture engine: {err}"))
 }
 
 fn param(name: &str, in_: Option<ParamLocation>, value: &str) -> Parameter {
@@ -86,7 +92,7 @@ fn step_at(op_path: &str, parameters: Vec<Parameter>) -> Step {
 }
 
 fn build_url(engine: &Engine, op_path: &str, step: &Step, vars: &VarStore) -> UrlBuildResult {
-    match engine.build_url_from_path(op_path, None, step, vars) {
+    match engine.build_url_from_path(op_path, BASE, step, vars) {
         Ok(result) => result,
         Err(err) => panic!("build_url_from_path({op_path:?}): {err}"),
     }
@@ -119,7 +125,7 @@ fn a_query_parameter_holding_an_object_is_sent_as_one_json_string() {
     vars.set_input("filter", json!({ "status": "open" }));
 
     let step = step_at(
-        "/items",
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
         vec![param(
             "filter",
             Some(ParamLocation::Query),
@@ -150,7 +156,7 @@ fn a_query_parameter_holding_an_array_is_exploded_into_one_pair_per_element() {
     vars.set_input("tag", json!(["a", "b"]));
 
     let step = step_at(
-        "/items",
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
         vec![param("tag", Some(ParamLocation::Query), "$inputs.tag")],
     );
     let result = build_url(&engine, "/items", &step, &vars);
@@ -178,7 +184,10 @@ fn a_query_parameter_holding_an_array_is_exploded_into_one_pair_per_element() {
 fn a_parameter_with_no_in_location_reaches_no_part_of_the_request() {
     let engine = fixture_engine();
     let vars = VarStore::default();
-    let step = step_at("/items", vec![param("stray", None, "value")]);
+    let step = step_at(
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
+        vec![param("stray", None, "value")],
+    );
 
     let result = build_url(&engine, "/items", &step, &vars);
     assert_eq!(result.url, format!("{BASE}/items"));
@@ -217,7 +226,7 @@ fn a_parameter_value_that_warns_is_reported_once_per_parameter() {
         ParamLocation::Path,
     ] {
         let step = step_at(
-            "/items/{id}",
+            "{$sourceDescriptions.test.url}#/paths/~1items~1%7Bid%7D/get",
             vec![param("probe", Some(location), "$inputs.absent")],
         );
         let warnings = prepare(&engine, &step, &vars).warnings;
@@ -240,7 +249,10 @@ fn a_parameter_value_that_warns_is_reported_once_per_parameter() {
 fn a_parameter_with_no_in_location_still_reports_an_unresolvable_value_once() {
     let engine = fixture_engine();
     let vars = VarStore::default();
-    let step = step_at("/items", vec![param("probe", None, "$inputs.absent")]);
+    let step = step_at(
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
+        vec![param("probe", None, "$inputs.absent")],
+    );
 
     let warnings = prepare(&engine, &step, &vars).warnings;
     assert_eq!(warnings.len(), 1, "actual: {warnings:?}");
@@ -259,7 +271,7 @@ fn query_parameters_append_to_a_target_that_already_carries_a_query() {
     let engine = fixture_engine();
     let vars = VarStore::default();
     let step = step_at(
-        "/search?scope=all",
+        "{$sourceDescriptions.test.url}#/paths/~1search/get",
         vec![param("q", Some(ParamLocation::Query), "rust")],
     );
 
@@ -276,7 +288,7 @@ fn a_querystring_repeating_one_key_stays_verbatim_and_collapses_for_expressions(
     let engine = fixture_engine();
     let vars = VarStore::default();
     let step = step_at(
-        "/search",
+        "{$sourceDescriptions.test.url}#/paths/~1search/get",
         vec![param(
             "raw",
             Some(ParamLocation::Querystring),
@@ -305,7 +317,7 @@ fn a_querystring_takes_over_a_bare_trailing_question_mark() {
     let engine = fixture_engine();
     let vars = VarStore::default();
     let step = step_at(
-        "/items?",
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
         vec![param("raw", Some(ParamLocation::Querystring), "page=2")],
     );
 
@@ -321,11 +333,11 @@ fn a_querystring_meeting_a_non_empty_target_query_is_refused() {
     let engine = fixture_engine();
     let vars = VarStore::default();
     let step = step_at(
-        "/items?page=1",
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
         vec![param("raw", Some(ParamLocation::Querystring), "page=2")],
     );
 
-    let err = match engine.build_url_from_path("/items?page=1", None, &step, &vars) {
+    let err = match engine.build_url_from_path("/items?page=1", BASE, &step, &vars) {
         Ok(result) => panic!("expected a refusal, built {}", result.url),
         Err(err) => err,
     };
@@ -339,11 +351,9 @@ fn a_querystring_meeting_a_non_empty_target_query_is_refused() {
 
 // ── Request assembly — future `http/request.rs` ─────────────────────────
 
-/// An `operationPath` naming no method leaves the step to the default, which
-/// reads `requestBody` presence. This is the rule the unqualified-`operationId`
-/// refusal tells authors about, so both directions are asserted together.
+/// Request-body presence cannot change the selected operation method.
 #[test]
-fn the_method_defaults_to_post_with_a_request_body_and_get_without() {
+fn the_bound_operation_method_is_independent_of_request_body() {
     let engine = fixture_engine();
     let vars = VarStore::default();
 
@@ -352,28 +362,41 @@ fn the_method_defaults_to_post_with_a_request_body_and_get_without() {
         serde_yaml_ng::Value::String("name".to_string()),
         serde_yaml_ng::Value::String("widget".to_string()),
     );
-    let mut with_body = step_at("/items", Vec::new());
+    let mut with_body = step_at(
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
+        Vec::new(),
+    );
     with_body.request_body = Some(RequestBody {
         content_type: "application/json".to_string(),
         payload: Some(serde_yaml_ng::Value::Mapping(payload).into()),
         ..RequestBody::default()
     });
 
-    assert_eq!(prepare(&engine, &with_body, &vars).method, "POST");
+    assert_eq!(prepare(&engine, &with_body, &vars).method, "GET");
     assert_eq!(
-        prepare(&engine, &step_at("/items", Vec::new()), &vars).method,
+        prepare(
+            &engine,
+            &step_at(
+                "{$sourceDescriptions.test.url}#/paths/~1items/get",
+                Vec::new()
+            ),
+            &vars
+        )
+        .method,
         "GET"
     );
 }
 
-/// An explicit method token always wins, including over the `requestBody`
-/// default it contradicts.
+/// The operation itself selects PUT, independently of body presence.
 #[test]
-fn an_explicit_method_token_overrides_the_request_body_default() {
+fn a_bound_put_operation_retains_its_method_with_a_body() {
     let engine = fixture_engine();
     let vars = VarStore::default();
 
-    let mut step = step_at("PUT /items", Vec::new());
+    let mut step = step_at(
+        "{$sourceDescriptions.test.url}#/paths/~1items/put",
+        Vec::new(),
+    );
     step.request_body = Some(RequestBody {
         content_type: "application/json".to_string(),
         payload: Some(serde_yaml_ng::Value::String("body".to_string()).into()),
@@ -383,15 +406,16 @@ fn an_explicit_method_token_overrides_the_request_body_default() {
     assert_eq!(prepare(&engine, &step, &vars).method, "PUT");
 }
 
-/// The method default keys off the `requestBody` field, not off the payload
-/// inside it — so a `requestBody` with nothing to send still makes the step a
-/// POST, and sends no body and no `Content-Type` describing one.
+/// An absent payload sends no body or Content-Type and preserves the method.
 #[test]
-fn a_request_body_with_no_payload_sends_no_body_but_still_defaults_to_post() {
+fn a_request_body_with_no_payload_preserves_the_bound_method() {
     let engine = fixture_engine();
     let vars = VarStore::default();
 
-    let mut step = step_at("/items", Vec::new());
+    let mut step = step_at(
+        "{$sourceDescriptions.test.url}#/paths/~1items/get",
+        Vec::new(),
+    );
     step.request_body = Some(RequestBody {
         content_type: "application/json".to_string(),
         payload: None,
@@ -399,7 +423,7 @@ fn a_request_body_with_no_payload_sends_no_body_but_still_defaults_to_post() {
     });
 
     let prepared = prepare(&engine, &step, &vars);
-    assert_eq!(prepared.method, "POST");
+    assert_eq!(prepared.method, "GET");
     assert!(prepared.body.is_none(), "actual: {:?}", prepared.body);
     assert!(
         prepared.body_json.is_none(),
@@ -413,10 +437,9 @@ fn a_request_body_with_no_payload_sends_no_body_but_still_defaults_to_post() {
     );
 }
 
-/// A step naming neither `operationId` nor `operationPath` resolves to the
-/// engine base with no path appended, rather than being refused.
+/// Missing operation context cannot become an implicit request to a base URL.
 #[test]
-fn a_step_with_no_target_requests_the_engine_base() {
+fn a_step_with_no_target_is_refused() {
     let engine = fixture_engine();
     let vars = VarStore::default();
     let step = Step {
@@ -424,9 +447,11 @@ fn a_step_with_no_target_requests_the_engine_base() {
         ..Step::default()
     };
 
-    let prepared = prepare(&engine, &step, &vars);
-    assert_eq!(prepared.method, "GET");
-    assert_eq!(prepared.url_result.url, BASE);
+    let error = match engine.prepare_http_request(&step, &vars) {
+        Err(error) => error,
+        Ok(request) => panic!("missing target produced a request: {request:?}"),
+    };
+    assert_eq!(error.kind, RuntimeErrorKind::InternalError);
 }
 
 // ── Step orchestration — future `http/execute.rs` ───────────────────────
@@ -440,13 +465,15 @@ async fn a_dry_run_names_the_output_whose_expression_warned() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/get".to_string(),
+            )),
             outputs: BTreeMap::from([("token".to_string(), "$nope.thing".to_string().into())]),
             ..Step::default()
         }],
         ..Workflow::default()
     }]);
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let engine = match fixture_builder(spec).dry_run(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building dry-run engine: {err}"),
     };
@@ -479,7 +506,9 @@ async fn a_success_criterion_warning_carries_the_index_of_the_criterion() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/items".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1items/get".to_string(),
+            )),
             success_criteria: vec![
                 SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
@@ -521,7 +550,7 @@ async fn a_success_criterion_warning_carries_the_index_of_the_criterion() {
         }),
         ..TraceStepRecord::default()
     }];
-    let engine = match EngineBuilder::new(spec)
+    let engine = match fixture_builder(spec)
         .trace(true)
         .replay_trace_steps(replayed)
         .build()

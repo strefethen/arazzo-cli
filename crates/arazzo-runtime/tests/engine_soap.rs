@@ -49,7 +49,9 @@ fn soap_step(
 ) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1soap/post".to_string(),
+        )),
         parameters: vec![
             Parameter {
                 name: "Content-Type".to_string(),
@@ -117,7 +119,9 @@ async fn replacements_overlay_xml_payload_before_send() {
         workflow_id: "soap-replace".to_string(),
         steps: vec![Step {
             step_id: "update".to_string(),
-            target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1soap/post".to_string(),
+            )),
             request_body: Some(RequestBody {
                 content_type: "text/xml".to_string(),
                 payload: Some(
@@ -179,7 +183,9 @@ async fn replacements_attribute_target_on_xml_payload() {
         workflow_id: "soap-attr-replace".to_string(),
         steps: vec![Step {
             step_id: "update".to_string(),
-            target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1soap/post".to_string(),
+            )),
             request_body: Some(RequestBody {
                 content_type: "text/xml".to_string(),
                 payload: Some(

@@ -556,7 +556,7 @@ async fn a_relative_declared_server_is_refused_as_this_runtimes_limit() {
         assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse, "{err}");
         assert_eq!(err.code(), "RUNTIME_SOURCE_DESCRIPTION_PARSE");
         let message = err.message.as_str();
-        assert_contains(message, &format!("operationId \"{target}\""));
+        assert_contains(message, &format!("operation target \"{target}\""));
         assert_contains(message, &format!("sourceDescription \"{SOURCE}\""));
         assert_contains(message, &fixture.dir.document_label());
         assert_contains(message, operation);
@@ -604,7 +604,7 @@ async fn a_malformed_servers_declaration_is_refused_as_a_document_fault() {
         assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse, "{err}");
         assert_eq!(err.code(), "RUNTIME_SOURCE_DESCRIPTION_PARSE");
         let message = err.message.as_str();
-        assert_contains(message, &format!("operationId \"{target}\""));
+        assert_contains(message, &format!("operation target \"{target}\""));
         assert_contains(message, &format!("sourceDescription \"{SOURCE}\""));
         assert_contains(message, operation);
         assert_contains(message, level);
@@ -768,14 +768,10 @@ fn every_relative_document_server_fails_the_build() {
     }
 }
 
-// ── What stays as it was ────────────────────────────────────────────
-
-/// An explicitly provided spec belongs to no source description (Arazzo 1.1:
-/// an operationId names an operation "existing within one of the
-/// sourceDescriptions"), so its operations keep the engine-wide base and its
-/// `servers` are consulted at no level.
+/// An unclaimed provided document cannot supply operations for a declared
+/// source, regardless of the servers it declares.
 #[tokio::test]
-async fn an_explicit_spec_keeps_the_engine_wide_base_whatever_it_declares() {
+async fn an_unclaimed_spec_cannot_supply_an_operation_or_request_base() {
     let dir = TempDir::new();
     let (document, operation) = (Host::start(), Host::start());
     dir.document(&openapi(
@@ -796,10 +792,12 @@ async fn an_explicit_spec_keeps_the_engine_wide_base_whatever_it_declares() {
         .build()
         .unwrap_or_else(|err| panic!("building with an explicit spec: {err}"));
     let result = engine.execute_collect(WORKFLOW, BTreeMap::new()).await;
-    if let Err(err) = result.outputs {
-        panic!("running the explicit-spec operation: {err}");
-    }
-    assert_eq!(document.hits(), vec!["/explicit"]);
+    let error = match result.outputs {
+        Ok(outputs) => panic!("unclaimed operation must be refused: {outputs:?}"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind, RuntimeErrorKind::OperationIdNotFound);
+    assert!(document.hits().is_empty());
     assert!(
         operation.hits().is_empty(),
         "operation: {:?}",
@@ -807,20 +805,22 @@ async fn an_explicit_spec_keeps_the_engine_wide_base_whatever_it_declares() {
     );
 }
 
-/// Characterizes the README's documented extension, not a conformance claim:
-/// `{name}./path` "selects a source description's base URL" and joins a path
-/// string to it, so it does not look up the operation that path belongs to.
+/// Pointer targets use the same operation server selection as operation IDs.
 #[tokio::test]
-async fn a_source_routed_operation_path_keeps_the_document_base() {
+async fn a_standard_operation_pointer_uses_the_operation_server() {
     let matrix = Matrix::new();
     let sent = send(
         matrix.dir.path(),
         vec![StepTarget::OperationPath(format!(
-            "{{{SOURCE}}}./op-over-doc"
+            "{{$sourceDescriptions.{SOURCE}.url}}#/paths/~1op-over-doc/get"
         ))],
     )
     .await
-    .unwrap_or_else(|err| panic!("running the source-routed operationPath: {err}"));
-    assert_eq!(sent, vec![format!("{}/op-over-doc", matrix.document.url())]);
-    assert!(matrix.operation.hits().is_empty());
+    .unwrap_or_else(|err| panic!("running the standard operationPath: {err}"));
+    assert_eq!(
+        sent,
+        vec![format!("{}/op-over-doc", matrix.operation.url())]
+    );
+    assert_eq!(matrix.operation.hits(), vec!["/op-over-doc"]);
+    assert!(matrix.document.hits().is_empty());
 }

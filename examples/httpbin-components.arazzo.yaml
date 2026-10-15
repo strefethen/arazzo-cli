@@ -29,7 +29,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 # -----------------------------------------------------------
@@ -78,7 +78,7 @@ workflows:
     steps:
       - stepId: step-with-shared-key
         description: Uses the shared API key header and accept header from components
-        operationPath: /headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1headers/get'
         parameters:
           # Reference shared API key header
           - reference: "$components.parameters.apiKeyHeader"
@@ -92,7 +92,7 @@ workflows:
 
       - stepId: step-with-override
         description: References the default label component but overrides its value
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           # Reference shared API key (keeps default value)
           - reference: "$components.parameters.apiKeyHeader"
@@ -121,7 +121,7 @@ workflows:
     steps:
       - stepId: might-fail
         description: Hits a 500 endpoint; the shared retry policy handles failures
-        operationPath: /status/500
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1500/get'
         successCriteria:
           - condition: $statusCode == 200
         # Reference the shared retry policy from components
@@ -130,7 +130,7 @@ workflows:
 
       - stepId: will-succeed
         description: Succeeds and uses the shared success action to end the workflow
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         # Reference the shared success action from components
@@ -156,7 +156,7 @@ workflows:
     steps:
       - stepId: api-call
         description: Makes a request; failures handled by workflow-level retry policy
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - reference: "$components.parameters.apiKeyHeader"
           - reference: "$components.parameters.jsonAcceptHeader"

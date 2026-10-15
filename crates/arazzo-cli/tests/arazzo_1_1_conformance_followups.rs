@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,6 +25,7 @@ impl TempDir {
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 

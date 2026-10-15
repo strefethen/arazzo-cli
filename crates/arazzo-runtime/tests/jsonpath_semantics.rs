@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use arazzo_runtime::{EngineBuilder, ExecutionResult, RuntimeErrorKind};
+use arazzo_runtime::{ExecutionResult, RuntimeErrorKind};
 use arazzo_spec::{
     ActionType, CriterionExpressionType, CriterionType, OnAction, Step, StepTarget,
     SuccessCriterion, Workflow,
@@ -67,7 +67,9 @@ fn criterion(type_: CriterionType, context: &str, condition: &str) -> SuccessCri
 fn typed_step(step_id: &str, type_: CriterionType, context: &str, condition: &str) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("GET /data".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+        )),
         success_criteria: vec![criterion(type_, context, condition)],
         ..Step::default()
     }
@@ -95,7 +97,7 @@ async fn execute(body: &'static str, workflows: Vec<Workflow>) -> (ExecutionResu
         MockHttpResponse::json(200, body)
     });
     let spec = make_spec_with_base(&server.base_url, workflows);
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building engine: {error}"),
     };
@@ -470,7 +472,9 @@ async fn action_criteria_share_the_engine() {
             steps: vec![
                 Step {
                     step_id: "first".to_string(),
-                    target: Some(StepTarget::OperationPath("GET /data".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+                    )),
                     on_success: vec![OnAction {
                         type_: Some(ActionType::End),
                         criteria: vec![criterion(type_, "$response.body", condition)],
@@ -480,7 +484,9 @@ async fn action_criteria_share_the_engine() {
                 },
                 Step {
                     step_id: "second".to_string(),
-                    target: Some(StepTarget::OperationPath("GET /data".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+                    )),
                     ..Step::default()
                 },
             ],
@@ -530,7 +536,9 @@ async fn sub_workflow_step_criteria_share_the_engine() {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "fetch".to_string(),
-                    target: Some(StepTarget::OperationPath("GET /data".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+                    )),
                     outputs: BTreeMap::from([(
                         "result".to_string(),
                         "$response.body".to_string().into(),

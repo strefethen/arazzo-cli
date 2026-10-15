@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Operation targets use standard Arazzo syntax exclusively. Both
+  operation IDs and canonical JSON Pointers resolve against a bound OpenAPI
+  document. Custom request-path syntax, method prefixes, URL-as-base routing,
+  and operation lookup in undeclared documents have been removed. Generation
+  emits standard targets and rejects duplicate operation IDs.
 - **Breaking:** Action `name` fields are always literal. Component reuse requires
   `reference`; name-based lookup and local field merging have been removed.
 - **Breaking:** `generate` writes YAML only. `generate --json` now fails with

@@ -21,7 +21,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         parameters:
           - reference: "$components.parameters.authHeader"
 "#;
@@ -51,7 +51,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         parameters:
           - reference: "$components.parameters.missing"
 "#;
@@ -90,7 +90,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - reference: "$components.successActions.endWorkflow"
 "#;
@@ -128,7 +128,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - reference: "$components.successActions.endWorkflow"
 "#;
@@ -164,7 +164,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onFailure:
           - reference: "$components.failureActions.retryPolicy"
 "#;
@@ -203,7 +203,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onFailure:
           - reference: "$components.failureActions.retryPolicy"
           - name: finish

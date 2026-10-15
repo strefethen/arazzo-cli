@@ -16,7 +16,7 @@ workflows:
         value: x
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#;
         let result = parse_bytes(yaml.as_bytes());
         match result {
@@ -59,7 +59,7 @@ workflows:
     steps:
       - stepId: s1
         description: First step
-        operationPath: /test
+        operationId: fixturetest
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -96,13 +96,13 @@ workflows:
   - workflowId: first
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
   - workflowId: second
     dependsOn:
       - first
     steps:
       - stepId: s2
-        operationPath: /test
+        operationId: fixturetest
 "#;
 
         let (spec, diagnostics) = match parse_bytes_with_diagnostics(spec_yaml.as_bytes()) {

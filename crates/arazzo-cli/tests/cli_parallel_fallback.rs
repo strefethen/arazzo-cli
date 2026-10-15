@@ -8,6 +8,8 @@
 //! `run.sequentialFallbacks`; a workflow whose only actions are plain retries
 //! runs in parallel levels and reports nothing.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -23,26 +25,26 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: stops-early
     steps:
       - stepId: a
-        operationPath: /a
+        operationId: fixtureGetA
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - name: stop
             type: end
       - stepId: b
-        operationPath: /b
+        operationId: fixtureGetB
         successCriteria:
           - condition: $statusCode == 200
   - workflowId: retries
     steps:
       - stepId: a
-        operationPath: /a
+        operationId: fixtureGetA
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -52,7 +54,7 @@ workflows:
             criteria:
               - condition: $statusCode == 503
       - stepId: b
-        operationPath: /b
+        operationId: fixtureGetB
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -83,6 +85,7 @@ impl TempDir {
         ));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 

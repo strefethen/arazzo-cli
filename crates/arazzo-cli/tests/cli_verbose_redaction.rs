@@ -4,6 +4,8 @@
 //! same query redaction the trace file applies, so a credential in a query
 //! parameter never reaches the terminal or CI logs (ac-f2305).
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,6 +15,7 @@ use std::time::Duration;
 const SECRET: &str = "SECRET-QUERY-VALUE";
 
 fn spec(base_url: &str) -> String {
+    let base_url = common::fixture_url(base_url);
     format!(
         r#"arazzo: 1.0.1
 info:
@@ -26,7 +29,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: list
-        operationPath: /items
+        operationId: fixtureGetItems
         parameters:
           - name: access_token
             in: query

@@ -7,14 +7,14 @@ info:
 
 sourceDescriptions:
   - name: soap
-    url: http://localhost:4010
+    url: ./descriptions/soap-customer.openapi.yaml
     type: openapi
 
 workflows:
   - workflowId: soap-crud
     steps:
       - stepId: list-customers
-        operationPath: POST /api/soap-mock/service
+        operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
           - name: Content-Type
             in: header
@@ -50,7 +50,7 @@ workflows:
             type: {type: xpath, version: xpath-10}
 
       - stepId: get-customer
-        operationPath: POST /api/soap-mock/service
+        operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
           - name: Content-Type
             in: header
@@ -84,7 +84,7 @@ workflows:
             type: {type: xpath, version: xpath-10}
 
       - stepId: create-customer
-        operationPath: POST /api/soap-mock/service
+        operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
           - name: Content-Type
             in: header
@@ -125,7 +125,7 @@ workflows:
             type: {type: xpath, version: xpath-10}
 
       - stepId: update-customer
-        operationPath: POST /api/soap-mock/service
+        operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
           - name: Content-Type
             in: header
@@ -172,7 +172,7 @@ workflows:
             type: {type: xpath, version: xpath-10}
 
       - stepId: delete-customer
-        operationPath: POST /api/soap-mock/service
+        operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
           - name: Content-Type
             in: header

@@ -9,12 +9,12 @@ use std::path::{Component, Path, PathBuf};
 
 use arazzo_spec::{
     ActionType, ArazzoSpec, Info, JsonSchemaType, OnAction, ParamLocation, Parameter, PropertyDef,
-    RequestBody, SchemaObject, SourceDescription, SourceType, Step, StepTarget, SuccessCriterion,
-    Workflow,
+    RequestBody, SchemaObject, SourceDescription, SourceType, Step, SuccessCriterion, Workflow,
 };
 use openapiv3::{OpenAPI, ReferenceOr, StatusCode};
 
 use crate::examples::{generate_example, json_to_yml};
+use crate::operation_targets::{operation_target, validate_operation_ids};
 use crate::refs::{resolve_response_ref, resolve_schema_ref};
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -52,6 +52,7 @@ pub fn generate_crud(
     // `servers` entry, an empty server URL, a relative server URL, and
     // server-variable substitution — keep firing at generation time.
     extract_server_url(openapi, &mut warnings)?;
+    validate_operation_ids(openapi)?;
     let groups = group_resources(openapi, &mut warnings);
     if groups.is_empty() {
         return Err("no CRUD resource groups found in the OpenAPI spec".to_string());
@@ -64,7 +65,7 @@ pub fn generate_crud(
     let resource_names: Vec<String> = groups.iter().map(|g| g.name.clone()).collect();
 
     for group in &groups {
-        workflows.push(build_workflow(group, &source_name, &auth, openapi));
+        workflows.push(build_workflow(group, &source_name, &auth, openapi)?);
     }
 
     let spec = ArazzoSpec {
@@ -683,7 +684,7 @@ fn build_workflow(
     source_name: &str,
     auth: &Option<AuthRequirement>,
     openapi: &OpenAPI,
-) -> Workflow {
+) -> Result<Workflow, String> {
     let workflow_id = format!("crud-{}", group.name);
     let (id_body_field, id_param_name) = find_id_field(group, openapi);
     let has_create = group.create.is_some();
@@ -748,10 +749,10 @@ fn build_workflow(
             &create.method,
             &create.path,
             source_name,
-            Some(&create.operation),
+            &create.operation,
             &openapi.components,
             Some(&id_body_field),
-        ));
+        )?);
     }
 
     if let Some(ref list) = group.list {
@@ -761,10 +762,10 @@ fn build_workflow(
             &list.method,
             &list.path,
             source_name,
-            Some(&list.operation),
+            &list.operation,
             &openapi.components,
             None,
-        ));
+        )?);
     }
 
     if let Some(ref read) = group.read {
@@ -774,10 +775,10 @@ fn build_workflow(
             &read.method,
             &read.path,
             source_name,
-            Some(&read.operation),
+            &read.operation,
             &openapi.components,
             None,
-        );
+        )?;
         if let Some(ref param_name) = group.id_param {
             let id_expr = if has_create {
                 format!("$steps.create-{}.outputs.{id_body_field}", group.name)
@@ -802,10 +803,10 @@ fn build_workflow(
             &update.method,
             &update.path,
             source_name,
-            Some(&update.operation),
+            &update.operation,
             &openapi.components,
             None,
-        );
+        )?;
         if let Some(ref param_name) = group.id_param {
             let id_expr = if has_create {
                 format!("$steps.create-{}.outputs.{id_body_field}", group.name)
@@ -830,10 +831,10 @@ fn build_workflow(
             &delete.method,
             &delete.path,
             source_name,
-            Some(&delete.operation),
+            &delete.operation,
             &openapi.components,
             None,
-        );
+        )?;
         if let Some(ref param_name) = group.id_param {
             let id_expr = if has_create {
                 format!("$steps.create-{}.outputs.{id_body_field}", group.name)
@@ -859,7 +860,7 @@ fn build_workflow(
         );
     }
 
-    Workflow {
+    Ok(Workflow {
         workflow_id,
         summary: format!("CRUD operations for {}", group.name),
         description: String::new(),
@@ -870,7 +871,7 @@ fn build_workflow(
         failure_actions: Vec::new(),
         parameters: wf_parameters,
         ..Workflow::default()
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -880,21 +881,14 @@ fn build_step(
     method: &str,
     path: &str,
     source_name: &str,
-    operation: Option<&openapiv3::Operation>,
+    operation: &openapiv3::Operation,
     components: &Option<openapiv3::Components>,
     output_id_field: Option<&str>,
-) -> Step {
-    let operation_path = format!("{method} {{{source_name}}}.{path}");
-    let status_code = operation
-        .map(|op| extract_success_code(&op.responses, method))
-        .unwrap_or_else(|| match method {
-            "POST" => 201,
-            "DELETE" => 204,
-            _ => 200,
-        });
+) -> Result<Step, String> {
+    let target = operation_target(source_name, path, method, operation)?;
+    let status_code = extract_success_code(&operation.responses, method);
 
-    let request_body = operation.and_then(|op| {
-        let rb_ref = op.request_body.as_ref()?;
+    let request_body = operation.request_body.as_ref().and_then(|rb_ref| {
         let rb = crate::refs::resolve_request_body_ref(rb_ref, components, &mut HashSet::new())?;
         let json_content = rb.content.get("application/json")?;
         let schema_ref = json_content.schema.as_ref()?;
@@ -930,10 +924,10 @@ fn build_step(
         );
     }
 
-    Step {
+    Ok(Step {
         step_id: step_id.to_string(),
         description: description.to_string(),
-        target: Some(StepTarget::OperationPath(operation_path)),
+        target: Some(target),
         parameters: Vec::new(),
         request_body,
         success_criteria,
@@ -941,7 +935,7 @@ fn build_step(
         on_failure,
         outputs,
         ..Step::default()
-    }
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1443,8 +1437,8 @@ paths: {}
         );
 
         assert!(
-            yaml_out.contains("{petstore}."),
-            "operationPath must use {{sourceName}} prefix"
+            yaml_out.contains("$sourceDescriptions.petstore."),
+            "operation targets must use the named source"
         );
         assert!(
             !yaml_out.contains("extensions:"),

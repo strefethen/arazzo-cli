@@ -9,14 +9,14 @@ info:
 # file was rejected with "unknown variant `querystring`".
 sourceDescriptions:
   - name: search
-    url: https://search.example.com/v1
+    url: ./querystring.openapi.yaml
     type: openapi
 workflows:
   - workflowId: search-verbatim
     summary: A querystring parameter supplies the whole query component.
     steps:
       - stepId: query-index
-        operationPath: '{search}./index'
+        operationPath: '{$sourceDescriptions.search.url}#/paths/~1index/get'
         parameters:
           - name: filter
             in: querystring

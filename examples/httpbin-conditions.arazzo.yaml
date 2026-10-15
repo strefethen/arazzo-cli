@@ -7,14 +7,14 @@ info:
     plus regex conditions for substring checks.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: status-code-comparisons
     summary: Test numeric comparison operators on status codes
     steps:
       - stepId: check-200
-        operationPath: /status/200
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1200/get'
         successCriteria:
           - condition: $statusCode == 200
           - condition: $statusCode != 404
@@ -28,7 +28,7 @@ workflows:
     summary: Verify response body string field equality
     steps:
       - stepId: fetch-data
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: fruit
             in: query
@@ -38,7 +38,7 @@ workflows:
         outputs:
           fruit: $response.body#/args/fruit
       - stepId: verify-value
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: check
             in: query
@@ -53,7 +53,7 @@ workflows:
     summary: Test regex substring conditions on response body strings
     steps:
       - stepId: fetch-url
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
           - context: $response.body#/url
@@ -68,11 +68,11 @@ workflows:
     summary: Test && and || compound conditions
     steps:
       - stepId: success-range
-        operationPath: /status/200
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1200/get'
         successCriteria:
           - condition: $statusCode >= 200 && $statusCode < 300
       - stepId: fetch-with-or
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200 || $statusCode == 201
     outputs: {}

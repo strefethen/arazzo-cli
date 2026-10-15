@@ -45,6 +45,7 @@ pub mod api_v1 {
 mod tests {
     use super::runtime_core::VarStore;
     use super::{ClientConfig, ContentType, Engine, Response, RuntimeErrorKind};
+    use crate::EngineBuilder;
     use arazzo_spec::{
         ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, Info, OnAction,
         ParamLocation, SourceDescription, SourceType, Step, StepTarget, SuccessCriterion, Workflow,
@@ -176,14 +177,22 @@ mod tests {
         }
     }
 
-    fn new_test_engine(base_url: &str, mut spec: ArazzoSpec) -> Engine {
-        if let Some(source) = spec.source_descriptions.get_mut(0) {
-            source.url = base_url.to_string();
-        }
-        match Engine::new(spec) {
-            Ok(engine) => engine,
-            Err(err) => panic!("creating engine: {err}"),
-        }
+    fn test_builder(base_url: &str, mut spec: ArazzoSpec) -> EngineBuilder {
+        spec.source_descriptions[0].url = "https://fixtures.invalid/openapi.json".to_string();
+        let document = json!({
+            "openapi": "3.2.0", "$self": "https://fixtures.invalid/openapi.json",
+            "info": {"title": "inline test", "version": "1"},
+            "servers": [{"url": base_url}],
+            "paths": {"/one": {"get": {}}, "/two": {"get": {}}, "/api": {"get": {}},
+                "/search": {"get": {}}, "/users": {"get": {}}}
+        });
+        EngineBuilder::new(spec).openapi_spec(document.to_string().into_bytes(), None)
+    }
+
+    fn new_test_engine(base_url: &str, spec: ArazzoSpec) -> Engine {
+        test_builder(base_url, spec)
+            .build()
+            .unwrap_or_else(|err| panic!("creating engine: {err}"))
     }
 
     fn success_200() -> Vec<SuccessCriterion> {
@@ -347,13 +356,17 @@ mod tests {
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        target: Some(StepTarget::OperationPath("/one".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1one/get".to_string(),
+                        )),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        target: Some(StepTarget::OperationPath("/two".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1two/get".to_string(),
+                        )),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
@@ -366,7 +379,10 @@ mod tests {
         cfg.rate_limit.requests_per_second = 1.0;
         cfg.rate_limit.burst = 1;
 
-        let engine = match Engine::with_client_config(spec, cfg) {
+        let engine = match test_builder(&server.base_url, spec)
+            .client_config(cfg)
+            .build()
+        {
             Ok(engine) => engine,
             Err(err) => panic!("creating engine: {err}"),
         };
@@ -387,7 +403,9 @@ mod tests {
         vars.set_input("ids", json!(["a", "b"]));
 
         let step = Step {
-            target: Some(StepTarget::OperationPath("/api".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1api/get".to_string(),
+            )),
             parameters: vec![arazzo_spec::Parameter {
                 name: "ids".to_string(),
                 in_: Some(ParamLocation::Query),
@@ -398,7 +416,7 @@ mod tests {
         };
 
         let url_result = engine
-            .build_url_from_path("/api", None, &step, &vars)
+            .build_url_from_path("/api", "http://localhost", &step, &vars)
             .unwrap_or_else(|err| panic!("build_url_from_path failed: {err}"));
         // Standard exploded format is ?ids=a&ids=b.
         assert!(
@@ -413,7 +431,9 @@ mod tests {
         let engine = new_test_engine("http://localhost", make_spec(Vec::new()));
         let vars = VarStore::default();
         let step = Step {
-            target: Some(StepTarget::OperationPath("/api".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1api/get".to_string(),
+            )),
             parameters: vec![arazzo_spec::Parameter {
                 name: "session".to_string(),
                 in_: Some(ParamLocation::Cookie),
@@ -441,7 +461,9 @@ mod tests {
         vars.set_input("metadata", json!({"source": "cli"}));
 
         let step = Step {
-            target: Some(StepTarget::OperationPath("/api".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1api/get".to_string(),
+            )),
             parameters: vec![arazzo_spec::Parameter {
                 name: "X-Metadata".to_string(),
                 in_: Some(ParamLocation::Header),
@@ -469,7 +491,9 @@ mod tests {
         vars.set_input("q", json!("hello world&more=stuff"));
 
         let step = Step {
-            target: Some(StepTarget::OperationPath("/search".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1search/get".to_string(),
+            )),
             parameters: vec![
                 arazzo_spec::Parameter {
                     name: "q".to_string(),
@@ -487,10 +511,11 @@ mod tests {
             ..Step::default()
         };
 
-        let url_result = match engine.build_url_from_path("/search", None, &step, &vars) {
-            Ok(v) => v,
-            Err(err) => panic!("building URL for query encoding test: {err}"),
-        };
+        let url_result =
+            match engine.build_url_from_path("/search", "http://localhost", &step, &vars) {
+                Ok(v) => v,
+                Err(err) => panic!("building URL for query encoding test: {err}"),
+            };
         let parsed = match Url::parse(&url_result.url) {
             Ok(v) => v,
             Err(err) => panic!("parsing url {}: {err}", url_result.url),
@@ -508,14 +533,17 @@ mod tests {
         let engine = new_test_engine("https://api.example.com/", make_spec(Vec::new()));
         let vars = VarStore::default();
         let step = Step {
-            target: Some(StepTarget::OperationPath("/users".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1users/get".to_string(),
+            )),
             ..Step::default()
         };
 
-        let url_result = match engine.build_url_from_path("/users", None, &step, &vars) {
-            Ok(v) => v,
-            Err(err) => panic!("building URL for slash normalization test: {err}"),
-        };
+        let url_result =
+            match engine.build_url_from_path("/users", "https://api.example.com/", &step, &vars) {
+                Ok(v) => v,
+                Err(err) => panic!("building URL for slash normalization test: {err}"),
+            };
         assert_eq!(url_result.url, "https://api.example.com/users");
         assert!(!url_result.url.contains("//users"));
     }
@@ -525,14 +553,16 @@ mod tests {
         let engine = new_test_engine("https://api.example.com", make_spec(Vec::new()));
         let vars = VarStore::default();
         let step = Step {
-            target: Some(StepTarget::OperationPath("{missing}./users".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.missing.url}#/paths/~1users/get".to_string(),
+            )),
             ..Step::default()
         };
 
-        let err = match engine.build_url_from_path("{missing}./users", None, &step, &vars) {
+        let err = match engine.prepare_http_request(&step, &vars) {
             Ok(result) => panic!(
                 "expected unknown sourceDescription error, got URL {}",
-                result.url
+                result.url_result.url
             ),
             Err(err) => err,
         };

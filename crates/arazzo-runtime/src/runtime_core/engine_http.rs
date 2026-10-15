@@ -76,32 +76,6 @@ impl Engine {
         Ok((resolved.method, resolved.path))
     }
 
-    /// The operation index, parsed on first access.
-    ///
-    /// Lazy-init: parse OpenAPI specs on first access (stable OnceLock pattern).
-    /// If two threads race, both compute the same deterministic index and one
-    /// `set()` silently no-ops — OnceLock guarantees a single stored value.
-    /// Source-description documents (indexed eagerly at build) go first, then
-    /// explicitly provided specs, so the build-time override warning keeps
-    /// announcing the same direction it always has.
-    fn operation_index(&self) -> Result<&OperationIndex, RuntimeError> {
-        let index = &self.inner.index;
-        if index.op_index.get().is_none() {
-            let mut idx = index.source_ops.clone();
-            for (ordinal, spec_data) in &index.openapi_specs_raw {
-                let origin = OperationOrigin::ExplicitSpec { ordinal: *ordinal };
-                parse_openapi_into_index(spec_data, &origin, &mut idx)?;
-            }
-            let _ = index.op_index.set(idx);
-        }
-        index.op_index.get().ok_or_else(|| {
-            RuntimeError::new(
-                RuntimeErrorKind::InternalError,
-                "operation index initialization failed unexpectedly",
-            )
-        })
-    }
-
     /// Resolves a step's `operationId` — bare or source-qualified — to the
     /// request it names and the server base that request belongs to.
     ///
@@ -130,9 +104,8 @@ impl Engine {
     }
 
     /// Resolves `$sourceDescriptions.<name>.<operationId>` against that one
-    /// Source Description and no other — an explicitly provided spec belongs
-    /// to no source, so it can neither satisfy a qualified target nor
-    /// override one.
+    /// Source Description and no other. Unclaimed provided documents cannot
+    /// satisfy or override a qualified target.
     fn resolve_in_source(
         &self,
         target: &str,
@@ -206,12 +179,8 @@ impl Engine {
                     format!("sourceDescription \"{source_name}\" has no effective request base"),
                 )
             })?;
-        match self.operation_index()?.in_source(source_name, operation_id) {
-            OperationMatch::One(entry) => Ok(ResolvedOperation {
-                method: entry.method.clone(),
-                path: entry.path.clone(),
-                base: Some(operation_base(target, entry, &base)?),
-            }),
+        match index.source_ops.in_source(source_name, operation_id) {
+            OperationMatch::One(entry) => resolved_operation(target, entry, &base),
             OperationMatch::Missing => Err(RuntimeError::new(
                 RuntimeErrorKind::OperationIdNotFound,
                 format!(
@@ -246,68 +215,12 @@ impl Engine {
             .filter(|sd| sd.type_ != SourceType::Arazzo)
             .map(|sd| sd.name.as_str())
             .collect();
-        if sources.len() > 1 {
-            // The refusal covers operations supplied through
-            // `EngineBuilder::openapi_spec` too — the MUST is about the
-            // document's own sourceDescriptions, whatever this engine happens
-            // to have indexed. Those operations belong to no source
-            // description, so the qualified form cannot reach them and naming
-            // it alone would be a remedy that fails.
-            let explicit_note = if index.openapi_specs_raw.is_empty() {
-                String::new()
-            } else {
-                // Naming only the two forms above would be worse than saying
-                // nothing: `{<name>}./<path>` joins that source's host to a
-                // path the source does not define, which is the silently-wrong
-                // host this refusal exists to prevent.
-                //
-                // The conformant remedy leads: declaring that document as a
-                // sourceDescription is what puts its operations in reach of
-                // the qualified form, and a relative url resolves through the
-                // `source_base_dir` the CLI already passes. The absolute-URL
-                // operationPath named after it is F1 debt in
-                // `plans/assessments/arazzo-spec-conformance-audit.md`, not a
-                // specification form, so it never stands alone — and it takes
-                // the optional method token, without which a PUT or DELETE
-                // step would silently inherit the GET/POST default.
-                ". An operation from a separately provided OpenAPI spec belongs to no \
-                 sourceDescription, so neither of those forms can reach it — declare that \
-                 document as a sourceDescription of type \"openapi\" and use the qualified form \
-                 above, or give that step an absolute-URL operationPath, written \
-                 \"<METHOD> <url>\" unless the default of POST with a requestBody and GET \
-                 without is the method the step wants"
-                    .to_string()
-            };
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::OperationIdAmbiguous,
-                format!(
-                    "operationId \"{target}\" is unqualified, but {count} non-arazzo \
-                     sourceDescriptions are defined ({names}); name the source with \
-                     \"$sourceDescriptions.<name>.{target}\", or address the operation by path \
-                     with an operationPath of \"{{<name>}}./<path>\"{explicit_note}",
-                    count = sources.len(),
-                    names = sources.join(", "),
-                ),
-            ));
-        }
-        match self.operation_index()?.bare(operation_id) {
-            OperationMatch::One(entry) => Ok(ResolvedOperation {
-                method: entry.method.clone(),
-                path: entry.path.clone(),
-                // An operation from an explicitly provided spec belongs to no
-                // source description, so it keeps the engine-wide base.
-                base: entry
-                    .origin
-                    .source_name()
-                    .and_then(|name| index.source_bases.get(name))
-                    .map(|document_base| operation_base(target, entry, document_base))
-                    .transpose()?,
-            }),
-            OperationMatch::Missing => Err(RuntimeError::new(
-                RuntimeErrorKind::OperationIdNotFound,
-                format!("operationId \"{operation_id}\" not found in loaded OpenAPI specs"),
-            )),
-            OperationMatch::Ambiguous(entries) => Err(ambiguous_operation_id(target, &entries)),
+        match sources.as_slice() {
+            [source] => self.resolve_in_source(target, source, operation_id),
+            [] => Err(RuntimeError::new(RuntimeErrorKind::OperationIdNotFound,
+                format!("operationId \"{operation_id}\" has no declared operation source; provided OpenAPI documents must bind to a sourceDescription"))),
+            _ => Err(RuntimeError::new(RuntimeErrorKind::OperationIdAmbiguous,
+                format!("operationId \"{target}\" is unqualified, but {} non-arazzo sourceDescriptions are defined ({}); name the source with \"$sourceDescriptions.<name>.{target}\"", sources.len(), sources.join(", ")))),
         }
     }
 
@@ -326,34 +239,18 @@ impl Engine {
             ));
         }
 
-        // A resolved `operationId` carries the effective request base of the
-        // source description that owns it. Formatting the resolution back into
-        // a `"<METHOD> <path>"` string and re-classifying that, as this used
-        // to, is what discarded the owning source and sent every resolved
-        // operation to the first source description's host.
-        let (explicit_method, op_path, source_base) = match &step.target {
-            Some(StepTarget::OperationPath(path)) => {
-                let (method, remainder) = parse_method(path);
-                (method.to_string(), remainder.to_string(), None)
+        let resolved = match &step.target {
+            Some(StepTarget::OperationPath(path)) => self.resolve_operation_path(path)?,
+            Some(StepTarget::OperationId(id)) => self.resolve_operation_target(id)?,
+            _ => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InternalError,
+                    format!("step \"{}\" has no HTTP operation target", step.step_id),
+                ))
             }
-            Some(StepTarget::OperationId(id)) => {
-                let resolved = self.resolve_operation_target(id)?;
-                (resolved.method, resolved.path, resolved.base)
-            }
-            _ => (String::new(), String::new(), None),
         };
-
-        let url_result = self.build_url_from_path(&op_path, source_base.as_deref(), step, vars)?;
-
-        let method = if explicit_method.is_empty() {
-            if step.request_body.is_some() {
-                "POST".to_string()
-            } else {
-                "GET".to_string()
-            }
-        } else {
-            explicit_method
-        };
+        let url_result = self.build_url_from_path(&resolved.path, &resolved.base, step, vars)?;
+        let method = resolved.method;
 
         let mut prep_warnings = url_result.warnings.clone();
         let body_json = if let Some(req_body) = &step.request_body {
@@ -733,65 +630,15 @@ impl Engine {
 
     /// Builds the request URL for a step's already-resolved target.
     ///
-    /// `source_base` is the effective request base of the source description
-    /// that owns a resolved `operationId`. When it is present, `op_path` is
-    /// that document's own path and carries no `operationPath` syntax to
-    /// classify — `/pets/{petId}` is a path, not a `{sourceName}.` reference.
+    /// Both target forms have already selected an actual bound operation.
     pub(crate) fn build_url_from_path(
         &self,
         op_path: &str,
-        source_base: Option<&str>,
+        source_base: &str,
         step: &Step,
         vars: &VarStore,
     ) -> Result<UrlBuildResult, RuntimeError> {
-        // `{name}.` routing resolves to that source's *effective* request base
-        // (derived from `servers` for document sources, the literal url for
-        // legacy sources). `$sourceDescriptions.{name}.url` expressions keep
-        // evaluating to the literal url via `source_descriptions_map`.
-        //
-        // Classification happens here, before any string is joined, so no
-        // caller can construct a URL out of a value this runtime cannot resolve.
-        let (resolved_base, resolved_path) = match source_base {
-            Some(base) => (base, op_path),
-            None => match classify_operation_path(op_path).form {
-                OperationPathForm::Unsupported(reason) => {
-                    return Err(RuntimeError::new(
-                        RuntimeErrorKind::UnsupportedOperationPathForm,
-                        format!(
-                            "step \"{}\": operationPath \"{op_path}\" carries {reason}; \
-                             resolving the specification form (source reference plus JSON \
-                             Pointer) is not implemented. Supported forms are \
-                             {SUPPORTED_OPERATION_PATH_FORMS}.",
-                            step.step_id
-                        ),
-                    ));
-                }
-                OperationPathForm::SourceRouted { source_name, path } => {
-                    match self.inner.index.source_bases.get(source_name) {
-                        Some(base) => (base.as_str(), path),
-                        None => {
-                            return Err(RuntimeError::new(
-                                RuntimeErrorKind::SourceDescriptionNotFound,
-                                format!(
-                                    "sourceDescription \"{source_name}\" referenced by operationPath \"{op_path}\" was not found"
-                                ),
-                            ));
-                        }
-                    }
-                }
-                // An absolute URL keeps the base only to satisfy the tuple; the
-                // `starts_with("http")` test below discards it, as it always has.
-                OperationPathForm::AbsoluteUrl(url) => (self.inner.index.base_url.as_str(), url),
-                OperationPathForm::BasePath(path) => (self.inner.index.base_url.as_str(), path),
-            },
-        };
-
-        let mut target =
-            if resolved_path.starts_with("http://") || resolved_path.starts_with("https://") {
-                resolved_path.to_string()
-            } else {
-                format!("{}{}", resolved_base.trim_end_matches('/'), resolved_path)
-            };
+        let mut target = format!("{}{}", source_base.trim_end_matches('/'), op_path);
 
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut path_params = BTreeMap::<String, String>::new();
@@ -1055,12 +902,21 @@ pub(crate) struct PreparedRequest {
 pub(crate) struct ResolvedOperation {
     pub method: String,
     pub path: String,
-    /// Effective request base of the operation: the server its Operation or
-    /// Path Item Object declares, else the document base of the source
-    /// description that defines it. `None` when it came from an explicitly
-    /// provided OpenAPI spec, which belongs to no source description and so
-    /// keeps the engine-wide base.
-    pub base: Option<String>,
+    /// Effective operation/path/document server from its bound source.
+    pub base: String,
+}
+
+/// Shared final projection for ID and pointer resolution.
+pub(super) fn resolved_operation(
+    target: &str,
+    entry: &OperationEntry,
+    document_base: &str,
+) -> Result<ResolvedOperation, RuntimeError> {
+    Ok(ResolvedOperation {
+        method: entry.method.clone(),
+        path: entry.path.clone(),
+        base: operation_base(target, entry, document_base)?,
+    })
 }
 
 /// The request base a source-bound operation is sent to: the server it
@@ -1087,7 +943,7 @@ fn unusable_operation_server(
     unusable: &UnusableServer,
 ) -> RuntimeError {
     let named = format!(
-        "operationId \"{target}\" names {} {} in {}",
+        "operation target \"{target}\" names {} {} in {}",
         entry.method,
         entry.path,
         entry.origin.describe()

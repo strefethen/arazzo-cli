@@ -125,6 +125,26 @@ fn is_tool_error(response: &Value) -> bool {
 // Spec builders
 // ---------------------------------------------------------------------------
 
+/// Explicit local description: the test server is its declared endpoint, never
+/// a source URL interpreted as a request base.
+fn fixture_source_url(base_url: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "arazzo-mcp-source-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let source = json!({"openapi": "3.0.3", "info": {"title": "MCP fixture", "version": "1.0.0"},
+    "servers": [{"url": base_url}], "paths": {
+        "/data": {"get": {"responses": {"200": {"description": "OK"}}}},
+        "/submit": {"post": {"responses": {"200": {"description": "OK"}}}},
+        "/never": {"get": {"responses": {"200": {"description": "OK"}}}}
+    }});
+    fs::write(&path, source.to_string())
+        .unwrap_or_else(|err| panic!("writing explicit MCP source: {err}"));
+    path.display().to_string()
+}
+
 fn make_spec(base_url: &str) -> ArazzoSpec {
     ArazzoSpec {
         arazzo: "1.0.0".to_string(),
@@ -135,7 +155,7 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
-            url: base_url.to_string(),
+            url: fixture_source_url(base_url),
             type_: SourceType::OpenApi,
             ..SourceDescription::default()
         }],
@@ -144,7 +164,9 @@ fn make_spec(base_url: &str) -> ArazzoSpec {
             summary: "Fetch test data".to_string(),
             steps: vec![Step {
                 step_id: "fetch".to_string(),
-                target: Some(StepTarget::OperationPath("/data".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -183,7 +205,7 @@ fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
         },
         source_descriptions: vec![SourceDescription {
             name: "test".to_string(),
-            url: base_url.to_string(),
+            url: fixture_source_url(base_url),
             type_: SourceType::OpenApi,
             ..SourceDescription::default()
         }],
@@ -191,7 +213,9 @@ fn make_sensitive_spec(base_url: &str) -> ArazzoSpec {
             workflow_id: "send-secret".to_string(),
             steps: vec![Step {
                 step_id: "submit".to_string(),
-                target: Some(StepTarget::OperationPath("/submit".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1submit/post".to_string(),
+                )),
                 parameters: vec![
                     Parameter {
                         name: "Authorization".to_string(),
@@ -304,6 +328,12 @@ fn test_full_flow() {
     let detail = extract_tool_text(&responses[3]);
     assert!(detail.is_some());
     assert_eq!(detail.as_ref().unwrap_or(&Value::Null)["stepCount"], 1);
+    let detail = detail.unwrap_or(Value::Null);
+    assert_eq!(
+        detail["steps"][0]["url"],
+        "{$sourceDescriptions.test.url}#/paths/~1data/get"
+    );
+    assert!(detail["steps"][0]["method"].is_null(), "{detail}");
 
     // 5: run_workflow
     assert!(!is_tool_error(&responses[4]));
@@ -330,7 +360,7 @@ workflows:
   - workflowId: noop
     steps:
       - stepId: placeholder
-        operationPath: /noop
+        operationId: noop
         successCriteria:
           - condition: "$statusCode == 200"
 "#;
@@ -395,23 +425,25 @@ fn warning_messages(result: &Value) -> Vec<String> {
 
 #[test]
 fn test_validate_spec_reports_warnings_on_success_envelope() {
-    let result = call_validate_spec(&testdata_path("unsupported-operation-path.arazzo.yaml"));
+    let dir = TempDir::new("warning-only");
+    let spec = json!({"arazzo": "1.1.0", "info": {"title": "Warnings", "version": "1"}, "unknownField": true,
+        "sourceDescriptions": [{"name": "api", "url": testdata_path("petstore.openapi.yaml"), "type": "openapi"}],
+        "workflows": [{"workflowId": "probe", "steps": [{"stepId": "list-pets", "operationId": "listPets"}]}]});
+    let path = dir.write("warnings.arazzo.yaml", &spec.to_string());
+    let result = call_validate_spec(&path.to_string_lossy());
 
     assert_eq!(result["valid"], true, "result={result}");
     let messages = warning_messages(&result);
     assert_eq!(
         messages,
         vec![
-            "workflow \"probe\" > step \"list-pets\".operationPath \"{$sourceDescriptions.petstore.url}#/paths/~1pets/get\" carries a runtime expression and a JSON Pointer fragment; this runtime does not resolve the specification form (source reference plus JSON Pointer), so running this step will fail. Supported forms are \"{sourceName}./path\", an absolute URL, or a path resolved against the base URL, each optionally prefixed with an HTTP method."
+            "unrecognized field \"unknownField\"; only `x-` prefixed extension fields are permitted here"
                 .to_string(),
         ],
         "result={result}"
     );
     assert_eq!(result["warnings"][0]["source"], "validation");
-    assert_eq!(
-        result["warnings"][0]["path"],
-        "workflow \"probe\" > step \"list-pets\".operationPath"
-    );
+    assert_eq!(result["warnings"][0].get("path"), Some(&Value::Null));
 }
 
 #[test]
@@ -429,7 +461,7 @@ workflows:
   - workflowId: mixed
     steps:
       - stepId: placeholder
-        operationPath: /noop
+        operationId: noop
         onSuccess:
           - name: finish
             type: end
@@ -493,7 +525,9 @@ fn test_run_workflow_preserves_nested_dependency_error_code() {
             depends_on: vec!["missing".to_string()],
             steps: vec![Step {
                 step_id: "request".to_string(),
-                target: Some(StepTarget::OperationPath("/never".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1never/get".to_string(),
+                )),
                 ..Step::default()
             }],
             ..Workflow::default()

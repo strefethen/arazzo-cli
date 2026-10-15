@@ -48,7 +48,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1test/get'
 "#;
 
     const ASYNCAPI_SOURCE_YAML: &str = r#"arazzo: "1.1.0"
@@ -63,7 +63,7 @@ workflows:
   - workflowId: inspect-source
     steps:
       - stepId: inspect
-        operationPath: /inspect
+        operationPath: '{$sourceDescriptions.events.url}#/paths/~1inspect/get'
 "#;
 
     fn valid_spec() -> ArazzoSpec {
@@ -86,7 +86,7 @@ workflows:
                 workflow_id: "wf1".to_string(),
                 steps: vec![Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/test".to_string())),
+                    target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1test/get".to_string())),
                     ..Step::default()
                 }],
                 ..Workflow::default()
@@ -184,7 +184,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1test/get'
         onSuccess:
           - name: finish
             type: end
@@ -203,7 +203,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1test/get'
         onSuccess:
           - name: finish
             type: end
@@ -402,7 +402,7 @@ workflows:
   - workflowId: wf1
     steps:
       - stepId: s1
-        operationPath: /test
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1test/get'
         parameters:
           - reference: "$components.parameters.authHeader"
 "#;
@@ -442,7 +442,7 @@ workflows:
       env: test
     steps:
       - stepId: s1
-        operationPath: /test
+        operationPath: '{$sourceDescriptions.api.url}#/paths/~1test/get'
         x-step:
           mode: smoke
 "#;

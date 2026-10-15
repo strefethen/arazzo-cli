@@ -26,6 +26,8 @@
 //! Engine-level routing for the same forms is owned by
 //! `crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs`.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,6 +53,7 @@ impl TempDir {
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 
@@ -195,7 +198,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -206,7 +209,7 @@ workflows:
           type: object
     steps:
       - stepId: update
-        operationPath: POST /items
+        operationId: fixturePostItems
         requestBody:
           contentType: application/json
           payload:
@@ -319,13 +322,13 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: check
-        operationPath: GET /items
+        operationId: fixtureGetItems
         successCriteria:
           - context: $response.body
             condition: '$.items.#(sku=="A").q'
             type: jsonpath
 "#,
-            base = server.base_url
+            base = common::fixture_url(&server.base_url)
         ),
     );
 

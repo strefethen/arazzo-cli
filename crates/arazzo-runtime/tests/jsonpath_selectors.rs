@@ -15,7 +15,7 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use arazzo_runtime::{EngineBuilder, ExecutionResult};
+use arazzo_runtime::ExecutionResult;
 use arazzo_spec::{
     ActionType, ExpressionType, OnAction, OutputValue, ParamLocation, Parameter, Replacement,
     RequestBody, SelectorObject, SelectorType, Step, StepTarget, SuccessCriterion, ValueSource,
@@ -82,7 +82,9 @@ fn jsonpath_replacement(target: &str, value: ValueSource) -> Replacement {
 fn body_step(step_id: &str, payload: Value, replacements: Vec<Replacement>) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath("POST /items".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+        )),
         request_body: Some(RequestBody {
             content_type: "application/json".to_string(),
             payload: Some(literal(payload)),
@@ -132,7 +134,7 @@ async fn execute(
         MockHttpResponse::json(200, RESPONSE_BODY)
     });
     let spec = make_spec_with_base(&server.base_url, workflows);
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building engine: {error}"),
     };
@@ -143,7 +145,7 @@ async fn execute(
 /// Resolves `wf` in dry-run mode; nothing is sent, and each dry-run request
 /// carries the resolved body and the preparation warnings.
 async fn dry_run(workflows: Vec<Workflow>, inputs: BTreeMap<String, Value>) -> ExecutionResult {
-    let engine = match EngineBuilder::new(make_spec(workflows))
+    let engine = match common::fixture_engine_builder(make_spec(workflows))
         .dry_run(true)
         .trace(true)
         .build()
@@ -193,7 +195,9 @@ async fn selectors_resolve_through_real_callers() {
     });
     let step = Step {
         step_id: "select".to_string(),
-        target: Some(StepTarget::OperationPath("POST /items".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1items/post".to_string(),
+        )),
         parameters: vec![
             Parameter {
                 name: "ids".to_string(),
@@ -321,7 +325,9 @@ async fn sub_workflow_and_action_parameters_resolve_jsonpath_selectors() {
         workflow_id: "child".to_string(),
         steps: vec![Step {
             step_id: "fetch".to_string(),
-            target: Some(StepTarget::OperationPath("GET /data".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+            )),
             ..Step::default()
         }],
         outputs: BTreeMap::from([
@@ -339,7 +345,9 @@ async fn sub_workflow_and_action_parameters_resolve_jsonpath_selectors() {
     // response the step just received.
     let main = workflow(vec![Step {
         step_id: "main".to_string(),
-        target: Some(StepTarget::OperationPath("GET /data".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+        )),
         success_criteria: vec![SuccessCriterion {
             condition: "$statusCode == 404".to_string(),
             ..SuccessCriterion::default()
@@ -371,7 +379,9 @@ async fn sub_workflow_and_action_parameters_resolve_jsonpath_selectors() {
         workflow_id: "fallback".to_string(),
         steps: vec![Step {
             step_id: "recover".to_string(),
-            target: Some(StepTarget::OperationPath("GET /data".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+            )),
             ..Step::default()
         }],
         outputs: BTreeMap::from([
@@ -398,7 +408,9 @@ async fn read_selectors_report_admission_and_evaluation_errors_once() {
     let oversized = format!("${}", ".a".repeat(129));
     let step = Step {
         step_id: "select".to_string(),
-        target: Some(StepTarget::OperationPath("GET /data".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1data/get".to_string(),
+        )),
         outputs: BTreeMap::from([
             (
                 "goessner".to_string(),

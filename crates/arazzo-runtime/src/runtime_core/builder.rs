@@ -2,9 +2,7 @@ use super::*;
 
 use std::path::{Path, PathBuf};
 
-use arazzo_spec::SourceDescription;
-
-use document_set::{BoundDocument, DocumentSet, ProvidedDocument};
+use document_set::{DocumentSet, ProvidedDocument};
 use state::{OperationIndex, OperationOrigin};
 
 pub struct EngineBuilder {
@@ -144,8 +142,9 @@ impl EngineBuilder {
     /// knows. Together with an absolute `$self` inside the document it gives
     /// the document an identity, so a `sourceDescriptions[].url` resolving to
     /// that identity binds to these bytes instead of reading the filesystem
-    /// (Arazzo 1.1 §5.5.2). A document with neither is still indexed; it is
-    /// simply not reachable by reference.
+    /// (Arazzo 1.1 §5.5.2). A document with neither cannot bind to a source and
+    /// its operations are unreachable. Provided documents are binding inputs,
+    /// not another operation namespace.
     pub fn openapi_spec(mut self, data: Vec<u8>, retrieval_path: Option<PathBuf>) -> Self {
         self.openapi_specs
             .push(ProvidedDocument::new(data, retrieval_path));
@@ -155,8 +154,8 @@ impl EngineBuilder {
     /// Consumes the builder and creates a fully configured [`Engine`].
     ///
     /// Returns an error if the HTTP client cannot be constructed (e.g. invalid
-    /// TLS settings), or if a `type: openapi` source description with a
-    /// relative url cannot be loaded, parsed, or yields no usable server base.
+    /// TLS settings), or if a `type: openapi` source description cannot bind
+    /// to a provided/local document, be parsed, or yield a usable server base.
     pub fn build(self) -> Result<Engine, RuntimeError> {
         let config = self.client_config.unwrap_or_default();
         let client = HttpClient::new(&config, self.max_response_bytes, self.replay_trace_steps)?;
@@ -171,25 +170,37 @@ impl EngineBuilder {
             self.openapi_specs,
         )?;
 
-        // Each source gets an effective request base: document sources (bound
-        // to provided bytes or read from a resolved `file://` url, eagerly
-        // here) derive it from the document's `servers`; legacy sources
-        // (absolute non-`file` url no provided document answers to) keep the
-        // literal url, exactly as before.
         let mut source_bases = BTreeMap::new();
         let mut source_ops = OperationIndex::default();
-        let mut base_url = String::new();
-        for (idx, sd) in self.spec.source_descriptions.iter().enumerate() {
-            let effective_base = match documents.bind(sd)? {
-                Some(bound) => index_bound_document(sd, &bound, &mut source_ops)?,
-                None => sd.url.clone(),
-            };
-            if idx == 0 {
-                base_url = effective_base.clone();
+        let mut source_documents = BTreeMap::new();
+        for sd in &self.spec.source_descriptions {
+            if let Some(bound) = documents.bind(sd)? {
+                let root: serde_yaml_ng::Value =
+                    serde_yaml_ng::from_slice(&bound.data).map_err(|err| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::SourceDescriptionParse,
+                            format!(
+                                "sourceDescription \"{}\": parsing OpenAPI document \"{}\": {err}",
+                                sd.name, bound.label
+                            ),
+                        )
+                    })?;
+                let base = operation_target::derive_servers_base(&root, sd, &bound.label)?;
+                let origin = OperationOrigin::Source {
+                    name: sd.name.clone(),
+                    path: bound.label.clone(),
+                };
+                operation_target::index_operations(&root, &origin, &mut source_ops);
+                source_bases.insert(sd.name.clone(), base);
+                source_documents.insert(
+                    sd.name.clone(),
+                    operation_target::BoundOpenApi {
+                        root,
+                        label: bound.label,
+                    },
+                );
             }
-            source_bases.insert(sd.name.clone(), effective_base);
         }
-        let openapi_specs_raw = documents.unclaimed();
 
         let mut source_descriptions_map = BTreeMap::new();
         for sd in &self.spec.source_descriptions {
@@ -217,14 +228,12 @@ impl EngineBuilder {
             inner: Arc::new(EngineInner {
                 index: WorkflowIndex {
                     spec: self.spec,
-                    base_url,
                     source_descriptions_map,
                     source_bases,
                     source_ops,
                     workflow_index,
                     step_indexes,
-                    openapi_specs_raw,
-                    op_index: OnceLock::new(),
+                    source_documents,
                 },
                 client,
                 parallel_mode: self.parallel,
@@ -254,248 +263,4 @@ impl EngineBuilder {
 /// read, so this list still covers every disk read the engine can perform.
 pub fn relative_openapi_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<(String, PathBuf)> {
     document_set::local_source_paths(spec, base_dir)
-}
-
-/// Indexes a bound document's operations and derives its request base from
-/// `servers[0].url`. A failure of the document's own `servers` is a build
-/// error naming the source and the document it was bound to — never a silent
-/// fallback. A Path Item or Operation Object whose `servers` yields no usable
-/// server is instead recorded on each operation it governs and refused when a
-/// step resolves one, the way an ambiguous operationId is: the document's
-/// other operations stay usable.
-fn index_bound_document(
-    sd: &SourceDescription,
-    bound: &BoundDocument,
-    source_ops: &mut OperationIndex,
-) -> Result<String, RuntimeError> {
-    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&bound.data).map_err(|err| {
-        RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionParse,
-            format!(
-                "sourceDescription \"{}\": parsing OpenAPI document \"{}\": {err}",
-                sd.name, bound.label
-            ),
-        )
-    })?;
-    let origin = OperationOrigin::Source {
-        name: sd.name.clone(),
-        path: bound.label.clone(),
-    };
-    index_operations(&root, &origin, source_ops);
-    derive_servers_base(&root, sd, &bound.label)
-}
-
-/// Derives the document's request base from its OpenAPI Object `servers`
-/// under the one Server Object rule, [`read_servers`]. The document level has
-/// no level above it, so declaring nothing is as fatal here as declaring
-/// something unusable.
-fn derive_servers_base(
-    root: &serde_yaml_ng::Value,
-    sd: &SourceDescription,
-    document: &str,
-) -> Result<String, RuntimeError> {
-    match read_servers(root.get("servers")) {
-        ServersField::Base(base) => Ok(base),
-        ServersField::Unusable(ServerIssue::Relative(url)) => Err(RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionParse,
-            format!(
-                "sourceDescription \"{}\": server URL \"{url}\" in OpenAPI document \
-                 \"{document}\" is relative; an absolute URL is required to derive the request \
-                 base",
-                sd.name,
-            ),
-        )),
-        ServersField::Undeclared
-        | ServersField::Unusable(ServerIssue::NotAnArray | ServerIssue::MissingUrl) => {
-            Err(RuntimeError::new(
-                RuntimeErrorKind::SourceDescriptionParse,
-                format!(
-                    "sourceDescription \"{}\": OpenAPI document \"{document}\" declares no \
-                     servers[0].url; an absolute server URL is required to derive the request \
-                     base",
-                    sd.name,
-                ),
-            ))
-        }
-    }
-}
-
-/// What one `servers` field yields.
-enum ServersField {
-    /// The field is absent, or an empty array: this level declares nothing.
-    Undeclared,
-    /// The request base the field yields.
-    Base(String),
-    /// The field is present but yields no usable server.
-    Unusable(ServerIssue),
-}
-
-/// The one Server Object rule, applied alike at the document, Path Item, and
-/// Operation levels: the first Server Object's `url`, its variables' defaults
-/// substituted, a trailing `/` trimmed, and a relative reference refused
-/// rather than guessed at.
-///
-/// `generate` repeats the substitution in its typed generation-time
-/// diagnostic, but that diagnostic still treats only a leading `/` as
-/// relative.
-fn read_servers(field: Option<&serde_yaml_ng::Value>) -> ServersField {
-    let Some(field) = field else {
-        return ServersField::Undeclared;
-    };
-    let Some(servers) = field.as_sequence() else {
-        return ServersField::Unusable(ServerIssue::NotAnArray);
-    };
-    let Some(first_server) = servers.first() else {
-        return ServersField::Undeclared;
-    };
-    let mut url = first_server
-        .get("url")
-        .and_then(serde_yaml_ng::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if url.is_empty() {
-        return ServersField::Unusable(ServerIssue::MissingUrl);
-    }
-    if let Some(vars) = first_server
-        .get("variables")
-        .and_then(serde_yaml_ng::Value::as_mapping)
-    {
-        for (name, var) in vars {
-            let (Some(name), Some(default)) = (
-                name.as_str(),
-                var.get("default").and_then(serde_yaml_ng::Value::as_str),
-            ) else {
-                continue;
-            };
-            url = url.replace(&format!("{{{name}}}"), default);
-        }
-    }
-    if document_set::is_relative_reference(&url) {
-        return ServersField::Unusable(ServerIssue::Relative(url));
-    }
-    ServersField::Base(url.trim_end_matches('/').to_string())
-}
-
-/// The server an operation declares for itself. The Operation Object's
-/// `servers` override the Path Item Object's (OpenAPI 3.2 §4.10.1), which
-/// override the document's (§4.9.1); a level that declares nothing passes to
-/// the one above, and the document level is the caller's.
-///
-/// This is the one place that precedence lives. A resolver that reaches an
-/// operation other than by operationId — the specification's JSON Pointer
-/// `operationPath`, not implemented — must call it too.
-fn operation_server(
-    path_item: &serde_yaml_ng::Value,
-    operation: &serde_yaml_ng::Value,
-) -> OperationServer {
-    for (level, object) in [
-        (ServerLevel::Operation, operation),
-        (ServerLevel::PathItem, path_item),
-    ] {
-        match read_servers(object.get("servers")) {
-            ServersField::Undeclared => continue,
-            ServersField::Base(base) => return OperationServer::Declared(base),
-            ServersField::Unusable(issue) => {
-                return OperationServer::Unusable(UnusableServer { level, issue })
-            }
-        }
-    }
-    OperationServer::Inherited
-}
-
-/// Parses an OpenAPI spec and populates the operation index.
-pub(super) fn parse_openapi_into_index(
-    data: &[u8],
-    origin: &OperationOrigin,
-    op_index: &mut OperationIndex,
-) -> Result<(), RuntimeError> {
-    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(data).map_err(|err| {
-        RuntimeError::new(
-            RuntimeErrorKind::SourceDescriptionParse,
-            format!("parsing OpenAPI spec: {err}"),
-        )
-    })?;
-    index_operations(&root, origin, op_index);
-    Ok(())
-}
-
-/// Walks an already-parsed OpenAPI document and indexes its operations.
-fn index_operations(
-    root: &serde_yaml_ng::Value,
-    origin: &OperationOrigin,
-    op_index: &mut OperationIndex,
-) {
-    let Some(paths) = root.get("paths") else {
-        return;
-    };
-    let Some(paths_map) = paths.as_mapping() else {
-        return;
-    };
-
-    let http_methods: BTreeSet<&str> = BTreeSet::from([
-        "get", "post", "put", "patch", "delete", "head", "options", "trace",
-    ]);
-
-    for (path_key, methods_value) in paths_map {
-        let Some(path) = path_key.as_str() else {
-            continue;
-        };
-        let Some(methods_map) = methods_value.as_mapping() else {
-            continue;
-        };
-
-        for (method_key, operation_value) in methods_map {
-            let Some(method) = method_key.as_str() else {
-                continue;
-            };
-            let method_l = method.to_lowercase();
-            if !http_methods.contains(method_l.as_str()) {
-                continue;
-            }
-            let Some(operation_map) = operation_value.as_mapping() else {
-                continue;
-            };
-            let op_id = operation_map
-                .get(serde_yaml_ng::Value::String("operationId".to_string()))
-                .and_then(serde_yaml_ng::Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            if op_id.is_empty() {
-                continue;
-            }
-            // Only a source-bound document's `servers` decide where its
-            // operations go. An explicitly provided spec keeps the
-            // engine-wide base, so its declarations are not read at all.
-            let server = match origin {
-                OperationOrigin::Source { .. } => operation_server(methods_value, operation_value),
-                OperationOrigin::ExplicitSpec { .. } => OperationServer::Inherited,
-            };
-            let entry = OperationEntry {
-                method: method.to_uppercase(),
-                path: path.to_string(),
-                origin: origin.clone(),
-                server,
-            };
-            // Every definition is retained, so an operationId defined by two
-            // documents is a lookup-time ambiguity rather than whichever one
-            // this loop reached last.
-            if let Some(previous) = op_index.last_origin(&op_id) {
-                warn_on_source_override(&op_id, previous, origin);
-            }
-            op_index.push(op_id, entry);
-        }
-    }
-}
-
-/// Emits a stderr warning when an explicitly provided OpenAPI spec overrides
-/// an operationId that a loaded source description document already defined.
-fn warn_on_source_override(op_id: &str, previous: &OperationOrigin, new: &OperationOrigin) {
-    if let (OperationOrigin::Source { name, path }, OperationOrigin::ExplicitSpec { ordinal }) =
-        (previous, new)
-    {
-        eprintln!(
-            "warning: operationId \"{op_id}\" from sourceDescription \"{name}\" ({path}) is \
-             overridden by explicitly provided OpenAPI spec #{ordinal}"
-        );
-    }
 }

@@ -83,18 +83,27 @@
       "id": "runtime.spec-operation-path-rejection",
       "area": "runtime",
       "authority": "arazzoSpec",
-      "specAnchors": ["spec/arazzo/v1.1.0.html#stepOperationPath", "spec/arazzo/v1.1.0.html#resolving-uri-fragments"],
-      "normativeLevels": ["MUST"],
-      "claim": "operationPath identifies a source description using Runtime Expression syntax and resolves its JSON Pointer to an operation described by that source.",
-      "status": "failClosed",
-      "owner": "ac-ff633",
-      "reason": "Finding the document this form names is delivered by document.source-reference-base-uri-and-identity. What this form still needs is the JSON Pointer half -- resolving the fragment against the bound document per 5.6.2 -- owned by ac-ff633, and whether this runtime adopts the idiom at all is entangled with the maintainer-owned F1/F5 decision in the conformance audit.",
+      "specAnchors": [
+        "spec/arazzo/v1.1.0.html#stepOperationPath",
+        "spec/arazzo/v1.1.0.html#resolving-uri-fragments"
+      ],
+      "normativeLevels": [
+        "MUST"
+      ],
+      "claim": "For directly routable Operation Objects under paths in a bound local or provided OpenAPI document, operationPath resolves its source URL expression and URI-fragment JSON Pointer to the same method, path and effective server as operationId. Missing, malformed, unbound and non-routable targets are refused before requests; network retrieval and general reference resolution remain unsupported.",
+      "status": "covered",
       "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/canonical_operation_targets.rs#pointers_and_ids_share_methods_paths_and_server_precedence",
+          "crates/arazzo-cli/tests/canonical_operation_targets.rs#imported_and_generated_id_and_no_id_targets_execute_the_same_provided_operation",
+          "crates/arazzo-cli/tests/canonical_operation_targets.rs#escaped_pointer_and_overlapping_sources_keep_method_path_and_server_identity"
+        ],
         "negative": [
-          "crates/arazzo-runtime/tests/operation_path_forms.rs#unsupported_forms_fail_with_a_stable_code_and_plan_no_request"
+          "crates/arazzo-runtime/tests/canonical_operation_targets.rs#malformed_custom_and_missing_targets_refuse_before_plan_or_traffic",
+          "crates/arazzo-cli/tests/operation_path_agreement.rs#runtime_and_validate_agree_on_every_operation_path_form"
         ],
         "zeroSideEffect": [
-          "crates/arazzo-runtime/tests/operation_path_forms.rs#unsupported_form_message_names_the_step_and_quotes_the_path"
+          "crates/arazzo-cli/tests/canonical_operation_targets.rs#invalid_or_unbound_targets_are_refused_before_any_traffic"
         ]
       }
     },

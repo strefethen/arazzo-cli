@@ -2,21 +2,16 @@ arazzo: 1.0.1
 info:
   title: Unsupported operationPath
   version: 1.0.0
-# The `operationPath` form the Arazzo specification defines — a Source
-# Description reference combined with a JSON Pointer, in runtime expression
-# syntax. This executor does not resolve JSON Pointers against a source
-# document, so the document validates with a warning and the step fails before
-# any request is built. It used to validate clean and then send a request to
-# `https://petstore.example.com/v1{$sourceDescriptions.petstore.url}#/paths/~1pets/get`.
+# Intentionally invalid: custom method/path syntax must be rejected.
 sourceDescriptions:
   - name: petstore
-    url: https://petstore.example.com/v1
+    url: ./petstore.openapi.yaml
     type: openapi
 workflows:
   - workflowId: probe
-    summary: Single step whose operationPath this runtime cannot resolve.
+    summary: Single step with a nonstandard operationPath.
     steps:
       - stepId: list-pets
-        operationPath: '{$sourceDescriptions.petstore.url}#/paths/~1pets/get'
+        operationPath: 'GET /pets'
         successCriteria:
           - condition: $statusCode == 200

@@ -1,6 +1,6 @@
 mod common;
 
-use arazzo_runtime::{redact_text_patterns, EngineBuilder, ExecutionResult, RuntimeErrorKind};
+use arazzo_runtime::{redact_text_patterns, ExecutionResult, RuntimeErrorKind};
 use arazzo_spec::{Step, StepTarget, SuccessCriterion, Workflow};
 use common::*;
 use serde_json::{json, Value};
@@ -28,7 +28,9 @@ fn workflow(expected_status: i64, outputs: BTreeMap<String, String>) -> Workflow
         workflow_id: "failure-redaction".to_string(),
         steps: vec![Step {
             step_id: "credential-response".to_string(),
-            target: Some(StepTarget::OperationPath("/credential".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1credential/get".to_string(),
+            )),
             success_criteria: vec![SuccessCriterion {
                 condition: format!("$statusCode == {expected_status}"),
                 ..SuccessCriterion::default()
@@ -51,7 +53,7 @@ async fn execute_response(
 ) -> ExecutionResult {
     let server = start_server(move |_method, _url, _headers, _body| response.clone());
     let spec = make_spec_with_base(&server.base_url, vec![workflow(expected_status, outputs)]);
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };

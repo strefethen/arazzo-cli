@@ -1030,7 +1030,7 @@ workflows:
   - workflowId: get-hackernews
     steps:
       - stepId: fetch-rss
-        operationPath: https://hnrss.org/frontpage
+        operationPath: '{$sourceDescriptions.hnrss.url}#/paths/~1frontpage/get'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:

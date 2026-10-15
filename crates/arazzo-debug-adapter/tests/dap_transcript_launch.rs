@@ -210,7 +210,7 @@ fn dap_launch_lifecycle_populates_debug_views() {
         Some("terminated")
     );
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 /// A `launch` without `spec` is answered with an error response, and the
@@ -263,23 +263,28 @@ fn write_temp_spec(base_url: &str) -> Result<PathBuf, String> {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-launch-{nanos}.yaml"));
+    let document_url = dap_test_support::write_openapi_document(
+        &path,
+        base_url,
+        &[("/rss", "get", None), ("/parse", "get", None)],
+    )?;
     let spec = format!(
         r#"
-arazzo: "1.0.0"
+arazzo: "1.1.0"
 info:
   title: Demo
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: {base_url}
+    url: {document_url}
     type: openapi
 workflows:
   - workflowId: get-hackernews
     steps:
       - stepId: fetch-rss
-        operationPath: {base_url}/rss
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1rss/get'
       - stepId: parse-rss
-        operationPath: {base_url}/parse
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1parse/get'
 "#
     );
     fs::write(&path, spec).map_err(|err| format!("writing temp spec: {err}"))?;

@@ -338,7 +338,7 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
         Some("https://example.com/one")
     );
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn dap_evaluate_condition_with_response_json_pointer() {
         Some("Apple Park Way, Cupertino")
     );
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 fn write_temp_spec(base_url: &str) -> PathBuf {
@@ -448,21 +448,24 @@ fn write_temp_spec(base_url: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-checkpoint-{nanos}.yaml"));
+    let document_url =
+        dap_test_support::write_openapi_document(&path, base_url, &[("/rss", "get", None)])
+            .unwrap_or_else(|err| panic!("creating transcript document: {err}"));
     let spec = format!(
         r#"
-arazzo: "1.0.0"
+arazzo: "1.1.0"
 info:
   title: Demo
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: {base_url}
+    url: {document_url}
     type: openapi
 workflows:
   - workflowId: get-hackernews
     steps:
       - stepId: fetch-rss
-        operationPath: /rss
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1rss/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:
@@ -481,21 +484,24 @@ fn write_temp_geo_spec(base_url: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-geo-{nanos}.yaml"));
+    let document_url =
+        dap_test_support::write_openapi_document(&path, base_url, &[("/geo", "get", None)])
+            .unwrap_or_else(|err| panic!("creating transcript document: {err}"));
     let spec = format!(
         r#"
-arazzo: "1.0.0"
+arazzo: "1.1.0"
 info:
   title: Geo
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: {base_url}
+    url: {document_url}
     type: openapi
 workflows:
   - workflowId: geocode
     steps:
       - stepId: lookup
-        operationPath: /geo
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1geo/get'
         successCriteria:
           - condition: $statusCode == 200
 "#

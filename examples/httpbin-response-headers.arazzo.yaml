@@ -26,7 +26,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -41,7 +41,7 @@ workflows:
     steps:
       - stepId: get-custom-headers
         description: Ask httpbin to return X-Request-Id and X-Rate-Limit headers
-        operationPath: /response-headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1response-headers/get'
         parameters:
           - name: X-Request-Id
             in: query
@@ -72,7 +72,7 @@ workflows:
     steps:
       - stepId: get-trace-id
         description: Request a trace ID from the server via /response-headers
-        operationPath: /response-headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1response-headers/get'
         parameters:
           - name: X-Trace-Id
             in: query
@@ -84,7 +84,7 @@ workflows:
 
       - stepId: forward-trace-id
         description: Forward the extracted trace ID as a request header to /headers
-        operationPath: /headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1headers/get'
         parameters:
           - name: X-Forwarded-Trace
             in: header
@@ -108,7 +108,7 @@ workflows:
     steps:
       - stepId: simple-get
         description: Fetch /get and inspect the standard response headers
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:

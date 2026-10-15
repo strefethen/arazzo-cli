@@ -99,14 +99,18 @@ fn rerun_workflow() -> Workflow {
         steps: vec![
             Step {
                 step_id: "a".to_string(),
-                target: Some(StepTarget::OperationPath("/a".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([("tok".to_string(), "$response.body#/tok".into())]),
                 ..Step::default()
             },
             Step {
                 step_id: "b".to_string(),
-                target: Some(StepTarget::OperationPath("/b".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                )),
                 // Reading `a`'s output puts `a` in `execute_step`'s closure for `b`.
                 parameters: vec![Parameter {
                     name: "tok".to_string(),
@@ -149,7 +153,7 @@ fn start_rerun_server(requests: &RequestLog) -> TestServer {
 }
 
 fn rerun_engine(server: &TestServer) -> EngineBuilder {
-    EngineBuilder::new(make_spec_with_base(
+    common::fixture_engine_builder(make_spec_with_base(
         &server.base_url,
         vec![rerun_workflow()],
     ))
@@ -254,7 +258,9 @@ fn retry_workflow() -> Workflow {
         steps: vec![
             Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/s1".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1s1/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     name: "retry-s1".to_string(),
@@ -266,7 +272,9 @@ fn retry_workflow() -> Workflow {
             },
             Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/s2".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1s2/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             },
@@ -297,7 +305,7 @@ fn start_retry_server(delays_ms: [u64; 2]) -> TestServer {
 const NO_DELAYS: [u64; 2] = [0, 0];
 
 fn retry_engine(server: &TestServer, observer: &Arc<TestObserver>) -> EngineBuilder {
-    EngineBuilder::new(make_spec_with_base(
+    common::fixture_engine_builder(make_spec_with_base(
         &server.base_url,
         vec![retry_workflow()],
     ))
@@ -479,7 +487,9 @@ const PARITY_WORKFLOW: &str = "parity";
 fn retried_step(step_id: &str, retry_limit: u64) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath(format!("/{step_id}"))),
+        target: Some(StepTarget::OperationPath(format!(
+            "{{$sourceDescriptions.test.url}}#/paths/~1{step_id}/get"
+        ))),
         success_criteria: success_200(),
         outputs: BTreeMap::from([("ok".to_string(), "$response.body#/ok".into())]),
         on_failure: vec![OnAction {
@@ -545,7 +555,7 @@ struct ParityRun {
 async fn run_parity_workflow(parallel: bool) -> ParityRun {
     let server = start_parity_server();
     let engine = build_engine(
-        EngineBuilder::new(make_spec_with_base(
+        common::fixture_engine_builder(make_spec_with_base(
             &server.base_url,
             vec![parity_workflow()],
         ))
@@ -719,7 +729,7 @@ async fn run_single_step_workflow(single_step: bool) -> LifecycleRun {
     let observer = Arc::new(TestObserver::default());
     let hook = Arc::new(TestTraceHook::default());
     let engine = build_engine(
-        EngineBuilder::new(make_spec_with_base(
+        common::fixture_engine_builder(make_spec_with_base(
             &server.base_url,
             vec![single_step_workflow()],
         ))
@@ -866,7 +876,7 @@ async fn run_cancelled_during_announcement(single_step: bool) -> CancelledRun {
     });
     let observer = Arc::new(CancelOnStepStarted::default());
     let engine = build_engine(
-        EngineBuilder::new(make_spec_with_base(
+        common::fixture_engine_builder(make_spec_with_base(
             &server.base_url,
             vec![single_step_workflow()],
         ))

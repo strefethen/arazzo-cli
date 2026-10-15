@@ -806,7 +806,7 @@ struct ParsedStepTarget {
 fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
-            let (method, target) = presented_method_and_target(path, step.request_body.is_some());
+            let (method, target) = presented_method_and_target(path);
             ParsedStepTarget {
                 method: method.map(str::to_string),
                 url: Some(target.to_string()),
@@ -926,11 +926,11 @@ mod tests {
     #[test]
     fn step_info_method_and_url_agree_with_the_runtime() {
         let info = build_step_info(&step("get /pets", false), 0);
-        assert_eq!(info.method.as_deref(), Some("GET"));
+        assert_eq!(info.method, None);
         assert_eq!(info.url.as_deref(), Some("get /pets"));
 
         let info = build_step_info(&step("get /pets", true), 0);
-        assert_eq!(info.method.as_deref(), Some("POST"));
+        assert_eq!(info.method, None);
         assert_eq!(info.url.as_deref(), Some("get /pets"));
 
         let spec_form = "{$sourceDescriptions.petstore.url}#/paths/~1pets/get";
@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(info.url.as_deref(), Some(spec_form));
 
         let info = build_step_info(&step("POST {petstore}./pets", false), 0);
-        assert_eq!(info.method.as_deref(), Some("POST"));
-        assert_eq!(info.url.as_deref(), Some("{petstore}./pets"));
+        assert_eq!(info.method, None);
+        assert_eq!(info.url.as_deref(), Some("POST {petstore}./pets"));
     }
 }

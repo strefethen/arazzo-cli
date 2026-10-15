@@ -17,7 +17,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -25,7 +25,7 @@ workflows:
     summary: Overlay a templated JSON request body before sending
     steps:
       - stepId: post-replaced-body
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:

@@ -3,7 +3,7 @@
         let mut spec = valid_spec();
         spec.workflows[0].steps.push(Step {
             step_id: "s2".to_string(),
-            target: Some(StepTarget::OperationPath("/second".to_string())),
+            target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1second/get".to_string())),
             depends_on: vec!["s1".to_string()],
             ..Step::default()
         });
@@ -28,7 +28,7 @@
             depends_on: vec!["wf1".to_string()],
             steps: vec![Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/second".to_string())),
+                target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1second/get".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -129,7 +129,7 @@
             depends_on: vec!["wf1".to_string()],
             steps: vec![Step {
                 step_id: "s2".to_string(),
-                target: Some(StepTarget::OperationPath("/second".to_string())),
+                target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1second/get".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -150,7 +150,7 @@
         spec.workflows[0].steps[0].depends_on = vec!["s2".to_string()];
         spec.workflows[0].steps.push(Step {
             step_id: "s2".to_string(),
-            target: Some(StepTarget::OperationPath("/second".to_string())),
+            target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1second/get".to_string())),
             depends_on: vec!["s1".to_string()],
             ..Step::default()
         });

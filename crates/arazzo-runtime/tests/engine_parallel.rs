@@ -1,8 +1,8 @@
 mod common;
 
 use arazzo_runtime::{
-    DebugController, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionObserver,
-    ExecutionResult, ObserverEvent, RuntimeErrorKind, SequentialFallback, SequentialFallbackReason,
+    DebugController, EngineEvent, ExecutionEventKind, ExecutionObserver, ExecutionResult,
+    ObserverEvent, RuntimeErrorKind, SequentialFallback, SequentialFallbackReason,
     TraceDecisionPath, TraceHook,
 };
 use arazzo_spec::{
@@ -33,7 +33,9 @@ fn retry_on_503(retry_limit: u64) -> OnAction {
 fn http_step(step_id: &str, on_failure: Vec<OnAction>) -> Step {
     Step {
         step_id: step_id.to_string(),
-        target: Some(StepTarget::OperationPath(format!("/{step_id}"))),
+        target: Some(StepTarget::OperationPath(format!(
+            "{{$sourceDescriptions.test.url}}#/paths/~1{step_id}/get"
+        ))),
         success_criteria: success_200(),
         on_failure,
         ..Step::default()
@@ -74,19 +76,25 @@ async fn execute_parallel_independent_steps() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "c".to_string(),
-                    target: Some(StepTarget::OperationPath("/c".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1c/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -95,7 +103,7 @@ async fn execute_parallel_independent_steps() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -124,13 +132,17 @@ async fn execute_parallel_runs_independent_steps_concurrently() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -150,7 +162,7 @@ async fn execute_parallel_runs_independent_steps_concurrently() {
     }
     let seq_elapsed = seq_started.elapsed();
 
-    let parallel = match EngineBuilder::new(spec).parallel(true).build() {
+    let parallel = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -185,7 +197,9 @@ async fn execute_parallel_with_dependencies() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "id".to_string(),
@@ -195,7 +209,9 @@ async fn execute_parallel_with_dependencies() {
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "id".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -219,7 +235,7 @@ async fn execute_parallel_with_dependencies() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -257,13 +273,17 @@ async fn execute_parallel_respects_explicit_local_depends_on() {
             steps: vec![
                 Step {
                     step_id: "prerequisite".to_string(),
-                    target: Some(StepTarget::OperationPath("/prerequisite".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1prerequisite/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "dependent".to_string(),
-                    target: Some(StepTarget::OperationPath("/dependent".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1dependent/get".to_string(),
+                    )),
                     depends_on: vec!["prerequisite".to_string()],
                     success_criteria: success_200(),
                     ..Step::default()
@@ -273,7 +293,7 @@ async fn execute_parallel_respects_explicit_local_depends_on() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -306,13 +326,17 @@ async fn execute_parallel_detects_explicit_depends_on_cycle_before_http() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     depends_on: vec!["b".to_string()],
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     depends_on: vec!["a".to_string()],
                     ..Step::default()
                 },
@@ -321,7 +345,7 @@ async fn execute_parallel_detects_explicit_depends_on_cycle_before_http() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -356,7 +380,9 @@ async fn execute_parallel_fallback_on_control_flow() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     on_success: vec![OnAction {
                         type_: Some(ActionType::End),
@@ -366,7 +392,9 @@ async fn execute_parallel_fallback_on_control_flow() {
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -375,7 +403,7 @@ async fn execute_parallel_fallback_on_control_flow() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -454,7 +482,9 @@ async fn execute_parallel_fallback_on_subworkflow() {
                     },
                     Step {
                         step_id: "after".to_string(),
-                        target: Some(StepTarget::OperationPath("/after".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1after/get".to_string(),
+                        )),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
@@ -465,7 +495,9 @@ async fn execute_parallel_fallback_on_subworkflow() {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "child-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/child".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1child/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -474,7 +506,7 @@ async fn execute_parallel_fallback_on_subworkflow() {
         ],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -553,7 +585,7 @@ async fn execute_parallel_retries_a_failed_step_inside_its_level() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -602,7 +634,7 @@ async fn execute_parallel_retry_exhausts_its_budget_and_still_records_later_sibl
         }],
     );
     let observer = Arc::new(TestObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .parallel(true)
         .trace(true)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
@@ -710,7 +742,7 @@ async fn execute_parallel_routes_a_failure_after_the_outputs_its_criteria_read()
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -747,7 +779,7 @@ async fn execute_parallel_accepts_routing_criteria_that_read_the_routed_step() {
         }],
         ..Workflow::default()
     }]);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .parallel(true)
         .dry_run(true)
         .build()
@@ -811,7 +843,7 @@ async fn execute_parallel_keeps_retry_references_sequential() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -850,7 +882,7 @@ async fn execute_step_reports_that_parallel_mode_does_not_apply() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -880,7 +912,7 @@ async fn execute_parallel_reports_an_attached_debugger() {
         steps: vec![http_step("a", Vec::new()), http_step("b", Vec::new())],
         ..Workflow::default()
     }]);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .parallel(true)
         .dry_run(true)
         .debug_controller(Arc::new(DebugController::new()))
@@ -922,13 +954,17 @@ async fn execute_parallel_step_failure() {
             steps: vec![
                 Step {
                     step_id: "ok".to_string(),
-                    target: Some(StepTarget::OperationPath("/ok".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "fail".to_string(),
-                    target: Some(StepTarget::OperationPath("/fail".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -937,7 +973,7 @@ async fn execute_parallel_step_failure() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -977,7 +1013,9 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     outputs: BTreeMap::from([(
                         "x".to_string(),
@@ -987,7 +1025,9 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -1004,7 +1044,9 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                 },
                 Step {
                     step_id: "c".to_string(),
-                    target: Some(StepTarget::OperationPath("/c".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1c/get".to_string(),
+                    )),
                     parameters: vec![arazzo_spec::Parameter {
                         name: "x".to_string(),
                         in_: Some(ParamLocation::Query),
@@ -1021,7 +1063,9 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
                 },
                 Step {
                     step_id: "d".to_string(),
-                    target: Some(StepTarget::OperationPath("/d".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1d/get".to_string(),
+                    )),
                     parameters: vec![
                         arazzo_spec::Parameter {
                             name: "y".to_string(),
@@ -1051,7 +1095,7 @@ async fn execute_parallel_outputs_preserved_and_diamond_dependency() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).build() {
+    let engine = match common::fixture_engine_builder(spec).parallel(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1094,13 +1138,17 @@ async fn trace_hook_invoked_and_captures_fields() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1110,7 +1158,7 @@ async fn trace_hook_invoked_and_captures_fields() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
     {
@@ -1176,13 +1224,17 @@ async fn trace_hook_workflow_id_subworkflow_and_error_capture() {
                 steps: vec![
                     Step {
                         step_id: "s1".to_string(),
-                        target: Some(StepTarget::OperationPath("/api".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1api/get".to_string(),
+                        )),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
                     Step {
                         step_id: "s2".to_string(),
-                        target: Some(StepTarget::OperationPath("/fail".to_string())),
+                        target: Some(StepTarget::OperationPath(
+                            "{$sourceDescriptions.test.url}#/paths/~1fail/get".to_string(),
+                        )),
                         success_criteria: success_200(),
                         ..Step::default()
                     },
@@ -1193,7 +1245,7 @@ async fn trace_hook_workflow_id_subworkflow_and_error_capture() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
     {
@@ -1220,7 +1272,9 @@ async fn trace_hook_workflow_id_subworkflow_and_error_capture() {
     assert!(!before.is_empty());
     assert_eq!(before[0].workflow_id, "parent".to_string());
     assert_eq!(before[0].workflow_id_ref, "child".to_string());
-    assert!(before.iter().any(|ev| ev.operation_path == "/api"));
+    assert!(before
+        .iter()
+        .any(|ev| ev.operation_path == "{$sourceDescriptions.test.url}#/paths/~1api/get"));
     assert!(after.iter().any(|ev| ev.status_code == 500));
 }
 
@@ -1243,19 +1297,25 @@ async fn trace_hook_parallel_events_are_deterministic() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/slow".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1slow/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/fast".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1fast/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    target: Some(StepTarget::OperationPath("/mid".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1mid/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1265,7 +1325,7 @@ async fn trace_hook_parallel_events_are_deterministic() {
     );
 
     let hook = Arc::new(TestTraceHook::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .parallel(true)
         .trace_hook(Arc::clone(&hook) as Arc<dyn TraceHook>)
         .build()
@@ -1313,7 +1373,9 @@ async fn trace_records_sequential_include_request_response_criteria_decision() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/ok".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 outputs: BTreeMap::from([(
                     "value".to_string(),
@@ -1329,7 +1391,7 @@ async fn trace_records_sequential_include_request_response_criteria_decision() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1347,7 +1409,10 @@ async fn trace_records_sequential_include_request_response_criteria_decision() {
     assert_eq!(record.step_id, "s1");
     assert_eq!(record.attempt, 1);
     assert_eq!(record.kind, "http");
-    assert_eq!(record.operation_path, "/ok");
+    assert_eq!(
+        record.operation_path,
+        "{$sourceDescriptions.test.url}#/paths/~1ok/get"
+    );
     assert_eq!(record.decision.path, TraceDecisionPath::Next);
     assert_eq!(
         record
@@ -1393,7 +1458,9 @@ async fn trace_records_retry_attempts_increment() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "retry-step".to_string(),
-                target: Some(StepTarget::OperationPath("/retry".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1retry/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 on_failure: vec![OnAction {
                     type_: Some(ActionType::Retry),
@@ -1406,7 +1473,7 @@ async fn trace_records_retry_attempts_increment() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1452,7 +1519,7 @@ async fn trace_records_capture_step_error() {
         ..Workflow::default()
     }]);
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1489,7 +1556,9 @@ async fn trace_records_subworkflow_parent_and_child_workflow_ids() {
                 workflow_id: "child".to_string(),
                 steps: vec![Step {
                     step_id: "child-step".to_string(),
-                    target: Some(StepTarget::OperationPath("/child".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1child/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 }],
@@ -1498,7 +1567,7 @@ async fn trace_records_subworkflow_parent_and_child_workflow_ids() {
         ],
     );
 
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1557,19 +1626,25 @@ async fn trace_records_parallel_order_is_deterministic_by_seq() {
             steps: vec![
                 Step {
                     step_id: "s1".to_string(),
-                    target: Some(StepTarget::OperationPath("/slow".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1slow/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s2".to_string(),
-                    target: Some(StepTarget::OperationPath("/fast".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1fast/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "s3".to_string(),
-                    target: Some(StepTarget::OperationPath("/mid".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1mid/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1578,7 +1653,11 @@ async fn trace_records_parallel_order_is_deterministic_by_seq() {
         }],
     );
 
-    let engine = match EngineBuilder::new(spec).parallel(true).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec)
+        .parallel(true)
+        .trace(true)
+        .build()
+    {
         Ok(e) => e,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -1690,7 +1769,7 @@ async fn run_parallel_retry_level(delays_ms: [u64; 3]) -> (ArazzoSpec, Execution
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec.clone())
+    let engine = match common::fixture_engine_builder(spec.clone())
         .parallel(true)
         .trace(true)
         .build()
@@ -1739,7 +1818,7 @@ async fn parallel_retry_trace_replays_to_the_same_stream() {
     let steps = recorded.trace_steps().into_iter().cloned().collect();
 
     // The recording server is gone, so every response must come from the trace.
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .parallel(true)
         .trace(true)
         .replay_trace_steps(steps)
@@ -1768,7 +1847,9 @@ async fn observer_receives_full_event_sequence() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -1812,7 +1893,9 @@ async fn observer_and_trace_hook_coexist() {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/test".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+                )),
                 success_criteria: success_200(),
                 ..Step::default()
             }],
@@ -1821,7 +1904,7 @@ async fn observer_and_trace_hook_coexist() {
     );
     let observer = Arc::new(TestObserver::default());
     let trace_hook = Arc::new(TestTraceHook::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .trace_hook(Arc::clone(&trace_hook) as Arc<dyn TraceHook>)
         .build()
@@ -1854,13 +1937,15 @@ async fn observer_receives_dry_run_request_prepared() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/test".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+            )),
             ..Step::default()
         }],
         ..Workflow::default()
     }]);
     let observer = Arc::new(TestObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .dry_run(true)
         .build()
@@ -1887,7 +1972,9 @@ async fn observer_no_events_without_observer() {
         workflow_id: "wf".to_string(),
         steps: vec![Step {
             step_id: "s1".to_string(),
-            target: Some(StepTarget::OperationPath("/test".to_string())),
+            target: Some(StepTarget::OperationPath(
+                "{$sourceDescriptions.test.url}#/paths/~1test/get".to_string(),
+            )),
             success_criteria: success_200(),
             ..Step::default()
         }],
@@ -1911,13 +1998,17 @@ async fn observer_parallel_receives_events_for_all_steps() {
             steps: vec![
                 Step {
                     step_id: "a".to_string(),
-                    target: Some(StepTarget::OperationPath("/a".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
                 Step {
                     step_id: "b".to_string(),
-                    target: Some(StepTarget::OperationPath("/b".to_string())),
+                    target: Some(StepTarget::OperationPath(
+                        "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+                    )),
                     success_criteria: success_200(),
                     ..Step::default()
                 },
@@ -1926,7 +2017,7 @@ async fn observer_parallel_receives_events_for_all_steps() {
         }],
     );
     let observer = Arc::new(TestObserver::default());
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
         .parallel(true)
         .build()

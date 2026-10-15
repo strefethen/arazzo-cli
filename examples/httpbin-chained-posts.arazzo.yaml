@@ -28,7 +28,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -44,7 +44,7 @@ workflows:
     steps:
       - stepId: post-initial
         description: Post the initial payload and capture the echoed data
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:
@@ -59,7 +59,7 @@ workflows:
 
       - stepId: post-enriched
         description: Take step 1's outputs and post them as an enriched payload
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:
@@ -74,7 +74,7 @@ workflows:
 
       - stepId: post-final
         description: Summarize the chain by posting the enriched data
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:
@@ -102,7 +102,7 @@ workflows:
     steps:
       - stepId: check-status
         description: Check that the service is up; on success skip to the final step
-        operationPath: /status/200
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1200/get'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
@@ -112,7 +112,7 @@ workflows:
 
       - stepId: fallback-request
         description: This step is skipped when step 1 succeeds
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: fallback
             in: query
@@ -122,7 +122,7 @@ workflows:
 
       - stepId: final-report
         description: Final step that runs whether we arrived by skip or normal flow
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: status
             in: query
@@ -154,7 +154,7 @@ workflows:
     steps:
       - stepId: create-resource
         description: Create a new resource with the provided name
-        operationPath: POST /post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
         requestBody:
           contentType: application/json
           payload:
@@ -167,7 +167,7 @@ workflows:
 
       - stepId: update-resource
         description: Update the resource using interpolation to build a descriptive label
-        operationPath: PUT /put
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1put/put'
         requestBody:
           contentType: application/json
           payload:

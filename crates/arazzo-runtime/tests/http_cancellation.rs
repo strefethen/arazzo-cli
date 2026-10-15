@@ -264,19 +264,28 @@ fn terminal_actions() -> Vec<OnAction> {
 }
 
 fn terminal_routing_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
-    let mut stalled = request_step("stalled", "/stall");
+    let mut stalled = request_step(
+        "stalled",
+        "{$sourceDescriptions.test.url}#/paths/~1stall/get",
+    );
     stalled.on_failure = terminal_actions();
     let mut spec = make_spec_with_base(
         base_url,
         vec![
             Workflow {
                 workflow_id: "main".to_string(),
-                steps: vec![stalled, request_step("later", "/later")],
+                steps: vec![
+                    stalled,
+                    request_step("later", "{$sourceDescriptions.test.url}#/paths/~1later/get"),
+                ],
                 ..Workflow::default()
             },
             Workflow {
                 workflow_id: "recovery".to_string(),
-                steps: vec![request_step("recover", "/recovery")],
+                steps: vec![request_step(
+                    "recover",
+                    "{$sourceDescriptions.test.url}#/paths/~1recovery/get",
+                )],
                 ..Workflow::default()
             },
         ],
@@ -293,11 +302,17 @@ fn parallel_level_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
         vec![Workflow {
             workflow_id: "parallel".to_string(),
             steps: vec![
-                request_step("stalled", "/stall"),
-                request_step("admitted", "/admitted"),
+                request_step(
+                    "stalled",
+                    "{$sourceDescriptions.test.url}#/paths/~1stall/get",
+                ),
+                request_step(
+                    "admitted",
+                    "{$sourceDescriptions.test.url}#/paths/~1admitted/get",
+                ),
                 Step {
                     depends_on: vec!["stalled".to_string(), "admitted".to_string()],
-                    ..request_step("later", "/later")
+                    ..request_step("later", "{$sourceDescriptions.test.url}#/paths/~1later/get")
                 },
             ],
             ..Workflow::default()
@@ -317,7 +332,7 @@ fn engine_builder(
         timeout: http_budget,
         ..ClientConfig::default()
     };
-    EngineBuilder::new(spec)
+    common::fixture_engine_builder(spec)
         .client_config(config)
         .parallel(parallel)
         .trace(true)
@@ -568,7 +583,7 @@ fn one_level_spec(base_url: &str, second_path: &str) -> arazzo_spec::ArazzoSpec 
         vec![Workflow {
             workflow_id: "level".to_string(),
             steps: vec![
-                request_step("first", "/first"),
+                request_step("first", "{$sourceDescriptions.test.url}#/paths/~1first/get"),
                 request_step("second", second_path),
             ],
             ..Workflow::default()
@@ -579,7 +594,7 @@ fn one_level_spec(base_url: &str, second_path: &str) -> arazzo_spec::ArazzoSpec 
 /// `main`'s only step fails, and its failure action hands the invocation to
 /// `target` with a goto.
 fn goto_workflow_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
-    let mut hop = request_step("hop", "/fail");
+    let mut hop = request_step("hop", "{$sourceDescriptions.test.url}#/paths/~1fail/get");
     hop.on_failure = vec![OnAction {
         type_: Some(ActionType::Goto),
         workflow_id: "target".to_string(),
@@ -595,7 +610,10 @@ fn goto_workflow_spec(base_url: &str) -> arazzo_spec::ArazzoSpec {
             },
             Workflow {
                 workflow_id: "target".to_string(),
-                steps: vec![request_step("land", "/landed")],
+                steps: vec![request_step(
+                    "land",
+                    "{$sourceDescriptions.test.url}#/paths/~1landed/get",
+                )],
                 ..Workflow::default()
             },
         ],
@@ -710,13 +728,19 @@ async fn nested_workflow_preserves_terminal_cancel_classification() {
                         target: Some(StepTarget::WorkflowId("inner".to_string())),
                         ..Step::default()
                     },
-                    request_step("outer-later", "/later"),
+                    request_step(
+                        "outer-later",
+                        "{$sourceDescriptions.test.url}#/paths/~1later/get",
+                    ),
                 ],
                 ..Workflow::default()
             },
             Workflow {
                 workflow_id: "inner".to_string(),
-                steps: vec![request_step("inner-http", "/nested")],
+                steps: vec![request_step(
+                    "inner-http",
+                    "{$sourceDescriptions.test.url}#/paths/~1nested/get",
+                )],
                 ..Workflow::default()
             },
         ],
@@ -741,7 +765,7 @@ async fn nested_workflow_preserves_terminal_cancel_classification() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workflow_retry_reference_preserves_terminal_cancel_classification() {
     let mut server = StallServer::start("/recovery", StallPhase::Headers);
-    let mut failed = request_step("failed", "/fail");
+    let mut failed = request_step("failed", "{$sourceDescriptions.test.url}#/paths/~1fail/get");
     failed.on_failure = vec![OnAction {
         type_: Some(ActionType::Retry),
         workflow_id: "recovery".to_string(),
@@ -758,7 +782,10 @@ async fn workflow_retry_reference_preserves_terminal_cancel_classification() {
             },
             Workflow {
                 workflow_id: "recovery".to_string(),
-                steps: vec![request_step("recovery-http", "/recovery")],
+                steps: vec![request_step(
+                    "recovery-http",
+                    "{$sourceDescriptions.test.url}#/paths/~1recovery/get",
+                )],
                 ..Workflow::default()
             },
         ],
@@ -791,7 +818,7 @@ async fn workflow_retry_reference_preserves_terminal_cancel_classification() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn step_retry_reference_preserves_terminal_cancel_classification() {
     let mut server = StallServer::start("/recovery", StallPhase::Body);
-    let mut failed = request_step("failed", "/fail");
+    let mut failed = request_step("failed", "{$sourceDescriptions.test.url}#/paths/~1fail/get");
     failed.on_failure = vec![OnAction {
         type_: Some(ActionType::Retry),
         step_id: "recovery-step".to_string(),
@@ -802,7 +829,13 @@ async fn step_retry_reference_preserves_terminal_cancel_classification() {
         &server.base_url,
         vec![Workflow {
             workflow_id: "main".to_string(),
-            steps: vec![failed, request_step("recovery-step", "/recovery")],
+            steps: vec![
+                failed,
+                request_step(
+                    "recovery-step",
+                    "{$sourceDescriptions.test.url}#/paths/~1recovery/get",
+                ),
+            ],
             ..Workflow::default()
         }],
     );
@@ -900,7 +933,10 @@ async fn parallel_external_cancel_records_the_level_without_completing_the_workf
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_success_reported_before_a_cancel_stays_a_success() {
     let server = StallServer::start("/never", StallPhase::Headers);
-    let spec = one_level_spec(&server.base_url, "/second");
+    let spec = one_level_spec(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1second/get",
+    );
     let result = cancel_while_completion_is_reported(spec, true, "level").await;
 
     assert_eq!(reported_completions(&result), [None]);
@@ -910,7 +946,10 @@ async fn parallel_success_reported_before_a_cancel_stays_a_success() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_failure_reported_before_a_cancel_stays_that_failure() {
     let server = StallServer::start("/never", StallPhase::Headers);
-    let spec = one_level_spec(&server.base_url, "/fail");
+    let spec = one_level_spec(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1fail/get",
+    );
     let result = cancel_while_completion_is_reported(spec, true, "level").await;
 
     assert!(matches!(
@@ -938,7 +977,10 @@ async fn uncancelled_chunked_response_still_succeeds() {
         &server.base_url,
         vec![Workflow {
             workflow_id: "success".to_string(),
-            steps: vec![request_step("success-step", "/stall")],
+            steps: vec![request_step(
+                "success-step",
+                "{$sourceDescriptions.test.url}#/paths/~1stall/get",
+            )],
             ..Workflow::default()
         }],
     );
@@ -962,7 +1004,10 @@ async fn uncancelled_chunked_response_still_succeeds() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_http_timeout_still_executes_failure_action() {
     let mut server = StallServer::start("/stall", StallPhase::Headers);
-    let mut step = request_step("timeout", "/stall");
+    let mut step = request_step(
+        "timeout",
+        "{$sourceDescriptions.test.url}#/paths/~1stall/get",
+    );
     step.on_failure = vec![OnAction {
         type_: Some(ActionType::End),
         ..OnAction::default()
@@ -1009,7 +1054,10 @@ async fn ordinary_transport_failure_still_executes_failure_action() {
     );
     drop(listener);
 
-    let mut step = request_step("connection-refused", "/unreachable");
+    let mut step = request_step(
+        "connection-refused",
+        "{$sourceDescriptions.test.url}#/paths/~1unreachable/get",
+    );
     step.on_failure = vec![OnAction {
         type_: Some(ActionType::End),
         ..OnAction::default()

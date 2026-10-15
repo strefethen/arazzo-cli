@@ -3,7 +3,7 @@
         let mut spec = valid_spec();
         spec.workflows[0].steps.push(Step {
             step_id: "s2".to_string(),
-            target: Some(StepTarget::OperationPath("/other".to_string())),
+            target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1other/get".to_string())),
             ..Step::default()
         });
         spec.workflows[0].steps[0].on_success = vec![OnAction {
@@ -39,7 +39,7 @@
             workflow_id: "wf2".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/test2".to_string())),
+                target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1test2/get".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()
@@ -127,7 +127,7 @@
             workflow_id: "wf2".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/test2".to_string())),
+                target: Some(StepTarget::OperationPath("{$sourceDescriptions.api.url}#/paths/~1test2/get".to_string())),
                 ..Step::default()
             }],
             ..Workflow::default()

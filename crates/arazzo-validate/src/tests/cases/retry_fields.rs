@@ -62,7 +62,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: step
-        operationPath: /test
+        operationId: fixturetest
         onFailure:
           - reference: $components.failureActions.retry
             retryAfter: .nan

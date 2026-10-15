@@ -77,18 +77,13 @@ impl ContextRole {
 pub(crate) enum OperationOrigin {
     /// Loaded from a `sourceDescriptions[]` OpenAPI document at engine build.
     Source { name: String, path: String },
-    /// Explicitly provided via `EngineBuilder::openapi_spec` (1-based order).
-    ExplicitSpec { ordinal: usize },
 }
 
 impl OperationOrigin {
-    /// The Source Description that owns the operation. `None` for an
-    /// explicitly provided spec, which belongs to no source description and
-    /// therefore has no server base of its own.
-    pub(super) fn source_name(&self) -> Option<&str> {
+    /// The declared Source Description that owns this operation.
+    pub(super) fn source_name(&self) -> &str {
         match self {
-            Self::Source { name, .. } => Some(name),
-            Self::ExplicitSpec { .. } => None,
+            Self::Source { name, .. } => name,
         }
     }
 
@@ -96,9 +91,6 @@ impl OperationOrigin {
     pub(super) fn describe(&self) -> String {
         match self {
             Self::Source { name, path } => format!("sourceDescription \"{name}\" ({path})"),
-            Self::ExplicitSpec { ordinal } => {
-                format!("explicitly provided OpenAPI spec #{ordinal}")
-            }
         }
     }
 }
@@ -120,10 +112,7 @@ pub(crate) struct OperationEntry {
 /// declaring level overrides every one above it.
 #[derive(Debug, Clone)]
 pub(crate) enum OperationServer {
-    /// Neither level declares a server, so the document's request base
-    /// applies. Every operation of an explicitly provided spec is recorded
-    /// this way: such a spec belongs to no source description, and its
-    /// `servers` are consulted at no level.
+    /// Neither level declares a server, so the bound document's base applies.
     Inherited,
     /// The request base the lowest declaring level yields.
     Declared(String),
@@ -215,38 +204,13 @@ impl OperationIndex {
         self.by_id.entry(operation_id).or_default().push(entry);
     }
 
-    /// The origin most recently indexed under `operation_id`, which is the
-    /// entry a last-insert-wins map would have replaced. Used only to keep the
-    /// build-time override warning firing exactly when it used to.
-    pub(super) fn last_origin(&self, operation_id: &str) -> Option<&OperationOrigin> {
-        self.by_id
-            .get(operation_id)
-            .and_then(|entries| entries.last())
-            .map(|entry| &entry.origin)
-    }
-
     /// The operation the named Source Description defines under this id.
     ///
-    /// Explicit specs are never consulted: they belong to no source, so a
-    /// source-qualified target neither resolves from one nor is overridden
-    /// by one.
+    /// Only operations from the named bound document participate.
     pub(super) fn in_source(&self, source_name: &str, operation_id: &str) -> OperationMatch<'_> {
         self.select(operation_id, |entry| {
-            entry.origin.source_name() == Some(source_name)
+            entry.origin.source_name() == source_name
         })
-    }
-
-    /// The operation an unqualified `operation_id` names.
-    ///
-    /// An explicitly provided spec outranks a Source Description document,
-    /// which is the direction the build-time override warning already
-    /// announces; source documents are consulted only when no explicit spec
-    /// defines the id.
-    pub(super) fn bare(&self, operation_id: &str) -> OperationMatch<'_> {
-        match self.select(operation_id, |entry| entry.origin.source_name().is_none()) {
-            OperationMatch::Missing => self.select(operation_id, |_| true),
-            matched => matched,
-        }
     }
 
     fn select<'a>(
@@ -367,22 +331,15 @@ impl VarStore {
 /// Immutable index built once from the parsed spec.
 pub(crate) struct WorkflowIndex {
     pub spec: ArazzoSpec,
-    /// Effective request base of the first source description. For document
-    /// sources this is derived from the loaded OpenAPI `servers`; for legacy
-    /// sources it is the literal `url` value.
-    pub base_url: String,
     pub source_descriptions_map: BTreeMap<String, arazzo_expr::SourceDescriptionContext>,
-    /// Effective request base per source name (`{name}.` operationPath routing).
+    /// Effective request base per source name.
     pub(super) source_bases: BTreeMap<String, String>,
     /// Operations indexed from `sourceDescriptions[]` documents at build time.
     pub(super) source_ops: OperationIndex,
     pub workflow_index: BTreeMap<String, usize>,
     pub step_indexes: BTreeMap<String, BTreeMap<String, usize>>,
-    /// Provided OpenAPI documents no Source Description claimed by identity,
-    /// each with the 1-based position it was supplied in so diagnostics keep
-    /// naming the same document however many earlier ones were claimed.
-    pub(super) openapi_specs_raw: Vec<(usize, Vec<u8>)>,
-    pub(super) op_index: OnceLock<OperationIndex>,
+    /// Parsed source-bound documents retained for pointer resolution.
+    pub(super) source_documents: BTreeMap<String, operation_target::BoundOpenApi>,
 }
 
 /// Shared immutable core of the engine, wrapped in `Arc`.

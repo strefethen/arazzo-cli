@@ -8,14 +8,14 @@ info:
     actions, and goto-based error recovery chains.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: retry-exhaustion
     summary: Retries a failing endpoint until retryLimit is exceeded (expected to fail)
     steps:
       - stepId: always-fails
-        operationPath: /status/500
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1500/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -29,7 +29,7 @@ workflows:
     summary: 500 triggers server-error handler via criteria routing
     steps:
       - stepId: trigger-500
-        operationPath: /status/500
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1500/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -46,7 +46,7 @@ workflows:
           - name: end-unhandled-error
             type: end
       - stepId: handle-not-found
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: handler
             in: query
@@ -57,7 +57,7 @@ workflows:
           - name: end-after-not-found
             type: end
       - stepId: handle-server-error
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: handler
             in: query
@@ -73,7 +73,7 @@ workflows:
     summary: 404 triggers not-found handler via criteria routing
     steps:
       - stepId: trigger-404
-        operationPath: /status/404
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1404/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -90,7 +90,7 @@ workflows:
           - name: end-unhandled-error
             type: end
       - stepId: handle-not-found
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: handler
             in: query
@@ -103,7 +103,7 @@ workflows:
           - name: end-after-not-found
             type: end
       - stepId: handle-other
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: handler
             in: query
@@ -122,11 +122,11 @@ workflows:
         type: end
     steps:
       - stepId: will-fail
-        operationPath: /status/500
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1500/get'
         successCriteria:
           - condition: $statusCode == 200
       - stepId: should-not-run
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
     outputs: {}
@@ -135,7 +135,7 @@ workflows:
     summary: Step fails, goto handler recovers, workflow succeeds
     steps:
       - stepId: might-fail
-        operationPath: /status/503
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1503/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:
@@ -143,14 +143,14 @@ workflows:
             type: goto
             stepId: recover
       - stepId: success-path
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         onSuccess:
           - name: end-after-success
             type: end
       - stepId: recover
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         parameters:
           - name: recovered
             in: query

@@ -1,7 +1,5 @@
-[
-  {
-    "stepId": "list-pets",
-    "url": "{$sourceDescriptions.petstore.url}#/paths/~1pets/get",
-    "position": 0
-  }
-]
+{
+  "kind": "error",
+  "error": "validation errors:\n  - workflow \"probe\" > step \"list-pets\".operationPath: workflow \"probe\" > step \"list-pets\".operationPath must name a source URL using {$sourceDescriptions.<name>.url} followed by # and a JSON Pointer; expected \"{$sourceDescriptions.<name>.url}#<JSON Pointer>\"",
+  "code": "STEPS_SPEC_VALIDATION"
+}

@@ -7,8 +7,7 @@
 mod common;
 
 use arazzo_runtime::{
-    ClientConfig, EngineBuilder, EngineEvent, RuntimeErrorKind, TraceStepRecord,
-    TransportWarningKind,
+    ClientConfig, EngineEvent, RuntimeErrorKind, TraceStepRecord, TransportWarningKind,
 };
 use arazzo_spec::{
     ActionType, OnAction, ParamLocation, Parameter, Step, StepTarget, ValueSource, Workflow,
@@ -60,8 +59,11 @@ fn single_step_spec(base_url: &str, step: Step) -> arazzo_spec::ArazzoSpec {
 #[tokio::test]
 async fn tls_self_signed_fails_by_default_with_actionable_error() {
     let server = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/ok"));
-    let engine = match EngineBuilder::new(spec).build() {
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -82,8 +84,11 @@ async fn tls_self_signed_fails_by_default_with_actionable_error() {
 async fn tls_insecure_host_exact_entry_allows_untrusted_cert() {
     let server = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let entry = host_port(&server.base_url);
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/ok"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(insecure_config(&[entry.as_str()]))
         .build()
     {
@@ -103,8 +108,11 @@ async fn tls_insecure_host_exact_entry_allows_untrusted_cert() {
 #[tokio::test]
 async fn tls_bare_host_entry_matches_any_port() {
     let server = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/ok"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(insecure_config(&["127.0.0.1"]))
         .build()
     {
@@ -119,8 +127,11 @@ async fn tls_bare_host_entry_matches_any_port() {
 #[tokio::test]
 async fn tls_blanket_insecure_all_allows_untrusted_cert() {
     let server = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/ok"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(ClientConfig {
             insecure_all: true,
             ..ClientConfig::default()
@@ -145,18 +156,32 @@ async fn tls_second_host_still_verified_in_same_run() {
     let verified = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let entry = host_port(&excepted.base_url);
 
-    let spec = make_spec_with_base(
+    let mut spec = make_spec_with_base(
         &excepted.base_url,
         vec![Workflow {
             workflow_id: "wf".to_string(),
             steps: vec![
-                get_step("excepted", "/ok"),
-                get_step("verified", &format!("GET {}/ok", verified.base_url)),
+                get_step("excepted", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+                get_step(
+                    "verified",
+                    "{$sourceDescriptions.verified.url}#/paths/~1ok/get",
+                ),
             ],
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec)
+    spec.source_descriptions
+        .push(arazzo_spec::SourceDescription {
+            name: "verified".to_string(),
+            url: verified.base_url.clone(),
+            type_: arazzo_spec::SourceType::OpenApi,
+            ..arazzo_spec::SourceDescription::default()
+        });
+    let engine = match common::fixture_engine_builder(spec)
+        .openapi_spec(
+            fixture_openapi(&verified.base_url, &verified.base_url),
+            None,
+        )
         .client_config(insecure_config(&[entry.as_str()]))
         .build()
     {
@@ -195,8 +220,11 @@ async fn downgrade_refused_by_default_names_both_urls() {
     });
     let entry = host_port(&tls.base_url);
 
-    let spec = single_step_spec(&tls.base_url, get_step("s1", "/a"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &tls.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1a/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(insecure_config(&[entry.as_str()]))
         .build()
     {
@@ -238,7 +266,9 @@ async fn downgrade_followed_with_allow_flag_matches_stripping_baseline() {
 
     let step = Step {
         step_id: "s1".to_string(),
-        target: Some(StepTarget::OperationPath("/a".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+        )),
         parameters: vec![
             Parameter {
                 name: "Authorization".to_string(),
@@ -257,7 +287,7 @@ async fn downgrade_followed_with_allow_flag_matches_stripping_baseline() {
         ..Step::default()
     };
     let spec = single_step_spec(&tls.base_url, step);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(ClientConfig {
             allow_downgrade_redirects: true,
             ..insecure_config(&[entry.as_str()])
@@ -302,8 +332,11 @@ async fn redirect_chain_recorded_in_trace_for_plain_chain() {
         "/c" => MockHttpResponse::json(200, r#"{"ok":true}"#),
         _ => MockHttpResponse::empty(404),
     });
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/a"));
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1a/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -343,8 +376,11 @@ async fn max_redirects_config_enforced_with_named_hop() {
             .unwrap_or(0);
         MockHttpResponse::redirect(302, &format!("/hop/{}", n + 1))
     });
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/hop/0"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1hop~10/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(ClientConfig {
             max_redirects: 2,
             ..ClientConfig::default()
@@ -389,7 +425,9 @@ async fn cleartext_credentials_warning_event_once_per_host() {
     // The requests fail; the warning fires before send.
     let step1 = Step {
         step_id: "s1".to_string(),
-        target: Some(StepTarget::OperationPath("http://192.0.2.1/a".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+        )),
         parameters: vec![Parameter {
             name: "Authorization".to_string(),
             in_: Some(ParamLocation::Header),
@@ -407,7 +445,9 @@ async fn cleartext_credentials_warning_event_once_per_host() {
     };
     let step2 = Step {
         step_id: "s2".to_string(),
-        target: Some(StepTarget::OperationPath("http://192.0.2.1/b".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1b/get".to_string(),
+        )),
         parameters: vec![Parameter {
             name: "Authorization".to_string(),
             in_: Some(ParamLocation::Header),
@@ -425,7 +465,7 @@ async fn cleartext_credentials_warning_event_once_per_host() {
             ..Workflow::default()
         }],
     );
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(ClientConfig {
             timeout: Duration::from_millis(250),
             ..ClientConfig::default()
@@ -453,7 +493,9 @@ async fn loopback_cleartext_credentials_exempt() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let step = Step {
         step_id: "s1".to_string(),
-        target: Some(StepTarget::OperationPath("/ok".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1ok/get".to_string(),
+        )),
         parameters: vec![Parameter {
             name: "Authorization".to_string(),
             in_: Some(ParamLocation::Header),
@@ -464,7 +506,7 @@ async fn loopback_cleartext_credentials_exempt() {
         ..Step::default()
     };
     let spec = single_step_spec(&server.base_url, step);
-    let engine = match EngineBuilder::new(spec).build() {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -513,7 +555,9 @@ async fn replay_engine_emits_no_transport_warnings() {
 
     let step = Step {
         step_id: "s1".to_string(),
-        target: Some(StepTarget::OperationPath("http://192.0.2.1/a".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1a/get".to_string(),
+        )),
         parameters: vec![Parameter {
             name: "Authorization".to_string(),
             in_: Some(ParamLocation::Header),
@@ -524,7 +568,7 @@ async fn replay_engine_emits_no_transport_warnings() {
         ..Step::default()
     };
     let spec = single_step_spec("http://192.0.2.1", step);
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .replay_trace_steps(vec![record])
         .build()
     {
@@ -545,8 +589,11 @@ async fn replay_engine_emits_no_transport_warnings() {
 async fn unused_insecure_entries_reported_after_run() {
     let server = start_tls_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let used_entry = host_port(&server.base_url);
-    let spec = single_step_spec(&server.base_url, get_step("s1", "/ok"));
-    let engine = match EngineBuilder::new(spec)
+    let spec = single_step_spec(
+        &server.base_url,
+        get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+    );
+    let engine = match common::fixture_engine_builder(spec)
         .client_config(insecure_config(&[
             used_entry.as_str(),
             "stale.example:9443",

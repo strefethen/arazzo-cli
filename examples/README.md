@@ -13,12 +13,14 @@ cargo run -p arazzo-cli -- validate examples/httpbin-get.arazzo.yaml
 `--dry-run` resolves parameters, bodies, and expressions without sending a
 request, so the commands below need no network access. Drop the flag to
 actually call the endpoint — the `httpbin-*` specs target `https://httpbin.org`.
+Source descriptions point to local OpenAPI documents; operation targets select
+the method and path from those documents.
 
 ## Scenario-First Examples
 
 | File | Workflows | What it demonstrates | Dry-run command |
 | --- | --- | --- | --- |
-| `multi-api-orchestration.arazzo.yaml` | `cross-source-check` | Multiple source descriptions, `{sourceName}./path` routing, source URL outputs | `cargo run -p arazzo-cli -- run examples/multi-api-orchestration.arazzo.yaml cross-source-check --dry-run` |
+| `multi-api-orchestration.arazzo.yaml` | `cross-source-check` | Named source descriptions, canonical operation pointers, source URL outputs | `cargo run -p arazzo-cli -- run examples/multi-api-orchestration.arazzo.yaml cross-source-check --dry-run` |
 | `auth-flow.arazzo.yaml` | `auth-then-fetch` | Auth inputs, header interpolation, cookies, auth chaining | `cargo run -p arazzo-cli -- run examples/auth-flow.arazzo.yaml auth-then-fetch --dry-run --input token=my-token --input session=s-123` |
 | `error-handling-retry.arazzo.yaml` | `retry-then-recover` | Retry + criteria-based goto + workflow fallback | `cargo run -p arazzo-cli -- run examples/error-handling-retry.arazzo.yaml retry-then-recover --dry-run` |
 | `sub-workflow.arazzo.yaml` | `parent-flow`, `child-create` | Parent/child workflow composition with input/output passing | `cargo run -p arazzo-cli -- run examples/sub-workflow.arazzo.yaml parent-flow --dry-run --input item_name=widget` |
@@ -44,6 +46,10 @@ actually call the endpoint — the `httpbin-*` specs target `https://httpbin.org
 | `httpbin-replacements.arazzo.yaml` | `replacements-demo` | `requestBody.replacements` JSON Pointer overlays on a templated payload |
 
 ## Supporting Files
+
+`descriptions/httpbin.openapi.yaml` defines the operations used by the HTTPBin
+examples. `descriptions/soap-customer.openapi.yaml` defines the SOAP mock
+operation. Their `servers` specify the request destinations.
 
 `swagger-petstore.openapi.json` is an OpenAPI 3.0 source description, not an
 Arazzo document. It is the input that produced

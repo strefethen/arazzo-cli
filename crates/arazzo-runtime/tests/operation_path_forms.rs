@@ -1,27 +1,20 @@
 #![forbid(unsafe_code)]
 
-//! Request parity for every `operationPath` form this runtime resolves.
-//!
-//! Three of the four supported forms are also pinned end to end by the golden
-//! sweep in `arazzo-cli/tests/golden_spec_baseline.rs`: bare paths appear in 16
-//! of the 18 `examples/` documents, `{source}./path` in
-//! `examples/multi-api-orchestration.arazzo.yaml`, and `"METHOD {source}./path"`
-//! in `examples/swagger-petstore-crud.arazzo.yaml`. The absolute-URL form
-//! appears in no `examples/` or `testdata/` document at all, so it is pinned
-//! here or nowhere.
+//! Standard operation pointers resolve real source-bound operations. Removed
+//! shortcut forms are explicit rejection cases and never become request URLs.
 
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{EngineBuilder, RuntimeErrorKind};
 use arazzo_spec::{ArazzoSpec, Info, SourceDescription, SourceType, Step, StepTarget, Workflow};
 
-/// First source description, and therefore the base bare paths resolve against.
+/// Distinct server bases prove which bound document supplied the operation.
 const PRIMARY_BASE: &str = "https://primary.example.com/v1";
 const SECONDARY_BASE: &str = "https://secondary.example.com/v2";
 
 fn spec_with(operation_path: &str) -> ArazzoSpec {
     ArazzoSpec {
-        arazzo: "1.0.0".to_string(),
+        arazzo: "1.1.0".to_string(),
         info: Info {
             title: "operationPath forms".to_string(),
             version: "1.0.0".to_string(),
@@ -30,13 +23,13 @@ fn spec_with(operation_path: &str) -> ArazzoSpec {
         source_descriptions: vec![
             SourceDescription {
                 name: "primary".to_string(),
-                url: PRIMARY_BASE.to_string(),
+                url: "https://descriptions.example.test/primary.yaml".to_string(),
                 type_: SourceType::OpenApi,
                 ..SourceDescription::default()
             },
             SourceDescription {
                 name: "secondary".to_string(),
-                url: SECONDARY_BASE.to_string(),
+                url: "https://descriptions.example.test/secondary.yaml".to_string(),
                 type_: SourceType::OpenApi,
                 ..SourceDescription::default()
             },
@@ -54,17 +47,44 @@ fn spec_with(operation_path: &str) -> ArazzoSpec {
     }
 }
 
+/// Explicit document catalog, independent of the target under test.
+fn builder(operation_path: &str) -> EngineBuilder {
+    let mut builder = EngineBuilder::new(spec_with(operation_path)).dry_run(true);
+    for (name, base) in [("primary", PRIMARY_BASE), ("secondary", SECONDARY_BASE)] {
+        let document = serde_json::json!({
+            "openapi": "3.0.3",
+            "$self": format!("https://descriptions.example.test/{name}.yaml"),
+            "info": {"title": "pointer fixture", "version": "1"},
+            "servers": [{"url": base}],
+            "paths": {
+                "/pets": {
+                    "get": {"responses": {"200": {"description": "OK"}}},
+                    "post": {"responses": {"200": {"description": "OK"}}}
+                },
+                "/pets/{petId}": {
+                    "parameters": [{"name": "petId", "in": "path", "required": true, "schema": {"type": "string"}}],
+                    "get": {"responses": {"200": {"description": "OK"}}}
+                },
+                "/pets/7": {"delete": {"responses": {"200": {"description": "OK"}}}}
+            }
+        });
+        builder = builder.openapi_spec(document.to_string().into_bytes(), None);
+    }
+    builder
+}
+
 /// Resolves one `operationPath` to the `(method, url)` a dry run would send.
 async fn dry_run(operation_path: &str) -> Result<(String, String), RuntimeErrorKind> {
-    let engine = match EngineBuilder::new(spec_with(operation_path))
-        .dry_run(true)
-        .build()
-    {
+    let engine = match builder(operation_path).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine for {operation_path:?}: {err}"),
     };
     let result = engine.execute_collect("wf", BTreeMap::new()).await;
     if let Err(err) = &result.outputs {
+        assert!(
+            result.dry_run_requests().is_empty(),
+            "refused operationPath must plan no request"
+        );
         return Err(err.kind);
     }
     let requests = result.dry_run_requests();
@@ -99,47 +119,37 @@ fn futures_block_on<F: std::future::Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn bare_path_joins_the_first_source_base() {
-    let (method, url) = expect_url("/pets");
+fn pointer_uses_the_primary_document_server() {
+    let (method, url) = expect_url("{$sourceDescriptions.primary.url}#/paths/~1pets/get");
     assert_eq!(method, "GET");
     assert_eq!(url, "https://primary.example.com/v1/pets");
 }
 
 #[test]
-fn source_routed_path_joins_that_source_base() {
-    let (method, url) = expect_url("{secondary}./pets");
+fn pointer_routes_to_the_named_source() {
+    let (method, url) = expect_url("{$sourceDescriptions.secondary.url}#/paths/~1pets/get");
     assert_eq!(method, "GET");
     assert_eq!(url, "https://secondary.example.com/v2/pets");
 }
 
 #[test]
-fn method_prefixed_source_routed_path_keeps_method_and_base() {
-    let (method, url) = expect_url("POST {secondary}./pets");
+fn pointer_uses_the_actual_operation_method() {
+    let (method, url) = expect_url("{$sourceDescriptions.secondary.url}#/paths/~1pets/post");
     assert_eq!(method, "POST");
     assert_eq!(url, "https://secondary.example.com/v2/pets");
 }
 
-/// The form no `examples/` or `testdata/` document exercises: an absolute URL
-/// replaces the base entirely rather than being appended to it.
 #[test]
-fn absolute_url_replaces_every_base() {
-    let (method, url) = expect_url("https://elsewhere.example.com/pets?page=2");
-    assert_eq!(method, "GET");
-    assert_eq!(url, "https://elsewhere.example.com/pets?page=2");
-}
-
-#[test]
-fn method_prefixed_absolute_url_keeps_method_and_replaces_the_base() {
-    let (method, url) = expect_url("DELETE https://elsewhere.example.com/pets/7");
+fn pointer_can_select_delete_without_a_method_override() {
+    let (method, url) = expect_url("{$sourceDescriptions.primary.url}#/paths/~1pets~17/delete");
     assert_eq!(method, "DELETE");
-    assert_eq!(url, "https://elsewhere.example.com/pets/7");
+    assert_eq!(url, "https://primary.example.com/v1/pets/7");
 }
 
-/// A path-parameter placeholder is not a Source Description reference: the
-/// `{sourceName}.` form requires the dot after `}`.
 #[test]
-fn path_parameter_placeholder_is_left_for_parameter_substitution() {
-    let (method, url) = expect_url("/pets/{petId}");
+fn pointer_keeps_path_parameters_for_parameter_substitution() {
+    let (method, url) =
+        expect_url("{$sourceDescriptions.primary.url}#/paths/~1pets~1%7BpetId%7D/get");
     assert_eq!(method, "GET");
     assert_eq!(url, "https://primary.example.com/v1/pets/{petId}");
 }
@@ -147,7 +157,11 @@ fn path_parameter_placeholder_is_left_for_parameter_substitution() {
 /// Every shape this runtime cannot resolve, and the exact text it used to
 /// paste into a request URL instead of failing.
 const UNSUPPORTED: &[&str] = &[
-    "{$sourceDescriptions.primary.url}#/paths/~1pets/get",
+    "/pets",
+    "{secondary}./pets",
+    "POST {secondary}./pets",
+    "https://elsewhere.example.com/pets?page=2",
+    "DELETE https://elsewhere.example.com/pets/7",
     "GET {$sourceDescriptions.primary.url}#/paths/~1pets/get",
     "{$sourceDescriptions.primary.url}",
     "#/paths/~1pets/get",
@@ -173,11 +187,8 @@ fn unsupported_forms_fail_with_a_stable_code_and_plan_no_request() {
 /// point is that the operator can find which step to rewrite.
 #[test]
 fn unsupported_form_message_names_the_step_and_quotes_the_path() {
-    let operation_path = "{$sourceDescriptions.primary.url}#/paths/~1pets/get";
-    let engine = match EngineBuilder::new(spec_with(operation_path))
-        .dry_run(true)
-        .build()
-    {
+    let operation_path = "POST {primary}./pets";
+    let engine = match builder(operation_path).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -187,14 +198,13 @@ fn unsupported_form_message_names_the_step_and_quotes_the_path() {
         Err(err) => err.to_string(),
     };
 
-    assert!(err.contains("step \"probe\""), "message was: {err}");
+    assert!(err.contains("step probe:"), "message was: {err}");
     assert!(err.contains(operation_path), "message was: {err}");
     assert!(
-        err.contains("a runtime expression and a JSON Pointer fragment"),
+        err.contains("$sourceDescriptions.<name>.url"),
         "message was: {err}"
     );
-    assert!(err.contains("not implemented"), "message was: {err}");
-    assert!(err.contains("{sourceName}./path"), "message was: {err}");
+    assert!(err.contains("JSON Pointer"), "message was: {err}");
 
     assert!(
         result.dry_run_requests().is_empty(),
@@ -204,7 +214,9 @@ fn unsupported_form_message_names_the_step_and_quotes_the_path() {
 
 #[test]
 fn unknown_source_reference_still_fails_with_its_own_code() {
-    let kind = match futures_block_on(dry_run("{missing}./pets")) {
+    let kind = match futures_block_on(dry_run(
+        "{$sourceDescriptions.missing.url}#/paths/~1pets/get",
+    )) {
         Ok((_, url)) => panic!("expected unknown source failure, resolved to {url}"),
         Err(kind) => kind,
     };

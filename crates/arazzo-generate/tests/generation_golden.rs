@@ -3,14 +3,10 @@
 //! Golden snapshot of `generate_crud`'s full YAML output for the petstore
 //! fixture.
 //!
-//! This is the first golden under `crates/arazzo-generate/tests/` — before
-//! ac-91284 there was no snapshot corpus here, only inline `contains()`
-//! assertions in `crud.rs`. Pinning the *whole* generated document, not a
-//! handful of substrings, is what actually proves that
-//! `sourceDescriptions[].url` — and nothing else — changed shape: the golden
-//! diff for this ticket is exactly one line, `url: https://petstore.example
-//! .com/v1` becoming `url: petstore.openapi.yaml`, with every operationPath,
-//! step, and request body byte-identical.
+//! The snapshot preserves the document URL, workflows, schemas and bodies while
+//! pinning standard operation targets. Operations with representable IDs use
+//! source-qualified `operationId`; operations without IDs use source-expression
+//! JSON Pointers to their actual document positions.
 //!
 //! Regenerating is deliberate, never automatic:
 //!

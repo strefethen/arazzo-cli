@@ -15,9 +15,8 @@ pub use operation_id::{
     classify_operation_id, MalformedOperationId, OperationIdTarget, SUPPORTED_OPERATION_ID_FORMS,
 };
 pub use operation_path::{
-    classify_operation_path, presented_method_and_target, split_operation_method,
-    ClassifiedOperationPath, OperationPathForm, UnsupportedOperationPath,
-    SUPPORTED_OPERATION_PATH_FORMS,
+    classify_operation_path, presented_method_and_target, MalformedOperationPath,
+    OperationPathTarget, SUPPORTED_OPERATION_PATH_FORMS,
 };
 pub use workflow_dependency::{classify_workflow_dependency, WorkflowDependency};
 

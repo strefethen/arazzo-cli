@@ -396,7 +396,7 @@ workflows:
       - stepId: operation-id
         operationId: first
       - stepId: operation-path
-        operationPath: /second
+        operationId: fixturesecond
       - stepId: async-id
         operationId: publish
         action: send

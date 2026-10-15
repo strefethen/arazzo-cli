@@ -16,7 +16,7 @@ workflows:
     parameters:{workflow_params}
     steps:
       - stepId: s1
-        operationPath: /index
+        operationId: fixtureindex
         parameters:{step_params}
 "#
         )
@@ -107,7 +107,7 @@ workflows:
   - workflowId: wf2
     steps:
       - stepId: s2
-        operationPath: /index
+        operationId: fixtureindex
 "#
         );
         let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {
@@ -227,7 +227,7 @@ workflows:
   - workflowId: wf2
     steps:
       - stepId: s2
-        operationPath: /index
+        operationId: fixtureindex
 "#
         );
         let spec = match arazzo_spec::parse_unvalidated_bytes(yaml.as_bytes()) {

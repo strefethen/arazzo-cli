@@ -45,6 +45,15 @@ fn engine_failure_emits_error_output_exited_and_terminated() {
     assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
 
     let messages = dap_test_support::decode_dap_stream(&output);
+    let launch = messages
+        .iter()
+        .find(|message| message.get("command").and_then(|value| value.as_str()) == Some("launch"))
+        .unwrap_or_else(|| panic!("launch response must be present: {messages:#?}"));
+    assert_eq!(
+        launch.get("success"),
+        Some(&json!(true)),
+        "MissingOperation must fail during execution after a successful launch"
+    );
     let event_name =
         |m: &serde_json::Value| m.get("event").and_then(|v| v.as_str()).map(str::to_string);
 
@@ -88,7 +97,7 @@ fn engine_failure_emits_error_output_exited_and_terminated() {
          output@{error_output_idx}, exited@{exited_idx}, terminated@{terminated_idx}"
     );
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 #[test]
@@ -126,7 +135,7 @@ fn nested_dependency_failure_exposes_stable_runtime_code() {
         text.contains("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED"),
         "DAP failure output must preserve stable code: {messages:#?}"
     );
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 fn write_temp_spec() -> PathBuf {
@@ -134,17 +143,19 @@ fn write_temp_spec() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-engine-failure-{nanos}.yaml"));
-    // Absolute base URL (legacy semantics): no OpenAPI document is loaded, so
-    // the step's operationId cannot resolve and the workflow fails before any
-    // HTTP request is attempted. Port 9 (discard) is never contacted.
-    let spec = r#"
-arazzo: "1.0.0"
+    // A real bound document lets launch succeed. It deliberately defines no
+    // MissingOperation, so resolution fails during execution before traffic.
+    let document_url = dap_test_support::write_openapi_document(&path, "http://127.0.0.1:9", &[])
+        .unwrap_or_else(|err| panic!("creating failure transcript document: {err}"));
+    let spec = format!(
+        r#"
+arazzo: "1.1.0"
 info:
   title: Engine Failure Test
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: http://127.0.0.1:9
+    url: {document_url}
     type: openapi
 workflows:
   - workflowId: failing
@@ -153,7 +164,8 @@ workflows:
         operationId: MissingOperation
         successCriteria:
           - condition: $statusCode == 200
-"#;
+"#
+    );
     fs::write(&path, spec).unwrap_or_else(|err| panic!("writing temp spec: {err}"));
     path
 }
@@ -163,14 +175,21 @@ fn write_dependency_spec() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-dependency-failure-{nanos}.yaml"));
-    let spec = r#"
+    let document_url = dap_test_support::write_openapi_document(
+        &path,
+        "http://127.0.0.1:9",
+        &[("/never", "get", None)],
+    )
+    .unwrap_or_else(|err| panic!("creating dependency transcript document: {err}"));
+    let spec = format!(
+        r#"
 arazzo: "1.1.0"
 info:
   title: Nested dependency failure
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: http://127.0.0.1:9
+    url: {document_url}
     type: openapi
   - name: shared
     url: ./shared.arazzo.yaml
@@ -181,12 +200,13 @@ workflows:
       - $sourceDescriptions.shared.remote
     steps:
       - stepId: never
-        operationPath: /never
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1never/get'
   - workflowId: parent
     steps:
       - stepId: call
         workflowId: blocked
-"#;
+"#
+    );
     fs::write(&path, spec).unwrap_or_else(|err| panic!("writing temp spec: {err}"));
     path
 }

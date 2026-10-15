@@ -85,7 +85,7 @@ fn stepping_off_last_checkpoint_emits_terminated() {
         messages
     );
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 /// After the engine has finished, `continue` and `next` are answered with an
@@ -164,7 +164,7 @@ fn stepping_after_termination_answers_error_and_keeps_session() {
     assert_eq!(disconnect.get("command"), Some(&json!("disconnect")));
     assert_eq!(disconnect.get("success"), Some(&json!(true)));
 
-    let _ = fs::remove_file(spec_path);
+    dap_test_support::remove_temp_spec(&spec_path);
 }
 
 fn write_temp_spec(base_url: &str) -> PathBuf {
@@ -172,21 +172,24 @@ fn write_temp_spec(base_url: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let path = std::env::temp_dir().join(format!("arazzo-debug-termination-{nanos}.yaml"));
+    let document_url =
+        dap_test_support::write_openapi_document(&path, base_url, &[("/data", "get", None)])
+            .unwrap_or_else(|err| panic!("creating transcript document: {err}"));
     let spec = format!(
         r#"
-arazzo: "1.0.0"
+arazzo: "1.1.0"
 info:
   title: Termination Test
   version: "1.0.0"
 sourceDescriptions:
   - name: test
-    url: {base_url}
+    url: {document_url}
     type: openapi
 workflows:
   - workflowId: single-step
     steps:
       - stepId: fetch-data
-        operationPath: /data
+        operationPath: '{{$sourceDescriptions.test.url}}#/paths/~1data/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:

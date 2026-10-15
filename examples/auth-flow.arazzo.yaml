@@ -23,7 +23,7 @@ info:
 
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -41,7 +41,7 @@ workflows:
         - session
     steps:
       - stepId: bearer-check
-        operationPath: /bearer
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1bearer/get'
         parameters:
           - name: Authorization
             in: header
@@ -53,7 +53,7 @@ workflows:
           token: $response.body#/token
 
       - stepId: fetch-profile
-        operationPath: /headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1headers/get'
         parameters:
           - name: Authorization
             in: header

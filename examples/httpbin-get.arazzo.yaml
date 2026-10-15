@@ -5,14 +5,14 @@ info:
   description: A simple workflow that fetches data from httpbin.org — useful for testing the arazzo CLI.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: get-origin
     summary: Fetch your public IP address via httpbin
     steps:
       - stepId: fetch-ip
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:
@@ -26,7 +26,7 @@ workflows:
     summary: Echo back request headers
     steps:
       - stepId: fetch-headers
-        operationPath: /headers
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1headers/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:
@@ -48,7 +48,7 @@ workflows:
         - code
     steps:
       - stepId: check-status
-        operationPath: /status/{code}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1status~1%7Bcode%7D/get'
         parameters:
           - name: code
             in: path
@@ -64,7 +64,7 @@ workflows:
           - name: end-unhandled-status
             type: end
       - stepId: handle-error
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
     outputs: {}

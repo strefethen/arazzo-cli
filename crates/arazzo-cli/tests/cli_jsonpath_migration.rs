@@ -30,6 +30,8 @@
 //! `jsonpath_semantics.rs` / `jsonpath_selectors.rs` suites. This file does not
 //! repeat them.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,6 +70,7 @@ impl TempDir {
         let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&path)
             .unwrap_or_else(|err| panic!("creating {}: {err}", path.display()));
+        common::write_in(&path, "https://example.com");
         Self { path }
     }
 
@@ -264,7 +267,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: catalog
-        operationPath: GET /catalog
+        operationId: fixtureGetCatalog
         successCriteria:
           - context: $response.body
             condition: '$.items[?match(@.sku, "A-[0-9]{{3}}")]'
@@ -297,7 +300,7 @@ workflows:
             selector: '$'
             type: jsonpath
       - stepId: order
-        operationPath: POST /orders
+        operationId: fixturePostOrders
         requestBody:
           contentType: application/json
           payload:
@@ -338,7 +341,7 @@ workflows:
       absentSku: $steps.catalog.outputs.absentSku
       echoedSku: $steps.order.outputs.echoedSku
 "#,
-            base = server.base_url
+            base = common::fixture_url(&server.base_url)
         ),
     );
 
@@ -495,7 +498,7 @@ info:
   version: 1.0.0
 sourceDescriptions:
   - name: api
-    url: https://example.com
+    url: ./fixture.openapi.json
     type: openapi
 workflows:
   - workflowId: wf
@@ -506,7 +509,7 @@ workflows:
           type: object
     steps:
       - stepId: update
-        operationPath: POST /items
+        operationId: fixturePostItems
         requestBody:
           contentType: application/json
           payload:
@@ -630,7 +633,7 @@ workflows:
   - workflowId: versioned
     steps:
       - stepId: check
-        operationPath: GET /catalog
+        operationId: fixtureGetCatalog
         successCriteria:
           - context: $response.body
             condition: '$.items[0].sku'
@@ -640,13 +643,13 @@ workflows:
   - workflowId: operational
     steps:
       - stepId: check
-        operationPath: GET /catalog
+        operationId: fixtureGetCatalog
         successCriteria:
           - context: $response.body
             condition: '$.items[?match(@.sku, "a{{1000000000}}")]'
             type: jsonpath
 "#,
-            base = server.base_url,
+            base = common::fixture_url(&server.base_url),
             goessner = GOESSNER
         ),
     );

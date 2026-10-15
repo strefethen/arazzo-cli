@@ -126,9 +126,11 @@ async fn dot_values_send_no_http_request_for_operation_id_or_operation_path() {
     for value in [".", ".."] {
         for target in [
             StepTarget::OperationId("target".to_string()),
-            StepTarget::OperationPath(PATH.to_string()),
-            StepTarget::OperationPath(format!("{{api}}.{PATH}")),
-            StepTarget::OperationPath(format!("{}{PATH}", server.base_url)),
+            StepTarget::OperationId("$sourceDescriptions.api.target".to_string()),
+            StepTarget::OperationPath(
+                "{$sourceDescriptions.api.url}#/paths/~1v1~1pets~1%7Bid%7D~1details/get"
+                    .to_string(),
+            ),
         ] {
             let mut step = target_step(value);
             step.target = Some(target);
@@ -245,11 +247,10 @@ async fn dry_run_refuses_before_planning_across_supported_operation_paths() {
     let base = "https://api.invalid";
     for target in [
         StepTarget::OperationId("target".to_string()),
-        StepTarget::OperationPath(PATH.to_string()),
-        StepTarget::OperationPath(format!("{{api}}.{PATH}")),
-        StepTarget::OperationPath(format!("{base}{PATH}")),
-        StepTarget::OperationPath(format!("{base}/v1/pets/{{id}}?secret=private-query")),
-        StepTarget::OperationPath(format!("{base}/v1/pets/{{id}}#private-fragment")),
+        StepTarget::OperationId("$sourceDescriptions.api.target".to_string()),
+        StepTarget::OperationPath(
+            "{$sourceDescriptions.api.url}#/paths/~1v1~1pets~1%7Bid%7D~1details/get".to_string(),
+        ),
     ] {
         let mut step = target_step("..");
         step.target = Some(target);

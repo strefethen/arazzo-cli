@@ -5,8 +5,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{
-    ContentType, EngineBuilder, RuntimeErrorKind, TraceDecision, TraceDecisionPath, TraceRequest,
-    TraceResponse, TraceStepRecord,
+    ContentType, RuntimeErrorKind, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse,
+    TraceStepRecord,
 };
 use arazzo_spec::{Step, StepTarget, SuccessCriterion, Workflow};
 use common::make_spec_with_base;
@@ -19,7 +19,9 @@ fn replay_spec() -> arazzo_spec::ArazzoSpec {
             workflow_id: "wf".to_string(),
             steps: vec![Step {
                 step_id: "s1".to_string(),
-                target: Some(StepTarget::OperationPath("/items".to_string())),
+                target: Some(StepTarget::OperationPath(
+                    "{$sourceDescriptions.test.url}#/paths/~1items/get".to_string(),
+                )),
                 success_criteria: vec![SuccessCriterion {
                     condition: "$statusCode == 200".to_string(),
                     ..SuccessCriterion::default()
@@ -75,7 +77,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
 
 #[tokio::test]
 async fn replay_executes_without_live_network() {
-    let engine = match EngineBuilder::new(replay_spec())
+    let engine = match common::fixture_engine_builder(replay_spec())
         .trace(true)
         .replay_trace_steps(replay_trace("https://replay.invalid/items"))
         .build()
@@ -94,7 +96,7 @@ async fn replay_executes_without_live_network() {
 
 #[tokio::test]
 async fn replay_reports_request_drift() {
-    let engine = match EngineBuilder::new(replay_spec())
+    let engine = match common::fixture_engine_builder(replay_spec())
         .trace(true)
         .replay_trace_steps(replay_trace("https://replay.invalid/other"))
         .build()
@@ -115,7 +117,7 @@ async fn replay_propagates_workflow_dependency_error_without_consuming_requests(
     let mut spec = replay_spec();
     spec.workflows[0].workflow_id = "dependent".to_string();
     spec.workflows[0].depends_on = vec!["missing".to_string()];
-    let engine = match EngineBuilder::new(spec)
+    let engine = match common::fixture_engine_builder(spec)
         .trace(true)
         .replay_trace_steps(Vec::new())
         .build()
@@ -177,7 +179,7 @@ async fn replay_uses_full_body_not_truncated_preview() {
         error: None,
     }];
 
-    let engine = match EngineBuilder::new(replay_spec())
+    let engine = match common::fixture_engine_builder(replay_spec())
         .trace(true)
         .replay_trace_steps(trace)
         .build()

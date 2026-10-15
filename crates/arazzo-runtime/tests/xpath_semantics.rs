@@ -9,7 +9,6 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use arazzo_runtime::EngineBuilder;
 use arazzo_spec::{
     CriterionExpressionType, CriterionType, OutputValue, Replacement, RequestBody, SelectorObject,
     SelectorType, Step, StepTarget, SuccessCriterion, Workflow,
@@ -38,7 +37,9 @@ fn xml_body_response() -> MockHttpResponse {
 fn criterion_step(type_: Option<CriterionType>) -> Step {
     Step {
         step_id: "check".to_string(),
-        target: Some(StepTarget::OperationPath("GET /pets".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1pets/get".to_string(),
+        )),
         success_criteria: vec![SuccessCriterion {
             condition: "count(//pet) = 2".to_string(),
             context: "$response.body".to_string(),
@@ -112,7 +113,9 @@ fn selector_step(version: &str) -> Step {
     };
     Step {
         step_id: "select".to_string(),
-        target: Some(StepTarget::OperationPath("GET /pets".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1pets/get".to_string(),
+        )),
         outputs: BTreeMap::from([(
             "picked".to_string(),
             OutputValue::Selector(SelectorObject {
@@ -129,7 +132,7 @@ fn selector_step(version: &str) -> Step {
 async fn run_selector(version: &str) -> (Value, Vec<String>) {
     let server = start_server(|_m, _u, _h, _b| xml_body_response());
     let spec = make_spec_with_base(&server.base_url, one_step_workflow(selector_step(version)));
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building engine: {error}"),
     };
@@ -169,7 +172,9 @@ async fn non_10_selector_versions_return_null_with_exactly_one_warning() {
 fn replacement_step(version: Option<&str>) -> Step {
     Step {
         step_id: "send".to_string(),
-        target: Some(StepTarget::OperationPath("POST /soap".to_string())),
+        target: Some(StepTarget::OperationPath(
+            "{$sourceDescriptions.test.url}#/paths/~1soap/post".to_string(),
+        )),
         request_body: Some(RequestBody {
             content_type: "text/xml".to_string(),
             payload: Some(
@@ -205,7 +210,7 @@ async fn run_replacement(version: Option<&str>) -> (String, Vec<String>) {
         &server.base_url,
         one_step_workflow(replacement_step(version)),
     );
-    let engine = match EngineBuilder::new(spec).trace(true).build() {
+    let engine = match common::fixture_engine_builder(spec).trace(true).build() {
         Ok(engine) => engine,
         Err(error) => panic!("building engine: {error}"),
     };

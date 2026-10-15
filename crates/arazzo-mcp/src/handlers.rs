@@ -117,7 +117,7 @@ struct ParsedStepTarget {
 fn parse_step_target(step: &Step) -> ParsedStepTarget {
     match &step.target {
         Some(StepTarget::OperationPath(path)) => {
-            let (method, target) = presented_method_and_target(path, step.request_body.is_some());
+            let (method, target) = presented_method_and_target(path);
             ParsedStepTarget {
                 method: method.map(str::to_string),
                 url: Some(target.to_string()),
@@ -545,7 +545,7 @@ workflows:
         ));
         assert_eq!(
             lowercase.get("method").and_then(serde_json::Value::as_str),
-            Some("GET")
+            None
         );
         assert_eq!(
             lowercase.get("url").and_then(serde_json::Value::as_str),
@@ -570,11 +570,11 @@ workflows:
             source_routed
                 .get("method")
                 .and_then(serde_json::Value::as_str),
-            Some("POST")
+            None
         );
         assert_eq!(
             source_routed.get("url").and_then(serde_json::Value::as_str),
-            Some("{petstore}./pets")
+            Some("POST {petstore}./pets")
         );
     }
 
@@ -655,7 +655,7 @@ workflows:
   - workflowId: inspect-sources
     steps:
       - stepId: inspect
-        operationPath: /inspect
+        operationPath: '{$sourceDescriptions.openapiSource.url}#/paths/~1inspect/get'
 "#;
         let spec = match arazzo_validate::parse_bytes(yaml.as_bytes()) {
             Ok(spec) => spec,

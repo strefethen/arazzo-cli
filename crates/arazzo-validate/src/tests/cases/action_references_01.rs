@@ -35,7 +35,7 @@ workflows:
         value: ""
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
         onSuccess:
           - reference: "$components.successActions.notify"
             value: ""
@@ -89,7 +89,7 @@ workflows:
     "workflowId": "wf",
     "steps": [{{
       "stepId": "request",
-      "operationPath": "/request",
+      "operationId": "fixturerequest",
       "onSuccess": [{{"reference": "$components.successActions.notify"{value}}}]
     }}]
   }}]
@@ -109,7 +109,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: request
-        operationPath: /request
+        operationId: fixturerequest
         onSuccess:
           - reference: "$components.successActions.notify"{value}
 "#
@@ -171,7 +171,7 @@ workflows:
       - reference: "$components.failureActions.retryAll"
     steps:
       - stepId: s1
-        operationPath: /test
+        operationId: fixturetest
 "#;
 
         let spec = match parse_bytes(spec_yaml.as_bytes()) {
@@ -207,15 +207,15 @@ workflows:
       - reference: $components.failureActions.retry
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess:
           - reference: $components.successActions.goS3
         onFailure:
           - reference: $components.failureActions.retry
       - stepId: s2
-        operationPath: /s2
+        operationId: fixtures2
       - stepId: s3
-        operationPath: /s3
+        operationId: fixtures3
 "#;
         let spec = expect_parsed(spec_yaml.as_bytes());
         let workflow = &spec.workflows[0];
@@ -252,7 +252,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{reference: $components.successActions.missing}]
 "#;
         let err = expect_parse_error(missing.as_bytes());
@@ -266,7 +266,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onFailure: [{reference: $components.failureActions.missing}]
 "#;
         let err = expect_parse_error(missing_failure.as_bytes());
@@ -283,7 +283,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{reference: $components.successActions.missing}]
 "#;
         let err = expect_parse_error(missing_with_components.as_bytes());
@@ -305,7 +305,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{reference: $components.failureActions.ok}]
 "#;
         let err = expect_parse_error(wrong_namespace.as_bytes());
@@ -321,7 +321,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{reference: not-a-components-reference}]
 "#;
         let Err(Error::Validation(report)) = parse_bytes(non_expression.as_bytes()) else {
@@ -345,7 +345,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{reference: $components.successActions.missing}]
 "#;
         let err = expect_parse_error(action.as_bytes());
@@ -358,7 +358,7 @@ sourceDescriptions: [{name: api, url: https://example.com, type: openapi}]
 workflows:
   - workflowId: wf
     parameters: [{reference: $components.parameters.missing}]
-    steps: [{stepId: s1, operationPath: /s1}]
+    steps: [{stepId: s1, operationId: fixtures1}]
 "#;
         let err = expect_parse_error(parameter.as_bytes());
         assert!(format!("{err}").contains("component parameter \"missing\" not found"));
@@ -378,13 +378,13 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess:
           - name: $components.successActions.a
             reference: $components.successActions.b
             value: ""
       - stepId: s2
-        operationPath: /s2
+        operationId: fixtures2
 "#;
         let spec = expect_parsed(yaml.as_bytes());
         let action = &spec.workflows[0].steps[0].on_success[0];
@@ -420,7 +420,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{name: inline, type: end, value: null}]
 "#;
         let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
@@ -486,7 +486,7 @@ components:
     {name}: {{name: action, type: end, reference: {shape}}}
 workflows:
   - workflowId: wf
-    steps: [{{stepId: s1, operationPath: /s1}}]
+    steps: [{{stepId: s1, operationId: fixtures1}}]
 "#
                 );
                 let (_, diagnostics) = match parse_bytes_with_diagnostics(yaml.as_bytes()) {
@@ -521,7 +521,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess: [{{reference: {shape}}}]
 "#
             );
@@ -551,7 +551,7 @@ workflows:
   - workflowId: wf
     steps:
       - stepId: s1
-        operationPath: /s1
+        operationId: fixtures1
         onSuccess:
           - name: finish
             type: end

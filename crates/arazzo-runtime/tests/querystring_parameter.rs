@@ -17,6 +17,15 @@ use arazzo_spec::{
 };
 
 const BASE: &str = "https://search.example.com/v1";
+const SOURCES: &[(&str, &str)] = &[
+    ("search", BASE),
+    (
+        "queried",
+        "https://elsewhere.example.com/index?page=2&sort=asc",
+    ),
+    ("queriedEmpty", "https://elsewhere.example.com/index?page=2"),
+    ("clean", "https://elsewhere.example.com"),
+];
 
 fn param(name: &str, location: ParamLocation, value: serde_yaml_ng::Value) -> Parameter {
     Parameter {
@@ -45,12 +54,15 @@ fn spec_with(
             version: "1.0.0".to_string(),
             ..Info::default()
         },
-        source_descriptions: vec![SourceDescription {
-            name: "search".to_string(),
-            url: BASE.to_string(),
-            type_: SourceType::OpenApi,
-            ..SourceDescription::default()
-        }],
+        source_descriptions: SOURCES
+            .iter()
+            .map(|(name, _)| SourceDescription {
+                name: (*name).to_string(),
+                url: format!("https://descriptions.example.test/{name}.yaml"),
+                type_: SourceType::OpenApi,
+                ..SourceDescription::default()
+            })
+            .collect(),
         workflows: vec![Workflow {
             workflow_id: "wf".to_string(),
             parameters: workflow_params,
@@ -79,7 +91,24 @@ fn plan_with_inputs(
     spec: ArazzoSpec,
     inputs: BTreeMap<String, serde_json::Value>,
 ) -> Result<Planned, (RuntimeErrorKind, String)> {
-    let engine = match EngineBuilder::new(spec).dry_run(true).build() {
+    let mut builder = EngineBuilder::new(spec).dry_run(true);
+    for (name, base) in SOURCES {
+        let document = serde_json::json!({
+            "openapi": "3.0.3",
+            "$self": format!("https://descriptions.example.test/{name}.yaml"),
+            "info": {"title": "querystring fixture", "version": "1"},
+            "servers": [{"url": base}],
+            "paths": {
+                "/index": {"get": {"responses": {"200": {"description": "OK"}}}},
+                "/index/{id}": {
+                    "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+                    "get": {"responses": {"200": {"description": "OK"}}}
+                }
+            }
+        });
+        builder = builder.openapi_spec(document.to_string().into_bytes(), None);
+    }
+    let engine = match builder.build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -105,7 +134,7 @@ fn plan_with_inputs(
 /// Plans a step whose only parameter is `in: querystring` with `value`.
 fn plan_querystring(value: serde_yaml_ng::Value) -> Result<Planned, (RuntimeErrorKind, String)> {
     plan(spec_with(
-        "{search}./index",
+        "{$sourceDescriptions.search.url}#/paths/~1index/get",
         Vec::new(),
         vec![param("filter", ParamLocation::Querystring, value)],
     ))
@@ -148,7 +177,7 @@ fn querystring_value_becomes_the_query_component_verbatim() {
 fn embedded_expressions_resolve_inside_the_querystring_value() {
     let planned = match plan_with_inputs(
         spec_with(
-            "{search}./index",
+            "{$sourceDescriptions.search.url}#/paths/~1index/get",
             Vec::new(),
             vec![param(
                 "filter",
@@ -223,7 +252,7 @@ fn encoded_fragment_delimiter_is_accepted() {
 #[test]
 fn querystring_with_a_pre_queried_target_fails_the_step() {
     let (kind, message) = match plan(spec_with(
-        "https://elsewhere.example.com/index?page=2&sort=asc",
+        "{$sourceDescriptions.queried.url}#/paths/~1index/get",
         Vec::new(),
         vec![param(
             "filter",
@@ -249,7 +278,7 @@ fn querystring_with_a_pre_queried_target_fails_the_step() {
 #[test]
 fn empty_querystring_value_with_a_pre_queried_target_fails_the_step() {
     let (kind, message) = match plan(spec_with(
-        "https://elsewhere.example.com/index?page=2",
+        "{$sourceDescriptions.queriedEmpty.url}#/paths/~1index/get",
         Vec::new(),
         vec![param("filter", ParamLocation::Querystring, text(""))],
     )) {
@@ -269,7 +298,7 @@ fn empty_querystring_value_with_a_pre_queried_target_fails_the_step() {
 #[test]
 fn empty_querystring_value_yields_no_query_component() {
     let planned = match plan(spec_with(
-        "https://elsewhere.example.com/index",
+        "{$sourceDescriptions.clean.url}#/paths/~1index/get",
         Vec::new(),
         vec![param("filter", ParamLocation::Querystring, text(""))],
     )) {
@@ -331,7 +360,7 @@ fn null_querystring_value_is_skipped_silently() {
 #[test]
 fn inherited_query_and_step_querystring_both_reach_the_step() {
     let planned = match plan(spec_with(
-        "{search}./index",
+        "{$sourceDescriptions.search.url}#/paths/~1index/get",
         vec![param("q", ParamLocation::Query, text("inherited"))],
         vec![param(
             "q",
@@ -361,7 +390,7 @@ fn inherited_query_and_step_querystring_both_reach_the_step() {
 #[test]
 fn step_level_querystring_overrides_the_inherited_one() {
     let planned = match plan(spec_with(
-        "{search}./index",
+        "{$sourceDescriptions.search.url}#/paths/~1index/get",
         vec![param(
             "filter",
             ParamLocation::Querystring,
@@ -385,7 +414,7 @@ fn step_level_querystring_overrides_the_inherited_one() {
 #[test]
 fn two_querystring_parameters_keep_the_last_and_name_the_discarded_one() {
     let planned = match plan(spec_with(
-        "{search}./index",
+        "{$sourceDescriptions.search.url}#/paths/~1index/get",
         vec![param("inherited", ParamLocation::Querystring, text("a=1"))],
         vec![param("filter", ParamLocation::Querystring, text("b=2"))],
     )) {
@@ -411,7 +440,7 @@ fn two_querystring_parameters_keep_the_last_and_name_the_discarded_one() {
 #[test]
 fn other_parameter_locations_are_unchanged() {
     let planned = match plan(spec_with(
-        "{search}./index/{id}",
+        "{$sourceDescriptions.search.url}#/paths/~1index~1%7Bid%7D/get",
         Vec::new(),
         vec![
             param("id", ParamLocation::Path, text("7")),

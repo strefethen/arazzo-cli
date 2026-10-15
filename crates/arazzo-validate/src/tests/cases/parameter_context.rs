@@ -73,7 +73,7 @@ sourceDescriptions:
             value: lower
           - reference: $components.parameters.reusable
       - stepId: operation-path
-        operationPath: /path
+        operationId: fixturepath
         parameters:
           - name: id
             in: path
@@ -131,7 +131,7 @@ sourceDescriptions:
       - stepId: by-id
         operationId: invoke
       - stepId: by-path
-        operationPath: /path
+        operationId: fixturepath
         parameters:
           - name: local
             value: local
@@ -483,7 +483,7 @@ sourceDescriptions:
             in: header
             value: value
       - stepId: async-path
-        operationPath: /subscribe
+        operationId: fixturesubscribe
         action: receive
         parameters:
           - name: header
@@ -503,7 +503,7 @@ sourceDescriptions:
             in: header
             value: value
       - stepId: ordinary-path
-        operationPath: /items
+        operationId: fixtureitems
         parameters:
           - name: header
             in: header

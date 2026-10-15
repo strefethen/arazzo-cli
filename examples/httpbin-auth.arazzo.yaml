@@ -11,14 +11,14 @@ info:
     files and verbose/dry-run output.
 sourceDescriptions:
   - name: httpbin
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 workflows:
   - workflowId: basic-auth-success
     summary: Correct basic auth credentials return 200
     steps:
       - stepId: authenticate
-        operationPath: /basic-auth/{user}/{passwd}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1basic-auth~1%7Buser%7D~1%7Bpasswd%7D/get'
         parameters:
           - name: user
             in: path
@@ -42,7 +42,7 @@ workflows:
     summary: Wrong credentials trigger 401, error handler recovers
     steps:
       - stepId: bad-auth
-        operationPath: /basic-auth/{user}/{passwd}
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1basic-auth~1%7Buser%7D~1%7Bpasswd%7D/get'
         parameters:
           - name: user
             in: path
@@ -64,7 +64,7 @@ workflows:
           - name: end-unhandled-auth-error
             type: end
       - stepId: handle-auth-error
-        operationPath: /get
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1get/get'
         successCriteria:
           - condition: $statusCode == 200
         outputs:
@@ -82,7 +82,7 @@ workflows:
           description: A bearer token — automatically redacted in traces via stem matching
     steps:
       - stepId: auth-with-token
-        operationPath: /bearer
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1bearer/get'
         parameters:
           - name: Authorization
             in: header
@@ -100,7 +100,7 @@ workflows:
     summary: Missing bearer token triggers 401 and workflow ends cleanly
     steps:
       - stepId: no-token
-        operationPath: /bearer
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1bearer/get'
         successCriteria:
           - condition: $statusCode == 200
         onFailure:

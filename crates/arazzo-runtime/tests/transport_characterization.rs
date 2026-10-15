@@ -8,7 +8,7 @@
 
 mod common;
 
-use arazzo_runtime::{EngineBuilder, RuntimeErrorKind};
+use arazzo_runtime::RuntimeErrorKind;
 use arazzo_spec::{ParamLocation, Parameter, RequestBody, Step, StepTarget, ValueSource, Workflow};
 use common::*;
 use serde_json::{json, Value};
@@ -58,7 +58,7 @@ async fn run_one_step(
     body: Option<Value>,
 ) -> Result<BTreeMap<String, Value>, arazzo_runtime::RuntimeError> {
     let spec = make_spec_with_base(base_url, vec![one_step_workflow(target, parameters, body)]);
-    let engine = match EngineBuilder::new(spec).build() {
+    let engine = match common::fixture_engine_builder(spec).build() {
         Ok(engine) => engine,
         Err(err) => panic!("building engine: {err}"),
     };
@@ -82,7 +82,13 @@ async fn charac_same_host_302_chain_followed_silently() {
         }
     });
 
-    let outputs = run_one_step(&server.base_url, "/a", Vec::new(), None).await;
+    let outputs = run_one_step(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1a/get",
+        Vec::new(),
+        None,
+    )
+    .await;
     if let Err(err) = outputs {
         panic!("chain should succeed: {err}");
     }
@@ -109,7 +115,7 @@ async fn charac_301_302_303_convert_post_to_get_and_drop_body() {
 
         let outputs = run_one_step(
             &server.base_url,
-            "POST /a",
+            "{$sourceDescriptions.test.url}#/paths/~1a/post",
             Vec::new(),
             Some(json!({"k":"v"})),
         )
@@ -152,7 +158,10 @@ async fn charac_301_302_preserve_non_post_methods_and_payload() {
             let expected_body = payload.to_string();
             let outputs = run_one_step(
                 &server.base_url,
-                &format!("{method} /a"),
+                &format!(
+                    "{{$sourceDescriptions.test.url}}#/paths/~1a/{}",
+                    method.to_ascii_lowercase()
+                ),
                 Vec::new(),
                 Some(payload),
             )
@@ -214,7 +223,10 @@ async fn charac_303_converts_put_but_retains_head_and_drops_payload() {
 
             let outputs = run_one_step(
                 &server.base_url,
-                &format!("{method} /a"),
+                &format!(
+                    "{{$sourceDescriptions.test.url}}#/paths/~1a/{}",
+                    method.to_ascii_lowercase()
+                ),
                 vec![header_param(header_name, header_contents)],
                 Some(json!({"k":"v"})),
             )
@@ -259,7 +271,7 @@ async fn charac_307_308_preserve_method_and_body() {
 
         let outputs = run_one_step(
             &server.base_url,
-            "POST /a",
+            "{$sourceDescriptions.test.url}#/paths/~1a/post",
             Vec::new(),
             Some(json!({"k":"v"})),
         )
@@ -298,7 +310,10 @@ async fn charac_307_308_preserve_non_post_methods_and_body() {
             let expected_body = payload.to_string();
             let outputs = run_one_step(
                 &server.base_url,
-                &format!("{method} /a"),
+                &format!(
+                    "{{$sourceDescriptions.test.url}}#/paths/~1a/{}",
+                    method.to_ascii_lowercase()
+                ),
                 Vec::new(),
                 Some(payload),
             )
@@ -353,7 +368,13 @@ async fn charac_auth_cookie_kept_on_same_host_hop() {
         header_param("Authorization", "Bearer secret-token"),
         cookie_param("sid", "abc123"),
     ];
-    let outputs = run_one_step(&server.base_url, "/a", params, None).await;
+    let outputs = run_one_step(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1a/get",
+        params,
+        None,
+    )
+    .await;
     if let Err(err) = outputs {
         panic!("chain should succeed: {err}");
     }
@@ -392,7 +413,13 @@ async fn charac_auth_cookie_stripped_on_cross_port_hop() {
         header_param("X-Custom", "keep-me"),
         cookie_param("sid", "abc123"),
     ];
-    let outputs = run_one_step(&origin.base_url, "/a", params, None).await;
+    let outputs = run_one_step(
+        &origin.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1a/get",
+        params,
+        None,
+    )
+    .await;
     if let Err(err) = outputs {
         panic!("cross-port chain should succeed: {err}");
     }
@@ -428,7 +455,13 @@ async fn charac_referer_set_on_same_scheme_hop() {
         }
     });
 
-    let outputs = run_one_step(&server.base_url, "/a", Vec::new(), None).await;
+    let outputs = run_one_step(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1a/get",
+        Vec::new(),
+        None,
+    )
+    .await;
     if let Err(err) = outputs {
         panic!("chain should succeed: {err}");
     }
@@ -457,7 +490,14 @@ async fn charac_default_redirect_limit_is_ten() {
         MockHttpResponse::redirect(302, &format!("/hop/{}", n + 1))
     });
 
-    let err = match run_one_step(&server.base_url, "/hop/0", Vec::new(), None).await {
+    let err = match run_one_step(
+        &server.base_url,
+        "{$sourceDescriptions.test.url}#/paths/~1hop~10/get",
+        Vec::new(),
+        None,
+    )
+    .await
+    {
         Ok(_) => panic!("endless chain must exceed the redirect limit"),
         Err(err) => err,
     };

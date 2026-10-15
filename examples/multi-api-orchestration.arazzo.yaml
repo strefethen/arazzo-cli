@@ -1,11 +1,11 @@
 # multi-api-orchestration.arazzo.yaml
 #
 # Demonstrates orchestrating calls across multiple source descriptions using
-# `{sourceName}./path` routing and exposing source URLs via `$sourceDescriptions.*`.
+# canonical operation pointers and exposing source URLs via `$sourceDescriptions.*`.
 #
 # Features covered:
 #   - Two source descriptions in one spec
-#   - Per-step routing with `{sourceName}./path`
+#   - Per-step pointers into the named source document
 #   - Cross-step output flow
 #   - `$sourceDescriptions.<name>.url` output expressions
 #
@@ -23,10 +23,10 @@ info:
 
 sourceDescriptions:
   - name: primary
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
   - name: secondary
-    url: https://httpbin.org
+    url: ./descriptions/httpbin.openapi.yaml
     type: openapi
 
 workflows:
@@ -34,7 +34,7 @@ workflows:
     summary: Route steps to named sources and combine outputs
     steps:
       - stepId: call-primary
-        operationPath: "{primary}./get"
+        operationPath: '{$sourceDescriptions.primary.url}#/paths/~1get/get'
         parameters:
           - name: source
             in: query
@@ -46,7 +46,7 @@ workflows:
           url: $url
 
       - stepId: call-secondary
-        operationPath: "{secondary}./response-headers"
+        operationPath: '{$sourceDescriptions.secondary.url}#/paths/~1response-headers/get'
         parameters:
           - name: X-Trace-Id
             in: query

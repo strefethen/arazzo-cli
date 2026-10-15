@@ -360,7 +360,7 @@ fn refused_operation_ids_carry_their_stable_code_in_json() {
 /// The human-readable path carries the same refusal — an operator running
 /// without `--json` still learns which forms are accepted.
 #[test]
-fn refused_unqualified_operation_id_names_both_supported_forms() {
+fn refused_unqualified_operation_id_names_the_source_qualified_form() {
     let dir = TempDir::new();
     let spec = fixture(&dir, &["getPet"]);
     let output = Command::new(cli_bin())
@@ -378,5 +378,8 @@ fn refused_unqualified_operation_id_names_both_supported_forms() {
         text.contains("$sourceDescriptions.<name>.getPet"),
         "stderr was: {text}"
     );
-    assert!(text.contains("{<name>}./<path>"), "stderr was: {text}");
+    assert!(
+        !text.contains("{<name>}./<path>"),
+        "legacy syntax must not be suggested: {text}"
+    );
 }
