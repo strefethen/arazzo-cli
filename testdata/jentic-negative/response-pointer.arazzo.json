@@ -1,0 +1,19 @@
+{
+  "arazzo": "1.0.1",
+  "info": { "title": "Response pointer defect", "version": "1.0.0" },
+  "sourceDescriptions": [
+    { "name": "openapi_source", "url": "./openapi.json", "type": "openapi" }
+  ],
+  "workflows": [
+    {
+      "workflowId": "probe",
+      "steps": [
+        {
+          "stepId": "request",
+          "operationPath": "{$sourceDescriptions.openapi_source.url}#/paths/~1probe/get",
+          "outputs": { "token": "$response.body#access_token" }
+        }
+      ]
+    }
+  ]
+}
