@@ -126,7 +126,7 @@ impl ServerState {
     }
 }
 
-/// Discover `.arazzo.yaml` / `.arazzo.yml` files in a directory tree.
+/// Discover `.arazzo.json`, `.arazzo.yaml`, and `.arazzo.yml` files in a directory tree.
 pub fn discover_specs(dir: &str) -> Result<Vec<String>, String> {
     let root = Path::new(dir);
     if !root.is_dir() {
@@ -165,7 +165,10 @@ fn collect_arazzo_files(dir: &Path, out: &mut Vec<String>) -> Result<(), std::io
         } else if ft.is_file() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.ends_with(".arazzo.yaml") || name.ends_with(".arazzo.yml") {
+            if name.ends_with(".arazzo.json")
+                || name.ends_with(".arazzo.yaml")
+                || name.ends_with(".arazzo.yml")
+            {
                 if let Some(path) = entry.path().to_str() {
                     out.push(path.to_string());
                 }

@@ -15,7 +15,7 @@ struct Args {
     /// Arazzo spec files to load
     specs: Vec<String>,
 
-    /// Directory containing .arazzo.yaml files to load
+    /// Directory containing .arazzo.json, .arazzo.yaml, or .arazzo.yml files to load
     #[arg(long = "dir")]
     dir: Option<String>,
 

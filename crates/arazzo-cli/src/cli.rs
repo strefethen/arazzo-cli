@@ -245,11 +245,11 @@ pub enum Commands {
     },
     /// Run Arazzo specs as tests and report results
     #[command(
-        after_help = "For agents:\n  - Use --json for a structured test report regardless of --format.\n  - Directories are scanned recursively for .arazzo.yaml and .arazzo.yml.\n  - Use schema test to inspect the JSON output contract."
+        after_help = "For agents:\n  - Use --json for a structured test report regardless of --format.\n  - Directories are scanned recursively for .arazzo.json, .arazzo.yaml, and .arazzo.yml.\n  - Use schema test to inspect the JSON output contract."
     )]
     Test {
         /// Spec files or directories to test (directories scanned recursively
-        /// for .arazzo.yaml / .arazzo.yml)
+        /// for .arazzo.json / .arazzo.yaml / .arazzo.yml)
         #[arg(required = true)]
         paths: Vec<String>,
 
@@ -350,7 +350,7 @@ pub enum Commands {
         /// Arazzo spec files to load
         specs: Vec<String>,
 
-        /// Directory containing .arazzo.yaml files to load
+        /// Directory containing .arazzo.json, .arazzo.yaml, or .arazzo.yml files to load
         #[arg(long = "dir")]
         dir: Option<String>,
 
