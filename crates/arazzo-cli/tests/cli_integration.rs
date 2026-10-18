@@ -3036,7 +3036,7 @@ fn run_help_surfaces_agent_safe_execution_notes() {
     let help = stdout_text(&output);
 
     assert!(help.contains("Execute a workflow from an Arazzo spec"));
-    assert!(help.contains("Path to an Arazzo YAML spec file"));
+    assert!(help.contains("Path to an Arazzo YAML or JSON spec file"));
     assert!(help.contains("String input as key=value"));
     assert!(help.contains("Build and print the request plan without sending HTTP requests"));
     assert!(help.contains("For agents:"));

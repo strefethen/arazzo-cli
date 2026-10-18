@@ -204,11 +204,25 @@ fn test_unscannable_directory_is_test_path_scan() {
 }
 
 #[test]
-fn test_non_arazzo_file_is_test_path_not_arazzo() {
+fn explicitly_named_non_spec_file_is_a_suite_parse_error() {
     let dir = TempDir::new("not-arazzo");
     let file = dir.file("notes.txt", "hello");
-    let message = assert_test_failure(&[&file], "TEST_PATH_NOT_ARAZZO");
-    assert!(message.starts_with("not an Arazzo spec"), "{message}");
+    let output = run(&["--json", "test", &file]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let text = stdout(&output);
+    let body: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|err| panic!("stdout is not one JSON value ({err}): {text}"));
+    assert_eq!(body["kind"], "results", "{body}");
+    assert_eq!(body["summary"]["totalSuites"], 1, "{body}");
+    assert_eq!(body["summary"]["totalTests"], 0, "{body}");
+    assert_eq!(body["summary"]["suiteErrors"], 1, "{body}");
+
+    let error = body["suites"][0]["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("suite must report its parse error: {body}"));
+    assert!(error.contains("parsing arazzo yaml"), "{error}");
+    assert!(error.contains("hello"), "{error}");
 }
 
 #[test]

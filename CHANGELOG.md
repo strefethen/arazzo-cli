@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Update `rustls` from 0.23.45 to 0.23.46 to address RustSec advisories
+  RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
 - With `--json`, a failing `validate` prints the shared error object, with
   `kind`, `error`, and a `VALIDATE_SPEC_*` `code`, beside the `valid`, `file`,
   `errors`, and `warnings` fields it already had. `--strict` promotions use
