@@ -36,8 +36,9 @@ pub struct TestRunOptions {
 
 /// Discover Arazzo test specs from a list of file paths and directories.
 ///
-/// Files must end in `.arazzo.yaml` or `.arazzo.yml`. Directories are scanned
-/// recursively using the same convention as `arazzo_mcp::state::discover_specs`.
+/// Explicit files are selected by path; the parser determines whether their
+/// contents are valid. Directories are scanned recursively using the same
+/// convention as `arazzo_mcp::state::discover_specs`.
 pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, CliError> {
     let mut specs = Vec::new();
 
@@ -56,13 +57,8 @@ pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, CliError> {
             for p in discovered {
                 specs.push(PathBuf::from(p));
             }
-        } else if is_arazzo_spec_file(path_str) {
-            specs.push(path.to_path_buf());
         } else {
-            return Err(CliError::new(
-                "TEST_PATH_NOT_ARAZZO",
-                format!("not an Arazzo spec (expected .arazzo.yaml or .arazzo.yml): {path_str}"),
-            ));
+            specs.push(path.to_path_buf());
         }
     }
 
@@ -462,10 +458,6 @@ fn plan_workflow_ids(
         }
     }
     Ok(order)
-}
-
-fn is_arazzo_spec_file(path: &str) -> bool {
-    path.ends_with(".arazzo.yaml") || path.ends_with(".arazzo.yml")
 }
 
 // ── TAP formatter ────────────────────────────────────────────────
