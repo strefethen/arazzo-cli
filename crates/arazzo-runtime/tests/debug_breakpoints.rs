@@ -141,7 +141,7 @@ async fn conditional_breakpoint_respects_expression() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn invalid_breakpoint_conditions_never_match() {
+async fn invalid_breakpoint_conditions_report_errors_and_false_does_not_stop() {
     for condition in [
         "true || (",
         "!($inputs.code[0] == 1)",
@@ -157,8 +157,8 @@ async fn invalid_breakpoint_conditions_never_match() {
             ])
             .is_ok());
         let handle = engine.execute("wf", inputs_with_code(429));
-        // A bad condition must not stop execution; bound the wait so a regression
-        // can resume and collect the workflow instead of hanging the test.
+        // A false condition continues; an invalid condition reports a debugger
+        // error. Neither should leave the workflow waiting at a breakpoint.
         let stopped = controller
             .wait_for_stop_count(1, Duration::from_millis(100))
             .unwrap_or_else(|error| panic!("waiting for invalid breakpoint: {error}"));
@@ -167,7 +167,16 @@ async fn invalid_breakpoint_conditions_never_match() {
         }
         let result = handle.collect().await;
         assert!(!stopped, "invalid or false condition matched: {condition}");
-        assert!(result.outputs.is_ok());
+        if condition == "false" {
+            assert!(result.outputs.is_ok());
+        } else {
+            let error = result
+                .outputs
+                .err()
+                .unwrap_or_else(|| panic!("expected condition error: {condition}"));
+            assert!(error.message.contains(condition), "{error:?}");
+            assert!(error.message.contains("wf") && error.message.contains("s1"));
+        }
         assert!(controller
             .stop_events()
             .unwrap_or_else(|error| panic!("stop events: {error}"))

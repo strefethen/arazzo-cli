@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.0.8] - 2026-10-17
+
+Debugger failures now explain what went wrong and where, with reliable inspection of parent and child workflows.
+
+**Upgrade if** you have seen unexplained `read error` messages, missing values displayed as `null`, skipped breakpoints, or misleading workflow completion messages.
+
+- Unresolved outputs identify the output name, expression, workflow, and step.
+- Watch and inspection failures report their cause instead of showing empty data.
+- Parent and child stack frames display their own inputs and values.
+- Invalid breakpoints explain why they were not installed, including in Arazzo Debug output.
+
+### Fixed
+- Report unresolved step and workflow outputs before completion; the completion summary includes their count. Actual JSON `null` values remain valid values.
+- Return explicit errors for missing watch values, malformed expressions, invalid frame IDs, expired variable references, and unavailable source locations.
+- Preserve variable references across scope requests within a pause and prevent expired references from pointing to new values.
+- Use the selected stack frame's saved context when inspecting a parent workflow; allow breakpoints in called child workflows.
+- Reject invalid breakpoint syntax with an unverified breakpoint and its source location. If a condition cannot be evaluated at runtime, end the debug run with the condition, workflow, step, and underlying error rather than silently skipping the breakpoint.
+- Explain missing executables, inaccessible working directories, missing specs, startup failures, failed debugger requests, and unexpected process exits with session context.
+- Report termination once, distinguish successful completion from requested stops, and suppress the spurious `read error` caused by normal shutdown.
+- Return refused stepping requests as debugger errors without dropping the session.
+- Pass constant parameter values correctly to child workflows.
+
+### Changed
+- **Migration required for legacy operation targets:** the bundled runtime now resolves standard Arazzo `operationId` and `operationPath` references from the referenced OpenAPI documents. Replace legacy forms such as `GET service./path` with a declared operation ID (for example, `$sourceDescriptions.service.getForecast`) or a standard operation-path reference. Relative `sourceDescriptions[].url` values identify documents relative to the Arazzo file. Reusable actions use `reference: $components.failureActions.name` or `reference: $components.successActions.name`; legacy action-name lookup is removed.
+- JSONPath expressions nested more than eight bracket levels are rejected explicitly.
+
+### Added
+- Runnable, server-free debugger diagnostic specs and a VS Code demonstration workspace in `testdata/debugger-diagnostics`, backed by regression tests.
+- Dry-run output checkpoints use the same debugger diagnostics as live requests.
+
 ## [0.0.7] - 2026-10-09
 
 ### Fixed

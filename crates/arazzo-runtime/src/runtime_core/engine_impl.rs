@@ -602,7 +602,7 @@ impl Engine {
             }
 
             exec_ctx.check_cancelled()?;
-            let workflow_outputs = self.build_outputs(&workflow, &vars);
+            let workflow_outputs = self.build_outputs(&workflow, &vars)?;
             self.emit_observer_event(
                 exec_ctx,
                 ObserverEvent::WorkflowCompleted {
@@ -950,9 +950,19 @@ impl Engine {
         &self,
         workflow: &Workflow,
         vars: &VarStore,
-    ) -> BTreeMap<String, Value> {
+    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
         let mut ctx = self.make_eval_context(vars, None);
         for (name, output) in &workflow.outputs {
+            if let Some(controller) = &self.inner.debug_controller {
+                controller
+                    .report_workflow_output(&workflow.workflow_id, name, output, &ctx)
+                    .map_err(|err| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::DebugController,
+                            format!("reporting workflow output {name:?}: {err}"),
+                        )
+                    })?;
+            }
             let eval = ExpressionEvaluator::new(ctx.clone());
             let (value, warnings) = match output {
                 OutputValue::RuntimeExpression(expression) => {
@@ -965,7 +975,7 @@ impl Engine {
             }
             ctx.outputs.insert(name.clone(), value);
         }
-        ctx.outputs
+        Ok(ctx.outputs)
     }
 }
 

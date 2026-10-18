@@ -141,27 +141,38 @@ pub(crate) fn first_matching_breakpoint(
     step_id: &str,
     checkpoint: &StepCheckpoint,
     eval_ctx: &EvalContext,
-) -> Option<StepBreakpoint> {
+) -> Result<Option<StepBreakpoint>, String> {
     for breakpoint in breakpoints {
         if !breakpoint.matches_identity(workflow_id, step_id, checkpoint) {
             continue;
         }
-        if breakpoint_condition_matches(breakpoint, eval_ctx) {
-            return Some(breakpoint.clone());
+        if breakpoint_condition_matches(breakpoint, eval_ctx)? {
+            return Ok(Some(breakpoint.clone()));
         }
     }
-    None
+    Ok(None)
 }
 
-fn breakpoint_condition_matches(breakpoint: &StepBreakpoint, eval_ctx: &EvalContext) -> bool {
+fn breakpoint_condition_matches(
+    breakpoint: &StepBreakpoint,
+    eval_ctx: &EvalContext,
+) -> Result<bool, String> {
     let Some(condition) = breakpoint.condition.as_deref() else {
-        return true;
+        return Ok(true);
     };
     let trimmed = condition.trim();
     if trimmed.is_empty() {
-        return true;
+        return Ok(true);
     }
-    ExpressionEvaluator::new(eval_ctx.clone()).evaluate_condition(trimmed)
+    let evaluation =
+        ExpressionEvaluator::new(eval_ctx.clone()).evaluate_condition_detailed(trimmed);
+    if let Some(error) = evaluation.error {
+        return Err(format!(
+            "invalid breakpoint condition: {trimmed:?} in workflow: {:?}, step: {:?}: {} (byte {})",
+            breakpoint.workflow_id, breakpoint.step_id, error.message, error.byte_offset
+        ));
+    }
+    Ok(evaluation.result)
 }
 
 fn is_step_checkpoint(checkpoint: &StepCheckpoint) -> bool {

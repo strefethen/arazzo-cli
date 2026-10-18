@@ -1,3 +1,4 @@
+use super::xpath::extract_xpath;
 use super::*;
 use arazzo_spec::{CriterionExpressionType, CriterionType};
 use proptest::prelude::*;

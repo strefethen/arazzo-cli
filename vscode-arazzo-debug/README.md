@@ -96,6 +96,20 @@ Open **View → Output** and select **Arazzo Debug** to see session start/end ev
 
 Workflow execution failures also appear in the **Debug Console**.
 
+Unresolved outputs identify the output name, expression, workflow, and step.
+Completion reports their count; an actual JSON `null` value is not treated as
+an unresolved output. Watch failures and invalid breakpoints report their cause
+instead of silently returning `null` or skipping the breakpoint.
+
+Selecting a parent Call Stack frame shows that frame's own inputs and values.
+For reproducible examples, see the
+[debugger diagnostic workspace](https://github.com/strefethen/arazzo-cli/tree/vscode-v0.0.8/testdata/debugger-diagnostics).
+
+**Upgrading from 0.0.7:** the bundled runtime now requires standard Arazzo
+operation targets and reusable action references. See the
+[0.0.8 migration notes](CHANGELOG.md#008---2026-10-17) before debugging workflows
+that use legacy target syntax.
+
 ## Requirements
 
 - VS Code 1.90 or later

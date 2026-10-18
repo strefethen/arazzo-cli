@@ -6,7 +6,7 @@ import { ArazzoEvaluatableExpressionProvider } from "./evaluatableExpressionProv
 
 export function activate(context: vscode.ExtensionContext): void {
   const channel = vscode.window.createOutputChannel("Arazzo Debug");
-  const provider = new ArazzoDebugConfigurationProvider();
+  const provider = new ArazzoDebugConfigurationProvider(channel);
   const factory = new ArazzoAdapterDescriptorFactory(
     context.extensionPath,
     channel

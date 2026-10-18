@@ -67,13 +67,6 @@ pub fn empty_body() -> Value {
     json!({})
 }
 
-pub fn evaluate_body(result: String) -> Value {
-    json!({
-        "result": result,
-        "variablesReference": 0
-    })
-}
-
 pub fn threads_body(thread_id: u64, thread_name: &str) -> Value {
     json!({
         "threads": [

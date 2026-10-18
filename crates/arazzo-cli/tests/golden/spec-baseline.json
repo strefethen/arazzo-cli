@@ -960,6 +960,52 @@
         }
       }
     },
+    "testdata/debugger-diagnostics/frames.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "child": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "inspect-child",
+              "url": "https://example.invalid/probe"
+            }
+          ]
+        },
+        "parent": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "inspect-child",
+              "url": "https://example.invalid/probe"
+            }
+          ]
+        }
+      }
+    },
+    "testdata/debugger-diagnostics/outputs.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "address-forecast": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "GET",
+              "stepId": "check-active-alerts",
+              "url": "https://example.invalid/probe"
+            }
+          ]
+        }
+      }
+    },
     "testdata/error-handling.arazzo.yaml": {
       "validate": {
         "diagnostics": [],

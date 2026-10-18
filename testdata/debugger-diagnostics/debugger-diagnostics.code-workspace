@@ -1,0 +1,39 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": { "files.associations": { "malformed.yaml": "arazzo" } },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Missing outputs and watches",
+        "type": "arazzo",
+        "request": "launch",
+        "runtimeExecutable": "${workspaceFolder}/../../target/debug/arazzo-debug-adapter",
+        "spec": "${workspaceFolder}/outputs.arazzo.yaml",
+        "workflowId": "address-forecast",
+        "dryRun": true,
+        "stopOnEntry": true,
+        "inputs": { "alerts": { "features": [] }, "explicitNull": null }
+      },
+      {
+        "name": "Parent and child frames",
+        "type": "arazzo",
+        "request": "launch",
+        "runtimeExecutable": "${workspaceFolder}/../../target/debug/arazzo-debug-adapter",
+        "spec": "${workspaceFolder}/frames.arazzo.yaml",
+        "workflowId": "parent",
+        "dryRun": true,
+        "stopOnEntry": true,
+        "inputs": { "label": "parent-value" }
+      },
+      {
+        "name": "Malformed source diagnostic",
+        "type": "arazzo",
+        "request": "launch",
+        "runtimeExecutable": "${workspaceFolder}/../../target/debug/arazzo-debug-adapter",
+        "spec": "${workspaceFolder}/malformed.yaml",
+        "dryRun": true
+      }
+    ]
+  }
+}

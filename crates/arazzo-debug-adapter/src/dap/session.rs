@@ -23,6 +23,7 @@ const INLINE_EVENT_TIMEOUT: Duration = Duration::from_millis(100);
 const ENGINE_MONITOR_POLL: Duration = Duration::from_millis(25);
 
 pub(super) enum EngineEvent {
+    OutputDiagnostic(String),
     Stopped(DebugStopEvent),
     Terminated,
     /// Engine finished because the workflow failed; carries the runtime error
@@ -55,6 +56,7 @@ pub(super) struct RuntimeSession {
 
 #[derive(Debug, Default)]
 pub(super) struct SessionState {
+    pub(super) termination_sent: bool,
     pub(super) launch: Option<LaunchConfig>,
     pub(super) source_index: Option<SourceIndex>,
     pub(super) pending_breakpoints: HashMap<String, Vec<DapBreakpoint>>,
@@ -77,7 +79,7 @@ pub(super) fn ensure_runtime_started(
         .cloned()
         .ok_or_else(|| "launch must be sent before configurationDone".to_string())?;
     let spec = arazzo_validate::parse(&launch.spec)
-        .map_err(|err| format!("loading arazzo spec for debug: {err}"))?;
+        .map_err(|err| format!("loading arazzo spec for debug {:?}: {err}", launch.spec))?;
 
     let workflow_ids: Vec<String> = spec
         .workflows
@@ -252,6 +254,35 @@ fn engine_event_monitor(
             || cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
             || handle.as_ref().is_some_and(|h| h.is_finished());
 
+        // Drain before completion so fast workflows cannot lose diagnostics.
+        match controller.take_output_diagnostics() {
+            Ok(diagnostics) => {
+                for diagnostic in diagnostics {
+                    if event_tx
+                        .send(EngineEvent::OutputDiagnostic(diagnostic))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            Err(err) => {
+                if let Some(token) = &cancel_token {
+                    token.cancel();
+                }
+                // If the coordinator has gone away, there is no diagnostic consumer.
+                let _ = event_tx.send(EngineEvent::Failed(RuntimeError::new(
+                    arazzo_runtime::RuntimeErrorKind::InternalError,
+                    format!("reading debugger output diagnostics: {err}"),
+                )));
+                if let Some(engine) = handle.take() {
+                    // The primary controller error is already reported; join for cleanup.
+                    let _ = engine.join();
+                }
+                return;
+            }
+        }
+
         // Drain any new stop events from the controller.
         if let Ok(stop_events) = controller.stop_events() {
             while delivered < stop_events.len() {
@@ -314,6 +345,11 @@ where
     W: Write,
 {
     match event {
+        EngineEvent::OutputDiagnostic(message) => {
+            let mut event = output_event(outbound.alloc(), "console", &format!("{message}\n"));
+            event["body"]["data"] = serde_json::json!({"kind": "unresolvedOutput"});
+            write_dap_message(writer, &event)?;
+        }
         EngineEvent::Stopped(stop) => {
             let reason = stop_reason_name(stop.reason.clone());
             if let Some(runtime) = state.runtime.as_mut() {
@@ -329,7 +365,8 @@ where
             if let Some(runtime) = state.runtime.as_mut() {
                 runtime.terminated = true;
             }
-            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+            write_dap_message(writer, &exited_event(outbound.alloc(), 0))?;
+            terminate_session(state, writer, outbound)?;
         }
         EngineEvent::Failed(err) => {
             if let Some(runtime) = state.runtime.as_mut() {
@@ -346,7 +383,7 @@ where
                 ),
             )?;
             write_dap_message(writer, &exited_event(outbound.alloc(), 1))?;
-            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+            terminate_session(state, writer, outbound)?;
         }
         EngineEvent::Panicked(message) => {
             if let Some(runtime) = state.runtime.as_mut() {
@@ -358,8 +395,20 @@ where
             };
             write_dap_message(writer, &output_event(outbound.alloc(), "stderr", &text))?;
             write_dap_message(writer, &exited_event(outbound.alloc(), 101))?;
-            write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+            terminate_session(state, writer, outbound)?;
         }
+    }
+    Ok(())
+}
+
+pub(super) fn terminate_session<W: Write>(
+    state: &mut SessionState,
+    writer: &mut W,
+    outbound: &mut OutboundSequence,
+) -> Result<(), String> {
+    if !state.termination_sent {
+        write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+        state.termination_sent = true;
     }
     Ok(())
 }
@@ -431,5 +480,53 @@ fn stop_reason_name(reason: DebugStopReason) -> &'static str {
         DebugStopReason::Pause => "pause",
         DebugStopReason::Step => "step",
         _ => "pause",
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_output_is_sent_as_a_diagnostic_before_completion() {
+        let mut state = SessionState::default();
+        let mut output = Vec::new();
+        let mut sequence = OutboundSequence::new();
+        let message = r#"unresolved output value: "first_alert_event" expression: "$response.body#/features/0/properties/event" in workflow: "forecast", step: "alerts"."#;
+        for event in [
+            EngineEvent::OutputDiagnostic(message.into()),
+            EngineEvent::Terminated,
+        ] {
+            handle_engine_event(event, &mut state, &mut output, &mut sequence)
+                .unwrap_or_else(|err| panic!("event failed: {err}"));
+        }
+        let output =
+            String::from_utf8(output).unwrap_or_else(|err| panic!("invalid output: {err}"));
+        let encoded_message = serde_json::to_string(&format!("{message}\n"))
+            .unwrap_or_else(|err| panic!("encoding message: {err}"));
+        assert!(output.contains(&encoded_message));
+        assert!(output.contains("\"kind\":\"unresolvedOutput\""));
+        assert!(output.find(&encoded_message) < output.find("\"event\":\"exited\""));
+    }
+
+    #[test]
+    fn success_reports_exit_zero_and_termination_is_idempotent() {
+        let mut state = SessionState::default();
+        let mut output = Vec::new();
+        let mut sequence = OutboundSequence::new();
+        handle_engine_event(
+            EngineEvent::Terminated,
+            &mut state,
+            &mut output,
+            &mut sequence,
+        )
+        .unwrap_or_else(|err| panic!("completion failed: {err}"));
+        terminate_session(&mut state, &mut output, &mut sequence)
+            .unwrap_or_else(|err| panic!("disconnect termination failed: {err}"));
+        let output =
+            String::from_utf8(output).unwrap_or_else(|err| panic!("invalid output: {err}"));
+        assert!(output.contains("\"exitCode\":0"));
+        assert_eq!(output.matches("\"event\":\"terminated\"").count(), 1);
+        assert!(output.find("\"event\":\"exited\"") < output.find("\"event\":\"terminated\""));
     }
 }

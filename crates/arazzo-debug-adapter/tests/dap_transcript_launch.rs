@@ -80,7 +80,7 @@ fn dap_launch_lifecycle_populates_debug_views() {
             "seq": 8,
             "type": "request",
             "command": "scopes",
-            "arguments": { "frameId": 1 }
+            "arguments": { "frameId": 100 }
         }),
         json!({
             "seq": 9,
@@ -178,37 +178,30 @@ fn dap_launch_lifecycle_populates_debug_views() {
         Some("continue")
     );
 
-    // After continue, the engine may or may not deliver a stopped/terminated event
-    // before the disconnect command is processed (depends on tokio runtime shutdown
-    // timing). Check the tail of the message stream for disconnect + terminated.
-    let tail_offset = if messages.len() == 15 {
-        // Post-continue event arrived before disconnect.
-        let post_continue_event = messages[12].get("event").and_then(|v| v.as_str());
-        if post_continue_event == Some("stopped") {
-            let reason = messages[12]
-                .pointer("/body/reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            assert!(reason == "breakpoint" || reason == "step" || reason == "pause");
-        } else {
-            assert_eq!(post_continue_event, Some("terminated"));
+    // Completion may precede disconnect; termination must be sent only once.
+    let disconnect_index = messages
+        .iter()
+        .position(|message| {
+            message.get("command").and_then(|value| value.as_str()) == Some("disconnect")
+        })
+        .unwrap_or_else(|| panic!("missing disconnect response: {messages:#?}"));
+    assert!(disconnect_index >= 12);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["event"] == "terminated")
+            .count(),
+        1
+    );
+    for message in &messages[12..disconnect_index] {
+        assert!(matches!(
+            message["event"].as_str(),
+            Some("stopped" | "exited" | "terminated")
+        ));
+        if message["event"] == "exited" {
+            assert_eq!(message["body"]["exitCode"], 0);
         }
-        13
-    } else {
-        12
-    };
-    assert_eq!(
-        messages[tail_offset]
-            .get("command")
-            .and_then(|v| v.as_str()),
-        Some("disconnect")
-    );
-    assert_eq!(
-        messages[tail_offset + 1]
-            .get("event")
-            .and_then(|v| v.as_str()),
-        Some("terminated")
-    );
+    }
 
     dap_test_support::remove_temp_spec(&spec_path);
 }

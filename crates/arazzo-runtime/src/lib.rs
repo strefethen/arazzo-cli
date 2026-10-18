@@ -313,7 +313,9 @@ mod tests {
         vars.set_input("name", json!("test"));
         vars.set_step_output("s1", "result", json!("hello"));
 
-        let outputs = engine.build_outputs(&workflow, &vars);
+        let outputs = engine
+            .build_outputs(&workflow, &vars)
+            .unwrap_or_else(|err| panic!("workflow outputs: {err}"));
         assert_eq!(outputs.get("inputName"), Some(&json!("test")));
         assert_eq!(outputs.get("stepResult"), Some(&json!("hello")));
     }

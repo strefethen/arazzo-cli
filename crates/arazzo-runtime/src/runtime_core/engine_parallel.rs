@@ -127,7 +127,7 @@ impl Engine {
                             vars.set_step_output(&step.step_id, &name, value);
                         }
                         if matches!(flow, FlowDecision::Done) {
-                            terminal = Some(Ok(self.build_outputs(workflow, vars)));
+                            terminal = Some(self.build_outputs(workflow, vars));
                         }
                     }
                     FlowDecision::Error(err) => terminal = Some(Err(err)),
@@ -163,7 +163,7 @@ impl Engine {
             }
         }
         exec_ctx.check_cancelled()?;
-        let workflow_outputs = self.build_outputs(workflow, vars);
+        let workflow_outputs = self.build_outputs(workflow, vars)?;
         self.emit_observer_event(
             exec_ctx,
             ObserverEvent::WorkflowCompleted {

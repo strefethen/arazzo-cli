@@ -176,14 +176,6 @@ pub(crate) fn evaluate_criterion_detailed(
     }
 }
 
-pub(crate) fn evaluate_output_expression(
-    expr: &str,
-    eval: &ExpressionEvaluator,
-    response: Option<&Response>,
-) -> Value {
-    evaluate_output_expression_detailed(expr, eval, response).0
-}
-
 pub(crate) fn evaluate_output_expression_detailed(
     expr: &str,
     eval: &ExpressionEvaluator,

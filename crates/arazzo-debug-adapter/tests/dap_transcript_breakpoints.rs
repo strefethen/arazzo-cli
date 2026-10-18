@@ -8,7 +8,7 @@ use arazzo_debug_adapter::run_dap_stdio;
 use serde_json::json;
 
 #[test]
-fn dap_set_breakpoints_returns_verified_locations() {
+fn dap_set_breakpoints_on_missing_source_returns_unverified_locations() {
     let input = dap_test_support::encode_dap_stream(&[
         json!({
             "seq": 1,
@@ -21,7 +21,7 @@ fn dap_set_breakpoints_returns_verified_locations() {
             "type": "request",
             "command": "setBreakpoints",
             "arguments": {
-                "source": { "path": "/tmp/workflow.arazzo.yaml" },
+                "source": { "path": "/nonexistent/arazzo-debugger-fixture/workflow.arazzo.yaml" },
                 "breakpoints": [
                     { "line": 8 },
                     { "line": 12 }
@@ -62,7 +62,7 @@ fn dap_set_breakpoints_returns_verified_locations() {
     assert_eq!(breakpoints[0].get("line").and_then(|v| v.as_u64()), Some(8));
     assert_eq!(
         breakpoints[0].get("verified").and_then(|v| v.as_bool()),
-        Some(true)
+        Some(false)
     );
     assert_eq!(
         breakpoints[1].get("line").and_then(|v| v.as_u64()),
@@ -70,7 +70,7 @@ fn dap_set_breakpoints_returns_verified_locations() {
     );
     assert_eq!(
         breakpoints[1].get("verified").and_then(|v| v.as_bool()),
-        Some(true)
+        Some(false)
     );
     assert_eq!(
         messages[4].get("event").and_then(|v| v.as_str()),

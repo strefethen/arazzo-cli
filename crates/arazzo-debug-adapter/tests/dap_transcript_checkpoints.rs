@@ -93,19 +93,19 @@ fn dap_step_over_reaches_success_criteria_and_outputs_locals() {
             "seq": 12,
             "type": "request",
             "command": "variables",
-            "arguments": { "variablesReference": 1 }
+            "arguments": { "variablesReference": 2 }
         }),
         json!({
             "seq": 13,
             "type": "request",
             "command": "variables",
-            "arguments": { "variablesReference": 2 }
+            "arguments": { "variablesReference": 3 }
         }),
         json!({
             "seq": 14,
             "type": "request",
             "command": "variables",
-            "arguments": { "variablesReference": 3 }
+            "arguments": { "variablesReference": 4 }
         }),
         json!({
             "seq": 15,

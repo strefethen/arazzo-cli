@@ -1,0 +1,32 @@
+arazzo: 1.1.0
+info:
+  title: Parent and child debugger frames
+  version: '1'
+sourceDescriptions:
+  - name: fixture
+    type: openapi
+    url: api.openapi.yaml
+workflows:
+  - workflowId: parent
+    inputs:
+      type: object
+      properties:
+        label:
+          type: string
+    steps:
+      - stepId: call-child
+        workflowId: child
+        parameters:
+          - name: label
+            value: child-value
+  - workflowId: child
+    inputs:
+      type: object
+      properties:
+        label:
+          type: string
+    steps:
+      - stepId: inspect-child
+        operationId: $sourceDescriptions.fixture.probe
+        outputs:
+          label: $inputs.label

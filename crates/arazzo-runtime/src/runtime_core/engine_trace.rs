@@ -92,7 +92,9 @@ impl Engine {
         output_name: &str,
         output_expr: &OutputValue,
     ) -> Result<(), RuntimeError> {
-        let mut locals = BTreeMap::new();
+        // User output names must not overwrite the checkpoint metadata used
+        // for output inspection and unresolved-output diagnostics.
+        let mut locals = gate.current_outputs.clone();
         let status_code = gate
             .response
             .map(|response| response.status_code)
@@ -106,9 +108,6 @@ impl Engine {
             "outputExpression".to_string(),
             serde_json::to_value(output_expr).unwrap_or(Value::Null),
         );
-        for (name, value) in gate.current_outputs {
-            locals.insert(name.clone(), value.clone());
-        }
         if let Some(request) = gate.request {
             insert_request_locals(&mut locals, request);
         }
@@ -668,5 +667,48 @@ pub(super) fn insert_response_locals(locals: &mut BTreeMap<String, Value>, respo
             preview.push_str("...");
         }
         locals.insert("responseBodyPreview".to_string(), Value::String(preview));
+    }
+}
+
+#[cfg(test)]
+mod output_metadata_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn user_outputs_cannot_replace_diagnostic_metadata() {
+        let controller = Arc::new(DebugController::new());
+        let engine = EngineBuilder::new(ArazzoSpec::default())
+            .debug_controller(Arc::clone(&controller))
+            .build()
+            .unwrap_or_else(|err| panic!("building engine: {err}"));
+        let vars = VarStore::default();
+        let outputs = BTreeMap::from([
+            ("outputExpression".into(), json!(42)),
+            ("outputName".into(), json!("wrong name")),
+        ]);
+        let gate = DebugGateContext {
+            workflow_id: "forecast",
+            step_id: "alerts",
+            vars: &vars,
+            response: None,
+            request: None,
+            current_outputs: &outputs,
+            depth: 0,
+        };
+        let expression = "$response.body#/features/0/properties/event";
+        engine
+            .debug_gate_output(
+                &gate,
+                "outputExpression",
+                &OutputValue::RuntimeExpression(expression.into()),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("output gate: {err}"));
+        let diagnostics = controller
+            .take_output_diagnostics()
+            .unwrap_or_else(|err| panic!("diagnostics: {err}"));
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("output value: \"outputExpression\""));
+        assert!(diagnostics[0].contains(expression));
     }
 }

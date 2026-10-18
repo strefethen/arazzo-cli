@@ -8,9 +8,7 @@ use arazzo_spec::OutputValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::runtime_core::{
-    evaluate_output_expression, evaluate_output_value_detailed, extract_xpath,
-};
+use crate::runtime_core::{evaluate_output_value_detailed, select_xpath};
 
 use super::breakpoints::{first_matching_breakpoint, StepBreakpoint, StepCheckpoint};
 use super::{DebugScopes, DebugStackFrame, WatchEvaluation};
@@ -69,6 +67,8 @@ struct ControllerState {
     current_stack: Vec<DebugStackFrame>,
     current_scopes: DebugScopes,
     current_eval_ctx: EvalContext,
+    output_diagnostics: Vec<String>,
+    frames: Vec<(DebugScopes, EvalContext)>,
 }
 
 /// Thread-safe runtime debug gate controller for pause/resume and breakpoints.
@@ -79,8 +79,93 @@ pub struct DebugController {
 }
 
 impl DebugController {
+    /// Drain unresolved-output diagnostics, including outputs evaluated without a pause.
+    pub fn take_output_diagnostics(&self) -> Result<Vec<String>, String> {
+        let mut guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(std::mem::take(&mut guard.output_diagnostics))
+    }
+
+    /// Distinguish an unresolved declared output from a resolved JSON null.
+    pub fn output_is_unresolved(&self, output: &OutputValue) -> Result<bool, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        Ok(output_is_unresolved(
+            output,
+            &ExpressionEvaluator::new(guard.current_eval_ctx.clone()),
+        ))
+    }
+
+    /// Snapshot inspection state for a selected paused stack frame.
+    pub fn inspect_frame(&self, depth: usize) -> Result<Self, String> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| "debug controller lock poisoned".to_string())?;
+        if !guard.waiting || guard.continue_permit {
+            return Err(
+                "cannot inspect values while the workflow is running; pause it first".into(),
+            );
+        }
+        let (scopes, context) = guard
+            .frames
+            .get(depth)
+            .ok_or_else(|| format!("stack frame at depth {depth} is no longer available"))?;
+        Ok(Self {
+            state: Mutex::new(ControllerState {
+                current_scopes: scopes.clone(),
+                current_eval_ctx: context.clone(),
+                current_stack: guard.current_stack[..=depth].to_vec(),
+                ..ControllerState::default()
+            }),
+            condvar: Condvar::new(),
+        })
+    }
+
+    /// Report a workflow output without changing runtime output values.
+    pub(crate) fn report_workflow_output(
+        &self,
+        workflow: &str,
+        name: &str,
+        output: &OutputValue,
+        context: &EvalContext,
+    ) -> Result<(), String> {
+        let evaluator = ExpressionEvaluator::new(context.clone());
+        let unresolved = match output {
+            OutputValue::RuntimeExpression(expression) => {
+                let (_, warnings) = evaluator.resolve_value_with_diagnostics(expression);
+                !warnings.is_empty()
+                    || (expression.starts_with('$')
+                        && evaluator.evaluate_resolved(expression).is_none())
+            }
+            _ => output_is_unresolved(output, &evaluator),
+        };
+        if unresolved {
+            let expression = serde_json::to_string(output)
+                .map_err(|err| format!("formatting workflow output {name:?}: {err}"))?;
+            let mut guard = self
+                .state
+                .lock()
+                .map_err(|_| "debug controller lock poisoned".to_string())?;
+            guard.output_diagnostics.push(format!("unresolved output value: {name:?} expression: {expression} in workflow: {workflow:?} (workflow output)."));
+            self.condvar.notify_all();
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Validate breakpoint condition syntax before installing it.
+    pub fn validate_breakpoint_condition(condition: &str) -> Result<(), String> {
+        parse_simple_condition(condition)
+            .map(|_| ())
+            .map_err(|error| format_condition_error(&error))
     }
 
     pub fn set_breakpoints(&self, breakpoints: Vec<StepBreakpoint>) -> Result<(), String> {
@@ -184,7 +269,7 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        Ok(evaluate_watch_expression_from_state(&guard, expression))
+        evaluate_watch_expression_from_state(&guard, expression)
     }
 
     /// Preview a declared output using the current paused evaluation context.
@@ -194,7 +279,18 @@ impl DebugController {
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
         let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
-        Ok(evaluate_output_value_detailed(output, &evaluator, None).0)
+        if let OutputValue::RuntimeExpression(expression) = output {
+            return evaluate_watch_expression_from_state(&guard, expression);
+        }
+        let (value, warnings) = evaluate_output_value_detailed(output, &evaluator, None);
+        if !warnings.is_empty() {
+            return Err(warnings
+                .into_iter()
+                .map(|warning| warning.message)
+                .collect::<Vec<_>>()
+                .join("; "));
+        }
+        Ok(value)
     }
 
     pub fn evaluate_condition(&self, condition: &str) -> Result<bool, String> {
@@ -246,13 +342,15 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        Ok(expressions
+        expressions
             .iter()
-            .map(|expression| WatchEvaluation {
-                expression: expression.clone(),
-                value: evaluate_watch_expression_from_state(&guard, expression),
+            .map(|expression| {
+                Ok(WatchEvaluation {
+                    expression: expression.clone(),
+                    value: evaluate_watch_expression_from_state(&guard, expression)?,
+                })
             })
-            .collect())
+            .collect()
     }
 
     pub fn wait_for_stop_count(&self, expected: usize, timeout: Duration) -> Result<bool, String> {
@@ -295,6 +393,20 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
+        if let StepCheckpoint::Output { name } = &checkpoint {
+            if let Some(expression) = scopes.locals.get("outputExpression") {
+                let output: OutputValue = serde_json::from_value(expression.clone())
+                    .map_err(|err| format!("reading debugger output expression: {err}"))?;
+                if output_is_unresolved(&output, &ExpressionEvaluator::new(eval_ctx.clone())) {
+                    guard.output_diagnostics.push(format!(
+                        "unresolved output value: {name:?} expression: {expression} in workflow: {workflow_id:?}, step: {step_id:?}."
+                    ));
+                    self.condvar.notify_all();
+                }
+            }
+        }
+        guard.frames.truncate(depth);
+        guard.frames.push((scopes.clone(), eval_ctx.clone()));
         guard.current_scopes = scopes;
         guard.current_eval_ctx = eval_ctx.clone();
         upsert_stack_frame(&mut guard.current_stack, workflow_id, step_id, depth);
@@ -305,7 +417,7 @@ impl DebugController {
             step_id,
             &checkpoint,
             eval_ctx,
-        );
+        )?;
         let candidate_seq = guard.next_seq.saturating_add(1);
         let step_mode_stop = should_stop_for_step_mode(guard.run_mode, candidate_seq, depth);
 
@@ -407,36 +519,76 @@ impl DebugController {
     }
 }
 
-fn evaluate_watch_expression_from_state(guard: &ControllerState, expression: &str) -> Value {
+fn output_is_unresolved(output: &OutputValue, evaluator: &ExpressionEvaluator) -> bool {
+    match output {
+        OutputValue::RuntimeExpression(expression) if expression.starts_with('$') => {
+            evaluator.evaluate_resolved(expression).is_none()
+        }
+        OutputValue::Selector(_) => !evaluate_output_value_detailed(output, evaluator, None)
+            .1
+            .is_empty(),
+        // Legacy non-runtime forms retain their existing evaluation behavior.
+        _ => false,
+    }
+}
+
+fn evaluate_watch_expression_from_state(
+    guard: &ControllerState,
+    expression: &str,
+) -> Result<Value, String> {
     let trimmed = expression.trim();
     if trimmed.is_empty() {
-        return Value::Null;
+        return Err("watch expression is empty".into());
     }
-
+    if trimmed.starts_with('/') {
+        let body = guard
+            .current_scopes
+            .locals
+            .get("responseBodyRaw")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!("cannot evaluate XPath {trimmed:?}: this frame has no response body")
+            })?;
+        let selection = select_xpath(body.as_bytes(), trimmed, Some("xpath-10"))
+            .map_err(|err| format!("cannot evaluate XPath {trimmed:?}: {err}"))?;
+        if selection.match_count == 0 {
+            return Err(format!(
+                "unresolved XPath expression: {trimmed:?}; no matching nodes"
+            ));
+        }
+        return selection.value;
+    }
     if !trimmed.starts_with('$') {
-        if trimmed.starts_with('/') {
-            if let Some(Value::String(body)) = guard.current_scopes.locals.get("responseBodyRaw") {
-                return extract_xpath(body.as_bytes(), trimmed);
-            }
-            return Value::Null;
-        }
-
         if let Some(value) = guard.current_scopes.locals.get(trimmed) {
-            return value.clone();
+            return Ok(value.clone());
         }
-        if let Some(frame) = guard.current_stack.last() {
-            if let Some(outputs) = guard.current_scopes.steps.get(&frame.step_id) {
-                if let Some(value) = outputs.get(trimmed) {
-                    return value.clone();
-                }
-            }
+        if let Some(value) = guard
+            .current_stack
+            .last()
+            .and_then(|frame| guard.current_scopes.steps.get(&frame.step_id))
+            .and_then(|outputs| outputs.get(trimmed))
+        {
+            return Ok(value.clone());
         }
-
-        let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
-        return evaluate_output_expression(trimmed, &evaluator, None);
+        return Err(format!(
+            "unknown watch name: {trimmed:?}; no local or output has that name in this frame"
+        ));
     }
-
-    ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(trimmed)
+    let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
+    if let Some(value) = evaluator.evaluate_resolved(trimmed) {
+        return Ok(value);
+    }
+    let (_, warnings) = evaluator.evaluate_with_diagnostics(trimmed);
+    let detail = warnings
+        .into_iter()
+        .map(|warning| warning.message)
+        .collect::<Vec<_>>()
+        .join("; ");
+    if detail.is_empty() {
+        Err(format!("unresolved expression: {trimmed:?}"))
+    } else {
+        Err(format!("cannot evaluate expression: {trimmed:?}: {detail}"))
+    }
 }
 
 fn format_condition_error(error: &ConditionError) -> String {
@@ -483,5 +635,124 @@ fn upsert_stack_frame(
     if let Some(frame) = stack.get_mut(depth) {
         frame.workflow_id = workflow_id.to_string();
         frame.step_id = step_id.to_string();
+    }
+}
+
+#[cfg(test)]
+mod output_diagnostic_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn diagnostic_is_available_while_paused_at_output() {
+        let controller = std::sync::Arc::new(DebugController::new());
+        controller
+            .request_pause()
+            .unwrap_or_else(|err| panic!("pause failed: {err}"));
+        let worker_controller = std::sync::Arc::clone(&controller);
+        let worker = std::thread::spawn(move || {
+            let expression = "$response.body#/features/0/properties/event";
+            let mut scopes = DebugScopes::default();
+            scopes
+                .locals
+                .insert("outputExpression".into(), json!(expression));
+            let context = EvalContext {
+                response_body: Some(json!({"features": []})),
+                ..Default::default()
+            };
+            worker_controller.gate_step(
+                "forecast",
+                "alerts",
+                StepCheckpoint::Output {
+                    name: "event".into(),
+                },
+                0,
+                &context,
+                scopes,
+            )
+        });
+        let stopped = controller
+            .wait_for_stop_count(1, Duration::from_secs(2))
+            .unwrap_or_else(|err| panic!("waiting failed: {err}"));
+        let diagnostics = controller
+            .take_output_diagnostics()
+            .unwrap_or_else(|err| panic!("diagnostics failed: {err}"));
+        controller
+            .force_resume()
+            .unwrap_or_else(|err| panic!("resume failed: {err}"));
+        worker
+            .join()
+            .unwrap_or_else(|_| panic!("output thread panicked"))
+            .unwrap_or_else(|err| panic!("output gate failed: {err}"));
+        assert!(stopped);
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn missing_output_is_reported_without_pausing_and_null_is_not_missing() {
+        let controller = DebugController::new();
+        let expression = "$response.body#/features/0/properties/event";
+        let checkpoint = StepCheckpoint::Output {
+            name: "first_alert_event".to_owned(),
+        };
+        let mut scopes = DebugScopes::default();
+        scopes
+            .locals
+            .insert("outputExpression".to_owned(), json!(expression));
+        let mut context = EvalContext {
+            response_body: Some(json!({"features": []})),
+            ..Default::default()
+        };
+        controller
+            .gate_step(
+                "forecast",
+                "check-active-alerts",
+                checkpoint.clone(),
+                0,
+                &context,
+                scopes.clone(),
+            )
+            .unwrap_or_else(|err| panic!("output gate failed: {err}"));
+        let diagnostics = controller
+            .take_output_diagnostics()
+            .unwrap_or_else(|err| panic!("reading diagnostics: {err}"));
+        assert_eq!(diagnostics.len(), 1);
+        for expected in [
+            "forecast",
+            "check-active-alerts",
+            "first_alert_event",
+            expression,
+        ] {
+            assert!(diagnostics[0].contains(expected), "{diagnostics:?}");
+        }
+        assert!(controller.stop_events().unwrap_or_default().is_empty());
+        assert!(controller
+            .take_output_diagnostics()
+            .unwrap_or_default()
+            .is_empty());
+        assert!(controller
+            .output_is_unresolved(&OutputValue::RuntimeExpression(expression.into()))
+            .unwrap_or_else(|err| panic!("preview failed: {err}")));
+
+        for value in [Value::Null, json!("Flood Warning")] {
+            context.response_body = Some(json!({"features": [{"properties": {"event": value}}]}));
+            controller
+                .gate_step(
+                    "forecast",
+                    "check-active-alerts",
+                    checkpoint.clone(),
+                    0,
+                    &context,
+                    scopes.clone(),
+                )
+                .unwrap_or_else(|err| panic!("output gate failed: {err}"));
+            assert!(controller
+                .take_output_diagnostics()
+                .unwrap_or_default()
+                .is_empty());
+            assert!(!controller
+                .output_is_unresolved(&OutputValue::RuntimeExpression(expression.into()))
+                .unwrap_or_else(|err| panic!("preview failed: {err}")));
+        }
     }
 }

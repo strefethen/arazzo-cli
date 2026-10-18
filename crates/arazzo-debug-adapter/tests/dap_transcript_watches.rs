@@ -8,7 +8,7 @@ use arazzo_debug_adapter::run_dap_stdio;
 use serde_json::json;
 
 #[test]
-fn dap_evaluate_watch_expression_returns_body() {
+fn dap_evaluate_before_launch_reports_error() {
     let input = dap_test_support::encode_dap_stream(&[
         json!({
             "seq": 1,
@@ -49,17 +49,10 @@ fn dap_evaluate_watch_expression_returns_body() {
         evaluate.get("command").and_then(|v| v.as_str()),
         Some("evaluate")
     );
+    assert_eq!(evaluate["success"], false);
     assert_eq!(
-        evaluate.get("success").and_then(|v| v.as_bool()),
-        Some(true)
-    );
-    let result = evaluate.pointer("/body/result").and_then(|v| v.as_str());
-    assert_eq!(result, Some("runtime not started"));
-    assert_eq!(
-        evaluate
-            .pointer("/body/variablesReference")
-            .and_then(|v| v.as_u64()),
-        Some(0)
+        evaluate["message"],
+        "cannot evaluate expression: debug runtime has not started"
     );
     assert_eq!(
         messages[4].get("event").and_then(|v| v.as_str()),

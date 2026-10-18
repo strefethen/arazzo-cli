@@ -4,7 +4,7 @@ use std::sync::mpsc;
 
 use serde_json::Value;
 
-use super::events::{initialized_event, output_event, terminated_event};
+use super::events::{initialized_event, output_event};
 use super::requests::{DapBreakpoint, DapRequest};
 use super::responses::{
     continue_body, empty_body, error_response, initialize_capabilities, response_with_body,
@@ -12,9 +12,10 @@ use super::responses::{
 };
 use super::session::{
     cleanup_runtime, ensure_runtime_started, inline_event_check, rebuild_runtime_breakpoints,
-    sync_runtime_breakpoints, EngineEvent, LaunchConfig, SessionState, MAIN_THREAD_ID,
+    sync_runtime_breakpoints, terminate_session, EngineEvent, LaunchConfig, SessionState,
+    MAIN_THREAD_ID,
 };
-use super::source_index::{resolve_source_breakpoints, try_build_source_index};
+use super::source_index::{build_source_index, resolve_source_breakpoints};
 use super::transport::{write_dap_message, OutboundSequence};
 use super::variables::{
     evaluate_body_for_expression, scopes_body, stack_trace_body, variables_body,
@@ -92,8 +93,17 @@ fn handle_launch<W: Write>(
             return write_dap_message(writer, &response);
         }
     };
+    let index = match build_source_index(&launch.spec) {
+        Ok(index) => index,
+        Err(error) => {
+            return write_dap_message(
+                writer,
+                &error_response(outbound.alloc(), &request.command, request.seq, error),
+            )
+        }
+    };
     state.launch = Some(launch.clone());
-    state.source_index = try_build_source_index(&launch.spec);
+    state.source_index = Some(index);
     rebuild_runtime_breakpoints(state);
     let response = response_with_body(
         outbound.alloc(),
@@ -125,14 +135,6 @@ fn handle_set_breakpoints<W: Write>(
     state
         .pending_breakpoints
         .insert(source_path.clone(), breakpoints.clone());
-    if state
-        .source_index
-        .as_ref()
-        .is_none_or(|index| index.path != source_path)
-    {
-        state.source_index = try_build_source_index(&source_path);
-    }
-
     let launch_workflow = state
         .launch
         .as_ref()
@@ -145,7 +147,17 @@ fn handle_set_breakpoints<W: Write>(
     )
     .resolved;
     rebuild_runtime_breakpoints(state);
-    sync_runtime_breakpoints(state)?;
+    if let Err(error) = sync_runtime_breakpoints(state) {
+        return write_dap_message(
+            writer,
+            &error_response(
+                outbound.alloc(),
+                &request.command,
+                request.seq,
+                format!("cannot install breakpoints for {source_path:?}: {error}"),
+            ),
+        );
+    }
 
     let body = set_breakpoints_body(&resolved);
     let response = response_with_body(outbound.alloc(), &request.command, body, request.seq);
@@ -176,10 +188,10 @@ fn handle_configuration_done<W: Write>(
 ) -> Result<(), String> {
     if let Err(err) = ensure_runtime_started(state, event_tx) {
         let msg = format!("Arazzo debug: {err}\n");
-        write_dap_message(writer, &output_event(outbound.alloc(), "console", &msg))?;
+        write_dap_message(writer, &output_event(outbound.alloc(), "stderr", &msg))?;
         let response = error_response(outbound.alloc(), &request.command, request.seq, err);
         write_dap_message(writer, &response)?;
-        write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+        terminate_session(state, writer, outbound)?;
         return Ok(());
     }
     let response = response_with_body(
@@ -202,15 +214,26 @@ fn handle_threads<W: Write>(
     write_dap_message(writer, &response)
 }
 
+fn respond_to_inspection<W: Write>(
+    request: &DapRequest,
+    writer: &mut W,
+    outbound: &mut OutboundSequence,
+    result: Result<Value, String>,
+) -> Result<(), String> {
+    let response = match result {
+        Ok(body) => response_with_body(outbound.alloc(), &request.command, body, request.seq),
+        Err(error) => error_response(outbound.alloc(), &request.command, request.seq, error),
+    };
+    write_dap_message(writer, &response)
+}
+
 fn handle_stack_trace<W: Write>(
     request: &DapRequest,
     state: &mut SessionState,
     writer: &mut W,
     outbound: &mut OutboundSequence,
 ) -> Result<(), String> {
-    let body = stack_trace_body(state);
-    let response = response_with_body(outbound.alloc(), &request.command, body, request.seq);
-    write_dap_message(writer, &response)
+    respond_to_inspection(request, writer, outbound, stack_trace_body(state))
 }
 
 fn handle_scopes<W: Write>(
@@ -219,9 +242,10 @@ fn handle_scopes<W: Write>(
     writer: &mut W,
     outbound: &mut OutboundSequence,
 ) -> Result<(), String> {
-    let body = scopes_body(state);
-    let response = response_with_body(outbound.alloc(), &request.command, body, request.seq);
-    write_dap_message(writer, &response)
+    let result = parse_u64_argument(&request.arguments, "frameId")
+        .ok_or_else(|| "scopes requires a valid frameId from stackTrace".to_string())
+        .and_then(|id| scopes_body(state, id));
+    respond_to_inspection(request, writer, outbound, result)
 }
 
 fn handle_variables<W: Write>(
@@ -230,10 +254,12 @@ fn handle_variables<W: Write>(
     writer: &mut W,
     outbound: &mut OutboundSequence,
 ) -> Result<(), String> {
-    let reference = parse_u64_argument(&request.arguments, "variablesReference").unwrap_or(0);
-    let body = variables_body(state, reference);
-    let response = response_with_body(outbound.alloc(), &request.command, body, request.seq);
-    write_dap_message(writer, &response)
+    let result = parse_u64_argument(&request.arguments, "variablesReference")
+        .ok_or_else(|| {
+            "variables requires a valid variablesReference from scopes or evaluate".to_string()
+        })
+        .and_then(|reference| variables_body(state, reference));
+    respond_to_inspection(request, writer, outbound, result)
 }
 
 fn handle_evaluate<W: Write>(
@@ -242,10 +268,20 @@ fn handle_evaluate<W: Write>(
     writer: &mut W,
     outbound: &mut OutboundSequence,
 ) -> Result<(), String> {
-    let expression = parse_string_argument(&request.arguments, "expression").unwrap_or_default();
-    let body = evaluate_body_for_expression(state, &expression);
-    let response = response_with_body(outbound.alloc(), &request.command, body, request.seq);
-    write_dap_message(writer, &response)
+    let result = (|| {
+        let expression = parse_string_argument(&request.arguments, "expression")
+            .ok_or_else(|| "evaluate requires an expression string".to_string())?;
+        let frame_id = if request.arguments.get("frameId").is_some() {
+            Some(
+                parse_u64_argument(&request.arguments, "frameId")
+                    .ok_or_else(|| "evaluate frameId must be a valid stack frame ID".to_string())?,
+            )
+        } else {
+            None
+        };
+        evaluate_body_for_expression(state, &expression, frame_id)
+    })();
+    respond_to_inspection(request, writer, outbound, result)
 }
 
 fn handle_continue<W: Write>(
@@ -414,7 +450,7 @@ fn handle_disconnect<W: Write>(
         request.seq,
     );
     write_dap_message(writer, &response)?;
-    write_dap_message(writer, &terminated_event(outbound.alloc()))?;
+    terminate_session(state, writer, outbound)?;
     cleanup_runtime(state);
     Ok(())
 }

@@ -1,0 +1,13 @@
+openapi: 3.0.3
+info:
+  title: Debugger diagnostics fixture
+  version: '1'
+servers:
+  - url: https://example.invalid
+paths:
+  /probe:
+    get:
+      operationId: probe
+      responses:
+        '200':
+          description: Dry-run fixture; no request is sent

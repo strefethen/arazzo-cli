@@ -3,6 +3,8 @@ import * as vscode from "vscode";
 export class ArazzoDebugConfigurationProvider
   implements vscode.DebugConfigurationProvider
 {
+  constructor(private readonly channel: vscode.OutputChannel) {}
+
   resolveDebugConfiguration(
     folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration
@@ -28,9 +30,10 @@ export class ArazzoDebugConfigurationProvider
     }
 
     if (!resolved.spec) {
-      void vscode.window.showErrorMessage(
-        "Arazzo debug config requires 'spec'."
-      );
+      const message = `Cannot start "${resolved.name}": no Arazzo spec is selected. Open an .arazzo.yaml file or set 'spec' to its path in .vscode/launch.json.`;
+      this.channel.appendLine(message);
+      this.channel.show(true);
+      void vscode.window.showErrorMessage(message);
       return undefined;
     }
 

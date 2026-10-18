@@ -396,7 +396,9 @@ impl Engine {
                 },
             )
             .await;
-            return self.execute_dry_run_step(step, vars, prep);
+            return self
+                .execute_dry_run_step(workflow_id, step, vars, depth, prep)
+                .await;
         }
 
         self.emit_observer_event(
@@ -447,10 +449,12 @@ impl Engine {
             .await
     }
 
-    fn execute_dry_run_step(
+    async fn execute_dry_run_step(
         &self,
+        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
+        depth: usize,
         prep: PreparedRequest,
     ) -> Result<StepExecution, RuntimeError> {
         let fake = Response {
@@ -472,6 +476,16 @@ impl Engine {
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
+            let gate = DebugGateContext {
+                workflow_id,
+                step_id: &step.step_id,
+                vars,
+                response: Some(&fake),
+                request: Some(&prep.trace_request),
+                current_outputs: &outputs,
+                depth,
+            };
+            self.debug_gate_output(&gate, name, expr).await?;
         }
         let req = DryRunRequest {
             step_id: step.step_id.clone(),

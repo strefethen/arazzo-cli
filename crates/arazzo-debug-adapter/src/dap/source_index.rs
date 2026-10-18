@@ -61,20 +61,15 @@ pub(super) struct ResolvedSourceBreakpoints {
 }
 
 pub(super) fn build_source_index(path: &str) -> Result<SourceIndex, String> {
-    let text =
-        fs::read_to_string(path).map_err(|err| format!("reading source index file: {err}"))?;
-    let metadata = extract_source_metadata(&text);
+    let text = fs::read_to_string(path)
+        .map_err(|err| format!("cannot read debugger source {path:?}: {err}"))?;
+    let metadata = extract_source_metadata(&text)
+        .map_err(|err| format!("cannot index debugger source {path:?}: {err}"))?;
     Ok(SourceIndex {
         path: path.to_string(),
         checkpoints: metadata.checkpoints,
         line_contexts: metadata.line_contexts,
     })
-}
-
-pub(super) fn try_build_source_index(path: &str) -> Option<SourceIndex> {
-    // Intentional: source index failures should not block launch or breakpoint setup.
-    // The adapter returns verified placeholders and resolves at runtime instead.
-    build_source_index(path).ok()
 }
 
 pub(super) fn lookup_line_for_checkpoint(
@@ -114,42 +109,63 @@ pub(super) fn lookup_line_for_checkpoint(
 
 /// Resolves DAP source-line breakpoints against the YAML source index, producing
 /// both the editor-facing [`ResolvedBreakpoint`] list and the runtime
-/// [`StepBreakpoint`] list. Falls back to verified placeholders if the source
-/// index cannot be built so launch is not blocked.
+/// [`StepBreakpoint`] list. Unreadable sources and invalid conditions are
+/// returned as unverified breakpoints with their original diagnostic.
 pub(super) fn resolve_source_breakpoints(
     source_path: &str,
     requested: &[DapBreakpoint],
-    launch_workflow: Option<&str>,
+    _launch_workflow: Option<&str>,
     existing_index: Option<&SourceIndex>,
 ) -> ResolvedSourceBreakpoints {
-    let mut index = existing_index
+    let index = match existing_index
+        .filter(|idx| idx.path == source_path)
         .cloned()
-        .filter(|idx| idx.path == source_path);
-    if index.is_none() {
-        index = try_build_source_index(source_path);
-    }
-
-    let Some(index) = index else {
-        let resolved = requested
-            .iter()
-            .map(|bp| ResolvedBreakpoint {
-                line: bp.line,
-                verified: true,
-                message: Some("source index unavailable; deferred mapping".to_string()),
-            })
-            .collect::<Vec<_>>();
-        return ResolvedSourceBreakpoints {
-            resolved,
-            runtime: Vec::new(),
-        };
+        .map(Ok)
+        .unwrap_or_else(|| build_source_index(source_path))
+    {
+        Ok(index) => index,
+        Err(error) => {
+            return ResolvedSourceBreakpoints {
+                resolved: requested
+                    .iter()
+                    .map(|bp| ResolvedBreakpoint {
+                        line: bp.line,
+                        verified: false,
+                        message: Some(format!(
+                            "breakpoint at {source_path}:{} was not installed: {error}",
+                            bp.line
+                        )),
+                    })
+                    .collect(),
+                runtime: Vec::new(),
+            }
+        }
     };
 
     let mut resolved = Vec::<ResolvedBreakpoint>::new();
     let mut runtime_breakpoints = Vec::<StepBreakpoint>::new();
     for bp in requested {
-        let line_context = resolve_line_context(bp.line, &index, launch_workflow);
-        let Some(checkpoint) = resolve_breakpoint_checkpoint(bp.line, &index, launch_workflow)
-        else {
+        if let Some(condition) = bp
+            .condition
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            if let Err(error) =
+                arazzo_runtime::DebugController::validate_breakpoint_condition(condition)
+            {
+                resolved.push(ResolvedBreakpoint {
+                    line: bp.line,
+                    verified: false,
+                    message: Some(format!(
+                        "invalid breakpoint condition: {condition:?} at {source_path}:{}: {error}",
+                        bp.line
+                    )),
+                });
+                continue;
+            }
+        }
+        let line_context = resolve_line_context(bp.line, &index, None);
+        let Some(checkpoint) = resolve_breakpoint_checkpoint(bp.line, &index, None) else {
             let message = invalid_breakpoint_message(line_context.as_ref());
             resolved.push(ResolvedBreakpoint {
                 line: bp.line,
@@ -1006,17 +1022,20 @@ impl MarkedEventReceiver for MetadataReceiver {
     }
 }
 
-fn extract_source_metadata(text: &str) -> SourceMetadata {
+fn extract_source_metadata(text: &str) -> Result<SourceMetadata, String> {
     let mut receiver = MetadataReceiver::new();
     let mut parser = YamlParser::new_from_str(text);
-    // Parsing failures degrade to empty metadata rather than blocking DAP.
-    let _ = parser.load(&mut receiver, false);
-    receiver.into_metadata()
+    parser
+        .load(&mut receiver, false)
+        .map_err(|err| format!("invalid YAML: {err}"))?;
+    Ok(receiver.into_metadata())
 }
 
 #[cfg(test)]
 fn extract_checkpoints_from_text(text: &str) -> Vec<IndexedCheckpoint> {
-    extract_source_metadata(text).checkpoints
+    extract_source_metadata(text)
+        .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"))
+        .checkpoints
 }
 
 #[cfg(test)]
@@ -1123,7 +1142,8 @@ workflows:
         outputs:
           title_1: //item[1]/title
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         let output = metadata.checkpoints.iter().find(|entry| {
             matches!(&entry.checkpoint, StepCheckpoint::Output { name } if name == "title_1")
         }).unwrap_or_else(|| panic!("missing output checkpoint"));
@@ -1147,7 +1167,8 @@ workflows:
               - condition: $statusCode == 503
           - type: end
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         let index = SourceIndex {
             path: "/tmp/workflow.arazzo.yaml".to_string(),
             checkpoints: metadata.checkpoints,
@@ -1184,7 +1205,8 @@ workflows:
         onFailure:
           - type: end
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         let source_path = "/tmp/workflow.arazzo.yaml".to_string();
         let index = SourceIndex {
             path: source_path.clone(),
@@ -1226,7 +1248,8 @@ workflows:
       - stepId: s1
         outputs: {title: "$response.body#/title", count: "$response.body#/count"}
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         assert!(metadata.checkpoints.iter().any(|entry| {
             matches!(
                 &entry.checkpoint,
@@ -1259,7 +1282,8 @@ workflows:
         successCriteria:
           - condition: $statusCode == 200
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         assert!(metadata.checkpoints.iter().any(|entry| {
             entry.step_id == "s1" && matches!(entry.checkpoint, StepCheckpoint::Step)
         }));
@@ -1281,7 +1305,8 @@ workflows:
       - stepId: s1
         successCriteria: [{condition: "$statusCode == 200"}]
 "#;
-        let metadata = extract_source_metadata(text);
+        let metadata = extract_source_metadata(text)
+            .unwrap_or_else(|err| panic!("invalid fixture YAML: {err}"));
         assert!(metadata.checkpoints.iter().any(|entry| {
             entry.step_id == "s1" && matches!(entry.checkpoint, StepCheckpoint::Step)
         }));

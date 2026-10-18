@@ -105,15 +105,18 @@ async fn evaluate_and_watch_expressions_at_pause() {
             json!(null),
         ),
     ] {
-        assert_eq!(
-            controller.evaluate_output_value(&output),
-            Ok(expected),
-            "{output:?}"
-        );
+        let actual = controller.evaluate_output_value(&output);
+        if expected.is_null() {
+            assert!(
+                actual.is_err(),
+                "invalid selector must report its cause: {output:?}"
+            );
+        } else {
+            assert_eq!(actual, Ok(expected), "{output:?}");
+        }
     }
-    assert_eq!(
-        controller.evaluate_watch_expression("missing_alias"),
-        Ok(json!(null))
+    assert!(
+        matches!(controller.evaluate_watch_expression("missing_alias"), Err(error) if error.contains("missing_alias"))
     );
 
     let cond = match controller.evaluate_condition("$steps.s1.outputs.code == 429") {

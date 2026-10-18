@@ -162,6 +162,17 @@ impl ExpressionEvaluator {
         self.evaluate_with_diagnostics(expr).0
     }
 
+    /// Resolve a runtime expression without collapsing absence into JSON null.
+    /// Invalid or unresolved expressions return `None`; an explicit JSON null
+    /// returns `Some(Value::Null)`. Intended for diagnostic consumers.
+    pub fn evaluate_resolved(&self, expr: &str) -> Option<Value> {
+        let parsed = parse_runtime_expression(expr).ok()?;
+        match resolution::resolve_parsed(&parsed, self.context()).value {
+            resolution::ResolvedValue::Present(value) => Some(value),
+            resolution::ResolvedValue::Missing => None,
+        }
+    }
+
     /// Evaluate an expression, returning both the value and any diagnostic
     /// warnings produced when resolution falls back to `Null`.
     pub fn evaluate_with_diagnostics(&self, expr: &str) -> (Value, Vec<ExpressionWarning>) {
@@ -249,6 +260,29 @@ pub fn is_truthy(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolved_evaluation_preserves_absence_and_explicit_null() {
+        let evaluator = super::ExpressionEvaluator::new(super::EvalContext {
+            response_body: Some(
+                serde_json::json!({"features": [], "explicitNull": null, "value": 7}),
+            ),
+            ..Default::default()
+        });
+        assert_eq!(
+            evaluator.evaluate_resolved("$response.body#/features/0/properties/event"),
+            None
+        );
+        assert_eq!(
+            evaluator.evaluate_resolved("$response.body#/explicitNull"),
+            Some(serde_json::Value::Null)
+        );
+        assert_eq!(
+            evaluator.evaluate_resolved("$response.body#/value"),
+            Some(serde_json::json!(7))
+        );
+        assert_eq!(evaluator.evaluate_resolved("not an expression"), None);
+    }
+
     use std::sync::Arc;
 
     use super::{EvalContext, ExpressionEvaluator, SourceDescriptionContext};

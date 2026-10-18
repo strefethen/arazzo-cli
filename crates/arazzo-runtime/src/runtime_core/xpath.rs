@@ -225,6 +225,7 @@ fn finite_number_value(n: f64) -> Result<Value, String> {
 /// XPath 1.0 operation (ac-46638). Errors degrade to null, the extension's
 /// existing contract; non-representable numbers now degrade to null too
 /// (they previously stringified as `"inf"`/`"NaN"`).
+#[cfg(test)]
 pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
     select_xpath(body, expr, Some("xpath-10")).map_or(Value::Null, |selection| {
         selection.value.unwrap_or(Value::Null)

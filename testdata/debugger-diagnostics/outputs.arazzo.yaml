@@ -1,0 +1,26 @@
+arazzo: 1.1.0
+info:
+  title: Unresolved debugger outputs
+  version: '1'
+sourceDescriptions:
+  - name: fixture
+    type: openapi
+    url: api.openapi.yaml
+workflows:
+  - workflowId: address-forecast
+    inputs:
+      type: object
+      properties:
+        alerts:
+          type: object
+        explicitNull: {}
+    steps:
+      - stepId: check-active-alerts
+        operationId: $sourceDescriptions.fixture.probe
+        outputs:
+          first_alert_headline: $inputs.alerts#/features/0/properties/headline
+          response_headline: $response.body#/features/0/properties/headline
+          explicit_null: $inputs.explicitNull
+    outputs:
+      workflow_headline: $inputs.alerts#/features/0/properties/headline
+      explicit_null: $inputs.explicitNull

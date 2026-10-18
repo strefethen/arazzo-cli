@@ -69,8 +69,8 @@ pub use client::{
 use control::{sleep_with_cancel, step_result_error};
 use criteria::RegexCache;
 pub(crate) use criteria::{
-    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
-    evaluate_output_value_detailed, CriterionEvaluation,
+    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_value_detailed,
+    CriterionEvaluation,
 };
 pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker};
 use engine_actions::{
@@ -104,7 +104,7 @@ use state::{
     UnusableServer, WorkflowIndex,
 };
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
-pub(crate) use xpath::{extract_xpath, replace_xpath, select_xpath, xpath_version_rejection};
+pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{
     is_sensitive_key, redact_dry_run_request, redact_headers, redact_json_object,

@@ -7,8 +7,8 @@
 
 pub(super) use super::control::{sleep_with_cancel, step_result_error};
 pub(super) use super::criteria::{
-    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression,
-    evaluate_output_expression_detailed, CriterionEvaluation, RegexCache,
+    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression_detailed,
+    CriterionEvaluation, RegexCache,
 };
 pub(super) use super::deps::{
     build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker,
@@ -18,4 +18,5 @@ pub(super) use super::payload::{
     value_to_string,
 };
 pub(super) use super::url::{encode_cookie_value, replace_path_params, UrlBuildResult};
+#[cfg(test)]
 pub(super) use super::xpath::extract_xpath;
