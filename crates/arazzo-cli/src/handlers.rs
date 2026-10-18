@@ -271,7 +271,7 @@ pub fn catalog_workflows(dir: &str, global: GlobalOptions) -> Result<(), CliErro
 
     let mut catalog = Vec::<CatalogEntry>::new();
     for path in paths {
-        if !is_arazzo_yaml_path(&path) {
+        if !is_arazzo_document_path(&path) {
             continue;
         }
 
@@ -367,7 +367,7 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), C
     let mut match_file = String::new();
 
     for path in paths {
-        if !is_arazzo_yaml_path(&path) {
+        if !is_arazzo_document_path(&path) {
             continue;
         }
         let spec = match arazzo_validate::parse(&path) {
@@ -405,11 +405,11 @@ fn find_workflow(dir: &str, workflow_id: &str) -> Result<(ArazzoSpec, String), C
     }
 }
 
-fn is_arazzo_yaml_path(path: &Path) -> bool {
+fn is_arazzo_document_path(path: &Path) -> bool {
     match path.extension().and_then(|s| s.to_str()) {
         Some(ext) => {
             let ext = ext.to_ascii_lowercase();
-            ext == "yaml" || ext == "yml"
+            ext == "yaml" || ext == "yml" || ext == "json"
         }
         None => false,
     }

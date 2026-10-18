@@ -37,7 +37,7 @@ pub enum Commands {
         after_help = "For agents:\n  - Prefer --json for parseable success/error envelopes.\n  - Use --dry-run --json to preview requests without sending HTTP traffic.\n  - Use --trace <trace.json> to capture redacted replay evidence.\n  - Use schema run to inspect the JSON output contract."
     )]
     Run {
-        /// Path to an Arazzo YAML spec file.
+        /// Path to an Arazzo YAML or JSON spec file.
         spec: String,
 
         /// workflowId to execute from the spec.
@@ -180,7 +180,7 @@ pub enum Commands {
         after_help = "For agents:\n  - Use --json for structured valid/error output.\n  - Use schema validate to inspect the JSON output contract."
     )]
     Validate {
-        /// Path to an Arazzo YAML spec file.
+        /// Path to an Arazzo YAML or JSON spec file.
         spec: String,
     },
     /// List workflow IDs and summaries from one Arazzo spec.
@@ -188,7 +188,7 @@ pub enum Commands {
         after_help = "For agents:\n  - Use --json to receive an array of workflows.\n  - Follow with show or steps for deeper inspection.\n  - Use schema list to inspect the JSON output contract."
     )]
     List {
-        /// Path to an Arazzo YAML spec file.
+        /// Path to an Arazzo YAML or JSON spec file.
         spec: String,
     },
     /// Scan a directory for Arazzo specs and summarize available workflows.
@@ -215,7 +215,7 @@ pub enum Commands {
         after_help = "For agents:\n  - Use --json to receive an array of step rows.\n  - Use show <workflow-id> --dir <dir> --json when you need workflow inputs and outputs too.\n  - Use schema steps to inspect the JSON output contract."
     )]
     Steps {
-        /// Path to an Arazzo YAML spec file.
+        /// Path to an Arazzo YAML or JSON spec file.
         spec: String,
 
         /// workflowId whose steps should be listed.
