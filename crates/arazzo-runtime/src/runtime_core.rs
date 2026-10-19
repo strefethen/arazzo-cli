@@ -38,6 +38,10 @@ mod asyncapi_target_tests;
 mod builder;
 mod client;
 mod control;
+#[cfg(test)]
+mod controlled_exchange;
+#[cfg(test)]
+mod controlled_exchange_tests;
 mod criteria;
 mod deps;
 mod document_set;

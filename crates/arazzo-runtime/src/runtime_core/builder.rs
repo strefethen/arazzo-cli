@@ -226,6 +226,8 @@ impl EngineBuilder {
 
         Ok(Engine {
             inner: Arc::new(EngineInner {
+                #[cfg(test)]
+                controlled_exchange: None,
                 index: WorkflowIndex {
                     spec: self.spec,
                     source_descriptions_map,

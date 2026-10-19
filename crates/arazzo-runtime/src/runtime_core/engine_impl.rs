@@ -258,6 +258,11 @@ impl Engine {
 
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
 
+            #[cfg(test)]
+            if self.inner.controlled_exchange.is_some() {
+                super::controlled_exchange::require_supported_mode(self)?;
+            }
+
             if self.inner.parallel_mode {
                 let fallback = SequentialFallback::new(
                     workflow_id,
@@ -429,6 +434,11 @@ impl Engine {
             self.require_workflow_dependencies(exec_ctx, &workflow)?;
 
             let mut vars = self.validate_and_populate_inputs(&workflow, inputs)?;
+
+            #[cfg(test)]
+            if self.inner.controlled_exchange.is_some() {
+                super::controlled_exchange::require_supported_mode(self)?;
+            }
 
             if self.inner.parallel_mode {
                 if let Some(fallback) = self.sequential_fallback(&workflow) {
@@ -686,9 +696,24 @@ impl Engine {
             });
         }
 
-        let execution = self
-            .execute_http_step(exec_ctx, workflow_id, step, vars, depth)
-            .await?;
+        #[cfg(test)]
+        let exchange = self
+            .inner
+            .controlled_exchange
+            .as_ref()
+            .filter(|_| matches!(&step.target, Some(StepTarget::ChannelPath(_))));
+        let execution = {
+            #[cfg(test)]
+            if let Some(exchange) = exchange {
+                super::controlled_exchange::execute(self, exchange, exec_ctx, step, vars).await?
+            } else {
+                self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+                    .await?
+            }
+            #[cfg(not(test))]
+            self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+                .await?
+        };
         if let Some(req) = execution.dry_run_request.clone() {
             let _ = exec_ctx
                 .event_tx
