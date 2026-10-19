@@ -73,6 +73,18 @@ pub(super) struct BoundDocument {
     pub(super) label: String,
 }
 
+/// Failures of the deliberately local-only binding used by the deferred
+/// AsyncAPI target resolver. No provided-document or network lookup occurs.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(super) enum LocalSourceError {
+    MissingBase(String),
+    InvalidUrl(String),
+    UnsupportedUri(String),
+    MissingFile(PathBuf),
+    ReadFile(PathBuf, std::io::Error),
+}
+
 /// The provided set, parsed, with the base URI every reference resolves
 /// against.
 pub(super) struct DocumentSet {
@@ -200,6 +212,40 @@ impl DocumentSet {
             data,
             label: path.display().to_string(),
         }))
+    }
+
+    /// Bind exactly one declared source from a local file using the same URI
+    /// resolution as OpenAPI. This private seam is not called by engine build.
+    #[allow(dead_code)]
+    pub(super) fn bind_local_source(
+        &self,
+        sd: &SourceDescription,
+    ) -> Result<BoundDocument, LocalSourceError> {
+        let relative = is_relative_reference(&sd.url);
+        if relative && self.base.is_none() {
+            return Err(LocalSourceError::MissingBase(sd.url.clone()));
+        }
+        let resolved = self
+            .resolve(sd, relative)
+            .map_err(|err| LocalSourceError::InvalidUrl(err.to_string()))?
+            .ok_or_else(|| LocalSourceError::InvalidUrl(sd.url.clone()))?;
+        if resolved.scheme() != "file" {
+            return Err(LocalSourceError::UnsupportedUri(resolved.to_string()));
+        }
+        let path = resolved
+            .to_file_path()
+            .map_err(|()| LocalSourceError::InvalidUrl(resolved.to_string()))?;
+        let data = fs::read(&path).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                LocalSourceError::MissingFile(path.clone())
+            } else {
+                LocalSourceError::ReadFile(path.clone(), err)
+            }
+        })?;
+        Ok(BoundDocument {
+            data,
+            label: path.display().to_string(),
+        })
     }
 
     /// Joins an authored url onto the base URI, or refuses when a relative url

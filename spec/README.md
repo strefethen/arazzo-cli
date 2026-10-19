@@ -1,13 +1,14 @@
 # `spec/` — vendored specification documents
 
 Verbatim, unmodified copies of the published specifications this project
-implements against, fetched from `spec.openapis.org`.
+implements against, fetched from their publishers.
 
 | File | Document | Why it is here |
 |---|---|---|
 | `arazzo/v1.1.0.html` | Arazzo Specification v1.1.0 | The version this project implements. The sole authority on document shape, field meaning, and the expression and `successCriteria` grammars. |
 | `arazzo/v1.0.1.html` | Arazzo Specification v1.0.1 | Needed to settle "was this construct in 1.0.x?" questions, which drive the version-gating diagnostics in `arazzo-validate`. |
 | `oas/v3.2.0.html` | OpenAPI Specification v3.2.0 | Arazzo 1.1.0 defers to it by reference — e.g. the Parameter Object's `querystring` rules are stated as "per OpenAPI constraints", and the constraints themselves live here. |
+| `asyncapi/v3.0.0.html` | AsyncAPI Specification v3.0.0 | Defines the channel shape and address meaning for local AsyncAPI source resolution. |
 
 ## These are citable; the rest of the repo is not
 
@@ -17,7 +18,7 @@ non-conformances. That rule does not apply here: these files are the published
 documents themselves, byte-for-byte, not this project's description of them.
 
 So quote `spec/arazzo/v1.1.0.html` in a plan or ticket the same way you would
-quote `spec.openapis.org` — because it is the same text. What is **not**
+quote its published source — because it is the same text. What is **not**
 licensed is paraphrasing from memory and attributing it to these files; open
 the file and copy the sentence.
 
@@ -68,10 +69,9 @@ moves a checksum means the OpenAPI Initiative republished that document — read
 the diff before committing it, because a republished spec can silently change
 what this project is measured against.
 
-Adding a document (an older OpenAPI major for `arazzo-generate`, an AsyncAPI
-version for `sourceDescriptions`) means adding its path to `DOCS` in
-`spec/fetch.sh`, re-running the script, and adding a row to the table above.
-The path is used verbatim both under `spec.openapis.org/` and inside `spec/`.
+Adding a document means adding its path and publisher URL to `spec/fetch.sh`,
+re-running the script, and adding a row to the table above. OpenAPI Initiative
+documents use `spec.openapis.org`; AsyncAPI 3.0.0 uses the explicit AsyncAPI URL.
 
 ## Provenance and license
 
@@ -86,3 +86,9 @@ The OpenAPI Initiative publishes these specifications under the Apache License,
 Version 2.0. They are redistributed here unmodified, under that license, and
 remain the copyright of their authors. This vendoring does not extend the
 project's own license to them.
+
+AsyncAPI 3.0.0 was fetched 2026-10-19 from
+`https://www.asyncapi.com/docs/reference/specification/v3.0.0`, with SHA256
+`0ce8b14bc28fa68caaf439ac31352061392f63a2dcc71cc84e9af94311dc4a65`.
+Its published page is also reproduced verbatim and remains copyright of its
+authors under the license stated in that document.
