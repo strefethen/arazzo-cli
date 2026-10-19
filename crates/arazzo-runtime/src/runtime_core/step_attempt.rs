@@ -306,6 +306,7 @@ pub(super) fn settle(run: Result<StepExecution, RuntimeError>) -> StepExecution 
         result: StepResult {
             success: false,
             response: None,
+            message: None,
             err: Some(err.message),
             err_kind: Some(err.kind),
         },
@@ -376,6 +377,7 @@ mod tests {
             result: StepResult {
                 success,
                 response: None,
+                message: None,
                 err: err.map(str::to_string),
                 err_kind: None,
             },

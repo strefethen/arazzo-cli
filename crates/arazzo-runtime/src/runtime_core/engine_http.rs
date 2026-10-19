@@ -499,6 +499,7 @@ impl Engine {
             result: StepResult {
                 success: true,
                 response: Some(Arc::new(fake)),
+                message: None,
                 err: None,
                 err_kind: None,
             },
@@ -587,6 +588,7 @@ impl Engine {
                     result: StepResult {
                         success: false,
                         response: Some(Arc::clone(response)),
+                        message: None,
                         err: None,
                         err_kind: None,
                     },
@@ -628,6 +630,7 @@ impl Engine {
             result: StepResult {
                 success: true,
                 response: Some(Arc::clone(response)),
+                message: None,
                 err: None,
                 err_kind: None,
             },

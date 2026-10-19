@@ -240,6 +240,7 @@ impl OperationIndex {
 pub(super) struct StepResult {
     pub(super) success: bool,
     pub(super) response: Option<Arc<Response>>,
+    pub(super) message: Option<super::step_context::MessageSnapshot>,
     pub(super) err: Option<String>,
     /// Original error kind from a runtime error (e.g. HttpRequest, ExecutionTimeout).
     /// Preserved so that onFailure `end` actions can report the true cause

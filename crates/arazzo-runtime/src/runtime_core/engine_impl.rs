@@ -884,6 +884,7 @@ impl Engine {
                 return Ok(StepResult {
                     success: false,
                     response: None,
+                    message: None,
                     err: None,
                     err_kind: None,
                 });
@@ -893,6 +894,7 @@ impl Engine {
         Ok(StepResult {
             success: true,
             response: None,
+            message: None,
             err: None,
             err_kind: None,
         })

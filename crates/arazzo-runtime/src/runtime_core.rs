@@ -55,6 +55,9 @@ mod replay;
 mod run_record;
 mod state;
 mod step_attempt;
+mod step_context;
+#[cfg(test)]
+mod step_context_tests;
 mod url;
 mod xml_admission;
 mod xpath;

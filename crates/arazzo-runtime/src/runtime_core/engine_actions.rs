@@ -18,6 +18,7 @@ impl Engine {
                         branch: ActionBranch::Success,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
@@ -44,6 +45,7 @@ impl Engine {
                             cancel: ctx.cancel,
                             is_timeout: ctx.is_timeout,
                             response: ctx.result.response.as_deref(),
+                            message: ctx.result.message.as_ref(),
                             vars: ctx.vars,
                             original_err_kind: ctx.result.err_kind,
                         },
@@ -94,6 +96,7 @@ impl Engine {
                         branch: ActionBranch::Failure,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
@@ -127,6 +130,7 @@ impl Engine {
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                         response: ctx.result.response.as_deref(),
+                        message: ctx.result.message.as_ref(),
                         vars: ctx.vars,
                         original_err_kind: ctx.result.err_kind,
                     },
@@ -218,7 +222,10 @@ impl Engine {
         if ctx.cancel.is_cancelled() {
             return Err(control::cancellation_error(ctx.is_timeout));
         }
-        let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
+        let eval = ExpressionEvaluator::new(super::step_context::with_message(
+            self.make_eval_context(ctx.vars, ctx.response),
+            ctx.message,
+        ));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
         let gate = DebugGateContext {
             workflow_id: ctx.workflow_id,
@@ -356,7 +363,12 @@ impl Engine {
                 }
                 if !action.workflow_id.is_empty() {
                     let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
-                    let inputs = map_action_parameters(action, &eval);
+                    let parameter_eval =
+                        ExpressionEvaluator::new(super::step_context::with_message(
+                            self.make_eval_context(ctx.vars, ctx.response),
+                            ctx.message,
+                        ));
+                    let inputs = map_action_parameters(action, &parameter_eval);
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow {
                             workflow_id: resolved_workflow_id.clone(),
@@ -396,9 +408,14 @@ impl Engine {
                         step_id: eval.interpolate_string(&action.step_id),
                     })
                 } else if !action.workflow_id.is_empty() {
+                    let parameter_eval =
+                        ExpressionEvaluator::new(super::step_context::with_message(
+                            self.make_eval_context(ctx.vars, ctx.response),
+                            ctx.message,
+                        ));
                     Some(RetryReference::Workflow {
                         workflow_id: eval.interpolate_string(&action.workflow_id),
-                        inputs: map_action_parameters(action, &eval),
+                        inputs: map_action_parameters(action, &parameter_eval),
                     })
                 } else {
                     None
@@ -693,6 +710,7 @@ struct ActionSelectionContext<'a> {
     branch: ActionBranch,
     vars: &'a VarStore,
     response: Option<&'a Response>,
+    message: Option<&'a super::step_context::MessageSnapshot>,
     depth: usize,
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
@@ -721,6 +739,7 @@ struct ExecuteActionContext<'a> {
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
     response: Option<&'a Response>,
+    message: Option<&'a super::step_context::MessageSnapshot>,
     vars: &'a VarStore,
     /// Original error kind from a runtime error (e.g. HttpRequest, ExecutionTimeout).
     /// Used by the `End` action on the failure path to preserve the root cause
