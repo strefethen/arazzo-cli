@@ -262,6 +262,10 @@ impl Engine {
             if self.inner.controlled_exchange.is_some() {
                 super::controlled_exchange::require_supported_mode(self)?;
             }
+            #[cfg(test)]
+            if self.inner.nats_trial.is_some() {
+                super::nats_transport_trial::require_supported_mode(self)?;
+            }
 
             if self.inner.parallel_mode {
                 let fallback = SequentialFallback::new(
@@ -438,6 +442,10 @@ impl Engine {
             #[cfg(test)]
             if self.inner.controlled_exchange.is_some() {
                 super::controlled_exchange::require_supported_mode(self)?;
+            }
+            #[cfg(test)]
+            if self.inner.nats_trial.is_some() {
+                super::nats_transport_trial::require_supported_mode(self)?;
             }
 
             if self.inner.parallel_mode {
@@ -706,6 +714,13 @@ impl Engine {
             #[cfg(test)]
             if let Some(exchange) = exchange {
                 super::controlled_exchange::execute(self, exchange, exec_ctx, step, vars).await?
+            } else if let Some(trial) = self
+                .inner
+                .nats_trial
+                .as_ref()
+                .filter(|_| matches!(&step.target, Some(StepTarget::ChannelPath(_))))
+            {
+                super::nats_transport_trial::execute(self, trial, exec_ctx, step, vars).await?
             } else {
                 self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
                     .await?

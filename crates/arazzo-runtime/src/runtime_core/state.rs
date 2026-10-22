@@ -348,6 +348,8 @@ pub(super) struct EngineInner {
     pub(super) index: WorkflowIndex,
     #[cfg(test)]
     pub(super) controlled_exchange: Option<Arc<super::controlled_exchange::Exchange>>,
+    #[cfg(test)]
+    pub(super) nats_trial: Option<Arc<super::nats_transport_trial::NatsTrial>>,
     pub(super) client: HttpClient,
     pub(super) parallel_mode: bool,
     pub(super) dry_run_mode: bool,

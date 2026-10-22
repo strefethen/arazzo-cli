@@ -228,6 +228,8 @@ impl EngineBuilder {
             inner: Arc::new(EngineInner {
                 #[cfg(test)]
                 controlled_exchange: None,
+                #[cfg(test)]
+                nats_trial: None,
                 index: WorkflowIndex {
                     spec: self.spec,
                     source_descriptions_map,

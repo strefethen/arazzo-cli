@@ -59,6 +59,10 @@ mod helper_tests;
 mod helpers;
 mod input_validation;
 mod jsonpath;
+#[cfg(test)]
+mod nats_transport_trial;
+#[cfg(test)]
+mod nats_transport_trial_tests;
 mod operation_target;
 mod payload;
 mod redaction;
