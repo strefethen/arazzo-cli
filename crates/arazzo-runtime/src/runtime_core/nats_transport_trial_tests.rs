@@ -5,6 +5,7 @@ use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -175,8 +176,8 @@ fn inputs() -> BTreeMap<String, Value> {
 #[derive(Clone)]
 struct FixtureClient {
     client: async_nats::Client,
+    terminal: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
-    notice: Arc<tokio::sync::Notify>,
 }
 impl Deref for FixtureClient {
     type Target = async_nats::Client;
@@ -185,19 +186,23 @@ impl Deref for FixtureClient {
     }
 }
 async fn client(endpoint: &str) -> Result<FixtureClient, Box<dyn std::error::Error>> {
+    let terminal = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
-    let notice = Arc::new(tokio::sync::Notify::new());
+    let on_terminal = Arc::clone(&terminal);
     let flag = Arc::clone(&closed);
-    let on_notice = Arc::clone(&notice);
     let options = async_nats::ConnectOptions::new()
         .connection_timeout(LIMIT)
+        .max_reconnects(1usize)
+        .reconnect_delay_callback(|_| Duration::from_millis(10))
         .event_callback(move |event| {
             let flag = Arc::clone(&flag);
-            let notice = Arc::clone(&on_notice);
+            let terminal = Arc::clone(&on_terminal);
             async move {
+                if matches!(event, async_nats::Event::Disconnected) {
+                    terminal.store(true, Ordering::SeqCst);
+                }
                 if matches!(event, async_nats::Event::Closed) {
                     flag.store(true, Ordering::SeqCst);
-                    notice.notify_one();
                 }
             }
         });
@@ -206,8 +211,8 @@ async fn client(endpoint: &str) -> Result<FixtureClient, Box<dyn std::error::Err
         .map(|result| {
             result.map(|client| FixtureClient {
                 client,
+                terminal,
                 closed,
-                notice,
             })
         })??)
 }
@@ -248,14 +253,129 @@ async fn ready_subscription(
     Ok(sub)
 }
 async fn close_client(client: &FixtureClient) -> TestResult {
-    tokio::time::timeout(LIMIT, client.drain()).await??;
+    let _ = tokio::time::timeout(LIMIT, client.drain()).await;
     tokio::time::timeout(LIMIT, async {
-        while !client.closed.load(Ordering::SeqCst) {
-            client.notice.notified().await;
+        loop {
+            if client.closed.load(Ordering::SeqCst) {
+                break;
+            }
+            if matches!(client.flush().await, Err(err) if err.kind() == async_nats::client::FlushErrorKind::SendError)
+                && client.terminal.load(Ordering::SeqCst)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await?;
     Ok(())
+}
+
+// Owns one live fixture from the first acquired client through every exit.
+// The callback body includes setup, so errors and panics cannot bypass teardown.
+struct LiveResources {
+    fixture: Fixture,
+    clients: Vec<FixtureClient>,
+    trial: Option<Arc<NatsTrial>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    cancels: Vec<tokio_util::sync::CancellationToken>,
+}
+impl LiveResources {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            fixture: Fixture::new(true)?,
+            clients: Vec::new(),
+            trial: None,
+            tasks: Vec::new(),
+            cancels: Vec::new(),
+        })
+    }
+    async fn client(&mut self) -> Result<FixtureClient, Box<dyn std::error::Error>> {
+        let client = client(&self.fixture.endpoint).await?;
+        self.clients.push(client.clone());
+        Ok(client)
+    }
+    async fn attach(
+        &mut self,
+        doc: &Value,
+        early: bool,
+        wait: Duration,
+    ) -> Result<(Engine, Arc<NatsTrial>), Box<dyn std::error::Error>> {
+        let (engine, trial) = attach(&self.fixture, doc, early, wait).await?;
+        self.trial = Some(Arc::clone(&trial));
+        Ok((engine, trial))
+    }
+    async fn finish(
+        mut self,
+        body: Result<TestResult, Box<dyn std::any::Any + Send>>,
+    ) -> TestResult {
+        let failed = !matches!(body, Ok(Ok(())));
+        for cancel in &self.cancels {
+            cancel.cancel();
+        }
+        if let Some(trial) = &self.trial {
+            trial.release_receive();
+        }
+        let mut cleanup = Vec::new();
+        for mut task in self.tasks.drain(..) {
+            if failed {
+                task.abort();
+                match tokio::time::timeout(LIMIT, &mut task).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) if err.is_cancelled() => {}
+                    Ok(Err(err)) => cleanup.push(err.to_string()),
+                    Err(_) => {
+                        task.abort();
+                        let _ = tokio::time::timeout(LIMIT, &mut task).await;
+                        cleanup.push("NATS_TRIAL_FIXTURE_TASK_ABORT_EXPIRED".into());
+                    }
+                }
+            } else if let Err(err) = join_fixture_task(task).await {
+                cleanup.push(err.to_string());
+            }
+        }
+        if let Some(trial) = self.trial.take() {
+            if let Err(err) = trial.close().await {
+                cleanup.push(err.to_string());
+            }
+        }
+        for client in &self.clients {
+            if let Err(err) = close_client(client).await {
+                cleanup.push(err.to_string());
+            }
+        }
+        if let Err(err) = self.fixture.kill_server() {
+            cleanup.push(err.to_string());
+        }
+        let body = match body {
+            Ok(body) => body,
+            Err(panic) => {
+                assert!(cleanup.is_empty(), "cleanup after panic: {cleanup:?}");
+                std::panic::resume_unwind(panic);
+            }
+        };
+        if !cleanup.is_empty() {
+            let cause = body
+                .as_ref()
+                .err()
+                .map(|err| format!("{err}; "))
+                .unwrap_or_default();
+            return Err(format!("{cause}NATS_TRIAL_CLEANUP: {}", cleanup.join("; ")).into());
+        }
+        body
+    }
+}
+
+type LiveFuture<'a> = Pin<Box<dyn std::future::Future<Output = TestResult> + 'a>>;
+async fn run_live<F>(body: F) -> TestResult
+where
+    F: for<'a> FnOnce(&'a mut LiveResources) -> LiveFuture<'a>,
+{
+    let mut owned = LiveResources::new()?;
+    let body = std::panic::AssertUnwindSafe(body(&mut owned))
+        .catch_unwind()
+        .await;
+    owned.finish(body).await
 }
 async fn join_fixture_task(mut task: tokio::task::JoinHandle<()>) -> TestResult {
     match tokio::time::timeout(LIMIT, &mut task).await {
@@ -265,7 +385,7 @@ async fn join_fixture_task(mut task: tokio::task::JoinHandle<()>) -> TestResult 
         }
         Err(_) => {
             task.abort();
-            let _ = task.await;
+            let _ = tokio::time::timeout(LIMIT, &mut task).await;
             Err("NATS_TRIAL_FIXTURE_TASK_JOIN_EXPIRED".into())
         }
     }
@@ -347,97 +467,80 @@ async fn nats_transport_trial_mode_and_unconfigured_guards() -> TestResult {
 #[tokio::test]
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_exchange_and_early_reply() -> TestResult {
-    let mut fixture = Fixture::new(true)?;
-    let doc = fixture.write_docs(false)?;
-    let responder = client(&fixture.endpoint).await?;
-    let observer = client(&fixture.endpoint).await?;
-    let mut request = ready_subscription(&responder, fixture.subject("request")).await?;
-    let mut forward = ready_subscription(&observer, fixture.subject("forward")).await?;
-    let (engine, trial) = attach(&fixture, &doc, true, LIMIT).await?;
-    let responder_task = tokio::spawn({
-        let responder = responder.clone();
-        let reply = fixture.subject("reply");
-        async move {
-            let request = tokio::time::timeout(LIMIT, request.next())
-                .await
-                .expect("request deadline")
-                .expect("request message");
+    run_live(|owned| {
+        Box::pin(async move {
+            let doc = owned.fixture.write_docs(false)?;
+            let responder = owned.client().await?;
+            let observer = owned.client().await?;
+            let mut request =
+                ready_subscription(&responder, owned.fixture.subject("request")).await?;
+            let mut forward =
+                ready_subscription(&observer, owned.fixture.subject("forward")).await?;
+            let (engine, trial) = owned.attach(&doc, true, LIMIT).await?;
+            let reply = owned.fixture.subject("reply");
+            owned.tasks.push(tokio::spawn({
+                let responder = responder.clone();
+                async move {
+                    let request = tokio::time::timeout(LIMIT, request.next())
+                        .await
+                        .expect("request deadline")
+                        .expect("request message");
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&request.payload).expect("request JSON"),
+                        json!({"order":7})
+                    );
+                    let mut headers = async_nats::HeaderMap::new();
+                    headers.insert("x-tag", "reply");
+                    responder
+                        .publish_with_headers(
+                            reply,
+                            headers,
+                            serde_json::to_vec(&json!({"id":42,"accepted":true}))
+                                .expect("JSON")
+                                .into(),
+                        )
+                        .await
+                        .expect("reply publish");
+                    responder.flush().await.expect("reply flush");
+                }
+            }));
+            let handle = engine.execute("exchange", inputs());
+            owned.cancels.push(handle.cancel_token().clone());
+            trial.wait_receive_gate().await?;
+            trial.wait_buffered().await?;
+            // The send step has returned because the scheduler entered the receive
+            // gate, while the subscriber pump already holds the broker reply.
+            assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
+            trial.release_receive();
+            let result = tokio::time::timeout(LIMIT, handle.collect()).await?;
             assert_eq!(
-                serde_json::from_slice::<Value>(&request.payload).expect("request JSON"),
-                json!({"order":7})
+                result.outputs?,
+                BTreeMap::from([("id".into(), json!(42)), ("tag".into(), json!("reply"))])
             );
-            let mut headers = async_nats::HeaderMap::new();
-            headers.insert("x-tag", "reply");
-            responder
-                .publish_with_headers(
-                    reply,
-                    headers,
-                    serde_json::to_vec(&json!({"id":42,"accepted":true}))
-                        .expect("JSON")
-                        .into(),
-                )
-                .await
-                .expect("reply publish");
-            responder.flush().await.expect("reply flush");
-        }
-    });
-    let handle = engine.execute("exchange", inputs());
-    let cancel = handle.cancel_token().clone();
-    let body = std::panic::AssertUnwindSafe(async {
-        trial.wait_receive_gate().await?;
-        trial.wait_buffered().await?;
-        // The send step has returned because the scheduler entered the receive
-        // gate, while the subscriber pump already holds the broker reply.
-        assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
-        trial.release_receive();
-        let result = tokio::time::timeout(LIMIT, handle.collect()).await?;
-        assert_eq!(
-            result.outputs?,
-            BTreeMap::from([("id".into(), json!(42)), ("tag".into(), json!("reply"))])
-        );
-        let forwarded = tokio::time::timeout(LIMIT, forward.next())
-            .await?
-            .expect("forward message");
-        assert_eq!(
-            serde_json::from_slice::<Value>(&forwarded.payload)?,
-            json!({"id":42})
-        );
-        assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 1);
-        let routes = trial.routes.lock().expect("routes").clone();
-        assert_eq!(
-            routes
-                .iter()
-                .map(|r| r.channel_key.as_str())
-                .collect::<Vec<_>>(),
-            vec!["request", "reply", "forward"]
-        );
-        assert!(routes.iter().all(|r| r.source == "events"
-            && r.document == fixture.dir.join("events.yaml").display().to_string()
-            && r.address == fixture.subject(&r.channel_key)));
-        assert_clean(&trial);
-        Ok(()) as TestResult
+            let forwarded = tokio::time::timeout(LIMIT, forward.next())
+                .await?
+                .expect("forward message");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&forwarded.payload)?,
+                json!({"id":42})
+            );
+            assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 1);
+            let routes = trial.routes.lock().expect("routes").clone();
+            assert_eq!(
+                routes
+                    .iter()
+                    .map(|r| r.channel_key.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["request", "reply", "forward"]
+            );
+            assert!(routes.iter().all(|r| r.source == "events"
+                && r.document == owned.fixture.dir.join("events.yaml").display().to_string()
+                && r.address == owned.fixture.subject(&r.channel_key)));
+            assert_clean(&trial);
+            Ok(())
+        })
     })
-    .catch_unwind()
-    .await;
-    cancel.cancel();
-    trial.release_receive();
-    let task_result = join_fixture_task(responder_task).await;
-    let trial_close = trial.close().await;
-    let responder_close = close_client(&responder).await;
-    let observer_close = close_client(&observer).await;
-    let server_reap = fixture.kill_server();
-    let body = match body {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-    body?;
-    task_result?;
-    trial_close?;
-    assert!(trial.closed());
-    responder_close?;
-    observer_close?;
-    server_reap?;
-    Ok(())
+    .await
 }
 
 #[derive(Clone, Copy)]
@@ -449,8 +552,8 @@ enum ReplyCase {
 }
 
 async fn reply_case(case: ReplyCase) -> TestResult {
-    let mut fixture = Fixture::new(true)?;
-    let mut doc = fixture.write_docs(false)?;
+    run_live(move |owned| Box::pin(async move {
+    let mut doc = owned.fixture.write_docs(false)?;
     match case {
         ReplyCase::SuccessEnd => {
             doc["workflows"][0]["steps"][1]["onSuccess"] = json!([{
@@ -464,13 +567,13 @@ async fn reply_case(case: ReplyCase) -> TestResult {
         }
         _ => {}
     }
-    let responder = client(&fixture.endpoint).await?;
-    let observer = client(&fixture.endpoint).await?;
-    let mut request = ready_subscription(&responder, fixture.subject("request")).await?;
-    let mut forward = ready_subscription(&observer, fixture.subject("forward")).await?;
-    let (engine, trial) = attach(&fixture, &doc, false, LIMIT).await?;
-    let reply_subject = fixture.subject("reply");
-    let responder_task = tokio::spawn({
+    let responder = owned.client().await?;
+    let observer = owned.client().await?;
+    let mut request = ready_subscription(&responder, owned.fixture.subject("request")).await?;
+    let mut forward = ready_subscription(&observer, owned.fixture.subject("forward")).await?;
+    let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+    let reply_subject = owned.fixture.subject("reply");
+    owned.tasks.push(tokio::spawn({
         let responder = responder.clone();
         async move {
             let request = tokio::time::timeout(LIMIT, request.next())
@@ -500,10 +603,9 @@ async fn reply_case(case: ReplyCase) -> TestResult {
                 .expect("reply publish");
             responder.flush().await.expect("reply flush");
         }
-    });
+    }));
     let handle = engine.execute("exchange", inputs());
-    let cancel = handle.cancel_token().clone();
-    let body = std::panic::AssertUnwindSafe(async {
+    owned.cancels.push(handle.cancel_token().clone());
         let result = tokio::time::timeout(LIMIT, handle.collect()).await?;
         match case {
             ReplyCase::SuccessEnd => {
@@ -536,28 +638,8 @@ async fn reply_case(case: ReplyCase) -> TestResult {
                 .is_err()
         );
         assert_clean(&trial);
-        Ok(()) as TestResult
-    })
-    .catch_unwind()
-    .await;
-    cancel.cancel();
-    let task_result = join_fixture_task(responder_task).await;
-    let trial_close = trial.close().await;
-    let responder_close = close_client(&responder).await;
-    let observer_close = close_client(&observer).await;
-    let server_reap = fixture.kill_server();
-    let body = match body {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-    body?;
-    task_result?;
-    trial_close?;
-    assert!(trial.closed());
-    responder_close?;
-    observer_close?;
-    server_reap?;
     Ok(())
+    })).await
 }
 
 #[tokio::test]
@@ -585,86 +667,86 @@ async fn nats_transport_trial_live_resolver_and_changed_address() -> TestResult 
         "request_body",
         "correlation",
     ] {
-        let mut fixture = Fixture::new(true)?;
-        let mut doc = fixture.write_docs(case == "changed")?;
-        match case {
-            "invalid" => {
-                doc["workflows"][0]["steps"][0]["channelPath"] = json!("not-a-channel-path")
-            }
-            "missing" => doc["workflows"][0]["steps"][0]["channelPath"] = json!(target("absent")),
-            "bad_address" => {
-                let path = fixture.dir.join("events.yaml");
-                let text = fs::read_to_string(&path)?;
-                fs::write(path, text.replace(&fixture.subject("request"), "bad.*"))?;
-            }
-            "request_body" => {
-                doc["workflows"][0]["steps"][0]["requestBody"] = json!({"payload":{"order":7}})
-            }
-            "correlation" => doc["workflows"][0]["steps"][0]["correlationId"] = json!("fixed"),
-            _ => {}
-        }
-        let probe = client(&fixture.endpoint).await?;
-        let mut original = ready_subscription(&probe, fixture.subject("request")).await?;
-        let mut changed = ready_subscription(&probe, fixture.subject("wrong")).await?;
-        let (engine, trial) = attach(&fixture, &doc, false, Duration::from_millis(150)).await?;
-        let handle = engine.execute("exchange", inputs());
-        let cancel = handle.cancel_token().clone();
-        let body = std::panic::AssertUnwindSafe(async {
-            let err = tokio::time::timeout(LIMIT, handle.collect())
-                .await?
-                .outputs
-                .expect_err(case);
-            if case == "changed" {
-                assert!(err.message.contains("NATS_TRIAL_RECEIVE_WAIT_EXPIRED"));
-                let message = tokio::time::timeout(LIMIT, changed.next())
+        run_live(move |owned| {
+            Box::pin(async move {
+                let mut doc = owned.fixture.write_docs(case == "changed")?;
+                match case {
+                    "invalid" => {
+                        doc["workflows"][0]["steps"][0]["channelPath"] = json!("not-a-channel-path")
+                    }
+                    "missing" => {
+                        doc["workflows"][0]["steps"][0]["channelPath"] = json!(target("absent"))
+                    }
+                    "bad_address" => {
+                        let path = owned.fixture.dir.join("events.yaml");
+                        let text = fs::read_to_string(&path)?;
+                        fs::write(
+                            path,
+                            text.replace(&owned.fixture.subject("request"), "bad.*"),
+                        )?;
+                    }
+                    "request_body" => {
+                        doc["workflows"][0]["steps"][0]["requestBody"] =
+                            json!({"payload":{"order":7}})
+                    }
+                    "correlation" => {
+                        doc["workflows"][0]["steps"][0]["correlationId"] = json!("fixed")
+                    }
+                    _ => {}
+                }
+                let probe = owned.client().await?;
+                let mut original =
+                    ready_subscription(&probe, owned.fixture.subject("request")).await?;
+                let mut changed =
+                    ready_subscription(&probe, owned.fixture.subject("wrong")).await?;
+                let (engine, trial) = owned
+                    .attach(&doc, false, Duration::from_millis(150))
+                    .await?;
+                let handle = engine.execute("exchange", inputs());
+                owned.cancels.push(handle.cancel_token().clone());
+                let err = tokio::time::timeout(LIMIT, handle.collect())
                     .await?
-                    .expect("changed subject message");
-                assert_eq!(
-                    serde_json::from_slice::<Value>(&message.payload)?,
-                    json!({"order":7})
-                );
-                assert_eq!(
-                    trial.routes.lock().expect("routes")[0].address,
-                    fixture.subject("wrong")
-                );
-            } else {
-                let marker = match case {
-                    "bad_address" => "NATS_TRIAL_UNSUPPORTED_ADDRESS",
-                    "request_body" | "correlation" => "NATS_TRIAL_UNSUPPORTED_STEP_FORM",
-                    _ => "NATS_TRIAL_RESOLVE_",
-                };
-                assert!(err.message.contains(marker), "{case}: {err}");
-                assert!(trial.routes.lock().expect("routes").is_empty());
-            }
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), original.next())
-                    .await
-                    .is_err()
-            );
-            if case != "changed" {
+                    .outputs
+                    .expect_err(case);
+                if case == "changed" {
+                    assert!(err.message.contains("NATS_TRIAL_RECEIVE_WAIT_EXPIRED"));
+                    let message = tokio::time::timeout(LIMIT, changed.next())
+                        .await?
+                        .expect("changed subject message");
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&message.payload)?,
+                        json!({"order":7})
+                    );
+                    assert_eq!(
+                        trial.routes.lock().expect("routes")[0].address,
+                        owned.fixture.subject("wrong")
+                    );
+                } else {
+                    let marker = match case {
+                        "bad_address" => "NATS_TRIAL_UNSUPPORTED_ADDRESS",
+                        "request_body" | "correlation" => "NATS_TRIAL_UNSUPPORTED_STEP_FORM",
+                        _ => "NATS_TRIAL_RESOLVE_",
+                    };
+                    assert!(err.message.contains(marker), "{case}: {err}");
+                    assert!(trial.routes.lock().expect("routes").is_empty());
+                }
                 assert!(
-                    tokio::time::timeout(Duration::from_millis(100), changed.next())
+                    tokio::time::timeout(Duration::from_millis(100), original.next())
                         .await
                         .is_err()
                 );
-            }
-            assert_clean(&trial);
-            Ok(()) as TestResult
+                if case != "changed" {
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(100), changed.next())
+                            .await
+                            .is_err()
+                    );
+                }
+                assert_clean(&trial);
+                Ok(())
+            })
         })
-        .catch_unwind()
-        .await;
-        cancel.cancel();
-        let trial_close = trial.close().await;
-        let probe_close = close_client(&probe).await;
-        let server_reap = fixture.kill_server();
-        let body = match body {
-            Ok(result) => result,
-            Err(panic) => std::panic::resume_unwind(panic),
-        };
-        body?;
-        trial_close?;
-        probe_close?;
-        server_reap?;
+        .await?;
     }
     Ok(())
 }
@@ -673,67 +755,58 @@ async fn nats_transport_trial_live_resolver_and_changed_address() -> TestResult 
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_wait_expiry_and_cancellation() -> TestResult {
     for cancel in [false, true] {
-        let mut fixture = Fixture::new(true)?;
-        let doc = fixture.write_docs(false)?;
-        let probe = client(&fixture.endpoint).await?;
-        let mut request = ready_subscription(&probe, fixture.subject("request")).await?;
-        let mut forward = ready_subscription(&probe, fixture.subject("forward")).await?;
-        let (engine, trial) = attach(
-            &fixture,
-            &doc,
-            false,
-            Duration::from_millis(if cancel { 2000 } else { 100 }),
-        )
-        .await?;
-        let registered = trial.receive_started.notified();
-        tokio::pin!(registered);
-        registered.as_mut().enable();
-        let handle = engine.execute("exchange", inputs());
-        let cancel_token = handle.cancel_token().clone();
-        let body = std::panic::AssertUnwindSafe(async {
-            tokio::time::timeout(LIMIT, registered).await?;
-            assert_eq!(trial.active_waits.load(Ordering::SeqCst), 1);
-            let request = tokio::time::timeout(LIMIT, request.next())
-                .await?
-                .expect("request crossed broker");
-            assert_eq!(
-                serde_json::from_slice::<Value>(&request.payload)?,
-                json!({"order":7})
-            );
-            if cancel {
-                cancel_token.cancel();
-            }
-            let err = tokio::time::timeout(LIMIT, handle.collect())
-                .await?
-                .outputs
-                .expect_err("receive failure");
-            if cancel {
-                assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
-            } else {
-                assert!(err.message.contains("NATS_TRIAL_RECEIVE_WAIT_EXPIRED"));
-            }
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), forward.next())
-                    .await
-                    .is_err()
-            );
-            assert_clean(&trial);
-            Ok(()) as TestResult
+        run_live(move |owned| {
+            Box::pin(async move {
+                let doc = owned.fixture.write_docs(false)?;
+                let probe = owned.client().await?;
+                let mut request =
+                    ready_subscription(&probe, owned.fixture.subject("request")).await?;
+                let mut forward =
+                    ready_subscription(&probe, owned.fixture.subject("forward")).await?;
+                let (engine, trial) = owned
+                    .attach(
+                        &doc,
+                        false,
+                        Duration::from_millis(if cancel { 2000 } else { 100 }),
+                    )
+                    .await?;
+                let registered = trial.receive_started.notified();
+                tokio::pin!(registered);
+                registered.as_mut().enable();
+                let handle = engine.execute("exchange", inputs());
+                let cancel_token = handle.cancel_token().clone();
+                owned.cancels.push(cancel_token.clone());
+                tokio::time::timeout(LIMIT, registered).await?;
+                assert_eq!(trial.active_waits.load(Ordering::SeqCst), 1);
+                let request = tokio::time::timeout(LIMIT, request.next())
+                    .await?
+                    .expect("request crossed broker");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&request.payload)?,
+                    json!({"order":7})
+                );
+                if cancel {
+                    cancel_token.cancel();
+                }
+                let err = tokio::time::timeout(LIMIT, handle.collect())
+                    .await?
+                    .outputs
+                    .expect_err("receive failure");
+                if cancel {
+                    assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
+                } else {
+                    assert!(err.message.contains("NATS_TRIAL_RECEIVE_WAIT_EXPIRED"));
+                }
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), forward.next())
+                        .await
+                        .is_err()
+                );
+                assert_clean(&trial);
+                Ok(())
+            })
         })
-        .catch_unwind()
-        .await;
-        cancel_token.cancel();
-        let trial_close = trial.close().await;
-        let probe_close = close_client(&probe).await;
-        let server_reap = fixture.kill_server();
-        let body = match body {
-            Ok(result) => result,
-            Err(panic) => std::panic::resume_unwind(panic),
-        };
-        body?;
-        trial_close?;
-        probe_close?;
-        server_reap?;
+        .await?;
     }
     Ok(())
 }
@@ -741,135 +814,222 @@ async fn nats_transport_trial_live_wait_expiry_and_cancellation() -> TestResult 
 #[tokio::test]
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_terminal_server_loss() -> TestResult {
-    let mut fixture = Fixture::new(true)?;
-    let doc = fixture.write_docs(false)?;
-    let probe = client(&fixture.endpoint).await?;
-    let mut request = ready_subscription(&probe, fixture.subject("request")).await?;
-    let mut forward = ready_subscription(&probe, fixture.subject("forward")).await?;
-    let (engine, trial) = attach(&fixture, &doc, false, LIMIT).await?;
-    let registered = trial.receive_started.notified();
-    tokio::pin!(registered);
-    registered.as_mut().enable();
-    let handle = engine.execute("exchange", inputs());
-    let cancel = handle.cancel_token().clone();
-    let body = std::panic::AssertUnwindSafe(async {
-        tokio::time::timeout(LIMIT, registered).await?;
-        let _ = tokio::time::timeout(LIMIT, request.next())
-            .await?
-            .expect("request crossed broker");
-        fixture.kill_server()?;
-        let err = tokio::time::timeout(LIMIT, handle.collect())
-            .await?
-            .outputs
-            .expect_err("server lost");
-        assert!(err.message.contains("NATS_TRIAL_DISCONNECTED"), "{err}");
-        assert!(trial.terminal());
-        assert!(!matches!(
-            tokio::time::timeout(Duration::from_millis(100), forward.next()).await,
-            Ok(Some(_))
-        ));
-        assert_clean(&trial);
-        Ok(()) as TestResult
+    let observed = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&observed);
+    run_live(move |owned| {
+        Box::pin(async move {
+            let doc = owned.fixture.write_docs(false)?;
+            let probe = owned.client().await?;
+            let mut request = ready_subscription(&probe, owned.fixture.subject("request")).await?;
+            let mut forward = ready_subscription(&probe, owned.fixture.subject("forward")).await?;
+            let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+            *capture.lock().expect("capture") = Some((probe.clone(), Arc::clone(&trial)));
+            let registered = trial.receive_started.notified();
+            tokio::pin!(registered);
+            registered.as_mut().enable();
+            let handle = engine.execute("exchange", inputs());
+            owned.cancels.push(handle.cancel_token().clone());
+            tokio::time::timeout(LIMIT, registered).await?;
+            let _ = tokio::time::timeout(LIMIT, request.next())
+                .await?
+                .expect("request crossed broker");
+            owned.fixture.kill_server()?;
+            let err = tokio::time::timeout(LIMIT, handle.collect())
+                .await?
+                .outputs
+                .expect_err("server lost");
+            assert!(err.message.contains("NATS_TRIAL_DISCONNECTED"), "{err}");
+            assert!(trial.terminal());
+            assert!(!matches!(
+                tokio::time::timeout(Duration::from_millis(100), forward.next()).await,
+                Ok(Some(_))
+            ));
+            assert_clean(&trial);
+            Ok(())
+        })
     })
-    .catch_unwind()
-    .await;
-    cancel.cancel();
-    let server_reap = fixture.kill_server();
-    let close = tokio::time::timeout(LIMIT, trial.close()).await;
-    let _probe_close = close_client(&probe).await;
-    let body = match body {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-    body?;
-    server_reap?;
-    let close = close?;
-    match close {
-        Ok(()) => assert!(trial.closed()),
-        Err(err) => assert!(
-            err.message.contains("NATS_TRIAL_DRAIN")
-                || err.message.contains("NATS_TRIAL_CLOSED_NOT_OBSERVED"),
-            "{err}"
-        ),
-    }
-    drop(engine);
-    drop(probe);
+    .await?;
+    let (probe, trial) = observed
+        .lock()
+        .expect("capture")
+        .take()
+        .expect("connected clients");
+    assert!(
+        trial.terminal() && !trial.closed(),
+        "exhausted reconnect ends without Closed"
+    );
+    assert!(probe.terminal.load(Ordering::SeqCst) && !probe.closed.load(Ordering::SeqCst));
     Ok(())
 }
 
 #[tokio::test]
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_changed_receive_route_rejects_old_reply() -> TestResult {
-    let mut fixture = Fixture::new(true)?;
-    let doc = fixture.write_docs(false)?;
-    let probe = client(&fixture.endpoint).await?;
-    let mut request = ready_subscription(&probe, fixture.subject("request")).await?;
-    let mut forward = ready_subscription(&probe, fixture.subject("forward")).await?;
-    let (engine, trial) = attach(&fixture, &doc, false, LIMIT).await?;
+    run_live(|owned| {
+        Box::pin(async move {
+            let doc = owned.fixture.write_docs(false)?;
+            let probe = owned.client().await?;
+            let mut request = ready_subscription(&probe, owned.fixture.subject("request")).await?;
+            let mut forward = ready_subscription(&probe, owned.fixture.subject("forward")).await?;
+            let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
 
-    // The registered old reply genuinely crossed NATS into the fixed inbox.
-    let mut headers = async_nats::HeaderMap::new();
-    headers.insert("x-tag", "reply");
-    probe
-        .publish_with_headers(
-            fixture.subject("reply"),
-            headers,
-            serde_json::to_vec(&json!({"id":42,"accepted":true}))?.into(),
-        )
-        .await?;
-    probe.flush().await?;
-    trial.wait_buffered().await?;
-    assert_eq!(trial.buffered(), 1);
+            // The registered old reply genuinely crossed NATS into the fixed inbox.
+            let mut headers = async_nats::HeaderMap::new();
+            headers.insert("x-tag", "reply");
+            probe
+                .publish_with_headers(
+                    owned.fixture.subject("reply"),
+                    headers,
+                    serde_json::to_vec(&json!({"id":42,"accepted":true}))?.into(),
+                )
+                .await?;
+            probe.flush().await?;
+            trial.wait_buffered().await?;
+            assert_eq!(trial.buffered(), 1);
 
-    // Change only the local AsyncAPI receive address after preregistration.
-    let path = fixture.dir.join("events.yaml");
-    let text = fs::read_to_string(&path)?;
-    fs::write(
-        &path,
-        text.replace(&fixture.subject("reply"), &fixture.subject("changed_reply")),
-    )?;
-    let handle = engine.execute("exchange", inputs());
-    let cancel = handle.cancel_token().clone();
-    let body = std::panic::AssertUnwindSafe(async {
-        let err = tokio::time::timeout(LIMIT, handle.collect())
-            .await?
-            .outputs
-            .expect_err("receive route changed");
-        assert!(
-            err.message.contains("NATS_TRIAL_RECEIVE_ROUTE_CHANGED"),
-            "{err}"
-        );
-        let sent = tokio::time::timeout(LIMIT, request.next())
-            .await?
-            .expect("request crossed broker");
-        assert_eq!(
-            serde_json::from_slice::<Value>(&sent.payload)?,
-            json!({"order":7})
-        );
-        assert_eq!(trial.buffered(), 1, "old reply must remain unconsumed");
-        assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
-        assert_eq!(trial.routes.lock().expect("routes").len(), 1);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), forward.next())
-                .await
-                .is_err()
-        );
-        assert_clean(&trial);
-        Ok(()) as TestResult
+            // Change only the local AsyncAPI receive address after preregistration.
+            let path = owned.fixture.dir.join("events.yaml");
+            let text = fs::read_to_string(&path)?;
+            fs::write(
+                &path,
+                text.replace(
+                    &owned.fixture.subject("reply"),
+                    &owned.fixture.subject("changed_reply"),
+                ),
+            )?;
+            let handle = engine.execute("exchange", inputs());
+            owned.cancels.push(handle.cancel_token().clone());
+            let err = tokio::time::timeout(LIMIT, handle.collect())
+                .await?
+                .outputs
+                .expect_err("receive route changed");
+            assert!(
+                err.message.contains("NATS_TRIAL_RECEIVE_ROUTE_CHANGED"),
+                "{err}"
+            );
+            let sent = tokio::time::timeout(LIMIT, request.next())
+                .await?
+                .expect("request crossed broker");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&sent.payload)?,
+                json!({"order":7})
+            );
+            assert_eq!(trial.buffered(), 1, "old reply must remain unconsumed");
+            assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
+            assert_eq!(trial.routes.lock().expect("routes").len(), 1);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), forward.next())
+                    .await
+                    .is_err()
+            );
+            assert_clean(&trial);
+            Ok(())
+        })
     })
-    .catch_unwind()
-    .await;
-    cancel.cancel();
-    let trial_close = trial.close().await;
-    let probe_close = close_client(&probe).await;
-    let server_reap = fixture.kill_server();
-    let body = match body {
-        Ok(result) => result,
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-    body?;
-    trial_close?;
-    probe_close?;
-    server_reap?;
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
+async fn nats_transport_trial_live_setup_failure_and_watchdog_cleanup() -> TestResult {
+    // The trial connects before subscribing. A dot-invalid reply subject makes
+    // subscribe fail after client acquisition; connect must close that client.
+    run_live(|owned| {
+        Box::pin(async move {
+            let doc = owned.fixture.write_docs(false)?;
+            let path = owned.fixture.dir.join("events.yaml");
+            let text = fs::read_to_string(&path)?;
+            fs::write(
+                path,
+                text.replace(&owned.fixture.subject("reply"), "bad..reply"),
+            )?;
+            let spec = owned.fixture.parse(&doc)?;
+            let receive = spec.workflows[0].steps[1].clone();
+            let engine = EngineBuilder::new(spec)
+                .source_base_dir(&owned.fixture.dir)
+                .build()?;
+            let err = match NatsTrial::connect(
+                &engine,
+                &owned.fixture.endpoint,
+                &owned.fixture.dir,
+                &receive,
+                LIMIT,
+                false,
+            )
+            .await
+            {
+                Ok(_) => return Err("expected post-connect subscribe failure".into()),
+                Err(err) => err,
+            };
+            assert!(err.message.contains("NATS_TRIAL_SUBSCRIBE"), "{err}");
+            assert!(!err.message.contains("NATS_TRIAL_SETUP_CLEANUP"), "{err}");
+            Ok(())
+        })
+    })
+    .await?;
+
+    let setup_probe = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&setup_probe);
+    let err = run_live(move |owned| {
+        Box::pin(async move {
+            let probe = owned.client().await?;
+            let _subscription =
+                ready_subscription(&probe, owned.fixture.subject("request")).await?;
+            *capture.lock().expect("capture") = Some(probe);
+            Err("NATS_TRIAL_INJECTED_SETUP_FAILURE".into())
+        })
+    })
+    .await
+    .expect_err("injected setup failure");
+    assert!(err
+        .to_string()
+        .contains("NATS_TRIAL_INJECTED_SETUP_FAILURE"));
+    assert!(setup_probe
+        .lock()
+        .expect("capture")
+        .as_ref()
+        .expect("probe")
+        .closed
+        .load(Ordering::SeqCst));
+
+    let watchdog = Arc::new(Mutex::new(None));
+    let task_stopped = Arc::new(AtomicBool::new(false));
+    let capture = Arc::clone(&watchdog);
+    let stopped = Arc::clone(&task_stopped);
+    let err = run_live(move |owned| {
+        Box::pin(async move {
+            let doc = owned.fixture.write_docs(false)?;
+            let probe = owned.client().await?;
+            let (_engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+            *capture.lock().expect("capture") = Some((probe, Arc::clone(&trial)));
+            struct MarkStopped(Arc<AtomicBool>);
+            impl Drop for MarkStopped {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let (ready, started) = tokio::sync::oneshot::channel();
+            owned.tasks.push(tokio::spawn(async move {
+                let _mark = MarkStopped(stopped);
+                let _ = ready.send(());
+                futures_util::future::pending::<()>().await;
+            }));
+            tokio::time::timeout(LIMIT, started).await??;
+            // No reply is published, so this is the actual preregistration watchdog.
+            trial.wait_buffered().await?;
+            Ok(())
+        })
+    })
+    .await
+    .expect_err("buffer watchdog");
+    assert!(err.to_string().contains("NATS_TRIAL_BUFFER_EXPIRED"));
+    let (probe, trial) = watchdog
+        .lock()
+        .expect("capture")
+        .take()
+        .expect("connected trial");
+    assert!(trial.closed() && trial.pump_joined().await);
+    assert!(probe.closed.load(Ordering::SeqCst));
+    assert!(task_stopped.load(Ordering::SeqCst));
     Ok(())
 }

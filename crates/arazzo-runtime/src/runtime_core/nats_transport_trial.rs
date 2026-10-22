@@ -102,6 +102,7 @@ impl NatsTrial {
         let options = async_nats::ConnectOptions::new()
             .connection_timeout(IO_LIMIT)
             .max_reconnects(1usize)
+            .reconnect_delay_callback(|_| Duration::from_millis(10))
             .event_callback(move |event| {
                 let flag = Arc::clone(&on_terminal);
                 let closed = Arc::clone(&on_closed);
@@ -124,15 +125,32 @@ impl NatsTrial {
             .await
             .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_CONNECT_EXPIRED"))?
             .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_CONNECT: {err}")))?;
-        let mut subscriber =
-            tokio::time::timeout(IO_LIMIT, client.subscribe(route.address.clone()))
+        let setup = async {
+            let subscriber =
+                tokio::time::timeout(IO_LIMIT, client.subscribe(route.address.clone()))
+                    .await
+                    .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_SUBSCRIBE_EXPIRED"))?
+                    .map_err(|err| {
+                        RuntimeError::unspecified(format!("NATS_TRIAL_SUBSCRIBE: {err}"))
+                    })?;
+            tokio::time::timeout(IO_LIMIT, client.flush())
                 .await
-                .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_SUBSCRIBE_EXPIRED"))?
-                .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_SUBSCRIBE: {err}")))?;
-        tokio::time::timeout(IO_LIMIT, client.flush())
-            .await
-            .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_READY_EXPIRED"))?
-            .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_READY: {err}")))?;
+                .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_READY_EXPIRED"))?
+                .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_READY: {err}")))?;
+            Ok::<_, RuntimeError>(subscriber)
+        }
+        .await;
+        let mut subscriber = match setup {
+            Ok(subscriber) => subscriber,
+            Err(err) => {
+                if let Err(cleanup) = terminate_client(&client, &terminal, &closed).await {
+                    return Err(RuntimeError::unspecified(format!(
+                        "{err}; NATS_TRIAL_SETUP_CLEANUP: {cleanup}"
+                    )));
+                }
+                return Err(err);
+            }
+        };
         let (reply_tx, reply) = mpsc::channel(1);
         let pump_stop = tokio_util::sync::CancellationToken::new();
         let stop = pump_stop.clone();
@@ -287,43 +305,28 @@ impl NatsTrial {
 
     pub(super) async fn close(&self) -> Result<(), RuntimeError> {
         self.pump_stop.cancel();
+        let mut pump_error = None;
         if let Some(mut pump) = self.reply_pump.lock().await.take() {
             match tokio::time::timeout(IO_LIMIT, &mut pump).await {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    return Err(RuntimeError::unspecified(format!(
+                    pump_error = Some(RuntimeError::unspecified(format!(
                         "NATS_TRIAL_PUMP_JOIN: {err}"
-                    )))
+                    )));
                 }
                 Err(_) => {
                     pump.abort();
                     let _ = pump.await;
-                    return Err(RuntimeError::unspecified("NATS_TRIAL_PUMP_JOIN_EXPIRED"));
+                    pump_error = Some(RuntimeError::unspecified("NATS_TRIAL_PUMP_JOIN_EXPIRED"));
                 }
             }
         }
-        // Drain can stall after a server death. Bound it, then drop the client
-        // when the sole fixture-owned Arc is released.
-        match tokio::time::timeout(IO_LIMIT, self.client.drain()).await {
-            Ok(Ok(())) => {
-                if tokio::time::timeout(IO_LIMIT, async {
-                    while !self.closed.load(Ordering::SeqCst) {
-                        self.terminal_notice.notified().await;
-                    }
-                })
-                .await
-                .is_ok()
-                {
-                    Ok(())
-                } else {
-                    Err(RuntimeError::unspecified("NATS_TRIAL_CLOSED_NOT_OBSERVED"))
-                }
-            }
-            Ok(Err(err)) => Err(RuntimeError::unspecified(format!(
-                "NATS_TRIAL_DRAIN: {err}"
-            ))),
-            Err(_) => Err(RuntimeError::unspecified("NATS_TRIAL_DRAIN_EXPIRED")),
+        let client_result = terminate_client(&self.client, &self.terminal, &self.closed).await;
+        if let Some(err) = pump_error {
+            return Err(err);
         }
+        client_result
+            .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_TERMINATION: {err}")))
     }
 
     pub(super) fn terminal(&self) -> bool {
@@ -334,6 +337,9 @@ impl NatsTrial {
     }
     pub(super) fn receiver_free(&self) -> bool {
         self.reply.try_lock().is_ok()
+    }
+    pub(super) async fn pump_joined(&self) -> bool {
+        self.reply_pump.lock().await.is_none()
     }
     pub(super) fn buffered(&self) -> usize {
         self.buffered_count.load(Ordering::SeqCst)
@@ -354,6 +360,32 @@ impl NatsTrial {
             .await
             .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_GATE_ENTRY_EXPIRED"))
     }
+}
+
+// async-nats emits Closed on a graceful drain. On reconnect exhaustion its
+// handler exits without that event; a disconnected client whose command sender
+// rejects Flush has instead observably lost the handler.
+async fn terminate_client(
+    client: &async_nats::Client,
+    terminal: &AtomicBool,
+    closed: &AtomicBool,
+) -> Result<(), &'static str> {
+    let _ = tokio::time::timeout(IO_LIMIT, client.drain()).await;
+    tokio::time::timeout(IO_LIMIT, async {
+        loop {
+            if closed.load(Ordering::SeqCst) {
+                return;
+            }
+            if matches!(client.flush().await, Err(err) if err.kind() == async_nats::client::FlushErrorKind::SendError)
+                && terminal.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| "NATS_TRIAL_HANDLER_TERMINATION_EXPIRED")
 }
 
 impl Drop for NatsTrial {
