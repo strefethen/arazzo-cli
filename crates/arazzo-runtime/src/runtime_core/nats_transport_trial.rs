@@ -48,9 +48,16 @@ impl Route {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct PreparedReceive {
+    pub workflow_id: String,
+    pub step_id: String,
+    pub route: Route,
+}
+
 pub(super) struct NatsTrial {
     retrieval_dir: PathBuf,
-    registered_reply: Route,
+    prepared_receive: PreparedReceive,
     client: async_nats::Client,
     reply: tokio::sync::Mutex<mpsc::Receiver<async_nats::Message>>,
     reply_pump: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -78,21 +85,57 @@ impl Drop for ActiveWait<'_> {
 }
 
 impl NatsTrial {
+    pub(super) fn prepare_receive(
+        engine: &Engine,
+        workflow_id: &str,
+        retrieval_dir: &Path,
+    ) -> Result<PreparedReceive, RuntimeError> {
+        let workflow = engine
+            .inner
+            .index
+            .spec
+            .workflows
+            .iter()
+            .find(|workflow| workflow.workflow_id == workflow_id)
+            .ok_or_else(|| {
+                RuntimeError::unspecified(format!("NATS_TRIAL_UNKNOWN_WORKFLOW: {workflow_id}"))
+            })?;
+        let mut receivers = workflow
+            .steps
+            .iter()
+            .filter(|step| step.action == Some(StepAction::Receive));
+        let step = receivers.next().ok_or_else(|| {
+            RuntimeError::unspecified(format!("NATS_TRIAL_NO_RECEIVER: {workflow_id}"))
+        })?;
+        if receivers.next().is_some() {
+            return Err(RuntimeError::unspecified(format!(
+                "NATS_TRIAL_MULTIPLE_RECEIVERS: {workflow_id}"
+            )));
+        }
+        require_supported_step(step)?;
+        let route = Route::from_target(&resolve(engine, step, retrieval_dir)?)?;
+        Ok(PreparedReceive {
+            workflow_id: workflow_id.to_string(),
+            step_id: step.step_id.clone(),
+            route,
+        })
+    }
+
+    pub(super) fn workflow_id(&self) -> &str {
+        &self.prepared_receive.workflow_id
+    }
+
     pub(super) async fn connect(
         engine: &Engine,
         endpoint: &str,
         retrieval_dir: &Path,
-        receive_step: &Step,
+        workflow_id: &str,
         wait_limit: Duration,
         hold_receive: bool,
     ) -> Result<Arc<Self>, RuntimeError> {
-        let target = resolve(engine, receive_step, retrieval_dir)?;
-        let route = Route::from_target(&target)?;
-        if route.action != StepAction::Receive || route.channel_key != "reply" {
-            return Err(RuntimeError::unspecified(
-                "NATS_TRIAL_UNEXPECTED_RECEIVE_ROUTE",
-            ));
-        }
+        // Complete discovery and local resolution before acquiring any client.
+        let prepared_receive = Self::prepare_receive(engine, workflow_id, retrieval_dir)?;
+        let route = &prepared_receive.route;
         let terminal = Arc::new(AtomicBool::new(false));
         let closed = Arc::new(AtomicBool::new(false));
         let terminal_notice = Arc::new(tokio::sync::Notify::new());
@@ -177,7 +220,7 @@ impl NatsTrial {
         });
         Ok(Arc::new(Self {
             retrieval_dir: retrieval_dir.to_path_buf(),
-            registered_reply: route,
+            prepared_receive,
             client,
             reply: tokio::sync::Mutex::new(reply),
             reply_pump: tokio::sync::Mutex::new(Some(pump)),
@@ -198,23 +241,22 @@ impl NatsTrial {
         }))
     }
 
-    fn record(&self, target: &ResolvedChannelTarget) -> Result<Route, RuntimeError> {
+    fn record(&self, step: &Step, target: &ResolvedChannelTarget) -> Result<Route, RuntimeError> {
         let route = Route::from_target(target)?;
-        let expected = matches!(
-            (route.channel_key.as_str(), route.action),
-            ("request", StepAction::Send)
-                | ("reply", StepAction::Receive)
-                | ("forward", StepAction::Send)
-        );
+        let expected = route.action == StepAction::Receive
+            || matches!(route.channel_key.as_str(), "request" | "forward");
         if !expected || route.channel_pointer != format!("/channels/{}", route.channel_key) {
             return Err(RuntimeError::unspecified(format!(
                 "NATS_TRIAL_UNEXPECTED_ROUTE: {route:?}"
             )));
         }
-        if route.action == StepAction::Receive && route != self.registered_reply {
+        if route.action == StepAction::Receive
+            && (step.step_id != self.prepared_receive.step_id
+                || route != self.prepared_receive.route)
+        {
             return Err(RuntimeError::unspecified(format!(
-                "NATS_TRIAL_RECEIVE_ROUTE_CHANGED: registered={:?} resolved={route:?}",
-                self.registered_reply
+                "NATS_TRIAL_RECEIVE_ROUTE_CHANGED: prepared={:?} step={} resolved={route:?}",
+                self.prepared_receive, step.step_id
             )));
         }
         self.routes
@@ -424,6 +466,15 @@ pub(super) fn require_supported_mode(engine: &Engine) -> Result<(), RuntimeError
         .map_err(|_| RuntimeError::unspecified("NATS_TRIAL_UNSUPPORTED_MODE"))
 }
 
+fn require_supported_step(step: &Step) -> Result<(), RuntimeError> {
+    if step.correlation_id.is_some() || step.request_body.is_some() {
+        return Err(RuntimeError::unspecified(
+            "NATS_TRIAL_UNSUPPORTED_STEP_FORM",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn execute(
     engine: &Engine,
     trial: &NatsTrial,
@@ -432,13 +483,9 @@ pub(super) async fn execute(
     vars: &VarStore,
 ) -> Result<StepExecution, RuntimeError> {
     ctx.check_cancelled()?;
-    if step.correlation_id.is_some() || step.request_body.is_some() {
-        return Err(RuntimeError::unspecified(
-            "NATS_TRIAL_UNSUPPORTED_STEP_FORM",
-        ));
-    }
+    require_supported_step(step)?;
     let target = resolve(engine, step, &trial.retrieval_dir)?;
-    let route = trial.record(&target)?;
+    let route = trial.record(step, &target)?;
     let message = match route.action {
         StepAction::Send => {
             let template = match route.channel_key.as_str() {

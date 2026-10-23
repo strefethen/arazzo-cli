@@ -96,6 +96,15 @@ impl Fixture {
             self.dir.join("exchange.arazzo.json"),
         )?)?)
     }
+    fn rename_receive_channel(&self, doc: &mut Value, key: &str) -> TestResult {
+        let path = self.dir.join("events.yaml");
+        fs::write(
+            &path,
+            fs::read_to_string(&path)?.replace("  reply:\n", &format!("  {key}:\n")),
+        )?;
+        doc["workflows"][0]["steps"][1]["channelPath"] = json!(target(key));
+        Ok(())
+    }
     fn kill_server(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(child) = &mut self.child {
             if child.try_wait()?.is_none() {
@@ -219,11 +228,11 @@ async fn client(endpoint: &str) -> Result<FixtureClient, Box<dyn std::error::Err
 async fn attach(
     fixture: &Fixture,
     doc: &Value,
+    workflow_id: &str,
     early: bool,
     wait: Duration,
 ) -> Result<(Engine, Arc<NatsTrial>), Box<dyn std::error::Error>> {
     let spec = fixture.parse(doc)?;
-    let receive = spec.workflows[0].steps[1].clone();
     let mut engine = EngineBuilder::new(spec)
         .source_base_dir(&fixture.dir)
         .build()?;
@@ -231,7 +240,7 @@ async fn attach(
         &engine,
         &fixture.endpoint,
         &fixture.dir,
-        &receive,
+        workflow_id,
         wait,
         early,
     )
@@ -298,10 +307,11 @@ impl LiveResources {
     async fn attach(
         &mut self,
         doc: &Value,
+        workflow_id: &str,
         early: bool,
         wait: Duration,
     ) -> Result<(Engine, Arc<NatsTrial>), Box<dyn std::error::Error>> {
-        let (engine, trial) = attach(&self.fixture, doc, early, wait).await?;
+        let (engine, trial) = attach(&self.fixture, doc, workflow_id, early, wait).await?;
         self.trial = Some(Arc::clone(&trial));
         Ok((engine, trial))
     }
@@ -396,6 +406,142 @@ fn assert_clean(trial: &NatsTrial) {
 }
 
 #[test]
+fn nats_transport_trial_preparation_selects_workflow_receiver() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    for position in 0..3 {
+        for step_id in ["receive", "delivered"] {
+            let mut doc = fixture.write_docs(false)?;
+            fixture.rename_receive_channel(&mut doc, "completed")?;
+            let steps = doc["workflows"][0]["steps"].as_array_mut().expect("steps");
+            let mut receive = steps.remove(1);
+            receive["stepId"] = json!(step_id);
+            steps.insert(position, receive);
+            let selected = doc["workflows"][0].clone();
+            doc["workflows"] = json!([
+                {"workflowId":"distractor","steps":[
+                    {"stepId":"unrelated","channelPath":target("absent"),"action":"receive"}
+                ]}, selected
+            ]);
+            let engine = EngineBuilder::new(fixture.parse(&doc)?)
+                .source_base_dir(&fixture.dir)
+                .build()?;
+            let prepared = NatsTrial::prepare_receive(&engine, "exchange", &fixture.dir)?;
+            assert_eq!(prepared.workflow_id, "exchange");
+            assert_eq!(prepared.step_id, step_id);
+            assert_eq!(prepared.route.source, "events");
+            assert_eq!(
+                prepared.route.document,
+                fixture.dir.join("events.yaml").display().to_string()
+            );
+            assert_eq!(prepared.route.channel_key, "completed");
+            assert_eq!(prepared.route.channel_pointer, "/channels/completed");
+            assert_eq!(prepared.route.address, fixture.subject("reply"));
+            assert_eq!(prepared.route.action, arazzo_spec::StepAction::Receive);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn nats_transport_trial_preparation_errors_precede_connection() -> TestResult {
+    let fixture = Fixture::new(false)?;
+    for (case, marker) in [
+        ("unknown", "NATS_TRIAL_UNKNOWN_WORKFLOW"),
+        ("zero", "NATS_TRIAL_NO_RECEIVER"),
+        ("multiple_same", "NATS_TRIAL_MULTIPLE_RECEIVERS"),
+        ("multiple_distinct", "NATS_TRIAL_MULTIPLE_RECEIVERS"),
+        ("missing_target", "NATS_TRIAL_RESOLVE_UnsupportedCapability"),
+        ("invalid_target", "NATS_TRIAL_RESOLVE_InvalidTarget"),
+        ("missing_channel", "NATS_TRIAL_RESOLVE_MissingChannel"),
+        ("missing_source", "NATS_TRIAL_RESOLVE_MissingSource"),
+        ("invalid_source", "NATS_TRIAL_RESOLVE_InvalidTarget"),
+        ("missing_file", "NATS_TRIAL_RESOLVE_MissingFile"),
+        ("invalid_document", "NATS_TRIAL_RESOLVE_InvalidDocument"),
+        ("missing_address", "NATS_TRIAL_UNSUPPORTED_ADDRESS"),
+        ("wildcard_address", "NATS_TRIAL_UNSUPPORTED_ADDRESS"),
+        ("correlation", "NATS_TRIAL_UNSUPPORTED_STEP_FORM"),
+        ("request_body", "NATS_TRIAL_UNSUPPORTED_STEP_FORM"),
+    ] {
+        let mut doc = fixture.write_docs(false)?;
+        match case {
+            "zero" => doc["workflows"][0]["steps"][1]["action"] = json!("send"),
+            "multiple_same" | "multiple_distinct" => {
+                let mut another = doc["workflows"][0]["steps"][1].clone();
+                another["stepId"] = json!("another");
+                if case == "multiple_distinct" {
+                    another["channelPath"] = json!(target("forward"));
+                }
+                doc["workflows"][0]["steps"]
+                    .as_array_mut()
+                    .expect("steps")
+                    .push(another);
+            }
+            "missing_target" => {
+                doc["workflows"][0]["steps"][1]
+                    .as_object_mut()
+                    .expect("step")
+                    .remove("channelPath");
+            }
+            "invalid_target" => {
+                doc["workflows"][0]["steps"][1]["channelPath"] = json!("not-a-channel-path")
+            }
+            "missing_channel" => {
+                doc["workflows"][0]["steps"][1]["channelPath"] = json!(target("absent"))
+            }
+            "missing_source" => doc["sourceDescriptions"] = json!([]),
+            "invalid_source" => doc["sourceDescriptions"][0]["type"] = json!("arazzo"),
+            "missing_file" => doc["sourceDescriptions"][0]["url"] = json!("absent.yaml"),
+            "invalid_document" => fs::write(fixture.dir.join("events.yaml"), "[")?,
+            "missing_address" | "wildcard_address" => {
+                let path = fixture.dir.join("events.yaml");
+                let text = fs::read_to_string(&path)?;
+                let replacement = if case == "missing_address" {
+                    "null"
+                } else {
+                    "bad.*"
+                };
+                fs::write(path, text.replace(&fixture.subject("reply"), replacement))?;
+            }
+            "correlation" => doc["workflows"][0]["steps"][1]["correlationId"] = json!("fixed"),
+            "request_body" => {
+                doc["workflows"][0]["steps"][1]["requestBody"] = json!({"payload":{"id":42}})
+            }
+            "unknown" => {}
+            _ => unreachable!(),
+        }
+        let engine = EngineBuilder::new(fixture.parse(&doc)?)
+            .source_base_dir(&fixture.dir)
+            .build()?;
+        let workflow_id = if case == "unknown" {
+            "absent"
+        } else {
+            "exchange"
+        };
+        let preparation =
+            NatsTrial::prepare_receive(&engine, workflow_id, &fixture.dir).expect_err(case);
+        assert!(
+            preparation.message.contains(marker),
+            "{case}: {preparation}"
+        );
+        let connection = match NatsTrial::connect(
+            &engine,
+            "nats://127.0.0.1:0",
+            &fixture.dir,
+            workflow_id,
+            LIMIT,
+            false,
+        )
+        .await
+        {
+            Ok(_) => return Err(format!("{case}: unexpected connection").into()),
+            Err(err) => err,
+        };
+        assert_eq!(connection.message, preparation.message, "{case}");
+    }
+    Ok(())
+}
+
+#[test]
 fn nats_transport_trial_prerequisites_fail_without_connecting() -> TestResult {
     assert!(server_binary_from(None)
         .expect_err("missing prerequisite")
@@ -469,14 +615,23 @@ async fn nats_transport_trial_mode_and_unconfigured_guards() -> TestResult {
 async fn nats_transport_trial_live_exchange_and_early_reply() -> TestResult {
     run_live(|owned| {
         Box::pin(async move {
-            let doc = owned.fixture.write_docs(false)?;
+            let mut doc = owned.fixture.write_docs(false)?;
+            owned
+                .fixture
+                .rename_receive_channel(&mut doc, "completed")?;
+            let selected = doc["workflows"][0].clone();
+            doc["workflows"] = json!([
+                {"workflowId":"distractor","steps":[
+                    {"stepId":"unrelated","channelPath":target("absent"),"action":"receive"}
+                ]}, selected
+            ]);
             let responder = owned.client().await?;
             let observer = owned.client().await?;
             let mut request =
                 ready_subscription(&responder, owned.fixture.subject("request")).await?;
             let mut forward =
                 ready_subscription(&observer, owned.fixture.subject("forward")).await?;
-            let (engine, trial) = owned.attach(&doc, true, LIMIT).await?;
+            let (engine, trial) = owned.attach(&doc, "exchange", true, LIMIT).await?;
             let reply = owned.fixture.subject("reply");
             owned.tasks.push(tokio::spawn({
                 let responder = responder.clone();
@@ -504,7 +659,7 @@ async fn nats_transport_trial_live_exchange_and_early_reply() -> TestResult {
                     responder.flush().await.expect("reply flush");
                 }
             }));
-            let handle = engine.execute("exchange", inputs());
+            let handle = engine.execute(trial.workflow_id(), inputs());
             owned.cancels.push(handle.cancel_token().clone());
             trial.wait_receive_gate().await?;
             trial.wait_buffered().await?;
@@ -531,11 +686,17 @@ async fn nats_transport_trial_live_exchange_and_early_reply() -> TestResult {
                     .iter()
                     .map(|r| r.channel_key.as_str())
                     .collect::<Vec<_>>(),
-                vec!["request", "reply", "forward"]
+                vec!["request", "completed", "forward"]
             );
             assert!(routes.iter().all(|r| r.source == "events"
                 && r.document == owned.fixture.dir.join("events.yaml").display().to_string()
-                && r.address == owned.fixture.subject(&r.channel_key)));
+                && r.channel_pointer == format!("/channels/{}", r.channel_key)
+                && r.address
+                    == owned.fixture.subject(if r.channel_key == "completed" {
+                        "reply"
+                    } else {
+                        &r.channel_key
+                    })));
             assert_clean(&trial);
             Ok(())
         })
@@ -571,7 +732,7 @@ async fn reply_case(case: ReplyCase) -> TestResult {
     let observer = owned.client().await?;
     let mut request = ready_subscription(&responder, owned.fixture.subject("request")).await?;
     let mut forward = ready_subscription(&observer, owned.fixture.subject("forward")).await?;
-    let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+    let (engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
     let reply_subject = owned.fixture.subject("reply");
     owned.tasks.push(tokio::spawn({
         let responder = responder.clone();
@@ -604,7 +765,7 @@ async fn reply_case(case: ReplyCase) -> TestResult {
             responder.flush().await.expect("reply flush");
         }
     }));
-    let handle = engine.execute("exchange", inputs());
+    let handle = engine.execute(trial.workflow_id(), inputs());
     owned.cancels.push(handle.cancel_token().clone());
         let result = tokio::time::timeout(LIMIT, handle.collect()).await?;
         match case {
@@ -700,9 +861,9 @@ async fn nats_transport_trial_live_resolver_and_changed_address() -> TestResult 
                 let mut changed =
                     ready_subscription(&probe, owned.fixture.subject("wrong")).await?;
                 let (engine, trial) = owned
-                    .attach(&doc, false, Duration::from_millis(150))
+                    .attach(&doc, "exchange", false, Duration::from_millis(150))
                     .await?;
-                let handle = engine.execute("exchange", inputs());
+                let handle = engine.execute(trial.workflow_id(), inputs());
                 owned.cancels.push(handle.cancel_token().clone());
                 let err = tokio::time::timeout(LIMIT, handle.collect())
                     .await?
@@ -766,6 +927,7 @@ async fn nats_transport_trial_live_wait_expiry_and_cancellation() -> TestResult 
                 let (engine, trial) = owned
                     .attach(
                         &doc,
+                        "exchange",
                         false,
                         Duration::from_millis(if cancel { 2000 } else { 100 }),
                     )
@@ -773,7 +935,7 @@ async fn nats_transport_trial_live_wait_expiry_and_cancellation() -> TestResult 
                 let registered = trial.receive_started.notified();
                 tokio::pin!(registered);
                 registered.as_mut().enable();
-                let handle = engine.execute("exchange", inputs());
+                let handle = engine.execute(trial.workflow_id(), inputs());
                 let cancel_token = handle.cancel_token().clone();
                 owned.cancels.push(cancel_token.clone());
                 tokio::time::timeout(LIMIT, registered).await?;
@@ -822,12 +984,12 @@ async fn nats_transport_trial_live_terminal_server_loss() -> TestResult {
             let probe = owned.client().await?;
             let mut request = ready_subscription(&probe, owned.fixture.subject("request")).await?;
             let mut forward = ready_subscription(&probe, owned.fixture.subject("forward")).await?;
-            let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+            let (engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
             *capture.lock().expect("capture") = Some((probe.clone(), Arc::clone(&trial)));
             let registered = trial.receive_started.notified();
             tokio::pin!(registered);
             registered.as_mut().enable();
-            let handle = engine.execute("exchange", inputs());
+            let handle = engine.execute(trial.workflow_id(), inputs());
             owned.cancels.push(handle.cancel_token().clone());
             tokio::time::timeout(LIMIT, registered).await?;
             let _ = tokio::time::timeout(LIMIT, request.next())
@@ -865,68 +1027,94 @@ async fn nats_transport_trial_live_terminal_server_loss() -> TestResult {
 #[tokio::test]
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_changed_receive_route_rejects_old_reply() -> TestResult {
-    run_live(|owned| {
-        Box::pin(async move {
-            let doc = owned.fixture.write_docs(false)?;
-            let probe = owned.client().await?;
-            let mut request = ready_subscription(&probe, owned.fixture.subject("request")).await?;
-            let mut forward = ready_subscription(&probe, owned.fixture.subject("forward")).await?;
-            let (engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+    for change_step_id in [false, true] {
+        run_live(move |owned| {
+            Box::pin(async move {
+                let doc = owned.fixture.write_docs(false)?;
+                let probe = owned.client().await?;
+                let mut request =
+                    ready_subscription(&probe, owned.fixture.subject("request")).await?;
+                let mut forward =
+                    ready_subscription(&probe, owned.fixture.subject("forward")).await?;
+                let (mut engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
 
-            // The registered old reply genuinely crossed NATS into the fixed inbox.
-            let mut headers = async_nats::HeaderMap::new();
-            headers.insert("x-tag", "reply");
-            probe
-                .publish_with_headers(
-                    owned.fixture.subject("reply"),
-                    headers,
-                    serde_json::to_vec(&json!({"id":42,"accepted":true}))?.into(),
-                )
-                .await?;
-            probe.flush().await?;
-            trial.wait_buffered().await?;
-            assert_eq!(trial.buffered(), 1);
+                // The registered old reply genuinely crossed NATS into the fixed inbox.
+                let mut headers = async_nats::HeaderMap::new();
+                headers.insert("x-tag", "reply");
+                probe
+                    .publish_with_headers(
+                        owned.fixture.subject("reply"),
+                        headers,
+                        serde_json::to_vec(&json!({"id":42,"accepted":true}))?.into(),
+                    )
+                    .await?;
+                probe.flush().await?;
+                trial.wait_buffered().await.map_err(|err| {
+                    format!("receive guard change_step_id={change_step_id}: {err}")
+                })?;
+                assert_eq!(trial.buffered(), 1);
 
-            // Change only the local AsyncAPI receive address after preregistration.
-            let path = owned.fixture.dir.join("events.yaml");
-            let text = fs::read_to_string(&path)?;
-            fs::write(
-                &path,
-                text.replace(
-                    &owned.fixture.subject("reply"),
-                    &owned.fixture.subject("changed_reply"),
-                ),
-            )?;
-            let handle = engine.execute("exchange", inputs());
-            owned.cancels.push(handle.cancel_token().clone());
-            let err = tokio::time::timeout(LIMIT, handle.collect())
-                .await?
-                .outputs
-                .expect_err("receive route changed");
-            assert!(
-                err.message.contains("NATS_TRIAL_RECEIVE_ROUTE_CHANGED"),
-                "{err}"
-            );
-            let sent = tokio::time::timeout(LIMIT, request.next())
-                .await?
-                .expect("request crossed broker");
-            assert_eq!(
-                serde_json::from_slice::<Value>(&sent.payload)?,
-                json!({"order":7})
-            );
-            assert_eq!(trial.buffered(), 1, "old reply must remain unconsumed");
-            assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
-            assert_eq!(trial.routes.lock().expect("routes").len(), 1);
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), forward.next())
-                    .await
-                    .is_err()
-            );
-            assert_clean(&trial);
-            Ok(())
+                if change_step_id {
+                    // A different step must not consume the inbox even if its full
+                    // resolved route matches. Build fresh indexes for that document.
+                    let prepared =
+                        NatsTrial::prepare_receive(&engine, "exchange", &owned.fixture.dir)?;
+                    let mut changed_doc = doc.clone();
+                    changed_doc["workflows"][0]["steps"][1]["stepId"] = json!("different_receiver");
+                    engine = EngineBuilder::new(owned.fixture.parse(&changed_doc)?)
+                        .source_base_dir(&owned.fixture.dir)
+                        .build()?;
+                    let changed =
+                        NatsTrial::prepare_receive(&engine, "exchange", &owned.fixture.dir)?;
+                    assert_ne!(prepared.step_id, changed.step_id);
+                    assert_eq!(prepared.route, changed.route);
+                    Arc::get_mut(&mut engine.inner)
+                        .expect("fresh Engine")
+                        .nats_trial = Some(Arc::clone(&trial));
+                } else {
+                    // Change only the local AsyncAPI receive address after preregistration.
+                    let path = owned.fixture.dir.join("events.yaml");
+                    let text = fs::read_to_string(&path)?;
+                    fs::write(
+                        &path,
+                        text.replace(
+                            &owned.fixture.subject("reply"),
+                            &owned.fixture.subject("changed_reply"),
+                        ),
+                    )?;
+                }
+                let handle = engine.execute(trial.workflow_id(), inputs());
+                owned.cancels.push(handle.cancel_token().clone());
+                let err = tokio::time::timeout(LIMIT, handle.collect())
+                    .await?
+                    .outputs
+                    .expect_err("receive route changed");
+                assert!(
+                    err.message.contains("NATS_TRIAL_RECEIVE_ROUTE_CHANGED"),
+                    "{err}"
+                );
+                let sent = tokio::time::timeout(LIMIT, request.next())
+                    .await?
+                    .expect("request crossed broker");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&sent.payload)?,
+                    json!({"order":7})
+                );
+                assert_eq!(trial.buffered(), 1, "old reply must remain unconsumed");
+                assert_eq!(trial.receive_attempts.load(Ordering::SeqCst), 0);
+                assert_eq!(trial.routes.lock().expect("routes").len(), 1);
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), forward.next())
+                        .await
+                        .is_err()
+                );
+                assert_clean(&trial);
+                Ok(())
+            })
         })
-    })
-    .await
+        .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -944,7 +1132,6 @@ async fn nats_transport_trial_live_setup_failure_and_watchdog_cleanup() -> TestR
                 text.replace(&owned.fixture.subject("reply"), "bad..reply"),
             )?;
             let spec = owned.fixture.parse(&doc)?;
-            let receive = spec.workflows[0].steps[1].clone();
             let engine = EngineBuilder::new(spec)
                 .source_base_dir(&owned.fixture.dir)
                 .build()?;
@@ -952,7 +1139,7 @@ async fn nats_transport_trial_live_setup_failure_and_watchdog_cleanup() -> TestR
                 &engine,
                 &owned.fixture.endpoint,
                 &owned.fixture.dir,
-                &receive,
+                "exchange",
                 LIMIT,
                 false,
             )
@@ -1000,7 +1187,7 @@ async fn nats_transport_trial_live_setup_failure_and_watchdog_cleanup() -> TestR
         Box::pin(async move {
             let doc = owned.fixture.write_docs(false)?;
             let probe = owned.client().await?;
-            let (_engine, trial) = owned.attach(&doc, false, LIMIT).await?;
+            let (_engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
             *capture.lock().expect("capture") = Some((probe, Arc::clone(&trial)));
             struct MarkStopped(Arc<AtomicBool>);
             impl Drop for MarkStopped {
