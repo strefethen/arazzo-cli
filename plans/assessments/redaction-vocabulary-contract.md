@@ -109,8 +109,10 @@ output, and query name.
 
 **Nesting.** JSON redaction walks every depth. A matching key's whole subtree
 becomes `"[REDACTED]"`, and a non-matching key is recursed into. The
-`--verbose` inputs echo is the only sink that does not recurse. The follow-on
-should pin a nested `privateKey` there.
+`--verbose` inputs echo is the only sink that does not recurse, so a nested
+secret prints in clear there today, for existing stems as much as new names.
+Closing that gap belongs to ac-b4a51's verbose/trace parity (its AC3), not to
+this vocabulary contract.
 
 **Case.** ASCII case-insensitive everywhere. Non-ASCII names are compared
 without folding.
@@ -130,17 +132,18 @@ output, keep the name bytes exactly as written and replace only the value.
 
 Decoding applies to every query classification, so a name that encodes
 existing-stem letters (`%74oken`) also becomes a positive. Decoding is the
-accepted point 3 of the 2026-10-24 decision, not part of ac-b4a51 AC4. A
-malformed escape is left literal and classified as written. Header and JSON
-names are not decoded.
+accepted point 3 of the 2026-10-24 decision, not part of ac-b4a51 AC4. Header
+and JSON names are not decoded. Malformed escapes and escapes that decode to
+invalid UTF-8 are not covered by the decision; see residual question 3.
 
 ## Free text (accepted: mirror)
 
 Add separator-tolerant alternates for the same five names to `RE_KV`, for
 example `private[-_ ]?key` and `x[-_ ]?auth[-_ ]?key`. Free text is a
 substring match by nature, so `foo_authkey=v` also matches there even though
-it is exact-negative in structured sinks. That is an accepted difference
-between the two paths. At HEAD, `X-Auth-Key: CANARY` and `private_key=CANARY`
+it is exact-negative in structured sinks. Mirroring was accepted; the
+resulting difference between the two paths is not yet confirmed (residual
+question 2). At HEAD, `X-Auth-Key: CANARY` and `private_key=CANARY`
 in a non-JSON body or an error message pass through in clear.
 
 ## Outputs, errors, replay
@@ -162,8 +165,7 @@ in a non-JSON body or an error message pass through in clear.
 
 One owner: `redaction.rs`. Add the five names as an exact table compared under
 ac-b4a51's normalization, decode the name in `redact_url_query`, and mirror the
-names in `RE_KV`. Make no changes at the sink call sites beyond the
-verbose-nesting test. Tests: the matrix above as positive and negative cases,
+names in `RE_KV`. Make no changes at the sink call sites. Tests: the matrix above as positive and negative cases,
 including `key` and `keyboardLayout` as pinned negatives, the encoded-name
 table, and one `RE_KV` free-text case per name. Add no stems, no config, and
 no schema changes.
@@ -174,4 +176,9 @@ no schema changes.
    `application/x-www-form-urlencoded` does? If so, `private+key` → ✓. As
    written, only `%XX` is decoded and it stays negative.
 2. Confirm that prefixed variants such as `x-private-key` and
-   `x-subscription-key` stay negative under exact matching.
+   `x-subscription-key` stay negative under exact matching, given that the
+   mirrored `RE_KV` alternates would redact them in free text, and would also
+   redact the next token after prose such as `private key: expected PEM` in an
+   error message.
+3. How should a malformed escape, or one that decodes to invalid UTF-8, be
+   classified? The proposal is to classify the name as written, undecoded.
