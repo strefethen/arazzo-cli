@@ -13,6 +13,7 @@ mod output;
 mod run;
 mod run_context;
 mod run_export;
+mod serve;
 mod test_runner;
 mod trace;
 mod transport;
@@ -307,45 +308,10 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             specs,
             dir,
             allowed_dir,
-        } => serve(specs, dir, allowed_dir)
+        } => serve::serve(specs, dir, allowed_dir)
             .await
             .map_err(CliFailure::from),
     }
-}
-
-async fn serve(
-    specs: Vec<String>,
-    dir: Option<String>,
-    allowed_dir: Vec<String>,
-) -> Result<(), CliError> {
-    let mut paths = specs;
-    if let Some(d) = dir {
-        let discovered = arazzo_mcp::state::discover_specs(&d).map_err(|err| {
-            CliError::new("SERVE_SPEC_DISCOVERY", format!("discovering specs: {err}"))
-        })?;
-        paths.extend(discovered);
-    }
-    if paths.is_empty() {
-        return Err(CliError::new(
-            "SERVE_NO_SPECS",
-            "no spec files provided. Pass file paths or use --dir <directory>",
-        ));
-    }
-    let allowed = if allowed_dir.is_empty() {
-        None
-    } else {
-        Some(allowed_dir)
-    };
-    // Escape the existing tokio runtime before calling run_mcp_stdio,
-    // which creates its own runtime internally.
-    tokio::task::spawn_blocking(move || {
-        let reader = io::BufReader::new(io::stdin());
-        let mut writer = io::BufWriter::new(io::stdout().lock());
-        arazzo_mcp::run_mcp_stdio(reader, &mut writer, &paths, allowed)
-    })
-    .await
-    .map_err(|err| CliError::new("SERVE_TASK_PANIC", format!("serve task panicked: {err}")))?
-    .map_err(|err| CliError::new("SERVE_MCP", err))
 }
 
 // `.env` loading. This and the copy in `arazzo-mcp/src/main.rs` are kept in lockstep: the
