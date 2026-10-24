@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
+use arazzo_spec::{PropertyDef, SchemaObject};
 use regex::Regex;
 use serde_json::Value;
 
@@ -25,12 +26,73 @@ const SENSITIVE_STEMS: [&str; 10] = [
     "pwd",
 ];
 
+/// Lowercases `name` and drops the `-`, `_`, and space separators, so
+/// `api_key`, `api-key`, `apiKey`, and `API KEY` all compare as `apikey`.
+fn normalize_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether a header, query-parameter, JSON-field, or input name looks like a
+/// credential. Matching is case- and separator-insensitive: the name and the
+/// table entries are both compared with `-`, `_`, and space removed.
 pub fn is_sensitive_key(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    if SENSITIVE_EXACT.iter().any(|key| lower == *key) {
+    let normalized = normalize_key(name);
+    if SENSITIVE_EXACT
+        .iter()
+        .any(|key| normalized == normalize_key(key))
+    {
         return true;
     }
-    SENSITIVE_STEMS.iter().any(|stem| lower.contains(stem))
+    SENSITIVE_STEMS
+        .iter()
+        .any(|stem| normalized.contains(&normalize_key(stem)))
+}
+
+/// Whether a workflow input property's schema declares its value a secret:
+/// the JSON Schema `writeOnly: true` annotation or `format: password`.
+pub fn is_schema_declared_secret(property: &PropertyDef) -> bool {
+    property.is_write_only() || property.format == "password"
+}
+
+/// The set of workflow input names whose values must never be written in
+/// clear: every name in `names` that [`is_sensitive_key`] matches, plus every
+/// top-level property of `schema` that [`is_schema_declared_secret`] marks.
+/// Nested object input schemas are not consulted.
+pub fn sensitive_input_names<'a>(
+    schema: Option<&SchemaObject>,
+    names: impl IntoIterator<Item = &'a str>,
+) -> BTreeSet<String> {
+    let mut sensitive: BTreeSet<String> = names
+        .into_iter()
+        .filter(|name| is_sensitive_key(name))
+        .map(str::to_string)
+        .collect();
+    if let Some(schema) = schema {
+        sensitive.extend(
+            schema
+                .properties
+                .iter()
+                .filter(|(_, property)| is_schema_declared_secret(property))
+                .map(|(name, _)| name.clone()),
+        );
+    }
+    sensitive
+}
+
+/// Redacts a workflow-inputs map: a top-level entry named in `sensitive`
+/// (see [`sensitive_input_names`]) is replaced whole; every other entry has
+/// its nested JSON redacted by key name, as [`redact_json_value`] does.
+pub fn redact_inputs(map: &mut BTreeMap<String, Value>, sensitive: &BTreeSet<String>) {
+    for (key, value) in map {
+        if sensitive.contains(key) || is_sensitive_key(key) {
+            *value = Value::String(REDACTED.to_string());
+        } else {
+            redact_json_value(value);
+        }
+    }
 }
 
 pub fn redact_dry_run_request(request: &mut DryRunRequest) {
@@ -192,6 +254,76 @@ mod tests {
                 .as_ref()
                 .and_then(|body| body.pointer("/nested/dbPassword")),
             Some(&json!(REDACTED))
+        );
+    }
+
+    #[test]
+    fn sensitive_key_matching_ignores_case_and_separators() {
+        for name in [
+            "api_key",
+            "api-key",
+            "apiKey",
+            "API_KEY",
+            "x_api_key",
+            "X-Api-Key",
+            "api key",
+            // Existing-stem control: already matched `apikey` by `contains`.
+            "apikeyless",
+        ] {
+            assert!(is_sensitive_key(name), "{name} should be sensitive");
+        }
+        for name in ["notes", "key", "api", "page", "x-request-id", "accept"] {
+            assert!(!is_sensitive_key(name), "{name} should not be sensitive");
+        }
+    }
+
+    #[test]
+    fn query_param_api_key_is_redacted() {
+        let mut url = "https://example.com/items?api_key=SECRET-QUERY-VALUE&page=2".to_string();
+        redact_url_query(&mut url);
+        assert_eq!(url, "https://example.com/items?api_key=[REDACTED]&page=2");
+    }
+
+    fn parse_schema(yaml: &str) -> SchemaObject {
+        match serde_yaml_ng::from_str(yaml) {
+            Ok(schema) => schema,
+            Err(err) => panic!("deserializing schema YAML: {err}"),
+        }
+    }
+
+    #[test]
+    fn sensitive_input_names_unions_name_and_schema_declarations() {
+        let schema = parse_schema(
+            "type: object\nproperties:\n  handle:\n    type: string\n    writeOnly: true\n  pin:\n    type: string\n    format: password\n  plain:\n    type: string\n  visible:\n    type: string\n    writeOnly: false\n  nested:\n    type: object\n    properties:\n      inner:\n        type: string\n        writeOnly: true\n",
+        );
+        let names = sensitive_input_names(Some(&schema), ["api_key", "plain", "nested", "visible"]);
+        let expected: BTreeSet<String> = ["api_key", "handle", "pin"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(names, expected);
+        assert!(sensitive_input_names(None, ["plain"]).is_empty());
+    }
+
+    #[test]
+    fn redact_inputs_redacts_named_set_and_nested_key_names_only() {
+        let sensitive: BTreeSet<String> = ["handle".to_string()].into();
+        let mut inputs = BTreeMap::from([
+            ("handle".to_string(), json!("clear-handle")),
+            ("api_key".to_string(), json!("clear-key")),
+            ("plain".to_string(), json!("visible")),
+            (
+                "nested".to_string(),
+                json!({ "inner": "kept", "clientSecret": "shh" }),
+            ),
+        ]);
+        redact_inputs(&mut inputs, &sensitive);
+        assert_eq!(inputs["handle"], json!(REDACTED));
+        assert_eq!(inputs["api_key"], json!(REDACTED));
+        assert_eq!(inputs["plain"], json!("visible"));
+        assert_eq!(
+            inputs["nested"],
+            json!({ "inner": "kept", "clientSecret": REDACTED })
         );
     }
 

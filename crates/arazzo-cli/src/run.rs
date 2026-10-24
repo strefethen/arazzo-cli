@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    is_sensitive_key, ClientConfig, EngineBuilder, EngineEvent, SequentialFallback,
-    TraceStepRecord, TransportWarning, REDACTED,
+    redact_inputs, sensitive_input_names, ClientConfig, EngineBuilder, EngineEvent,
+    SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use serde_json::Value;
 
@@ -111,18 +111,21 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         inputs.insert(key, value);
     }
 
+    // One sensitive input-name set feeds both the `--verbose` echo and the
+    // trace file, so the two sinks cannot disagree about what is a secret.
+    let sensitive_inputs = sensitive_input_names(
+        spec.workflows
+            .iter()
+            .find(|workflow| workflow.workflow_id == run.workflow_id)
+            .and_then(|workflow| workflow.inputs.as_ref()),
+        inputs.keys().map(String::as_str),
+    );
+
     if global.verbose {
         eprintln!("Executing workflow: {}", run.workflow_id);
-        let redacted: BTreeMap<&str, _> = inputs
-            .iter()
-            .map(|(k, v)| {
-                if is_sensitive_key(k) {
-                    (k.as_str(), serde_json::Value::String(REDACTED.into()))
-                } else {
-                    (k.as_str(), v.clone())
-                }
-            })
-            .collect();
+        // Same redaction as `trace.inputs`, nested key names included.
+        let mut redacted = inputs.clone();
+        redact_inputs(&mut redacted, &sensitive_inputs);
         eprintln!("Inputs: {redacted:?}");
     }
 
@@ -282,7 +285,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
             inputs.clone(),
             trace_steps.clone(),
         );
-        prepare_trace_for_write(&mut trace_file, run.trace_max_body_bytes);
+        prepare_trace_for_write(&mut trace_file, run.trace_max_body_bytes, &sensitive_inputs);
         if let Err(err) = write_trace_file_atomic(Path::new(trace_path), &trace_file) {
             trace_write_error = Some(err);
         }

@@ -125,6 +125,7 @@ use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
 pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{
-    is_sensitive_key, redact_dry_run_request, redact_headers, redact_json_object,
-    redact_json_value, redact_text_patterns, redact_url_query, redacted_dry_run_request, REDACTED,
+    is_schema_declared_secret, is_sensitive_key, redact_dry_run_request, redact_headers,
+    redact_inputs, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
+    redacted_dry_run_request, sensitive_input_names, REDACTED,
 };

@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    redact_headers, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
-    SequentialFallback, TraceStepRecord, TransportWarning,
+    redact_headers, redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
+    redact_url_query, SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -131,8 +131,16 @@ pub fn build_trace_file(
     }
 }
 
-pub fn prepare_trace_for_write(trace: &mut TraceFile, max_body_bytes: usize) {
-    redact_trace_file(trace, max_body_bytes);
+/// Redacts and truncates `trace` before it is written. `sensitive_inputs` is
+/// the workflow's sensitive input-name set (see
+/// [`arazzo_runtime::sensitive_input_names`]); those `trace.inputs` entries
+/// are replaced whole.
+pub fn prepare_trace_for_write(
+    trace: &mut TraceFile,
+    max_body_bytes: usize,
+    sensitive_inputs: &BTreeSet<String>,
+) {
+    redact_trace_file(trace, max_body_bytes, sensitive_inputs);
 }
 
 pub fn write_trace_file_atomic(path: &Path, trace: &TraceFile) -> Result<(), String> {
@@ -184,8 +192,12 @@ pub fn write_trace_file_atomic(path: &Path, trace: &TraceFile) -> Result<(), Str
     })
 }
 
-fn redact_trace_file(trace: &mut TraceFile, max_body_bytes: usize) {
-    redact_json_object(&mut trace.inputs);
+fn redact_trace_file(
+    trace: &mut TraceFile,
+    max_body_bytes: usize,
+    sensitive_inputs: &BTreeSet<String>,
+) {
+    redact_inputs(&mut trace.inputs, sensitive_inputs);
     for step in &mut trace.steps {
         if let Some(request) = &mut step.request {
             redact_headers(&mut request.headers);
@@ -315,7 +327,7 @@ mod tests {
         };
 
         let mut trace = make_trace_file(response);
-        redact_trace_file(&mut trace, 2048);
+        redact_trace_file(&mut trace, 2048, &BTreeSet::new());
 
         let resp = trace.steps[0]
             .response
@@ -356,7 +368,7 @@ mod tests {
         };
 
         let mut trace = make_trace_file(response);
-        redact_trace_file(&mut trace, 2048);
+        redact_trace_file(&mut trace, 2048, &BTreeSet::new());
 
         let resp = trace.steps[0]
             .response
@@ -389,7 +401,7 @@ mod tests {
         };
 
         let mut trace = make_trace_file(response);
-        redact_trace_file(&mut trace, 4096);
+        redact_trace_file(&mut trace, 4096, &BTreeSet::new());
 
         let resp = trace.steps[0]
             .response

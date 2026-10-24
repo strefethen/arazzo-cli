@@ -306,6 +306,20 @@ pub struct PropertyDef {
     pub extensions: VendorExtensions,
 }
 
+impl PropertyDef {
+    /// Whether the author declared this property with the JSON Schema
+    /// `writeOnly: true` annotation. The keyword is not a typed field, so it
+    /// is read from the captured leftovers in [`PropertyDef::extensions`].
+    /// Any value other than the boolean `true` (absent, `false`, a string)
+    /// reads as `false`.
+    pub fn is_write_only(&self) -> bool {
+        matches!(
+            self.extensions.get("writeOnly"),
+            Some(serde_yaml_ng::Value::Bool(true))
+        )
+    }
+}
+
 /// Step target discriminator — exactly one target field is permitted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepTarget {
@@ -965,7 +979,7 @@ pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng:
 mod tests {
     use super::{
         unrecognized_fields, ActionType, ExpressionType, OnAction, ParamLocation, Parameter,
-        Replacement, RequestBody, SelectorType, VendorExtensions,
+        PropertyDef, Replacement, RequestBody, SelectorType, VendorExtensions,
     };
 
     fn serialize<T: serde::Serialize>(value: &T) -> String {
@@ -1161,5 +1175,23 @@ mod tests {
 
         let serialized = serialize(&body);
         assert!(!serialized.contains("replacementTypo"), "{serialized}");
+    }
+
+    #[test]
+    fn property_def_is_write_only_reads_only_a_boolean_true() {
+        let cases = [
+            ("type: string\nwriteOnly: true\n", true),
+            ("type: string\nwriteOnly: false\n", false),
+            ("type: string\n", false),
+            ("type: string\nwriteOnly: \"true\"\n", false),
+            ("type: string\nwriteOnly: [1]\n", false),
+        ];
+        for (yaml, expected) in cases {
+            let prop: PropertyDef = match serde_yaml_ng::from_str(yaml) {
+                Ok(prop) => prop,
+                Err(err) => panic!("deserializing property YAML {yaml:?}: {err}"),
+            };
+            assert_eq!(prop.is_write_only(), expected, "{yaml:?}");
+        }
     }
 }
