@@ -187,15 +187,19 @@ is logged, no prepared or sent events fire, and `dry_run_requests()` is empty.
 | Dry-run | Same boundary, because preparation precedes the dry-run branch. Values unresolved only because transport was skipped do not fail (§5a). |
 
 **Routing.** The `Err` passes through `step_attempt::settle` (`:304`) into a
-failed `StepResult` with `err_kind` set. Failure routing treats `retry` as
-inapplicable for this kind. Read literally, the note says it "fails
-immediately with the new code", so the step fails, the workflow error carries
-the new code through `control::step_result_error`, and
-`RUNTIME_RETRY_LIMIT_EXCEEDED` never appears. Slice 4 confirms whether
-non-retry `onFailure` actions (`end`, `goto`) still route this kind when it is
-authored. An `end` would keep the new code via `original_err_kind`
-(`engine_actions.rs:307`). `StepResult.response` is `None`, so failure
-criteria on `$statusCode` see no response.
+failed `StepResult` with `err_kind` set. First-round item 4 still holds: this
+is an ordinary step failure, and `onFailure` actions run. Second-round item 5
+removes only `retry`.
+
+- An authored `goto` routes this failure like any other step failure.
+- An authored `end` keeps the new code through `original_err_kind`
+  (`engine_actions.rs:308`, the `ActionType::End` failure arm).
+- A `retry` action does not apply to this kind, so
+  `RUNTIME_RETRY_LIMIT_EXCEEDED` can never appear for it.
+- With no applicable action, `control::step_result_error` keeps the new code.
+
+`StepResult.response` is `None`, so failure criteria on `$statusCode` see no
+response.
 
 ## 4. Absent declared-optional inputs: alternative B (accepted 2026-10-24)
 
@@ -243,8 +247,9 @@ behaves the same over MCP and the CLI.
   `VarStore` provenance owner (§6). ac-fda34's planned `dry_run.rs`-only
   sidecar is revised to use it when that follow-on is written.
 - **(f) `$method` in URL contexts.** `$method` is a spec-defined expression
-  (ABNF, l. 1796), and it now resolves in path/query/querystring as it already
-  does in headers and the body.
+  (ABNF, l. 1796). Under the follow-on (Slice 3) it resolves in
+  path/query/querystring as it already does in headers and the body. Today it
+  is still Missing there.
 
 ## 6. Implementation shape
 
@@ -272,7 +277,9 @@ behaves the same over MCP and the CLI.
   location, including `build_url_from_path`.
 - **Retry bypass (§5d).** Failure routing (`engine_actions.rs`, failure loop)
   treats a `retry` action as inapplicable when `err_kind` is the new kind. The
-  result never reaches `retry_limit_exceeded_decision`.
+  result never reaches `retry_limit_exceeded_decision`. Authored `goto` and
+  `end` keep their ordinary failure routing; `end` reports the new code through
+  `original_err_kind`.
 - **Dry-run class (§5a).** The provenance set records two classes,
   *unresolved* and *transport-skipped*. Admission rejects only the first.
   `execute_dry_run_step` records the second for response-derived outputs.
@@ -331,8 +338,9 @@ accepted, and each slice is written as a ticket when the work is planned.
 4. **Admission and error.** `prepare_http_request`/`build_url_from_path`, the
    new `RuntimeErrorKind`, the message format, and the retry bypass (§5d).
    Proof is this L4 loopback fixture under sequential, `--parallel`,
-   `run --step`, an authored `retry` (asserting one attempt and the new code),
-   and subworkflow, asserting that no `DELETE` arrives. The authored-null and
+   `run --step`, and subworkflow, asserting that no `DELETE` arrives. It must
+   also cover authored failure actions on this failure: `retry` (one attempt,
+   new code), `end` (new code), and `goto` (routes to its target). The authored-null and
    zero-match controls must stay green. The selector zero-match residual
    (§5c) is recorded as a known limit, not tested as fixed.
 5. **Surfaces and release notes.** Verify only: CLI contract snapshot, MCP, and
