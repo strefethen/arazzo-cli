@@ -102,8 +102,9 @@ check the audit before using it.
 
 Selector Object = `context` + `selector` + `type` (`jsonpath` | `jsonpointer` |
 `xpath`, string or versioned object). A mapping is a selector only if it
-satisfies all three fields; otherwise it stays a literal. Zero/one/many matches
-normalize to `null` / scalar / ordered array.
+satisfies all three fields; otherwise it stays a literal. The spec does not say
+what a selector yields for zero/one/many matches; our `null` / scalar / ordered
+array normalization is a repository choice, not spec text.
 
 ## Parameter serialization
 
