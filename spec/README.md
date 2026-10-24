@@ -42,12 +42,19 @@ print(html.unescape(re.sub(r"\s+"," ",re.sub(r"<[^>]+>","",h[i-1400:i+200]))))'
 ## Not tracked: fetch after cloning
 
 The HTML files are gitignored (`/spec/**/*.html`); only this README,
-`fetch.sh`, and `SHA256SUMS` are committed. Run `./spec/fetch.sh` once per
-clone or worktree before `cargo test`: the `arazzo-expr` unit tests
-`include_str!` `arazzo/v1.1.0.html`, so without it that crate's tests do not
-compile. CI runs the same script before building and fails if `SHA256SUMS`
-changes, so a republished document is caught there instead of being adopted
-silently.
+`fetch.sh`, and `SHA256SUMS` are committed. Run this once per clone or
+worktree before `cargo test`:
+
+```bash
+./spec/fetch.sh --if-missing
+```
+
+The `arazzo-expr` unit tests `include_str!` `arazzo/v1.1.0.html`, so without
+it that crate's tests do not compile. `--if-missing` downloads only absent
+files, leaves present ones alone, and then verifies against `SHA256SUMS`
+without ever writing it, so a republished document fails the check instead of
+being adopted. CI runs the plain script before building and fails if
+`SHA256SUMS` changes, which catches the same thing there.
 
 ## Refreshing
 

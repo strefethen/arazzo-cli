@@ -4,8 +4,10 @@
 # These files are verbatim copies of the published documents. Never hand-edit
 # them — re-run this script instead.
 #
-#   ./spec/fetch.sh           re-download and rewrite SHA256SUMS
-#   ./spec/fetch.sh --verify  check the working copies against SHA256SUMS
+#   ./spec/fetch.sh               re-download and rewrite SHA256SUMS
+#   ./spec/fetch.sh --verify      check the working copies against SHA256SUMS
+#   ./spec/fetch.sh --if-missing  download only absent documents, then verify;
+#                                 never writes SHA256SUMS
 #
 # A --verify failure means a vendored file was edited or truncated; a plain
 # run that changes SHA256SUMS means a publisher changed a document. Both are
@@ -30,19 +32,39 @@ sha256() {
 
 cd -- "$(dirname -- "$0")"
 
-if [ "${1:-}" = "--verify" ]; then
+fetch() {
+    mkdir -p -- "$(dirname -- "$1")"
+    echo "fetching $2"
+    curl -sSfL -o "$1" "$2"
+}
+
+case "${1:-}" in
+--verify)
     sha256 -c SHA256SUMS
     exit
-fi
+    ;;
+--if-missing)
+    # Safe for agents and fresh worktrees: present files are left alone and
+    # SHA256SUMS is only read, so a republished document fails the check
+    # below instead of being adopted. A plain run is the deliberate refresh.
+    for doc in $OPENAPI_DOCS; do
+        [ -f "$doc" ] || fetch "$doc" "https://spec.openapis.org/$doc"
+    done
+    [ -f "$ASYNCAPI_DOC" ] || fetch "$ASYNCAPI_DOC" "$ASYNCAPI_URL"
+    sha256 -c SHA256SUMS
+    exit
+    ;;
+"") ;;
+*)
+    echo "usage: $0 [--verify | --if-missing]" >&2
+    exit 2
+    ;;
+esac
 
 for doc in $OPENAPI_DOCS; do
-    mkdir -p -- "$(dirname -- "$doc")"
-    echo "fetching https://spec.openapis.org/$doc"
-    curl -sSfL -o "$doc" "https://spec.openapis.org/$doc"
+    fetch "$doc" "https://spec.openapis.org/$doc"
 done
-mkdir -p -- "$(dirname -- "$ASYNCAPI_DOC")"
-echo "fetching $ASYNCAPI_URL"
-curl -sSfL -o "$ASYNCAPI_DOC" "$ASYNCAPI_URL"
+fetch "$ASYNCAPI_DOC" "$ASYNCAPI_URL"
 
 : >SHA256SUMS
 for doc in $OPENAPI_DOCS $ASYNCAPI_DOC; do
