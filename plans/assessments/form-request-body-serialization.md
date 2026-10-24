@@ -77,7 +77,7 @@ payload: "client_id={$inputs.clientId}&grant_type={$inputs.grantType}&redirect_u
 Its worked example encodes an `address` object as JSON:
 `address=%7B%22streetAddress%22%3A%22123+Example+Dr.%22…`, with this note:
 
-> Note that the id keyword is treated as text/plain per the Encoding Object's
+> Note that the id keyword is treated as text/plain per the Encoding Object’s
 > default behavior, and is serialized as-is.
 
 **OAS 3.2.0 Encoding Object `contentType`** (`#encoding-content-type`). The
@@ -126,10 +126,13 @@ three fields present, the defaults come from `contentType`.
 - **Object field → `application/json`: supported.** The default table maps
   `object` to `application/json`, and the §4.15.3 example shows those bytes.
 - **Array → repeated name: supported, by inference.** The repetition sentence
-  sits in Encoding By Name, which opens *"To use the encoding field"*. Two
-  passages apply it when no `encoding` field is present: the
-  `contentType` note (*"the array item for properties of type "array""*) and
-  §4.15.3's *"based on the Encoding Object’s default values"*. `explode` is not
+  sits in Encoding By Name, which opens *"To use the encoding field"*. Three
+  passages apply it when no `encoding` field is present: the Media Type
+  Object's `encoding` field (*"If no Encoding Object is provided for a
+  property, the behavior is determined by the default values documented for
+  the Encoding Object."*), the `contentType` note (*"the array item for
+  properties of type "array""*), and §4.15.3's *"based on the Encoding
+  Object’s default values"*. `explode` is not
   involved, because its `"form"` default only applies when
   `style`/`explode`/`allowReserved` is explicit. Leaving out null array items
   is our convention, not spec text.
@@ -147,7 +150,9 @@ three fields present, the defaults come from `contentType`.
 on the date shown). All bytes come from a WHATWG
 `application/x-www-form-urlencoded` serializer: unreserved characters are
 `A–Z a–z 0–9 * - . _`, space becomes `+`, and everything else is UTF-8
-percent-encoded. Keys follow the sorted order of `serde_json::Map`, which the
+percent-encoded. S byte rows rest on OAS §4.15.3's normative reference
+to [WHATWG-URL] (*"MUST be percent-encoded per [WHATWG-URL]'s rules"*);
+WHATWG-URL itself is not vendored in `spec/`. Keys follow the sorted order of `serde_json::Map`, which the
 spec permits (*"implementation-defined"*).
 
 ### Top-level payload (after expressions, selectors, replacements)
@@ -165,7 +170,7 @@ spec permits (*"implementation-defined"*).
 |---|---|---|---|
 | string | `{"name":"Alice Smith"}` | `name=Alice+Smith` | S (text/plain, WHATWG) |
 | empty string | `{"empty":""}` | `empty=` | C (2026-10-18) |
-| null | `{"nickname":null}` | *(pair omitted)* | C (2026-10-18). OAS allows omission but does not require it |
+| null | `{"nickname":null}` | *(pair omitted)* | C (2026-10-18). OAS allows omission but does not require it. Rejected alternatives: `nickname=` (HTTPX/qs default) and `nickname=null` (JSON text) |
 | reserved chars | `{"q":"a+b&c=d e"}` | `q=a%2Bb%26c%3Dd+e` | S (E.2, WHATWG) |
 | Unicode | `{"city":"São Paulo ☕"}` | `city=S%C3%A3o+Paulo+%E2%98%95` | S (WHATWG UTF-8) |
 | key needing encoding | `{"a b":"c~d"}` | `a+b=c%7Ed` | S (WHATWG encodes names too) |
@@ -190,7 +195,7 @@ meaning, so this conforms but does not match byte-for-byte.
 | Concern | Behavior | Basis |
 |---|---|---|
 | Media-type match | ASCII case-insensitive on the essence; parameters (`; charset=…`) ignored. Content-Type header sent as authored | C row 6 (2026-10-24). The vendored text does not state this |
-| Order of operations | Evaluate expressions and selectors → apply `replacements` to the logical value → encode once at send | S (*"MUST be evaluated prior to calling"*). Encoding last keeps replacement targets on the logical tree |
+| Order of operations | Evaluate expressions and selectors → apply `replacements` to the logical value → encode once at send | Evaluation first is S (*"MUST be evaluated prior to calling"*). Replacements act on the payload, S (*"A list of locations and values to set within a payload."*). Encoding after replacements follows from C row 7 (logical value until transport) |
 | Replacement target default for form | Unchanged (`infer_target_kind`). Spec defaults exist only for JSON and XML | not decided here |
 | Unresolved required expression | Fails before sending (existing admission decision). Never treated as intentional null | 2026-10-18 note |
 | Dry-run, trace, `$request.body` | Logical value (as today) | C row 7 (2026-10-24) |
