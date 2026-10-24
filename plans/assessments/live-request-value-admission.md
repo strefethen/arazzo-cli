@@ -14,9 +14,12 @@ failure, so `onFailure` runs and retries are allowed; (5) dry-run reports the
 same failure, and dry-run provenance detail stays with
 [ac-fda34](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fda34).
 
-This document turns that into a contract. One behavior fork is still open
-(§4), plus five confirmations (§5). One of them comes from the spec check: the
-vendored text **does not** say that zero matches produce `null`.
+**Second round, accepted 2026-10-24.** Steve accepted all seven
+recommendations from the first version of this document (`c34c3df`) and its
+review: alternative B (§4) and §5a–§5f. Two of them revise first-round
+decisions. Dry-run separates "transport skipped" from genuinely unresolved
+(revises 5), and admission failures are not retried (revises 4). The contract
+below is accepted as written. Nothing in it is open.
 
 ## 1. Evidence: L4 still reproduces at `2726e34`
 
@@ -44,7 +47,8 @@ The causal chain, with every link in current source:
    `Missing => Value::Null` (`resolution.rs:29`).
 2. **The stored output is plain JSON.** `VarStore::set_step_output`
    (`state.rs:279`) stores a `Value`. `EvalContext.steps` is
-   `BTreeMap<String, Value>` (`arazzo-expr/src/lib.rs:105`). The consumer's
+   `Arc<BTreeMap<String, BTreeMap<String, Value>>>`
+   (`arazzo-expr/src/lib.rs:105`). The consumer's
    `$steps.find.outputs.id` therefore resolves as *Present(null)*, which looks
    the same as an authored null.
 3. **The request builder serializes null as "nothing".** For a path value,
@@ -80,9 +84,11 @@ Each quote below was checked against the vendored HTML (tags stripped).
   to calling the referenced operation." This places admission before dispatch.
 - `#stepOnFailure` (l. 714): "An array of failure action objects that specify
   what to do upon step failure." This supports sub-decision 4.
-- Regex and JSONPath conditions (l. 1375, 1390): "If the `context` evaluates
-  to `null` or `undefined`, the condition MUST evaluate to *fail*." The spec
-  itself separates null from undefined.
+- Regex conditions (l. 1375): "If the `context` evaluates to `null` or
+  `undefined`, the condition MUST evaluate to *fail*." JSONPath conditions
+  (l. 1390): "If the `context` evaluates to `null` or `undefined`, or if the
+  JSONPath expression is syntactically invalid, the condition MUST evaluate to
+  *fail*." The spec itself separates null from undefined.
 - Runtime expressions (l. 2006, 2009): "Runtime expressions preserve the type
   of the referenced value." and "Scalar values (string, number, boolean, null)
   are converted to their string representation." So a *real* null embedded in
@@ -96,22 +102,23 @@ spec-mandated behavior:
 
 - What an unresolvable runtime expression yields. No sentence covers it. The
   accepted policy is our choice in that silence.
-- **What a Selector Object yields on zero matches. Open item for Steve.**
+- **What a Selector Object yields on zero matches.** Accepted 2026-10-24: null
+  as a repository choice in a spec-silent area.
   §5.8.13 (`#selector-object`) defines only `context`, `selector`, and `type`.
   It says nothing about cardinality or a no-match result. The only zero-node
   text is in JSONPath *conditions* (l. 1388): "A condition fails (falsy) when
   the JSONPath expression returns an empty nodelist (zero nodes)." That is
   about criterion truthiness, not a Selector value. OAS 3.2.0 does not define
   Selector Objects. So sub-decision 2 stands as a repository choice and cannot
-  be cited as spec. Separately, `AGENTS.md` § Expression surface says
-  "Zero/one/many matches normalize to `null` / scalar / ordered array" under a
-  heading that claims "This list is the spec". That line has no support in
-  `spec/` and should be reworded as repository behavior.
+  be cited as spec. `AGENTS.md` § Expression surface says "Zero/one/many
+  matches normalize to `null` / scalar / ordered array" under a heading that
+  claims "This list is the spec". That line has no support in `spec/`. Steve
+  accepted rewording it; that edit happens outside this document.
 - OpenAPI `required`. The repository does not read OpenAPI parameter metadata
   (`AGENTS.md` § Parameter serialization), and this contract does not either.
   Admission depends only on how the Arazzo value resolved.
 
-## 3. The accepted contract
+## 3. The contract (accepted 2026-10-24, both rounds)
 
 **Rule.** A step fails before dispatch with `RUNTIME_UNRESOLVED_REQUEST_VALUE`
 when any value used to build its request has *unresolved* provenance. Real
@@ -123,19 +130,22 @@ null and empty values keep their current serialization.
 |---|---|---|---|
 | Authored literal `null` / `""` | `value: null` | serialized as null | **allowed, unchanged** |
 | Data that really is null | prior output from `{"id": null}` | serialized as null | **allowed** |
-| Missing key / pointer miss | `$response.body#/id` absent, `$steps.s.outputs.x` undeclared, `$inputs.typo` | null | **fail** |
+| Request/response miss | `$response.body#/id` or `$response.header.X` absent | null, **no warning** (`resolution.rs:221`) | **fail** |
+| Named-value miss | `$inputs.typo`, undeclared `$steps.s.outputs.x`, pointer miss inside a stored value | null + warning (`resolve_named`) | **fail** |
 | Unknown step/workflow, `$components.*`, unresolvable `$sourceDescriptions.<n>.<ref>` | — | null + warning | **fail** |
 | Not available before the request | `$response.*`, `$statusCode`, `$url`, `$request.*` in the step's own request | null | **fail** |
 | Expression syntax error; malformed template | — | null, or the literal text + warning (`interpolation.rs:35`) | **fail**, decided by the syntax error, not the text |
 | Embedded unresolved expression in a template | `pet-{$steps.f.outputs.id}` | `"pet-null"` | **fail** (sub-decision 1) |
 | Embedded real null in a template | — | `"pet-null"` | **allowed** (spec l. 2009) |
-| Selector zero matches | `$.absent` | null + warning | **allowed as null** (sub-decision 2; see §5c) |
+| Selector zero matches | `$.absent` | null + warning | **allowed as null** (sub-decision 2; known L4 limit, §5c) |
 | Selector selects a real null | — | null | **allowed** |
 | Selector hard failure: JSONPath parse/version/limit/eval error; JSON Pointer version or syntax; XPath version or non-string context; unknown type | — | null + warning, or replacement skipped | **fail** |
 | Selector context unresolved | `context: $steps.x.outputs.y` missing | null + warning | **fail** |
 | Unresolved upstream value: stored step output, workflow output, `$workflows.*`, subworkflow input or output | L4 | null | **fail**, via provenance (§6) |
 | Required input absent (CLI without `--strict-inputs`) | — | null | **fail** at the consuming step |
-| Declared-optional input absent | — | null (query omitted) | **§4: A fails, B allows** |
+| Declared-optional input absent | — | null (query omitted) | **allowed as authored null** (alternative B, §4) |
+| Dry-run value unresolved only because transport was skipped | `$response.body#/id` against the synthetic `{}` | null | **not an admission failure**; ac-fda34 marks it (§5a) |
+| `$method` in path/query | — | Missing (URL context has no method) | **resolves** (§5f) |
 
 ### 3.2 Locations
 
@@ -172,68 +182,71 @@ is logged, no prepared or sent events fire, and `dry_run_requests()` is empty.
 | Sequential | `execute_step_with_result` (`engine_impl.rs:673`) → `execute_http_step` → `prepare_http_request` |
 | `--parallel` | `execute_parallel_attempt` (`engine_parallel.rs:307`) → `execute_http_step` on the level's `VarStore` snapshot. Outputs merge back at `:127`. |
 | `run --step` | `execute_step_inner` (`engine_impl.rs:207`) runs its deps first (or `--no-deps` refuses with `STEP_MISSING_DEPENDENCY`), then the same `execute_step_with_result` |
-| Retry | Each attempt calls `prepare_http_request` again. A `retry` with a `stepId`/`workflowId` reference can supply the missing value. |
+| Retry | Not retried (§5d). The admission failure is deterministic, so the failure path skips `retry` actions for it. |
 | Subworkflow | Parent parameters become child inputs (`engine_impl.rs:855`). Child outputs come back as parent step outputs (`:915–918`). A retry's `workflowId` reference registers at `:806`. Admission happens at the child's or parent's next request. |
-| Dry-run | Same boundary, because preparation precedes the dry-run branch. See §5a. |
+| Dry-run | Same boundary, because preparation precedes the dry-run branch. Values unresolved only because transport was skipped do not fail (§5a). |
 
 **Routing.** The `Err` passes through `step_attempt::settle` (`:304`) into a
-failed `StepResult` with `err_kind` set, which is ordinary `onFailure` routing.
-With no matching action, `control::step_result_error` keeps the kind, so the
-workflow error carries the new code. `StepResult.response` is `None`, so
-failure criteria on `$statusCode` see no response.
+failed `StepResult` with `err_kind` set. Failure routing treats `retry` as
+inapplicable for this kind. Read literally, the note says it "fails
+immediately with the new code", so the step fails, the workflow error carries
+the new code through `control::step_result_error`, and
+`RUNTIME_RETRY_LIMIT_EXCEEDED` never appears. Slice 4 confirms whether
+non-retry `onFailure` actions (`end`, `goto`) still route this kind when it is
+authored. An `end` would keep the new code via `original_err_kind`
+(`engine_actions.rs:307`). `StepResult.response` is `None`, so failure
+criteria on `$statusCode` see no response.
 
-## 4. The open fork: absent declared-optional inputs
+## 4. Absent declared-optional inputs: alternative B (accepted 2026-10-24)
 
 Today an omitted optional input is the only way to drop an optional query
 filter. A schema `default: null` cannot express that, because
 `PropertyDef.default` is `Option<Value>` (`arazzo-spec/src/lib.rs:298`) and
 serde reads `null` as `None`.
 
-- **A. Strict.** Any absent input fails at the consuming request. This is the
-  most fail-closed option, but it ends the omit-an-optional-filter idiom with
-  no replacement. It also catches `DELETE /pets/{petId}` when `petId` is
-  optional and omitted.
-- **B. Omission is intent (recommended).** When building the request context
-  only, an input that is declared in `workflow.inputs`, not `required`, and not
-  supplied becomes an authored `null`, so current serialization applies.
-  Undeclared names, missing required inputs, and inputs that were supplied with
-  unresolved provenance (for example from a parent workflow) still fail. Here
-  the author declared the input optional and the caller chose to omit it. That
-  is caller intent, unlike L4's silent upstream data drift. The remaining risk,
-  an optional input used as a path segment, is visible in the document.
+- **A. Strict (rejected).** Any absent input fails at the consuming request.
+  This would end the omit-an-optional-filter idiom with no replacement.
+- **B. Omission is intent (accepted).** When building the request context only,
+  an input that is declared in `workflow.inputs`, not `required`, and not
+  supplied becomes an authored `null`, so current serialization applies and an
+  optional query parameter is still dropped. Undeclared names, missing
+  required inputs, and inputs supplied with unresolved provenance (for example
+  from a parent workflow) still fail. The remaining risk, an optional input
+  used as a path segment, is visible in the document.
 
-The two alternatives are identical in every other cell of §3. Neither changes
-criteria, actions, or how stored values are shown.
+B does not change criteria, actions, or how stored values are shown. It
+behaves the same over MCP and the CLI.
 
-## 5. Confirmations Steve must give
+## 5. Second-round decisions (accepted 2026-10-24)
 
-- **(a) Dry-run synthetic responses.** `execute_dry_run_step` evaluates outputs
-  against a fabricated `{}` (`engine_http.rs:452`). Under sub-decision 5 taken
-  literally, every response-derived output would be unresolved, and dry-run of
-  any chained workflow would fail at its first consumer, including this
-  fixture. *Recommended:* treat "unresolved only because transport was
-  skipped" as a separate provenance class. It is not an admission failure, and
-  ac-fda34 renders it as `<unresolved:…>`. Everything else that would fail a
-  live run fails dry-run the same way.
-- **(b) Replacement values: fail, not skip.** The F20 closure records that a
+- **(a) Dry-run "transport skipped" class (revises first-round 5).**
+  `execute_dry_run_step` evaluates outputs against a fabricated `{}`
+  (`engine_http.rs:452`). Outputs that are unresolved only because transport
+  was skipped get their own provenance class. They are not an admission
+  failure, and the ac-fda34 work marks them. Genuinely unresolved values still
+  fail in dry-run with the new code.
+- **(b) Replacement values fail, not skip.** The F20 closure recorded that a
   failed replacement value "leaves that replacement unapplied and the body
-  untouched" (`payload.rs:298`). Under this contract the step fails instead.
-- **(c) Selector zero matches leave a residual L4.** An output
+  untouched" (`payload.rs:298`). That part of F20 is now reversed: the step
+  fails instead.
+- **(c) Zero matches stay null, with a known L4 limit.** This is a repository
+  choice in a spec-silent area (§2). As a result, an output such as
   `{context: $response.body, selector: $.id, type: jsonpath}`, or the
   `jsonpointer` equivalent (whose miss is coded as zero matches,
-  `payload.rs:224`), still gives null, and that null still produces
-  `DELETE /pets/`. Only the runtime-expression form `$response.body#/id` is
-  protected. This follows from sub-decision 2, which the spec does not decide
-  (§2).
-- **(d) Retry exhaustion masks the code.** An exhausted retry reports
-  `RUNTIME_RETRY_LIMIT_EXCEEDED` (`engine_actions.rs:163`), as it already does
-  for every kind. The new code appears only in the per-attempt trace error.
-- **(e) One provenance owner.** ac-fda34 currently plans its own
-  `runtime_core/dry_run.rs` sidecar, limited to exact aliases. Live admission
-  needs the same sidecar plus templates and pointer suffixes. *Recommended:*
-  one owner for both, with ac-fda34 revised to use it.
+  `payload.rs:224`), still gives null and still produces `DELETE /pets/`. The
+  follow-on protects only the runtime-expression form `$response.body#/id`.
+  The selector residual is a recorded limit that the follow-on does not fix.
+- **(d) No retry for admission failures (revises first-round 4).** The step
+  fails immediately with the new code, so the exhaustion code from
+  `engine_actions.rs:163` cannot hide it.
+- **(e) One provenance owner.** Live admission and dry-run share one
+  `VarStore` provenance owner (§6). ac-fda34's planned `dry_run.rs`-only
+  sidecar is revised to use it when that follow-on is written.
+- **(f) `$method` in URL contexts.** `$method` is a spec-defined expression
+  (ABNF, l. 1796), and it now resolves in path/query/querystring as it already
+  does in headers and the body.
 
-## 6. Implementation shape (recommended)
+## 6. Implementation shape
 
 - **One evaluator.** `arazzo-expr` adds one public, provenance-keeping value
   resolution that covers both exact expressions and templates
@@ -255,7 +268,14 @@ criteria, actions, or how stored values are shown.
   existing `resolve_named`, and `EvalContext` gains no field. Header and body
   use this context with `method` set (`engine_http.rs:258`, `:312`), but the
   URL context does not (`:659`). Today `$method` in a path or query parameter
-  is Missing. The same slice should give every location one context.
+  is Missing. Accepted (§5f): one request context with `method` set for every
+  location, including `build_url_from_path`.
+- **Retry bypass (§5d).** Failure routing (`engine_actions.rs`, failure loop)
+  treats a `retry` action as inapplicable when `err_kind` is the new kind. The
+  result never reaches `retry_limit_exceeded_decision`.
+- **Dry-run class (§5a).** The provenance set records two classes,
+  *unresolved* and *transport-skipped*. Admission rejects only the first.
+  `execute_dry_run_step` records the second for response-derived outputs.
 - **Subworkflow nesting.** If a parent parameter has any unresolved leaf, the
   whole child input is marked unresolved. This is conservative, and the
   per-leaf version is a non-goal. It sits on the single subworkflow-parameter
@@ -279,8 +299,8 @@ criteria, actions, or how stored values are shown.
   the code is the new one, not `RUNTIME_EXPRESSION_DIAGNOSTICS`.
 - **MCP.** `handlers.rs:321–328` passes `err.code()` through, so no code
   change is needed. With `strict_inputs(true)` (`:280`), a missing required
-  input still fails earlier with `RUNTIME_INPUT_VALIDATION`. Alternative B
-  behaves the same over MCP and the CLI.
+  input still fails earlier with `RUNTIME_INPUT_VALIDATION`. Accepted
+  alternative B behaves the same over MCP and the CLI.
 - **DAP.** `session.rs:382` already prints `workflow failed [code]`. Variable
   views keep showing `null`.
 - **Library.** Public outputs stay unchanged. `ExecutionResult.outputs` is
@@ -294,7 +314,8 @@ criteria, actions, or how stored values are shown.
 
 ## 8. Follow-on split (owner-based; draft, not created)
 
-None of these is ready until Steve answers §4 and §5.
+These are drafts, not created tickets. The contract they implement is
+accepted, and each slice is written as a ticket when the work is planned.
 
 1. **`arazzo-expr` provenance resolution.** Exact expressions and templates
    through one evaluator. Tests cover a template with a missing value vs a
@@ -303,17 +324,20 @@ None of these is ready until Steve answers §4 and §5.
    selector type and nested literal, plus the replacement-value change (§5b).
    Negative tests cover a rejected hard failure, and the zero-match controls
    stay null.
-3. **`VarStore` provenance and request context.** All write sites in §6,
-   input materialization for alternative B, and subworkflow propagation.
-   Depends on ac-681d4.
+3. **`VarStore` provenance and request context.** All write sites in §6, both
+   provenance classes, input materialization for alternative B, subworkflow
+   propagation, and one request context with `$method` (§5f). Depends on
+   ac-681d4.
 4. **Admission and error.** `prepare_http_request`/`build_url_from_path`, the
-   new `RuntimeErrorKind`, and the message format. Proof is this L4 loopback
-   fixture under sequential, `--parallel`, `run --step`, retry with recovery,
+   new `RuntimeErrorKind`, the message format, and the retry bypass (§5d).
+   Proof is this L4 loopback fixture under sequential, `--parallel`,
+   `run --step`, an authored `retry` (asserting one attempt and the new code),
    and subworkflow, asserting that no `DELETE` arrives. The authored-null and
-   zero-match controls must stay green.
+   zero-match controls must stay green. The selector zero-match residual
+   (§5c) is recorded as a known limit, not tested as fixed.
 5. **Surfaces and release notes.** Verify only: CLI contract snapshot, MCP, and
-   DAP code passthrough. Plus CHANGELOG and the `AGENTS.md` zero-match wording
-   (§2).
+   DAP code passthrough. Plus CHANGELOG, including the §5c known limit. The
+   `AGENTS.md` zero-match rewording is handled separately (§2).
 6. **Revise ac-fda34** onto the shared provenance owner (§5a, §5e). That is a
    planner decision, not part of this ticket.
 
