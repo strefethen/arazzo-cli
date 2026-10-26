@@ -25,11 +25,15 @@ struct Fixture {
     dir: PathBuf,
     child: Option<Child>,
     endpoint: String,
+    monitor: Option<String>,
     prefix: String,
 }
 
 impl Fixture {
     fn new(live: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_monitor(live, false)
+    }
+    fn new_with_monitor(live: bool, monitor: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let binary = if live { Some(server_binary()?) } else { None };
         let serial = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
         let dir =
@@ -40,6 +44,7 @@ impl Fixture {
             dir,
             child: None,
             endpoint: String::new(),
+            monitor: None,
             prefix,
         };
         if !live {
@@ -47,10 +52,27 @@ impl Fixture {
         }
         let socket = TcpListener::bind("127.0.0.1:0")?;
         let port = socket.local_addr()?.port();
-        drop(socket);
         let endpoint = format!("127.0.0.1:{port}");
-        let child = Command::new(binary.expect("live binary validated"))
-            .args(["-a", "127.0.0.1", "-p", &port.to_string()])
+        let monitor_socket = if monitor {
+            Some(TcpListener::bind("127.0.0.1:0")?)
+        } else {
+            None
+        };
+        let monitor_port = if let Some(monitor_socket) = &monitor_socket {
+            let port = monitor_socket.local_addr()?.port();
+            fixture.monitor = Some(format!("127.0.0.1:{port}"));
+            Some(port.to_string())
+        } else {
+            None
+        };
+        drop(socket);
+        drop(monitor_socket);
+        let mut command = Command::new(binary.expect("live binary validated"));
+        command.args(["-a", "127.0.0.1", "-p", &port.to_string()]);
+        if let Some(port) = &monitor_port {
+            command.args(["-m", port]);
+        }
+        let child = command
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
@@ -280,10 +302,85 @@ async fn close_client(client: &FixtureClient) -> TestResult {
     Ok(())
 }
 
+// Listener polling and the completion wait are bounded; worker errors propagate.
+struct HttpFixture {
+    address: String,
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+    stop: Arc<AtomicBool>,
+    done: std::sync::mpsc::Receiver<Result<(), String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl HttpFixture {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let server = tiny_http::Server::http("127.0.0.1:0").map_err(|err| err.to_string())?;
+        let address = server.server_addr().to_string();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let seen = Arc::clone(&requests);
+        let stopping = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                while !stopping.load(Ordering::SeqCst) {
+                    if let Some(request) = server
+                        .recv_timeout(Duration::from_millis(20))
+                        .map_err(|err| err.to_string())?
+                    {
+                        seen.lock().expect("HTTP requests").push((
+                            request.method().as_str().to_owned(),
+                            request.url().to_owned(),
+                        ));
+                        request
+                            .respond(tiny_http::Response::from_string("ok"))
+                            .map_err(|err| err.to_string())?;
+                    }
+                }
+                Ok(())
+            })();
+            drop(server);
+            let _ = done_tx.send(result);
+        });
+        Ok(Self {
+            address,
+            requests,
+            stop,
+            done,
+            thread: Some(thread),
+        })
+    }
+    fn close(&mut self) -> TestResult {
+        if self.thread.is_some() {
+            self.stop.store(true, Ordering::SeqCst);
+            let result = match self.done.recv_timeout(LIMIT) {
+                Ok(result) => result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("HTTP_TRIAL_THREAD_EXPIRED".into())
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    Err("HTTP_TRIAL_THREAD_DISCONNECTED".into())
+                }
+            };
+            self.thread
+                .take()
+                .expect("HTTP thread")
+                .join()
+                .map_err(|_| "HTTP_TRIAL_THREAD_PANIC")?;
+            result.map_err(|err| format!("HTTP_TRIAL_WORKER: {err}"))?;
+        }
+        Ok(())
+    }
+}
+impl Drop for HttpFixture {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
 // Owns one live fixture from the first acquired client through every exit.
 // The callback body includes setup, so errors and panics cannot bypass teardown.
 struct LiveResources {
     fixture: Fixture,
+    http: Option<HttpFixture>,
     clients: Vec<FixtureClient>,
     trial: Option<Arc<NatsTrial>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -291,8 +388,12 @@ struct LiveResources {
 }
 impl LiveResources {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_monitor(false)
+    }
+    fn new_with_monitor(monitor: bool) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
-            fixture: Fixture::new(true)?,
+            fixture: Fixture::new_with_monitor(true, monitor)?,
+            http: None,
             clients: Vec::new(),
             trial: None,
             tasks: Vec::new(),
@@ -327,6 +428,11 @@ impl LiveResources {
             trial.release_receive();
         }
         let mut cleanup = Vec::new();
+        if let Some(mut http) = self.http.take() {
+            if let Err(err) = http.close() {
+                cleanup.push(err.to_string());
+            }
+        }
         for mut task in self.tasks.drain(..) {
             if failed {
                 task.abort();
@@ -382,6 +488,16 @@ where
     F: for<'a> FnOnce(&'a mut LiveResources) -> LiveFuture<'a>,
 {
     let mut owned = LiveResources::new()?;
+    let body = std::panic::AssertUnwindSafe(body(&mut owned))
+        .catch_unwind()
+        .await;
+    owned.finish(body).await
+}
+async fn run_live_monitored<F>(body: F) -> TestResult
+where
+    F: for<'a> FnOnce(&'a mut LiveResources) -> LiveFuture<'a>,
+{
+    let mut owned = LiveResources::new_with_monitor(true)?;
     let body = std::panic::AssertUnwindSafe(body(&mut owned))
         .catch_unwind()
         .await;
@@ -702,6 +818,185 @@ async fn nats_transport_trial_live_exchange_and_early_reply() -> TestResult {
         })
     })
     .await
+}
+
+fn receive_http_docs(
+    fixture: &Fixture,
+    address: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    fs::write(
+        fixture.dir.join("events.yaml"),
+        format!(
+            r#"
+asyncapi: 3.0.0
+info: {{ title: Events, version: '1' }}
+channels:
+  reply:
+    address: {}
+    messages:
+      event:
+        contentType: application/json
+        payload:
+          type: object
+          required: [id]
+          properties:
+            id: {{ type: integer }}
+"#,
+            fixture.subject("reply")
+        ),
+    )?;
+    let openapi = json!({"openapi":"3.2.0", "info":{"title":"Events","version":"1"},
+        "servers":[{"url":format!("http://{address}")}],
+        "paths":{"/events/{id}":{"get":{"operationId":"getEvent",
+            "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"integer"}}],
+            "responses":{"200":{"description":"OK"}}}}}});
+    fs::write(fixture.dir.join("api.json"), serde_json::to_vec(&openapi)?)?;
+    Ok(
+        json!({"arazzo":"1.1.0","info":{"title":"Receive HTTP","version":"1"},
+        "sourceDescriptions":[{"name":"events","url":"events.yaml","type":"asyncapi"},
+                              {"name":"api","url":"api.json","type":"openapi"}],
+        "workflows":[{"workflowId":"exchange","steps":[
+            {"stepId":"receive","channelPath":target("reply"),"action":"receive",
+             "successCriteria":[{"condition":"$message.payload#/id > 0"}],
+             "outputs":{"id":"$message.payload#/id"}},
+            {"stepId":"fetch","operationId":"$sourceDescriptions.api.getEvent","dependsOn":["receive"],
+             "parameters":[{"name":"id","in":"path","value":"$steps.receive.outputs.id"}]}
+        ],"outputs":{"id":"$steps.receive.outputs.id"}}]}),
+    )
+}
+
+async fn monitor_has_subject(fixture: &Fixture) -> Result<bool, Box<dyn std::error::Error>> {
+    let address = fixture.monitor.as_ref().ok_or("missing NATS monitor")?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let response: Value = tokio::time::timeout(LIMIT, async {
+        client
+            .get(format!("http://{address}/subsz?subs=1"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+    })
+    .await??;
+    let subscriptions = response["subscriptions_list"]
+        .as_array()
+        .ok_or("missing subscriptions_list")?;
+    let subject = fixture.subject("reply");
+    Ok(subscriptions
+        .iter()
+        .any(|entry| entry["subject"] == subject && entry["account"] == "$G"))
+}
+
+async fn wait_monitor_subject(fixture: &Fixture) -> TestResult {
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            if monitor_has_subject(fixture).await? {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| "NATS_TRIAL_MONITOR_SUBSCRIPTION_EXPIRED")?
+}
+
+async fn receive_http_case(id: u32) -> TestResult {
+    run_live_monitored(move |owned| {
+        Box::pin(async move {
+            let http = HttpFixture::new()?;
+            let doc = receive_http_docs(&owned.fixture, &http.address)?;
+            let requests = Arc::clone(&http.requests);
+            owned.http = Some(http);
+            let publisher = owned
+                .client()
+                .await
+                .map_err(|err| format!("HTTP_TRIAL_PUBLISHER_SETUP: {err}"))?;
+            assert!(
+                !monitor_has_subject(&owned.fixture).await?,
+                "subscription existed before attachment"
+            );
+            // Client flush alone does not prove the server processed SUB. Observe
+            // the exact subscription in the broker before the independent publish.
+            let (engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
+            wait_monitor_subject(&owned.fixture).await?;
+            publisher
+                .publish(
+                    owned.fixture.subject("reply"),
+                    serde_json::to_vec(&json!({"id":id}))?.into(),
+                )
+                .await?;
+            publisher.flush().await?;
+            trial.wait_buffered().await?;
+            let handle = engine.execute(trial.workflow_id(), BTreeMap::new());
+            owned.cancels.push(handle.cancel_token().clone());
+            let result = tokio::time::timeout(LIMIT, handle.collect())
+                .await
+                .map_err(|_| "HTTP_TRIAL_WORKFLOW_COLLECT_EXPIRED")?;
+            if id == 42 {
+                assert_eq!(result.outputs?["id"], json!(42));
+            } else {
+                let error = result.outputs.expect_err("receive criterion must fail");
+                assert_eq!(error.kind, RuntimeErrorKind::SuccessCriteriaFailed);
+            }
+            // Observe after terminal collection, including a bounded window for late traffic.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            owned.http.as_mut().expect("HTTP fixture").close()?;
+            let actual = requests.lock().expect("HTTP requests").clone();
+            if id == 42 {
+                assert_eq!(actual, vec![("GET".into(), "/events/42".into())]);
+            } else {
+                assert!(actual.is_empty(), "unexpected HTTP requests: {actual:?}");
+            }
+            assert_clean(&trial);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
+async fn nats_transport_trial_live_receive_http_success() -> TestResult {
+    receive_http_case(42).await
+}
+
+#[tokio::test]
+#[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
+async fn nats_transport_trial_live_receive_http_criterion_failure() -> TestResult {
+    receive_http_case(0).await
+}
+
+#[tokio::test]
+#[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
+async fn nats_transport_trial_live_receive_http_failure_cleanup() -> TestResult {
+    let captured = Arc::new(Mutex::new(None));
+    let output = Arc::clone(&captured);
+    let result = run_live(move |owned| {
+        Box::pin(async move {
+            let http = HttpFixture::new()?;
+            let address = http.address.clone();
+            owned.http = Some(http);
+            let publisher = owned.client().await?;
+            let doc = receive_http_docs(&owned.fixture, &address)?;
+            let (_, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
+            *output.lock().expect("capture") = Some((address, publisher, trial));
+            Err("HTTP_TRIAL_INJECTED_FAILURE".into())
+        })
+    })
+    .await;
+    assert_eq!(
+        result.expect_err("injected body failure").to_string(),
+        "HTTP_TRIAL_INJECTED_FAILURE"
+    );
+    let (address, publisher, trial) = captured
+        .lock()
+        .expect("capture")
+        .take()
+        .expect("resources captured");
+    let _listener = TcpListener::bind(address)?;
+    assert!(publisher.closed.load(Ordering::SeqCst));
+    assert!(trial.closed());
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -1028,7 +1323,7 @@ async fn nats_transport_trial_live_terminal_server_loss() -> TestResult {
 #[ignore = "requires explicit NATS_SERVER_BIN pointing to pinned nats-server v2.15.0"]
 async fn nats_transport_trial_live_changed_receive_route_rejects_old_reply() -> TestResult {
     for change_step_id in [false, true] {
-        run_live(move |owned| {
+        run_live_monitored(move |owned| {
             Box::pin(async move {
                 let doc = owned.fixture.write_docs(false)?;
                 let probe = owned.client().await?;
@@ -1037,6 +1332,7 @@ async fn nats_transport_trial_live_changed_receive_route_rejects_old_reply() -> 
                 let mut forward =
                     ready_subscription(&probe, owned.fixture.subject("forward")).await?;
                 let (mut engine, trial) = owned.attach(&doc, "exchange", false, LIMIT).await?;
+                wait_monitor_subject(&owned.fixture).await?;
 
                 // The registered old reply genuinely crossed NATS into the fixed inbox.
                 let mut headers = async_nats::HeaderMap::new();
