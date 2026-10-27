@@ -120,10 +120,12 @@ decisions below rather than being hidden by them:
   whole fetch) and duplicate names collapse to the last value before the
   runtime sees them (D2).
 - Retries use `BackoffConfig { deadline: Option<Duration> }` with no deadline
-  by default, and a cancelled in-flight write is finished by a detached task
-  (`messenger.rs`, `CancellationSafeFuture`). D8 therefore sets an explicit
-  preparation deadline and states the cleanup bound honestly: connections
-  close when the client is dropped, after any in-flight write completes.
+  by default; the deadline only stops further retries once accumulated backoff
+  exceeds it and does not bound an in-flight request or throttle wait, so the
+  runtime's own outer timeout around preparation is load-bearing. A cancelled
+  in-flight write is finished by a detached task (`messenger.rs`,
+  `CancellationSafeFuture`). D8 therefore sets an explicit preparation
+  deadline and states the cleanup bound honestly.
 
 ## 3. Broker pin
 
@@ -148,8 +150,8 @@ pointer) or `operationId: $sourceDescriptions.<name>.<operationId>` where the
 named Operation Object has `action: receive` and
 `channel: {$ref: '#/channels/<key>'}`; the operationId form is included because
 the specification says it SHOULD be preferred. Arazzo `action` must be
-`receive`, and for the operationId form it must agree with the operation's own
-`action`. The Operation Object's other executable fields are admitted only in
+present and `receive` (an AsyncAPI step without `action` is refused), and for
+the operationId form it must agree with the operation's own `action`. The Operation Object's other executable fields are admitted only in
 the forms this runtime can honour: `security` on the operation is refused when
 present (AsyncAPI requires it to be satisfied *in addition to* server security,
 and one SASL identity cannot satisfy two lists; connection-level security is
@@ -264,7 +266,10 @@ Cursors are owned by the invocation (the execution context), never by the
 the first arming of a key sets its start and every later arming — a
 sub-workflow entering, a `goto` re-entering the workflow, a retry — reuses the
 same cursor, so a second receive step on the topic gets the *next* unconsumed
-message in offset order per partition, first-arrived across partitions. Under
+message in offset order per partition; partitions are polled round-robin and
+no ordering across partitions is promised. A cursor whose offset the broker
+has since trimmed (retention) fails the attempt with
+`RUNTIME_MESSAGE_TRANSPORT`; the runtime never re-seeks on its own. Under
 `--parallel`, concurrent receive steps on one key are serialized by the
 cursor's lock and receive distinct messages in lock-acquisition order, which
 the docs state is unspecified between them. Operation bindings
