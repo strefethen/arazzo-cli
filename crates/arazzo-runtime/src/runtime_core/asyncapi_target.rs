@@ -1,5 +1,8 @@
-//! Local AsyncAPI channel projection for a future execution integration.
-//! This module does not create a transport or participate in engine build.
+//! Local AsyncAPI channel projection shared by every consumer that needs a
+//! Channel Object from a local document: the test-only exchange trials (send
+//! and receive) and the production receive admission in `asyncapi_receive`.
+//! This module does not create a transport or participate in engine build,
+//! and it carries no receive-only rule.
 
 use std::path::Path;
 
@@ -60,6 +63,23 @@ pub(super) struct ResolvedChannelTarget {
     pub(super) action: StepAction,
     pub(super) address: Option<String>,
     pub(super) channel: Yaml,
+    /// The whole parsed document, so a consumer can read `servers`,
+    /// `operations`, `components`, and `defaultContentType` without
+    /// re-reading the file.
+    pub(super) root: Yaml,
+}
+
+/// A loaded local AsyncAPI 3.0.x document: its root mapping and the label
+/// used in diagnostics (the file path).
+pub(super) struct LoadedAsyncApi {
+    pub(super) root: Yaml,
+    pub(super) label: String,
+}
+
+/// A Channel Object taken from a loaded document.
+pub(super) struct ResolvedChannel {
+    pub(super) channel: Yaml,
+    pub(super) address: Option<String>,
 }
 
 /// Resolve one canonical channelPath against its explicitly named local file.
@@ -104,6 +124,76 @@ pub(super) fn resolve_local_channel(
             ));
         }
     };
+    let (pointer, tokens) = pointer_tokens(encoded_pointer, target, source_name)?;
+    let [channels, channel_key] = tokens.as_slice() else {
+        return Err(ResolveError::new(
+            ResolveErrorKind::UnsupportedCapability,
+            target,
+            Some(source_name),
+            None,
+            "only a direct /channels/<key> pointer is supported",
+        ));
+    };
+    if channels != "channels" || channel_key.is_empty() {
+        return Err(ResolveError::new(
+            ResolveErrorKind::UnsupportedCapability,
+            target,
+            Some(source_name),
+            None,
+            "only a direct /channels/<key> pointer is supported",
+        ));
+    }
+
+    let loaded = load_local_asyncapi(spec, source_name, target, retrieval_dir)?;
+    let resolved = channel_from_root(&loaded, channel_key, target, source_name)?;
+    Ok(ResolvedChannelTarget {
+        source_name: source_name.to_string(),
+        document: loaded.label,
+        channel_key: channel_key.clone(),
+        channel_pointer: pointer,
+        action,
+        address: resolved.address,
+        channel: resolved.channel,
+        root: loaded.root,
+    })
+}
+
+/// Decodes the percent-encoded, RFC 6901 pointer the shared classifier
+/// already checked: returns the decoded pointer (tokens still escaped, as
+/// the document author wrote it) and its unescaped tokens.
+fn pointer_tokens(
+    encoded_pointer: &str,
+    target: &str,
+    source_name: &str,
+) -> Result<(String, Vec<String>), ResolveError> {
+    let pointer = percent_encoding::percent_decode_str(encoded_pointer)
+        .decode_utf8()
+        .map_err(|err| {
+            ResolveError::new(
+                ResolveErrorKind::InvalidTarget,
+                target,
+                Some(source_name),
+                None,
+                err.to_string(),
+            )
+        })?;
+    let tokens = pointer
+        .strip_prefix('/')
+        .into_iter()
+        .flat_map(|rest| rest.split('/'))
+        .map(|token| token.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    Ok((pointer.into_owned(), tokens))
+}
+
+/// Binds the named `asyncapi` source description to its local file and
+/// parses it as an AsyncAPI 3.0.x document.
+pub(super) fn load_local_asyncapi(
+    spec: &ArazzoSpec,
+    source_name: &str,
+    target: &str,
+    retrieval_dir: Option<&Path>,
+) -> Result<LoadedAsyncApi, ResolveError> {
     let mut sources = spec
         .source_descriptions
         .iter()
@@ -124,44 +214,6 @@ pub(super) fn resolve_local_channel(
             Some(source_name),
             None,
             "source must be one unambiguous asyncapi declaration with a URL",
-        ));
-    }
-
-    // The shared classifier checked percent escapes, UTF-8, and RFC 6901
-    // escaping. Decode the fragment once, then unescape each pointer token.
-    let pointer = percent_encoding::percent_decode_str(encoded_pointer)
-        .decode_utf8()
-        .map_err(|err| {
-            ResolveError::new(
-                ResolveErrorKind::InvalidTarget,
-                target,
-                Some(source_name),
-                None,
-                err.to_string(),
-            )
-        })?;
-    let tokens: Vec<String> = pointer
-        .strip_prefix('/')
-        .into_iter()
-        .flat_map(|rest| rest.split('/'))
-        .map(|token| token.replace("~1", "/").replace("~0", "~"))
-        .collect();
-    let [channels, channel_key] = tokens.as_slice() else {
-        return Err(ResolveError::new(
-            ResolveErrorKind::UnsupportedCapability,
-            target,
-            Some(source_name),
-            None,
-            "only a direct /channels/<key> pointer is supported",
-        ));
-    };
-    if channels != "channels" || channel_key.is_empty() {
-        return Err(ResolveError::new(
-            ResolveErrorKind::UnsupportedCapability,
-            target,
-            Some(source_name),
-            None,
-            "only a direct /channels/<key> pointer is supported",
         ));
     }
 
@@ -196,13 +248,13 @@ pub(super) fn resolve_local_channel(
         };
         ResolveError::new(kind, target, Some(source_name), location.as_deref(), detail)
     })?;
-    let document_label = document.label;
+    let label = document.label;
     let root: Yaml = serde_yaml_ng::from_slice(&document.data).map_err(|err| {
         ResolveError::new(
             ResolveErrorKind::InvalidDocument,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(&label),
             format!("malformed JSON/YAML: {err}"),
         )
     })?;
@@ -211,7 +263,7 @@ pub(super) fn resolve_local_channel(
             ResolveErrorKind::InvalidDocument,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(&label),
             "AsyncAPI document root must be a mapping",
         ));
     }
@@ -220,7 +272,7 @@ pub(super) fn resolve_local_channel(
             ResolveErrorKind::InvalidDocument,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(&label),
             "AsyncAPI version string is missing or invalid",
         )
     })?;
@@ -230,7 +282,7 @@ pub(super) fn resolve_local_channel(
                 ResolveErrorKind::InvalidDocument,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(&label),
                 format!("malformed AsyncAPI version string {version}"),
             ));
         }
@@ -239,19 +291,32 @@ pub(super) fn resolve_local_channel(
                 ResolveErrorKind::UnsupportedCapability,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(&label),
                 format!("AsyncAPI version {version} is outside supported 3.0.x"),
             ));
         }
         Some(true) => {}
     }
-    let channels = match root.get("channels") {
+    Ok(LoadedAsyncApi { root, label })
+}
+
+/// Selects `channels.<key>` from a loaded document and checks it is a direct
+/// Channel Object (no `$ref`, only Channel Object fields) with a string or
+/// null `address`.
+pub(super) fn channel_from_root(
+    loaded: &LoadedAsyncApi,
+    channel_key: &str,
+    target: &str,
+    source_name: &str,
+) -> Result<ResolvedChannel, ResolveError> {
+    let label = loaded.label.as_str();
+    let channels = match loaded.root.get("channels") {
         None => {
             return Err(ResolveError::new(
                 ResolveErrorKind::MissingChannel,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(label),
                 "document has no channels map",
             ));
         }
@@ -260,19 +325,19 @@ pub(super) fn resolve_local_channel(
                 ResolveErrorKind::InvalidDocument,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(label),
                 "channels must be a mapping",
             )
         })?,
     };
     let channel = channels
-        .get(Yaml::String(channel_key.clone()))
+        .get(Yaml::String(channel_key.to_string()))
         .ok_or_else(|| {
             ResolveError::new(
                 ResolveErrorKind::MissingChannel,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(label),
                 format!("channel key {channel_key:?} is absent"),
             )
         })?;
@@ -281,7 +346,7 @@ pub(super) fn resolve_local_channel(
             ResolveErrorKind::InvalidDocument,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(label),
             "selected channel must be a Channel Object mapping",
         )
     })?;
@@ -290,7 +355,7 @@ pub(super) fn resolve_local_channel(
             ResolveErrorKind::UnsupportedCapability,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(label),
             "channel Reference Objects are not resolved",
         ));
     }
@@ -315,7 +380,7 @@ pub(super) fn resolve_local_channel(
             ResolveErrorKind::InvalidDocument,
             target,
             Some(source_name),
-            Some(&document_label),
+            Some(label),
             "selected mapping has fields outside a direct Channel Object",
         ));
     }
@@ -327,19 +392,14 @@ pub(super) fn resolve_local_channel(
                 ResolveErrorKind::InvalidDocument,
                 target,
                 Some(source_name),
-                Some(&document_label),
+                Some(label),
                 "channel address must be a string or null",
             ));
         }
     };
-    Ok(ResolvedChannelTarget {
-        source_name: source_name.to_string(),
-        document: document_label,
-        channel_key: channel_key.clone(),
-        channel_pointer: pointer.into_owned(),
-        action,
-        address,
+    Ok(ResolvedChannel {
         channel: channel.clone(),
+        address,
     })
 }
 

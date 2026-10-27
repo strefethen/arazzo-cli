@@ -30,6 +30,13 @@ pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 #[allow(
     dead_code,
+    reason = "receive admission awaits engine integration (plan arazzo-kafka-receive)"
+)]
+mod asyncapi_receive;
+#[cfg(test)]
+mod asyncapi_receive_tests;
+#[allow(
+    dead_code,
     reason = "private AsyncAPI target seam awaits engine integration"
 )]
 mod asyncapi_target;

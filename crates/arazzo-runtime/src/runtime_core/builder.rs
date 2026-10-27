@@ -255,10 +255,12 @@ impl EngineBuilder {
     }
 }
 
-/// Local files a build will read for `type: openapi` source descriptions,
-/// paired with their source names. Callers that gate filesystem access (e.g.
-/// the MCP server) can vet these paths before building an engine with
-/// [`EngineBuilder::source_base_dir`].
+/// Local files the engine will read for `type: openapi` source descriptions
+/// (at build) and `type: asyncapi` source descriptions (when a receive step
+/// is armed), paired with their source names. Callers that gate filesystem
+/// access (e.g. the MCP server) can vet these paths before building an engine
+/// with [`EngineBuilder::source_base_dir`]; the name predates AsyncAPI
+/// support and is kept for its consumers.
 ///
 /// Each url is resolved the way the build resolves it — against the Arazzo
 /// document's `$self` when it declares an absolute one, otherwise against

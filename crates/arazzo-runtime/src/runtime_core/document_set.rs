@@ -302,13 +302,16 @@ impl DocumentSet {
     }
 }
 
-/// The local files a build will read, keyed by source name.
+/// The local files a build or a run will read, keyed by source name: every
+/// `openapi` source (bound at engine build) and every `asyncapi` source
+/// (bound when a receive step is armed).
 ///
 /// Callers that gate filesystem access (the MCP server) vet these before
-/// building an engine. Identity binding only ever removes a read — a source
-/// whose reference matches a provided document reads nothing — so this list
-/// covers every read the engine can perform, and covers it exactly whenever no
-/// documents are provided, which is the MCP server's case.
+/// building an engine, and `--export-run` refuses to overwrite them. Identity
+/// binding only ever removes a read — a source whose reference matches a
+/// provided document reads nothing — so this list covers every read the
+/// engine can perform, and covers it exactly whenever no documents are
+/// provided, which is the MCP server's case.
 pub(super) fn local_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(base) = directory_uri(base_dir) else {
         return Vec::new();
@@ -316,7 +319,9 @@ pub(super) fn local_source_paths(spec: &ArazzoSpec, base_dir: &Path) -> Vec<(Str
     let base = base_uri(spec.self_uri.as_deref(), Some(base));
     spec.source_descriptions
         .iter()
-        .filter(|sd| sd.type_ == SourceType::OpenApi && !sd.url.is_empty())
+        .filter(|sd| {
+            matches!(sd.type_, SourceType::OpenApi | SourceType::AsyncApi) && !sd.url.is_empty()
+        })
         .filter_map(|sd| {
             let resolved = match Url::parse(&sd.url) {
                 Ok(absolute) => absolute,

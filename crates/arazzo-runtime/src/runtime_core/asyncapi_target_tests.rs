@@ -457,3 +457,31 @@ fn ordinary_engine_build_does_not_read_an_asyncapi_declaration() {
         .build()
         .expect("engine skips absent AsyncAPI source");
 }
+
+#[test]
+fn resolved_target_carries_the_parsed_document_root() {
+    let dir = FixtureDir::new();
+    dir.write(
+        "events.yaml",
+        "asyncapi: 3.0.0\nservers:\n  local:\n    host: broker:9092\n    protocol: kafka\nchannels:\n  orders:\n    address: orders.placed\n",
+    );
+    let (spec, step) = fixture(
+        "events.yaml",
+        "asyncapi",
+        &target("/channels/orders"),
+        Some("receive"),
+        None,
+    );
+    let selected = resolve(&spec, &step, Some(dir.path())).expect("resolve channel");
+    assert_eq!(selected.channel_pointer, "/channels/orders");
+    assert_eq!(
+        selected
+            .root
+            .get("servers")
+            .and_then(|servers| servers.get("local"))
+            .and_then(|server| server.get("host"))
+            .and_then(serde_yaml_ng::Value::as_str),
+        Some("broker:9092"),
+        "consumers read servers from the root without re-reading the file"
+    );
+}
