@@ -19,8 +19,10 @@ set -eu
 OPENAPI_DOCS='arazzo/v1.1.0.html
 arazzo/v1.0.1.html
 oas/v3.2.0.html'
-ASYNCAPI_DOC=asyncapi/v3.0.0.html
-ASYNCAPI_URL=https://www.asyncapi.com/docs/reference/specification/v3.0.0
+# Use the official release source, pinned to the v3.0.0 tag's commit. The
+# rendered website includes deployment-specific assets and is not byte-stable.
+ASYNCAPI_DOC=asyncapi/v3.0.0.md
+ASYNCAPI_URL=https://raw.githubusercontent.com/asyncapi/spec/d78dcea70c9b094a3df72f9a4e811828cec778cc/spec/asyncapi.md
 
 sha256() {
     if command -v shasum >/dev/null 2>&1; then

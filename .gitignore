@@ -61,5 +61,6 @@ god-files.md
 /vscode-arazzo-debug/*.vsix
 /vscode-arazzo-debug/.vscode-test/
 .tickets/
-# Vendored spec HTML is fetched, never tracked: ./spec/fetch.sh (CI runs it too)
+# Vendored specifications are fetched, never tracked: ./spec/fetch.sh
 /spec/**/*.html
+/spec/asyncapi/v3.0.0.md

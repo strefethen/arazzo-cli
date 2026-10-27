@@ -8,7 +8,7 @@ implements against, fetched from their publishers.
 | `arazzo/v1.1.0.html` | Arazzo Specification v1.1.0 | The version this project implements. The sole authority on document shape, field meaning, and the expression and `successCriteria` grammars. |
 | `arazzo/v1.0.1.html` | Arazzo Specification v1.0.1 | Needed to settle "was this construct in 1.0.x?" questions, which drive the version-gating diagnostics in `arazzo-validate`. |
 | `oas/v3.2.0.html` | OpenAPI Specification v3.2.0 | Arazzo 1.1.0 defers to it by reference — e.g. the Parameter Object's `querystring` rules are stated as "per OpenAPI constraints", and the constraints themselves live here. |
-| `asyncapi/v3.0.0.html` | AsyncAPI Specification v3.0.0 | Defines the channel shape and address meaning for local AsyncAPI source resolution. |
+| `asyncapi/v3.0.0.md` | AsyncAPI Specification v3.0.0 | Official Markdown source at the release tag's immutable commit. Defines the channel shape and address meaning for local AsyncAPI source resolution. |
 
 ## These are citable; the rest of the repo is not
 
@@ -24,8 +24,8 @@ the file and copy the sentence.
 
 ## Reading them
 
-The files are HTML. `grep` works for locating a phrase, but quoting wants the
-prose without tags:
+The OpenAPI Initiative files are HTML; AsyncAPI is Markdown. `grep` works for
+locating a phrase, but quoting HTML wants the prose without tags:
 
 ```bash
 grep -n 'cannot coexist with' spec/arazzo/v1.1.0.html
@@ -41,7 +41,7 @@ print(html.unescape(re.sub(r"\s+"," ",re.sub(r"<[^>]+>","",h[i-1400:i+200]))))'
 
 ## Not tracked: fetch after cloning
 
-The HTML files are gitignored (`/spec/**/*.html`); only this README,
+The downloaded HTML and AsyncAPI Markdown files are gitignored; only this README,
 `fetch.sh`, and `SHA256SUMS` are committed. Run this once per clone or
 worktree before `cargo test`:
 
@@ -72,13 +72,14 @@ To confirm the working copies are still the documents that were fetched:
 ```
 
 A `--verify` failure means a file was edited or truncated. A plain run that
-moves a checksum means the OpenAPI Initiative republished that document — read
+moves a checksum means a publisher changed that document — read
 the diff before committing it, because a republished spec can silently change
 what this project is measured against.
 
 Adding a document means adding its path and publisher URL to `spec/fetch.sh`,
 re-running the script, and adding a row to the table above. OpenAPI Initiative
-documents use `spec.openapis.org`; AsyncAPI 3.0.0 uses the explicit AsyncAPI URL.
+documents use `spec.openapis.org`; AsyncAPI 3.0.0 uses its official source URL
+pinned to commit `d78dcea70c9b094a3df72f9a4e811828cec778cc` (the `v3.0.0` tag).
 
 ## Provenance and license
 
@@ -99,3 +100,12 @@ AsyncAPI 3.0.0 was fetched 2026-10-19 from
 `0ce8b14bc28fa68caaf439ac31352061392f63a2dcc71cc84e9af94311dc4a65`.
 Its published page is also reproduced verbatim and remains copyright of its
 authors under the license stated in that document.
+
+On 2026-10-27, AsyncAPI fetching switched to the unmodified official Markdown
+source at
+`https://raw.githubusercontent.com/asyncapi/spec/d78dcea70c9b094a3df72f9a4e811828cec778cc/spec/asyncapi.md`.
+The rendered website's HTML checksum changed between fetches; pinning the
+release source avoids website deployment churn while retaining exact-byte
+verification. Existing local `asyncapi/v3.0.0.html` copies are historical;
+use `asyncapi/v3.0.0.md` for current citations. The source identifies version
+3.0.0 and carries the Apache License, Version 2.0.
