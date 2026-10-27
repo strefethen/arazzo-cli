@@ -1,0 +1,11 @@
+   Compiling serde_json_path_core v0.2.2 (/private/tmp/arazzo-kafka-verify/vendor/serde_json_path_core)
+   Compiling arazzo-expr v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-expr)
+   Compiling arazzo-spec v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-spec)
+   Compiling serde_json_path_macros v0.1.6
+   Compiling serde_json_path v0.7.2
+   Compiling arazzo-generate v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-generate)
+   Compiling arazzo-runtime v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-runtime)
+   Compiling arazzo-validate v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-validate)
+   Compiling arazzo-mcp v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-mcp)
+   Compiling arazzo-cli v0.8.2 (/private/tmp/arazzo-kafka-verify/crates/arazzo-cli)
+    Finished `release` profile [optimized] target(s) in 1m 11s

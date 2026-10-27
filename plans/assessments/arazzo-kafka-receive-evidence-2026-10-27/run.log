@@ -1,0 +1,48 @@
+Preparing worktree (detached HEAD 49a6578)
+HEAD is now at 49a6578 docs: document Kafka receive and ship a runnable example
+fetching https://spec.openapis.org/arazzo/v1.1.0.html
+fetching https://spec.openapis.org/arazzo/v1.0.1.html
+fetching https://spec.openapis.org/oas/v3.2.0.html
+fetching https://raw.githubusercontent.com/asyncapi/spec/d78dcea70c9b094a3df72f9a4e811828cec778cc/spec/asyncapi.md
+arazzo/v1.1.0.html: OK
+arazzo/v1.0.1.html: OK
+oas/v3.2.0.html: OK
+asyncapi/v3.0.0.md: OK
+23:06:11 spec fetch exit 0
+23:07:22 release build exit 0
+arazzo 0.8.2
+orders.placed
+23:07:25 order-server pid 11018
+23:07:25 connections baseline 0
+23:07:25 == arrival ==
+23:07:25 arrival: armed after ~0 s
+23:07:27 arrival: produced
+23:07:27 arrival: exit 0 code success gets_during 1
+23:07:30 arrival: groups=[] connections=0 (baseline 0)
+23:07:30 == arrival-text ==
+23:07:30 arrival-text: armed after ~0 s
+23:07:31 arrival-text: produced
+23:07:31 arrival-text: exit 0 code (text) gets_during 1
+23:07:33 arrival-text: groups=[] connections=0 (baseline 0)
+23:07:33 == criterion-failure ==
+23:07:34 criterion-failure: armed after ~0 s
+23:07:35 criterion-failure: produced
+23:07:35 criterion-failure: exit 1 code RUNTIME_SUCCESS_CRITERIA_FAILED gets_during 0
+23:07:38 criterion-failure: groups=[] connections=0 (baseline 0)
+23:07:38 == step-timeout ==
+23:07:38 step-timeout: armed after ~0 s
+23:08:08 step-timeout: exit 1 code RUNTIME_MESSAGE_RECEIVE_TIMEOUT gets_during 0
+23:08:10 step-timeout: groups=[] connections=0 (baseline 0)
+23:08:10 == execution-timeout ==
+23:08:11 execution-timeout: armed after ~0 s
+23:08:16 execution-timeout: exit 1 code RUNTIME_EXECUTION_TIMEOUT gets_during 0
+23:08:18 execution-timeout: groups=[] connections=0 (baseline 0)
+23:08:18 == secure-scram-tls ==
+23:08:18 secure-scram-tls: armed after ~0 s
+23:08:20 secure-scram-tls: produced
+23:08:20 secure-scram-tls: exit 0 code success gets_during 1
+23:08:22 secure-scram-tls: groups=[] connections=0 (baseline 0)
+23:08:22 secret grep clean
+23:08:24 broker down exit 0
+23:08:24 worktree removed exit 0
+23:08:24 done 49a6578c432c9fcd03be1c9f975ba1e400de74cd

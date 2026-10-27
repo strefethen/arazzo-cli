@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "0.8.2"
+  },
+  "run": {
+    "specPath": "/tmp/arazzo-kafka-verify/examples/kafka-order-followup.arazzo.yaml",
+    "workflowId": "order-followup",
+    "parallel": false,
+    "dryRun": false,
+    "timeoutMs": 300000,
+    "startedAt": "2026-10-27T23:07:38.183397000Z",
+    "finishedAt": "2026-10-27T23:08:08.191432000Z",
+    "durationMs": 30007,
+    "status": "failure",
+    "error": "step await-order: step \"await-order\": no message arrived on topic \"orders.placed\" of Kafka broker 127.0.0.1:19092 within the step timeout of 30000 ms"
+  },
+  "inputs": {},
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "order-followup",
+      "stepId": "await-order",
+      "attempt": 1,
+      "kind": "asyncapi",
+      "operationPath": "$sourceDescriptions.orders.receiveOrderPlaced",
+      "durationMs": 30000,
+      "decision": {
+        "path": "error"
+      },
+      "error": "step await-order: step \"await-order\": no message arrived on topic \"orders.placed\" of Kafka broker 127.0.0.1:19092 within the step timeout of 30000 ms"
+    }
+  ]
+}

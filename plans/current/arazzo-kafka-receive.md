@@ -280,3 +280,19 @@ plan introduces one runtime module and widens the engine's published surface
 additively, both named in the mandate's outcomes). Independent review: two
 rounds by Astra, recorded in assessment §8; the review budget is spent.
 Decomposed into Tier 2 tickets under the same epic — see the epic's members.
+
+**Evidence (2026-10-27):** the system success condition was observed on the
+final candidate — engine `38ed5fe`, CLI `288d7c2`, docs/example `49a6578` —
+with the release-profile binary built from a clean worktree of `49a6578`
+against the pinned broker; transcripts, exit codes, trace files, and the
+consumer-group and connection listings are in
+[`plans/assessments/arazzo-kafka-receive-evidence-2026-10-27/`](../assessments/arazzo-kafka-receive-evidence-2026-10-27/README.md).
+Rollback is `git revert` of the initiative's commits, which are contiguous
+on `main` from the plan acceptance `e87fecf` through the evidence commit that
+follows `49a6578`: plan and decision record (`e87fecf`, `6fe85aa`, `4e0fc47`),
+client, harness and CI job (`83bee8e`, `5c50623`, `36ae159`), admission and
+local-source inventory (`2d86cc4`, `5a57318`, `a8d973c`, `baeb9c5`) with the
+AsyncAPI spec-pin fix `99e7096`, engine (`e59d7b5`, `38b9a00`, `57678ba`,
+`38ed5fe`), CLI (`e53b9ad`, `288d7c2`), and docs (`49a6578` plus the evidence
+commit). Revert the range newest-first; no persisted format changes shape, and
+the trace `message` field is optional.

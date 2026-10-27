@@ -1,0 +1,7 @@
+{
+  "kind": "success",
+  "outputs": {
+    "orderId": 7,
+    "status": "placed"
+  }
+}

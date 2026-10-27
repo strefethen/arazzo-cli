@@ -1,0 +1,5 @@
+{
+  "kind": "error",
+  "error": "step await-order: success criteria not met",
+  "code": "RUNTIME_SUCCESS_CRITERIA_FAILED"
+}

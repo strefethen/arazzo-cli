@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "0.8.2"
+  },
+  "run": {
+    "specPath": "/tmp/arazzo-kafka-verify/examples/kafka-order-followup.arazzo.yaml",
+    "workflowId": "order-followup",
+    "parallel": false,
+    "dryRun": false,
+    "timeoutMs": 300000,
+    "startedAt": "2026-10-27T23:07:33.930130000Z",
+    "finishedAt": "2026-10-27T23:07:35.026776000Z",
+    "durationMs": 1096,
+    "status": "failure",
+    "error": "step await-order: success criteria not met"
+  },
+  "inputs": {},
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "order-followup",
+      "stepId": "await-order",
+      "attempt": 1,
+      "kind": "asyncapi",
+      "operationPath": "$sourceDescriptions.orders.receiveOrderPlaced",
+      "durationMs": 1090,
+      "criteria": [
+        {
+          "index": 0,
+          "type": "simple",
+          "condition": "$message.payload#/status == 'placed'",
+          "result": false
+        }
+      ],
+      "decision": {
+        "path": "error"
+      },
+      "error": "step await-order: success criteria not met",
+      "message": {
+        "transport": "kafka",
+        "host": "127.0.0.1:19092",
+        "topic": "orders.placed",
+        "partition": 0,
+        "offset": 2,
+        "timestampMs": 1793142454998,
+        "headers": {
+          "source": "demo"
+        },
+        "payloadBytes": 34,
+        "payloadPreview": "{\"orderId\":0,\"status\":\"cancelled\"}",
+        "payload": "{\"orderId\":0,\"status\":\"cancelled\"}"
+      }
+    }
+  ]
+}

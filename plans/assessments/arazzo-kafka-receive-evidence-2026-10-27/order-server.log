@@ -1,0 +1,4 @@
+order-server: listening on http://127.0.0.1:18080
+order-server: GET /orders/42 -> 200
+order-server: GET /orders/43 -> 200
+order-server: GET /orders/7 -> 200

@@ -1,0 +1,3 @@
+Executing workflow: order-followup
+Inputs: {}
+Kafka receiver armed: orders.placed on 127.0.0.1:19092 (1 partitions)

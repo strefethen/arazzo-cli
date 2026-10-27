@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "0.8.2"
+  },
+  "run": {
+    "specPath": "/tmp/kafka-design/secure-scratch-6239/kafka-order-followup.arazzo.yaml",
+    "workflowId": "order-followup",
+    "parallel": false,
+    "dryRun": false,
+    "timeoutMs": 300000,
+    "startedAt": "2026-10-27T23:08:18.566440000Z",
+    "finishedAt": "2026-10-27T23:08:19.679222000Z",
+    "durationMs": 1112,
+    "status": "success"
+  },
+  "inputs": {},
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "order-followup",
+      "stepId": "await-order",
+      "attempt": 1,
+      "kind": "asyncapi",
+      "operationPath": "$sourceDescriptions.orders.receiveOrderPlaced",
+      "durationMs": 965,
+      "criteria": [
+        {
+          "index": 0,
+          "type": "simple",
+          "condition": "$message.payload#/status == 'placed'",
+          "result": true
+        }
+      ],
+      "decision": {
+        "path": "next"
+      },
+      "outputs": {
+        "orderId": 7,
+        "status": "placed"
+      },
+      "message": {
+        "transport": "kafka",
+        "host": "127.0.0.1:19093",
+        "topic": "orders.placed",
+        "partition": 0,
+        "offset": 3,
+        "timestampMs": 1793142499647,
+        "headers": {
+          "source": "demo"
+        },
+        "payloadBytes": 31,
+        "payloadPreview": "{\"orderId\":7,\"status\":\"placed\"}",
+        "payload": "{\"orderId\":7,\"status\":\"placed\"}"
+      }
+    },
+    {
+      "seq": 2,
+      "workflowId": "order-followup",
+      "stepId": "fetch-order",
+      "attempt": 1,
+      "kind": "http",
+      "operationPath": "$sourceDescriptions.shop.getOrder",
+      "durationMs": 0,
+      "request": {
+        "method": "GET",
+        "url": "http://127.0.0.1:18080/orders/7"
+      },
+      "response": {
+        "statusCode": 200,
+        "contentType": "json",
+        "headers": {
+          "content-length": "34",
+          "content-type": "application/json",
+          "date": "Tue, 27 Oct 2026 23:08:19 GMT",
+          "server": "BaseHTTP/0.6 Python/3.14.9"
+        },
+        "bodyBytes": 34,
+        "bodyPreview": "{\"orderId\":7,\"status\":\"placed\"}",
+        "body": "{\"orderId\":7,\"status\":\"placed\"}"
+      },
+      "criteria": [
+        {
+          "index": 0,
+          "type": "simple",
+          "condition": "$statusCode == 200",
+          "result": true
+        }
+      ],
+      "decision": {
+        "path": "next"
+      }
+    }
+  ]
+}

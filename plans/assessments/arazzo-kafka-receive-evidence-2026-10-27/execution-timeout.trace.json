@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "trace.v1",
+  "tool": {
+    "name": "arazzo",
+    "version": "0.8.2"
+  },
+  "run": {
+    "specPath": "/tmp/arazzo-kafka-verify/examples/kafka-order-followup.arazzo.yaml",
+    "workflowId": "order-followup",
+    "parallel": false,
+    "dryRun": false,
+    "timeoutMs": 5000,
+    "startedAt": "2026-10-27T23:08:10.900214000Z",
+    "finishedAt": "2026-10-27T23:08:15.901897000Z",
+    "durationMs": 5001,
+    "status": "failure",
+    "error": "execution timeout exceeded"
+  },
+  "inputs": {},
+  "steps": [
+    {
+      "seq": 1,
+      "workflowId": "order-followup",
+      "stepId": "await-order",
+      "attempt": 1,
+      "kind": "asyncapi",
+      "operationPath": "$sourceDescriptions.orders.receiveOrderPlaced",
+      "durationMs": 4996,
+      "decision": {
+        "path": "error"
+      },
+      "error": "execution timeout exceeded"
+    }
+  ]
+}
