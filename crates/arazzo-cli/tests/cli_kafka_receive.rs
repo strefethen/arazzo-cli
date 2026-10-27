@@ -17,10 +17,10 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -31,6 +31,9 @@ const PASSWORD_LITERAL: &str = "s3cret-value-never-printed";
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
+/// A private directory holding one case's documents. Every CLI process runs
+/// from here: the directory has no `.env`, so the binary's automatic `.env`
+/// loading cannot feed a developer's Kafka credentials into a case.
 struct Fixture {
     dir: PathBuf,
 }
@@ -94,6 +97,34 @@ impl Fixture {
             ),
         )
     }
+
+    /// The CLI, run from this directory with every Kafka environment variable
+    /// cleared: neither a developer's shell nor a `.env` can leak into a case.
+    fn cli(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"));
+        command
+            .current_dir(&self.dir)
+            .env_remove(USERNAME_ENV)
+            .env_remove(PASSWORD_ENV);
+        command
+    }
+
+    fn run_json(&self, args: &[&str], envs: &[(&str, &str)]) -> (Output, Value) {
+        let mut command = self.cli();
+        command.arg("--json").args(args);
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let output = command.output().expect("execute CLI");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let value = serde_json::from_str::<Value>(stdout.trim()).unwrap_or_else(|err| {
+            panic!(
+                "stdout is not one JSON object ({err}): {stdout}\nstderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        (output, value)
+    }
 }
 
 impl Drop for Fixture {
@@ -104,32 +135,9 @@ impl Drop for Fixture {
 
 const RECEIVE_THEN_HTTP: &str = "  - workflowId: followup\n    steps:\n      - stepId: await-order\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        successCriteria:\n          - condition: $message.payload#/id > 0\n        outputs:\n          id: $message.payload#/id\n      - stepId: fetch-event\n        operationId: $sourceDescriptions.shop.getEvent\n        dependsOn: [await-order]\n        parameters:\n          - name: id\n            in: path\n            value: $steps.await-order.outputs.id\n        successCriteria:\n          - condition: $statusCode == 200\n    outputs:\n      orderId: $steps.await-order.outputs.id\n";
 
-const RECEIVE_WITH_STEP_TIMEOUT: &str = "  - workflowId: followup\n    steps:\n      - stepId: await-order\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        timeout: 1500\n        outputs:\n          id: $message.payload#/id\n";
-
-/// The CLI with every Kafka environment variable cleared, so a developer's
-/// shell cannot leak into the hermetic cases.
-fn cli() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"));
-    command.env_remove(USERNAME_ENV).env_remove(PASSWORD_ENV);
-    command
-}
-
-fn run_json(args: &[&str], envs: &[(&str, &str)]) -> (Output, Value) {
-    let mut command = cli();
-    command.arg("--json").args(args);
-    for (key, value) in envs {
-        command.env(key, value);
-    }
-    let output = command.output().expect("execute CLI");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let value = serde_json::from_str::<Value>(stdout.trim()).unwrap_or_else(|err| {
-        panic!(
-            "stdout is not one JSON object ({err}): {stdout}\nstderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
-    (output, value)
-}
+/// The same two steps with a step `timeout` on the receive, so a timed-out
+/// receive has a dependent HTTP step that must not run.
+const RECEIVE_WITH_STEP_TIMEOUT_THEN_HTTP: &str = "  - workflowId: followup\n    steps:\n      - stepId: await-order\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        timeout: 1500\n        outputs:\n          id: $message.payload#/id\n      - stepId: fetch-event\n        operationId: $sourceDescriptions.shop.getEvent\n        dependsOn: [await-order]\n        parameters:\n          - name: id\n            in: path\n            value: $steps.await-order.outputs.id\n    outputs:\n      orderId: $steps.await-order.outputs.id\n";
 
 fn assert_error(value: &Value, code: &str) {
     assert_eq!(value["kind"], "error", "{value}");
@@ -141,8 +149,8 @@ struct HttpServer {
     base_url: String,
     hits: Arc<AtomicUsize>,
     paths: Arc<Mutex<Vec<String>>>,
-    handle: Option<thread::JoinHandle<()>>,
-    stop: Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl HttpServer {
@@ -151,7 +159,7 @@ impl HttpServer {
         let base_url = format!("http://{}", server.server_addr());
         let hits = Arc::new(AtomicUsize::new(0));
         let paths = Arc::new(Mutex::new(Vec::new()));
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
         let (hits_t, paths_t, stop_t) = (Arc::clone(&hits), Arc::clone(&paths), Arc::clone(&stop));
         let handle = thread::spawn(move || {
             while !stop_t.load(Ordering::SeqCst) {
@@ -199,7 +207,7 @@ fn a_dead_broker_fails_with_the_transport_code_within_the_connect_timeout() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let started = Instant::now();
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
@@ -212,7 +220,7 @@ fn a_dead_broker_fails_with_the_transport_code_within_the_connect_timeout() {
     let elapsed = started.elapsed();
     assert!(!output.status.success());
     assert_error(&value, "RUNTIME_MESSAGE_TRANSPORT");
-    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     // `run_json` parsed the whole of stdout as one JSON value, so nothing
     // else (no YAML, no prose) shared the stream.
 }
@@ -224,7 +232,7 @@ fn partial_credentials_are_refused_before_any_connection() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let started = Instant::now();
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
@@ -237,7 +245,7 @@ fn partial_credentials_are_refused_before_any_connection() {
     assert_error(&value, "RUN_KAFKA_CREDENTIALS");
     assert!(value["error"].as_str().unwrap().contains(PASSWORD_ENV));
 
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &["run", spec.to_str().unwrap(), "followup"],
         &[(PASSWORD_ENV, PASSWORD_LITERAL)],
     );
@@ -245,7 +253,7 @@ fn partial_credentials_are_refused_before_any_connection() {
     assert!(!value.to_string().contains(PASSWORD_LITERAL));
 
     // The username may also arrive through its environment variable.
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &["run", spec.to_str().unwrap(), "followup"],
         &[(USERNAME_ENV, "arazzo")],
     );
@@ -263,7 +271,7 @@ fn a_password_flag_is_unknown() {
     fixture.asyncapi("127.0.0.1:1", "orders.placed");
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
@@ -288,12 +296,12 @@ fn asyncapi_server_and_ca_cert_flags_are_validated_first() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let spec = spec.to_str().unwrap();
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &["run", spec, "followup", "--asyncapi-server", "orders"],
         &[],
     );
     assert_error(&value, "RUN_ASYNCAPI_SERVER_FLAG");
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &[
             "run",
             spec,
@@ -308,7 +316,7 @@ fn asyncapi_server_and_ca_cert_flags_are_validated_first() {
     assert_error(&value, "RUN_ASYNCAPI_SERVER_FLAG");
     assert!(value["error"].as_str().unwrap().contains("duplicate"));
     let missing = fixture.path("missing.pem");
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &[
             "run",
             spec,
@@ -328,7 +336,7 @@ fn dry_run_lists_the_receive_without_connecting() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let started = Instant::now();
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &["run", spec.to_str().unwrap(), "followup", "--dry-run"],
         &[],
     );
@@ -340,7 +348,8 @@ fn dry_run_lists_the_receive_without_connecting() {
     assert_eq!(requests[0]["url"], "kafka://127.0.0.1:1/orders.placed");
     assert_eq!(requests[1]["method"], "GET");
 
-    let output = cli()
+    let output = fixture
+        .cli()
         .args(["run", spec.to_str().unwrap(), "followup", "--dry-run"])
         .output()
         .expect("execute CLI");
@@ -360,7 +369,7 @@ fn the_password_never_reaches_any_artefact() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let trace = fixture.path("trace.json");
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
@@ -394,7 +403,7 @@ fn test_reports_the_transport_code_as_a_case_error_and_refuses_partial_credentia
     fixture.arazzo(RECEIVE_THEN_HTTP);
     let dir = fixture.dir.to_str().unwrap().to_string();
     let started = Instant::now();
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &[
             "test",
             &dir,
@@ -412,7 +421,7 @@ fn test_reports_the_transport_code_as_a_case_error_and_refuses_partial_credentia
     assert_eq!(case["status"], "error", "{value}");
     assert_eq!(case["errorCode"], "RUNTIME_MESSAGE_TRANSPORT", "{value}");
 
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &[
             "test",
             &dir,
@@ -424,7 +433,7 @@ fn test_reports_the_transport_code_as_a_case_error_and_refuses_partial_credentia
         &[],
     );
     assert_error(&value, "TEST_KAFKA_CREDENTIALS");
-    let (_, value) = run_json(
+    let (_, value) = fixture.run_json(
         &[
             "test",
             &dir,
@@ -445,7 +454,7 @@ fn replay_refuses_a_trace_containing_a_receive_step() {
     fixture.openapi("http://127.0.0.1:1");
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let trace = fixture.path("dry.trace.json");
-    let (output, _) = run_json(
+    let (output, _) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
@@ -466,7 +475,7 @@ fn replay_refuses_a_trace_containing_a_receive_step() {
             .any(|step| step["message"]["simulated"] == true),
         "the dry-run trace carries the simulated receive record: {recorded}"
     );
-    let (output, value) = run_json(&["replay", trace.to_str().unwrap()], &[]);
+    let (output, value) = fixture.run_json(&["replay", trace.to_str().unwrap()], &[]);
     assert!(!output.status.success());
     assert_error(&value, "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT");
 }
@@ -528,23 +537,51 @@ fn connections() -> usize {
         .expect("connection count")
 }
 
-/// A running `arazzo-cli run`, with stderr followed live so the test can
-/// act on the armed line.
+/// The broker shows no consumer group and no more client connections than
+/// before the run (within the documented five-second cleanup bound).
+fn assert_broker_clean(baseline: usize) {
+    assert!(
+        broker(&["groups"], None).is_empty(),
+        "no consumer group may exist"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let now = connections();
+        if now <= baseline {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "connections did not return to baseline {baseline} (now {now})"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Every produced record carries a header: the console producer behind
+/// `broker.sh produce` rejects an empty header field.
+fn produce(topic: &str, headers: &str, payload: &str) {
+    broker(
+        &["produce", topic],
+        Some(&format!("{headers}\t{payload}\n")),
+    );
+}
+
+/// A running `arazzo-cli run`, with stderr followed live so the test can act
+/// on the armed line. Dropping it on any exit path kills the process and
+/// joins the reader threads, so a failed case cannot leave a receiver
+/// connected until its execution timeout and skew later connection baselines.
 struct LiveRun {
-    child: std::process::Child,
-    stdout: thread::JoinHandle<Vec<u8>>,
-    stderr: thread::JoinHandle<Vec<String>>,
+    child: Option<Child>,
+    stdout: Option<JoinHandle<Vec<u8>>>,
+    stderr: Option<JoinHandle<Vec<String>>>,
     armed: mpsc::Receiver<String>,
     started: Instant,
 }
 
 impl LiveRun {
-    fn spawn(args: &[&str], envs: &[(&str, &str)]) -> Self {
-        Self::spawn_mode(true, args, envs)
-    }
-
-    fn spawn_mode(json: bool, args: &[&str], envs: &[(&str, &str)]) -> Self {
-        let mut command = cli();
+    fn spawn(fixture: &Fixture, json: bool, args: &[&str], envs: &[(&str, &str)]) -> Self {
+        let mut command = fixture.cli();
         if json {
             command.arg("--json");
         }
@@ -576,9 +613,9 @@ impl LiveRun {
             lines
         });
         Self {
-            child,
-            stdout,
-            stderr,
+            child: Some(child),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
             armed,
             started,
         }
@@ -590,12 +627,30 @@ impl LiveRun {
             .expect("the armed line within 20 s")
     }
 
+    /// Waits for the process with a bound; a process that outlives it is
+    /// killed and the case fails.
+    fn wait_bounded(child: &mut Child, bound: Duration) -> ExitStatus {
+        let deadline = Instant::now() + bound;
+        loop {
+            if let Some(status) = child.try_wait().expect("poll arazzo-cli") {
+                return status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("arazzo-cli did not exit within {bound:?}");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Raw stdout text and stderr lines, for text-mode runs.
-    fn finish_raw(mut self) -> (std::process::ExitStatus, String, String, Duration) {
-        let status = self.child.wait().expect("wait for arazzo-cli");
+    fn finish_raw(mut self) -> (ExitStatus, String, String, Duration) {
+        let mut child = self.child.take().unwrap();
+        let status = Self::wait_bounded(&mut child, Duration::from_secs(60));
         let elapsed = self.started.elapsed();
-        let stdout = self.stdout.join().unwrap();
-        let stderr = self.stderr.join().unwrap().join("\n");
+        let stdout = self.stdout.take().unwrap().join().unwrap();
+        let stderr = self.stderr.take().unwrap().join().unwrap().join("\n");
         (
             status,
             String::from_utf8_lossy(&stdout).into_owned(),
@@ -604,7 +659,7 @@ impl LiveRun {
         )
     }
 
-    fn finish(self) -> (std::process::ExitStatus, Value, String, Duration) {
+    fn finish(self) -> (ExitStatus, Value, String, Duration) {
         let (status, text, stderr, elapsed) = self.finish_raw();
         let value = serde_json::from_str::<Value>(text.trim())
             .unwrap_or_else(|err| panic!("stdout not JSON ({err}): {text}\nstderr: {stderr}"));
@@ -612,11 +667,19 @@ impl LiveRun {
     }
 }
 
-fn produce(topic: &str, headers: &str, payload: &str) {
-    broker(
-        &["produce", topic],
-        Some(&format!("{headers}\t{payload}\n")),
-    );
+impl Drop for LiveRun {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(handle) = self.stdout.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[test]
@@ -632,6 +695,8 @@ fn kafka_cli_receive_then_http_end_to_end_with_a_redacted_trace() {
     let trace = fixture.path("trace.json");
 
     let run = LiveRun::spawn(
+        &fixture,
+        true,
         &[
             "run",
             spec.to_str().unwrap(),
@@ -684,7 +749,8 @@ fn kafka_cli_receive_then_http_end_to_end_with_a_redacted_trace() {
     assert!(step["request"].is_null(), "receive steps carry no request");
 
     // Text mode: the verbose step listing names the record the step consumed.
-    let run = LiveRun::spawn_mode(
+    let run = LiveRun::spawn(
+        &fixture,
         false,
         &["run", spec.to_str().unwrap(), "followup", "--verbose"],
         &[],
@@ -720,7 +786,10 @@ fn kafka_cli_criterion_failure_exits_with_its_code_and_sends_no_http() {
     let server = HttpServer::start();
     fixture.openapi(&server.base_url);
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
+    let baseline = connections();
     let run = LiveRun::spawn(
+        &fixture,
+        true,
         &["run", spec.to_str().unwrap(), "followup", "--verbose"],
         &[],
     );
@@ -730,6 +799,7 @@ fn kafka_cli_criterion_failure_exits_with_its_code_and_sends_no_http() {
     assert!(!status.success());
     assert_error(&value, "RUNTIME_SUCCESS_CRITERIA_FAILED");
     assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    assert_broker_clean(baseline);
 }
 
 #[test]
@@ -739,11 +809,16 @@ fn kafka_cli_timeouts_exit_with_their_codes_and_leave_the_broker_clean() {
     let topic = unique_topic("timeouts");
     let fixture = Fixture::new();
     fixture.asyncapi(&bootstrap, &topic);
-    fixture.openapi("http://127.0.0.1:1");
+    let server = HttpServer::start();
+    fixture.openapi(&server.base_url);
     let baseline = connections();
 
+    // Execution timeout while waiting: the existing timeout outcome, no
+    // dependent request, and the broker clean afterwards.
     let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
     let run = LiveRun::spawn(
+        &fixture,
+        true,
         &[
             "run",
             spec.to_str().unwrap(),
@@ -759,25 +834,15 @@ fn kafka_cli_timeouts_exit_with_their_codes_and_leave_the_broker_clean() {
     assert!(!status.success());
     assert_error(&value, "RUNTIME_EXECUTION_TIMEOUT");
     assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
-    assert!(
-        broker(&["groups"], None).is_empty(),
-        "no consumer group may exist"
-    );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let now = connections();
-        if now <= baseline {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "connections did not return to baseline {baseline} (now {now})"
-        );
-        thread::sleep(Duration::from_millis(200));
-    }
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    assert_broker_clean(baseline);
 
-    let spec = fixture.arazzo(RECEIVE_WITH_STEP_TIMEOUT);
+    // Step timeout: the receive's own code, the dependent GET never sent,
+    // and the broker clean afterwards.
+    let spec = fixture.arazzo(RECEIVE_WITH_STEP_TIMEOUT_THEN_HTTP);
     let run = LiveRun::spawn(
+        &fixture,
+        true,
         &["run", spec.to_str().unwrap(), "followup", "--verbose"],
         &[],
     );
@@ -786,6 +851,8 @@ fn kafka_cli_timeouts_exit_with_their_codes_and_leave_the_broker_clean() {
     assert!(!status.success());
     assert_error(&value, "RUNTIME_MESSAGE_RECEIVE_TIMEOUT");
     assert!(elapsed < Duration::from_secs(6), "{elapsed:?}");
+    assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    assert_broker_clean(baseline);
 }
 
 #[test]
@@ -804,6 +871,8 @@ fn kafka_cli_scram_over_tls_succeeds_and_a_wrong_password_fails_cleanly() {
     let trace = fixture.path("secure.trace.json");
 
     let run = LiveRun::spawn(
+        &fixture,
+        true,
         &[
             "run",
             spec.to_str().unwrap(),
@@ -840,7 +909,7 @@ fn kafka_cli_scram_over_tls_succeeds_and_a_wrong_password_fails_cleanly() {
     }
 
     let wrong = fixture.path("wrong.trace.json");
-    let (output, value) = run_json(
+    let (output, value) = fixture.run_json(
         &[
             "run",
             spec.to_str().unwrap(),
