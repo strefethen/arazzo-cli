@@ -9,6 +9,7 @@ mod cli;
 mod cli_error;
 mod generate;
 mod handlers;
+mod message_transport;
 mod output;
 mod run;
 mod run_context;
@@ -28,6 +29,7 @@ use clap::Parser;
 
 use crate::cli::{Cli, Commands, TestFormat};
 use crate::cli_error::{CliError, CliFailure, CLI_OUTPUT_WRITE, CLI_USAGE};
+use crate::message_transport::MessageTransportFlags;
 use crate::run_context::{GlobalOptions, RunContext, RunOptions};
 
 fn main() {
@@ -182,6 +184,11 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             allow_downgrade_redirects,
             max_redirects,
             no_transport_warnings,
+            kafka_username,
+            kafka_tls,
+            kafka_ca_cert,
+            kafka_connect_timeout,
+            asyncapi_server,
         } => {
             let context = RunContext::new(
                 global,
@@ -210,6 +217,14 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
                         allow_downgrade_redirects,
                         max_redirects,
                         no_transport_warnings,
+                    },
+                    message_transport: MessageTransportFlags {
+                        username: kafka_username,
+                        password: MessageTransportFlags::password_from_env(),
+                        tls: kafka_tls,
+                        ca_cert: kafka_ca_cert,
+                        connect_timeout: kafka_connect_timeout,
+                        server_selection: asyncapi_server,
                     },
                 },
             );
@@ -277,6 +292,11 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             allow_downgrade_redirects,
             max_redirects,
             no_transport_warnings,
+            kafka_username,
+            kafka_tls,
+            kafka_ca_cert,
+            kafka_connect_timeout,
+            asyncapi_server,
         } => {
             handlers::run_tests(
                 paths,
@@ -299,6 +319,14 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
                     allow_downgrade_redirects,
                     max_redirects,
                     no_transport_warnings,
+                },
+                MessageTransportFlags {
+                    username: kafka_username,
+                    password: MessageTransportFlags::password_from_env(),
+                    tls: kafka_tls,
+                    ca_cert: kafka_ca_cert,
+                    connect_timeout: kafka_connect_timeout,
+                    server_selection: asyncapi_server,
                 },
                 global,
             )

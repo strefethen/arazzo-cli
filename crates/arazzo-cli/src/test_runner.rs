@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use arazzo_runtime::{
-    ClientConfig, EngineBuilder, EngineEvent, RuntimeErrorKind, TransportWarning,
+    ClientConfig, EngineBuilder, EngineEvent, MessageTransportOptions, RuntimeErrorKind,
+    TransportWarning,
 };
 use arazzo_spec::{classify_workflow_dependency, ArazzoSpec, WorkflowDependency};
 use serde_json::Value;
@@ -32,6 +33,8 @@ pub struct TestRunOptions {
     pub fail_fast: bool,
     pub filter: Option<regex::Regex>,
     pub transport: TransportFlags,
+    /// Kafka connection options shared by every suite's engine.
+    pub message_transport: MessageTransportOptions,
 }
 
 /// Discover Arazzo test specs from a list of file paths and directories.
@@ -174,6 +177,7 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
 
         let mut builder = EngineBuilder::new(spec)
             .client_config(cfg)
+            .message_transport(opts.message_transport.clone())
             .parallel(opts.parallel)
             .strict_inputs(opts.strict_inputs)
             .trace(true);

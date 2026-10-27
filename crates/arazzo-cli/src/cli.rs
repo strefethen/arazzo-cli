@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -147,6 +148,34 @@ pub enum Commands {
             value_parser = clap::builder::FalseyValueParser::new()
         )]
         no_transport_warnings: bool,
+        /// SASL username for Kafka servers that declare a supported scheme (also ARAZZO_KAFKA_USERNAME). The password is read only from ARAZZO_KAFKA_PASSWORD; there is no flag.
+        #[arg(
+            long = "kafka-username",
+            value_name = "USER",
+            env = "ARAZZO_KAFKA_USERNAME"
+        )]
+        kafka_username: Option<String>,
+
+        /// Use TLS for Kafka servers whose protocol is plain `kafka` (`kafka-secure` servers always use TLS).
+        #[arg(long = "kafka-tls")]
+        kafka_tls: bool,
+
+        /// PEM file with additional CA certificate(s) trusted for Kafka broker verification.
+        #[arg(long = "kafka-ca-cert", value_name = "PEM")]
+        kafka_ca_cert: Option<PathBuf>,
+
+        /// Bound on connecting, authenticating, and snapshotting offsets before the first step, for example 10s.
+        #[arg(
+            long = "kafka-connect-timeout",
+            value_name = "DURATION",
+            default_value = "30s",
+            value_parser = parse_duration_value
+        )]
+        kafka_connect_timeout: Duration,
+
+        /// Choose the AsyncAPI server for a source description listing several eligible Kafka servers, as <source>=<server-key>. Repeatable.
+        #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
+        asyncapi_server: Vec<String>,
     },
     /// Replay a recorded trace.v1 file with deterministic response injection
     #[command(
@@ -341,6 +370,34 @@ pub enum Commands {
             value_parser = clap::builder::FalseyValueParser::new()
         )]
         no_transport_warnings: bool,
+        /// SASL username for Kafka servers that declare a supported scheme (also ARAZZO_KAFKA_USERNAME). The password is read only from ARAZZO_KAFKA_PASSWORD; there is no flag.
+        #[arg(
+            long = "kafka-username",
+            value_name = "USER",
+            env = "ARAZZO_KAFKA_USERNAME"
+        )]
+        kafka_username: Option<String>,
+
+        /// Use TLS for Kafka servers whose protocol is plain `kafka` (`kafka-secure` servers always use TLS).
+        #[arg(long = "kafka-tls")]
+        kafka_tls: bool,
+
+        /// PEM file with additional CA certificate(s) trusted for Kafka broker verification.
+        #[arg(long = "kafka-ca-cert", value_name = "PEM")]
+        kafka_ca_cert: Option<PathBuf>,
+
+        /// Bound on connecting, authenticating, and snapshotting offsets before the first step, for example 10s.
+        #[arg(
+            long = "kafka-connect-timeout",
+            value_name = "DURATION",
+            default_value = "30s",
+            value_parser = parse_duration_value
+        )]
+        kafka_connect_timeout: Duration,
+
+        /// Choose the AsyncAPI server for a source description listing several eligible Kafka servers, as <source>=<server-key>. Repeatable.
+        #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
+        asyncapi_server: Vec<String>,
     },
     /// Start an MCP server for AI agent integration
     #[command(

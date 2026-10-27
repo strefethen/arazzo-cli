@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::cli::{ExpressionDiagnosticsMode, TestFormat};
 use crate::cli_error::{self, CliError, CliFailure, SpecErrorCodes, CLI_OUTPUT_WRITE};
+use crate::message_transport::{MessageTransportFlags, TEST_MESSAGE_CODES};
 use crate::output::{self, CatalogEntry};
 use crate::run_context::{GlobalOptions, RunContext};
 use crate::trace::read_trace_file;
@@ -570,6 +571,7 @@ pub async fn run_tests(
     fail_fast: bool,
     filter: Option<String>,
     transport_flags: TransportFlags,
+    message_flags: MessageTransportFlags,
     global: GlobalOptions,
 ) -> Result<(), CliFailure> {
     use crate::test_runner::{discover_test_specs, run_test_suite, TestRunOptions};
@@ -579,6 +581,7 @@ pub async fn run_tests(
     if let Some(warning) = transport_flags.startup_warning() {
         transport::eprint_warning(&warning, squelched);
     }
+    let message_transport = message_flags.into_options(&TEST_MESSAGE_CODES)?;
 
     let specs = discover_test_specs(&paths)?;
 
@@ -655,6 +658,7 @@ pub async fn run_tests(
         fail_fast,
         filter: filter_re,
         transport: transport_flags,
+        message_transport,
     };
 
     let result = run_test_suite(&specs, &opts).await;

@@ -691,6 +691,21 @@ pub fn emit_run_steps(steps: &[TraceStepRecord]) {
             String::new()
         };
 
+        // A receive step has no request; its record names where the
+        // message came from. Nothing here is user data.
+        if let (None, Some(message)) = (&step.request, &step.message) {
+            println!(
+                "  [msg] RECEIVE {}://{}/{} partition={} offset={}  ({duration}ms){retry_suffix}",
+                message.transport,
+                message.host,
+                message.topic,
+                message.partition,
+                message.offset,
+                duration = step.duration_ms,
+            );
+            continue;
+        }
+
         println!(
             "  [{status_code}] {method} {url}  ({duration}ms){retry_suffix}",
             duration = step.duration_ms,

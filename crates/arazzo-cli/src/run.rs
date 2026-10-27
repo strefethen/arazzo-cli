@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::cli_error::{self, CliError, SpecErrorCodes, CLI_OUTPUT_WRITE};
 use crate::handlers::{parse_input_kv, parse_input_value};
+use crate::message_transport::{ArmedLinePrinter, RUN_MESSAGE_CODES};
 use crate::output;
 use crate::run_context::RunContext;
 use crate::run_export::{self, RunMetadata};
@@ -59,6 +60,20 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         transport::eprint_warning(&warning, squelched);
         transport_warnings.push(warning);
     }
+
+    // Kafka flags are validated (and the CA file read) before the spec is
+    // parsed, so a malformed flag never reaches an engine or a broker.
+    let message_options = run
+        .message_transport
+        .into_options(&RUN_MESSAGE_CODES)
+        .map_err(|err| {
+            output::run_error(
+                err.code(),
+                err.message().to_string(),
+                &[],
+                &transport_warnings,
+            )
+        })?;
 
     let spec = match arazzo_validate::parse(&run.spec_path) {
         Ok(spec) => spec,
@@ -150,11 +165,18 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
 
     let mut builder = EngineBuilder::new(spec)
         .client_config(cfg)
+        .message_transport(message_options)
         .parallel(run.parallel)
         .dry_run(run.dry_run)
         .strict_inputs(run.strict_inputs)
         .trace(trace_enabled)
         .capture_run(run.export_run.is_some());
+
+    // `collect()` drains events at the end; the armed line must be live so a
+    // user knows when producing is safe.
+    if global.verbose {
+        builder = builder.observer(ArmedLinePrinter::shared());
+    }
 
     if let Some(dir) = Path::new(&run.spec_path).parent() {
         builder = builder.source_base_dir(dir);
