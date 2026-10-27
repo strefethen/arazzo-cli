@@ -16,6 +16,19 @@ arazzo-expr = { path = "../arazzo-expr" }
 arazzo-spec = { path = "../arazzo-spec" }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Kafka receive client: pure Rust, rustls/ring TLS, SASL PLAIN/SCRAM. Exact pin
+# for the same reason as async-nats below; every codec a producer may have used
+# is decodable (lz4/zstd compile C through cc, as ring already does).
+rskafka = { version = "=0.6.0", default-features = false, features = [
+    "transport-tls",
+    "compression-gzip",
+    "compression-lz4",
+    "compression-snappy",
+    "compression-zstd",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1.14", features = ["std"] }
+webpki-roots = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"

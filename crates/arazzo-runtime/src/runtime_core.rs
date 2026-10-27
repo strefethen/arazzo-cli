@@ -59,6 +59,12 @@ mod helper_tests;
 mod helpers;
 mod input_validation;
 mod jsonpath;
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "Kafka receive client awaits engine integration (plan arazzo-kafka-receive)"
+)]
+mod kafka;
 #[cfg(test)]
 mod nats_transport_trial;
 #[cfg(test)]
@@ -107,6 +113,7 @@ pub use events::{
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::jsonpath_condition_holds;
+pub use kafka::{MessageTransportOptions, Secret, DEFAULT_CONNECT_TIMEOUT};
 use payload::{
     apply_replacements, json_type_name, resolve_payload_detailed, resolve_selector,
     resolve_value_source, to_json_path, value_to_string,

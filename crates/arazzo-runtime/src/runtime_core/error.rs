@@ -65,6 +65,15 @@ pub enum RuntimeErrorKind {
     ReplayRequestMismatch,
     ReplayResponseMissing,
     IterationLimitExceeded,
+    /// A message transport (AsyncAPI receive) cannot be configured from the
+    /// document and options: no eligible server, an unresolved server
+    /// variable, credentials without a scheme or a scheme without
+    /// credentials, an unreadable CA bundle. Raised before any connection.
+    MessageTransportConfig,
+    /// A message transport operation failed against the broker: connect,
+    /// TLS, authentication, metadata, a missing topic, the preparation
+    /// deadline, or a fetch.
+    MessageTransport,
 }
 
 impl RuntimeErrorKind {
@@ -112,6 +121,8 @@ impl RuntimeErrorKind {
             Self::ReplayRequestMismatch => "RUNTIME_REPLAY_REQUEST_MISMATCH",
             Self::ReplayResponseMissing => "RUNTIME_REPLAY_RESPONSE_MISSING",
             Self::IterationLimitExceeded => "RUNTIME_ITERATION_LIMIT_EXCEEDED",
+            Self::MessageTransportConfig => "RUNTIME_MESSAGE_TRANSPORT_CONFIG",
+            Self::MessageTransport => "RUNTIME_MESSAGE_TRANSPORT",
         }
     }
 

@@ -112,6 +112,43 @@ jobs:
             echo "No performance summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  # Live Kafka evidence: the ignored `kafka_*` tests against the pinned broker
+  # (plain and SASL_SSL listeners) started by scripts/kafka/broker.sh. The
+  # ordinary test job never touches a broker.
+  kafka-integration:
+    name: Kafka integration (Linux)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch vendored spec
+        shell: bash
+        run: ./spec/fetch.sh && git diff --exit-code -- spec/SHA256SUMS
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Start pinned Kafka broker (plain + SASL_SSL)
+        run: scripts/kafka/broker.sh up --secure
+
+      - name: Live Kafka tests
+        env:
+          ARAZZO_KAFKA_BOOTSTRAP: 127.0.0.1:19092
+          ARAZZO_KAFKA_SECURE_BOOTSTRAP: 127.0.0.1:19093
+          ARAZZO_KAFKA_CA_PEM: /tmp/arazzo-kafka/ca.pem
+        run: cargo test --workspace --locked -- --ignored --test-threads=1 kafka_
+
+      - name: Stop broker
+        if: always()
+        run: scripts/kafka/broker.sh down
+
   cross-arm:
     name: Cross-compile (aarch64-linux)
     runs-on: ubuntu-latest
