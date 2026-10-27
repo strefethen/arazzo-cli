@@ -55,6 +55,7 @@ impl Engine {
                             step,
                             vars: ctx.vars,
                             response: ctx.result.response.as_deref(),
+                            message: ctx.result.message.as_ref(),
                             depth: ctx.depth,
                             branch: ActionBranch::Success,
                             action_index: action.index,
@@ -140,6 +141,7 @@ impl Engine {
                         step,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         branch: ActionBranch::Failure,
                         action_index: action.index,
@@ -699,6 +701,9 @@ pub(super) struct SelectedActionDebugContext<'a> {
     pub step: &'a Step,
     pub vars: &'a VarStore,
     pub response: Option<&'a Response>,
+    /// The attempt's received message, so `$message.*` stays evaluable at
+    /// retry checkpoints after a message failed its criteria.
+    pub message: Option<&'a super::step_context::MessageSnapshot>,
     pub depth: usize,
     pub branch: ActionBranch,
     pub action_index: usize,

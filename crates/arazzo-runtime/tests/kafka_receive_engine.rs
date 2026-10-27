@@ -314,6 +314,27 @@ async fn arming_fails_the_run_before_any_http_request_and_covers_the_step_closur
 }
 
 #[tokio::test]
+async fn execution_timeout_during_preparation_keeps_its_classification() {
+    let fixture = Fixture::new();
+    fixture.asyncapi("127.0.0.1:1", "orders.placed");
+    fixture.openapi("http://127.0.0.1:1");
+    let spec = fixture.arazzo(RECEIVE_THEN_HTTP);
+    let engine = EngineBuilder::new(spec)
+        .source_base_dir(fixture.path())
+        .message_transport(options(Duration::from_secs(30)))
+        .build()
+        .expect("engine");
+    let err = engine
+        .execute_with_timeout("followup", BTreeMap::new(), Duration::from_millis(100))
+        .collect()
+        .await
+        .outputs
+        .expect_err("execution timeout fires during preparation");
+    assert_eq!(err.kind, RuntimeErrorKind::ExecutionTimeout, "{err}");
+    assert_eq!(err.code(), "RUNTIME_EXECUTION_TIMEOUT");
+}
+
+#[tokio::test]
 async fn an_unsupported_later_target_is_refused_before_the_first_one_connects() {
     let fixture = Fixture::new();
     fixture.asyncapi("127.0.0.1:1", "orders.placed");
@@ -657,10 +678,17 @@ async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
     let fixture = Fixture::new();
     fixture.asyncapi(&bootstrap, &topic);
     // The HTTP handler signals the test, which produces the event the call
-    // "caused" — before the receive step has begun.
+    // "caused", and the handler does not respond until production has
+    // completed — so the message exists before the receive step begins.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let done_rx = Mutex::new(done_rx);
     let server = start_server(move |_m, _u, _h, _b| {
         let _ = tx.send(());
+        let _ = done_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15));
         MockHttpResponse::json(200, "{}")
     });
     fixture.openapi(&server.base_url);
@@ -682,6 +710,7 @@ async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
             assert!(signalled.is_ok(), "the HTTP handler never signalled");
             producer.produce(&topic, 0, r#"{"id":7}"#).await;
             produced.store(true, Ordering::SeqCst);
+            let _ = done_tx.send(());
         })
     };
     let result = handle.collect().await;

@@ -259,30 +259,40 @@ fn redact_trace_file(
             if let Some(key) = &mut message.key {
                 *key = redact_text_patterns(key);
             }
-            for text in [&mut message.payload_preview, &mut message.payload]
-                .into_iter()
-                .flatten()
-            {
-                if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+            // Redact the complete payload first, then derive the preview from
+            // the redacted text: the runtime's preview is a byte-truncated
+            // copy whose broken JSON would otherwise escape JSON redaction.
+            if let Some(payload) = &mut message.payload {
+                if let Ok(mut value) = serde_json::from_str::<Value>(payload) {
                     redact_json_value(&mut value);
                     if let Ok(serialized) = serde_json::to_string(&value) {
-                        *text = serialized;
+                        *payload = serialized;
                     }
                 } else {
-                    *text = redact_text_patterns(text);
+                    *payload = redact_text_patterns(payload);
                 }
-                if text.len() > max_body_bytes {
-                    let mut end = max_body_bytes;
-                    while !text.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    text.truncate(end);
-                    text.push_str("...");
-                }
+                let mut preview = payload.clone();
+                truncate_at_char_boundary(&mut preview, max_body_bytes);
+                message.payload_preview = Some(preview);
+                truncate_at_char_boundary(payload, max_body_bytes);
+            } else if let Some(preview) = &mut message.payload_preview {
+                *preview = redact_text_patterns(preview);
+                truncate_at_char_boundary(preview, max_body_bytes);
             }
         }
 
         redact_json_object(&mut step.outputs);
+    }
+}
+
+fn truncate_at_char_boundary(text: &mut String, max_bytes: usize) {
+    if text.len() > max_bytes {
+        let mut end = max_bytes;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("...");
     }
 }
 
@@ -339,6 +349,48 @@ mod tests {
                 error: None,
                 message: None,
             }],
+        }
+    }
+
+    #[test]
+    fn redact_trace_derives_the_message_preview_from_the_redacted_payload() {
+        // The runtime's preview is the first 2048 bytes of the raw value, so a
+        // secret near the start would survive pattern redaction of broken
+        // JSON; the preview must come from the redacted payload instead.
+        let payload = format!(
+            r#"{{"token":"review-secret-123","zz_padding":"{}"}}"#,
+            "p".repeat(3000)
+        );
+        let mut trace = make_trace_file(TraceResponse::default());
+        trace.steps[0].request = None;
+        trace.steps[0].response = None;
+        trace.steps[0].message = Some(arazzo_runtime::TraceMessage {
+            transport: "kafka".to_string(),
+            host: "127.0.0.1:19092".to_string(),
+            topic: "orders.placed".to_string(),
+            partition: 0,
+            offset: 1,
+            timestamp_ms: 1,
+            key: None,
+            headers: BTreeMap::new(),
+            payload_bytes: payload.len() as u64,
+            payload_preview: Some(format!("{}...", &payload[..2048])),
+            payload: Some(payload),
+            payload_lossy: false,
+            simulated: false,
+        });
+        redact_trace_file(&mut trace, 2048, &BTreeSet::new());
+        let message = trace.steps[0]
+            .message
+            .as_ref()
+            .unwrap_or_else(|| panic!("message missing"));
+        for text in [&message.payload, &message.payload_preview]
+            .into_iter()
+            .flatten()
+        {
+            assert!(!text.contains("review-secret-123"), "leaked: {text}");
+            assert!(text.contains(REDACTED), "not redacted: {text}");
+            assert!(text.len() <= 2048 + 3, "not truncated: {}", text.len());
         }
     }
 

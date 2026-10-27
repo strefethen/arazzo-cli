@@ -233,7 +233,7 @@ impl Engine {
             vars: debug.vars,
             response: debug.response,
             request: None,
-            message: None,
+            message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
         };
@@ -276,7 +276,7 @@ impl Engine {
             vars: debug.vars,
             response: debug.response,
             request: None,
-            message: None,
+            message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
         };

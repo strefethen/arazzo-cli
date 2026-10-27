@@ -127,9 +127,27 @@ impl Engine {
                     Some(client) => Arc::clone(client),
                     None => {
                         exec_ctx.check_cancelled()?;
+                        // One preparation budget for the whole pass: a later
+                        // connection only gets what the earlier ones left.
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::MessageTransport,
+                                format!(
+                                    "preparation deadline ({:?}, --kafka-connect-timeout) was \
+                                     exhausted before connecting to Kafka broker {}",
+                                    options.connect_timeout, target.endpoint.identity.host
+                                ),
+                            ));
+                        }
+                        let budget = super::MessageTransportOptions {
+                            connect_timeout: remaining,
+                            ..options.clone()
+                        };
                         let client =
-                            connect(&target.endpoint, options, &client_id(), &exec_ctx.cancel)
-                                .await?;
+                            connect(&target.endpoint, &budget, &client_id(), &exec_ctx.cancel)
+                                .await
+                                .map_err(|err| classify_cancellation(exec_ctx, err))?;
                         if target.endpoint.sasl == Some(SaslMechanism::Plain)
                             && !(target.endpoint.tls_required || options.tls)
                         {
@@ -141,7 +159,9 @@ impl Engine {
                 }
             };
             let host = target.endpoint.identity.host.clone();
-            let armed = arm(&client, &host, &target.topic, deadline, &exec_ctx.cancel).await?;
+            let armed = arm(&client, &host, &target.topic, deadline, &exec_ctx.cancel)
+                .await
+                .map_err(|err| classify_cancellation(exec_ctx, err))?;
             let partitions = u32::try_from(armed.partition_count()).unwrap_or(u32::MAX);
             exec_ctx
                 .message_receivers
@@ -447,6 +467,16 @@ impl Engine {
                 message: Some(trace_message),
             },
         })
+    }
+}
+
+/// The kafka module reports a fired token as `ExecutionCancelled`; the
+/// invocation knows whether that was the execution timeout.
+fn classify_cancellation(exec_ctx: &ExecutionContext, err: RuntimeError) -> RuntimeError {
+    if err.kind == RuntimeErrorKind::ExecutionCancelled {
+        exec_ctx.cancelled_error()
+    } else {
+        err
     }
 }
 
