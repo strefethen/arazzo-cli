@@ -840,3 +840,26 @@ async fn duplicate_ids_across_unclaimed_specs_do_not_shadow_the_source() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url, format!("{}/pets", fixture.alpha.base_url));
 }
+
+/// A source-qualified `operationId` naming an `asyncapi` source with an
+/// explicit `action: send` is an AsyncAPI step: it is refused by receive
+/// admission (send has no payload contract, OAI/Arazzo-Specification#617),
+/// before any broker or HTTP request, with the transport code rather than
+/// the HTTP routing limit above.
+#[tokio::test]
+async fn qualified_target_with_explicit_send_action_is_refused_by_admission() {
+    let fixture = TwoSources::new();
+    let mut sources = fixture.sources();
+    sources.push(SourceDescription {
+        name: "events".to_string(),
+        url: "other.asyncapi.yaml".to_string(),
+        type_: SourceType::AsyncApi,
+        ..SourceDescription::default()
+    });
+    let mut spec = spec_with(sources, "$sourceDescriptions.events.placeOrder");
+    spec.workflows[0].steps[0].action = Some(arazzo_spec::StepAction::Send);
+    let err = refusal(spec, fixture.dir.path()).await;
+    assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
+    assert_eq!(err.code(), "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT");
+    assert!(err.message.contains("617"), "message was: {err}");
+}

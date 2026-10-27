@@ -178,14 +178,6 @@ pub(crate) async fn arm(
 }
 
 impl ArmedTopic {
-    pub(crate) fn topic(&self) -> &str {
-        &self.topic
-    }
-
-    pub(crate) fn host(&self) -> &str {
-        &self.host
-    }
-
     pub(crate) fn partition_count(&self) -> usize {
         self.partitions.len()
     }

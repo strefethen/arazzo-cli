@@ -482,6 +482,7 @@ impl Engine {
                 vars,
                 response: Some(&fake),
                 request: Some(&prep.trace_request),
+                message: None,
                 current_outputs: &outputs,
                 depth,
             };
@@ -518,6 +519,7 @@ impl Engine {
                 }),
                 criteria: Vec::new(),
                 warnings,
+                message: None,
             },
         })
     }
@@ -577,6 +579,7 @@ impl Engine {
                 vars,
                 response: Some(response),
                 request: Some(&prep.trace_request),
+                message: None,
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
@@ -599,6 +602,7 @@ impl Engine {
                         response: Some(trace_response),
                         criteria,
                         warnings: step_warnings,
+                        message: None,
                     },
                 });
             }
@@ -619,6 +623,7 @@ impl Engine {
                 vars,
                 response: Some(response),
                 request: Some(&prep.trace_request),
+                message: None,
                 current_outputs: &checkpoint_outputs,
                 depth,
             };
@@ -641,6 +646,7 @@ impl Engine {
                 response: Some(trace_response),
                 criteria,
                 warnings: step_warnings,
+                message: None,
             },
         })
     }

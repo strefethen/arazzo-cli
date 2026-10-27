@@ -49,6 +49,7 @@ fn execution_context() -> Arc<ExecutionContext> {
         cancel: CancellationToken::new(),
         is_timeout: Arc::new(AtomicBool::new(false)),
         completed_workflows: Mutex::new(BTreeSet::new()),
+        message_receivers: Arc::default(),
     })
 }
 

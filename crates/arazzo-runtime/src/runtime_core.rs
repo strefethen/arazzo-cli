@@ -28,17 +28,9 @@ pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
 /// Default maximum response body size: 10 MiB.
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
-#[allow(
-    dead_code,
-    reason = "receive admission awaits engine integration (plan arazzo-kafka-receive)"
-)]
 mod asyncapi_receive;
 #[cfg(test)]
 mod asyncapi_receive_tests;
-#[allow(
-    dead_code,
-    reason = "private AsyncAPI target seam awaits engine integration"
-)]
 mod asyncapi_target;
 #[cfg(test)]
 mod asyncapi_target_tests;
@@ -57,6 +49,7 @@ mod engine_http;
 #[cfg(test)]
 mod engine_http_tests;
 mod engine_impl;
+mod engine_message;
 mod engine_parallel;
 mod engine_trace;
 mod error;
@@ -66,11 +59,6 @@ mod helper_tests;
 mod helpers;
 mod input_validation;
 mod jsonpath;
-#[allow(
-    dead_code,
-    unused_imports,
-    reason = "Kafka receive client awaits engine integration (plan arazzo-kafka-receive)"
-)]
 mod kafka;
 #[cfg(test)]
 mod nats_transport_trial;
@@ -113,10 +101,10 @@ use engine_trace::{build_trace_response, DebugGateContext};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use events::{
     DryRunRequest, EngineEvent, ExecutionEvent, ExecutionEventKind, ExecutionHandle,
-    ExecutionObserver, ExecutionResult, ObserverEvent, SequentialFallback,
+    ExecutionObserver, ExecutionResult, ObserverEvent, ReceiverArmed, SequentialFallback,
     SequentialFallbackReason, StepEvent, TraceCriterionResult, TraceDecision, TraceDecisionPath,
-    TraceHook, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord, TransportWarning,
-    TransportWarningKind,
+    TraceHook, TraceMessage, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord,
+    TransportWarning, TransportWarningKind,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::jsonpath_condition_holds;

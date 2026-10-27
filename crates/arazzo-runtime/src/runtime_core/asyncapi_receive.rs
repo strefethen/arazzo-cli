@@ -17,6 +17,11 @@
 //! this module interprets; everything else that is reference-capable and
 //! consequential (channels, operations, bindings) is refused rather than
 //! guessed.
+//!
+//! Binding fields the D11 rule ignores (documented for the user guide):
+//! every server binding, channel `kafka.partitions` / `kafka.replicas` /
+//! `kafka.topicConfiguration`, operation `kafka.groupId` / `kafka.clientId`,
+//! message `kafka.key`, and every non-`kafka` binding.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -45,21 +50,6 @@ pub(crate) struct ReceiveTarget {
     pub(crate) server_key: String,
     pub(crate) endpoint: KafkaEndpoint,
 }
-
-/// Binding fields the D11 rule ignores, listed in the module docs for the
-/// user guide. Everything else under a `kafka` binding is either refused
-/// (see [`REFUSED_MESSAGE_BINDING_FIELDS`] and the channel `topic` rule) or
-/// absent from the specification we vendor.
-pub(crate) const IGNORED_BINDING_FIELDS: &[&str] = &[
-    "server bindings (all)",
-    "channel kafka.partitions",
-    "channel kafka.replicas",
-    "channel kafka.topicConfiguration",
-    "operation kafka.groupId",
-    "operation kafka.clientId",
-    "message kafka.key",
-    "non-kafka bindings (all)",
-];
 
 /// Message binding fields that change what is on the wire and are refused.
 const REFUSED_MESSAGE_BINDING_FIELDS: &[&str] = &[

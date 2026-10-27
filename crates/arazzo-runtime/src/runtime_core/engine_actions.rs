@@ -233,6 +233,7 @@ impl Engine {
             vars: ctx.vars,
             response: ctx.response,
             request: None,
+            message: ctx.message,
             current_outputs: &current_outputs,
             depth: ctx.depth,
         };

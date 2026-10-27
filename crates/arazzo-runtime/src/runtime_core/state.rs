@@ -16,6 +16,10 @@ pub(super) struct ExecutionContext {
     /// Workflow IDs completed before or during this invocation. The set is
     /// scoped to the execution context and is never stored on [`Engine`].
     pub completed_workflows: Mutex<BTreeSet<String>>,
+    /// Kafka receivers armed for this invocation, keyed by connection
+    /// identity and topic; shared with parallel attempt contexts. Never
+    /// stored on [`Engine`].
+    pub message_receivers: Arc<super::engine_message::MessageReceivers>,
 }
 
 impl ExecutionContext {
@@ -262,6 +266,7 @@ pub(super) struct StepTraceData {
     pub(super) response: Option<TraceResponse>,
     pub(super) criteria: Vec<TraceCriterionResult>,
     pub(super) warnings: Vec<String>,
+    pub(super) message: Option<super::TraceMessage>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -361,6 +366,13 @@ pub(super) struct EngineInner {
     pub(super) observer: Option<Arc<dyn ExecutionObserver>>,
     pub(super) debug_controller: Option<Arc<DebugController>>,
     pub(super) regex_cache: RegexCache,
+    /// Broker connection options for AsyncAPI receive steps.
+    pub(super) message_options: super::MessageTransportOptions,
+    /// Directory relative source urls resolve against (the spec's directory).
+    pub(super) source_base_dir: Option<std::path::PathBuf>,
+    /// Built with recorded trace steps: HTTP is served from the trace and
+    /// receive steps are refused before any broker work.
+    pub(super) replay_mode: bool,
 }
 
 /// Runtime engine for executing Arazzo workflows.

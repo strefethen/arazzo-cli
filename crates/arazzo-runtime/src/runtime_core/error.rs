@@ -74,6 +74,11 @@ pub enum RuntimeErrorKind {
     /// TLS, authentication, metadata, a missing topic, the preparation
     /// deadline, or a fetch.
     MessageTransport,
+    /// An AsyncAPI receive step's `timeout` elapsed before a message arrived.
+    MessageReceiveTimeout,
+    /// A received record could not become `$message.*`: its value is not
+    /// JSON or a header value is not UTF-8.
+    MessageMalformed,
 }
 
 impl RuntimeErrorKind {
@@ -123,6 +128,8 @@ impl RuntimeErrorKind {
             Self::IterationLimitExceeded => "RUNTIME_ITERATION_LIMIT_EXCEEDED",
             Self::MessageTransportConfig => "RUNTIME_MESSAGE_TRANSPORT_CONFIG",
             Self::MessageTransport => "RUNTIME_MESSAGE_TRANSPORT",
+            Self::MessageReceiveTimeout => "RUNTIME_MESSAGE_RECEIVE_TIMEOUT",
+            Self::MessageMalformed => "RUNTIME_MESSAGE_MALFORMED",
         }
     }
 

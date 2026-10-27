@@ -181,6 +181,67 @@
           },
           "error": {
             "type": "string"
+          },
+          "message": {
+            "type": "object",
+            "description": "The message an AsyncAPI receive step consumed, or simulated in a dry run. Absent for HTTP and workflow steps.",
+            "required": [
+              "transport",
+              "host",
+              "topic",
+              "partition",
+              "offset",
+              "timestampMs",
+              "payloadBytes"
+            ],
+            "properties": {
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "kafka"
+                ]
+              },
+              "host": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
+              "partition": {
+                "type": "integer"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "timestampMs": {
+                "type": "integer"
+              },
+              "key": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "payloadBytes": {
+                "type": "integer"
+              },
+              "payloadPreview": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "string"
+              },
+              "payloadLossy": {
+                "type": "boolean"
+              },
+              "simulated": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
           }
         },
         "additionalProperties": true

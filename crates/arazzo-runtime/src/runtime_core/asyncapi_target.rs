@@ -59,7 +59,9 @@ pub(super) struct ResolvedChannelTarget {
     pub(super) source_name: String,
     pub(super) document: String,
     pub(super) channel_key: String,
+    #[allow(dead_code, reason = "read by the test-only exchange trials")]
     pub(super) channel_pointer: String,
+    #[allow(dead_code, reason = "read by the test-only exchange trials")]
     pub(super) action: StepAction,
     pub(super) address: Option<String>,
     pub(super) channel: Yaml,

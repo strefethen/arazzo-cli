@@ -78,6 +78,7 @@ impl Engine {
                 cancel: cancel_clone,
                 is_timeout: timeout_clone,
                 completed_workflows: Mutex::new(completed_workflows),
+                message_receivers: Arc::default(),
             });
 
             let result = engine.execute_inner(&ctx, &wf_id, inputs, 0).await;
@@ -190,6 +191,7 @@ impl Engine {
                 cancel: cancel_clone,
                 is_timeout: timeout_clone,
                 completed_workflows: Mutex::new(completed_workflows),
+                message_receivers: Arc::default(),
             });
 
             let result = engine
@@ -266,6 +268,16 @@ impl Engine {
             if self.inner.nats_trial.is_some() {
                 super::nats_transport_trial::require_supported_mode(self)?;
             }
+
+            // Arm the receive steps of the whole selected closure before any
+            // of it runs, so a selected HTTP step's receive prerequisite is
+            // armed too (D5).
+            self.arm_receivers(
+                exec_ctx,
+                workflow_id,
+                steps_to_run.iter().map(|&idx| &workflow.steps[idx]),
+            )
+            .await?;
 
             if self.inner.parallel_mode {
                 let fallback = SequentialFallback::new(
@@ -447,6 +459,13 @@ impl Engine {
             if self.inner.nats_trial.is_some() {
                 super::nats_transport_trial::require_supported_mode(self)?;
             }
+
+            // Arm every receive step of this workflow before its first step
+            // runs (D5): a message produced by an earlier step of the same
+            // workflow is received even though it arrived before the receive
+            // step began. Keys already armed by a parent invocation are reused.
+            self.arm_receivers(exec_ctx, workflow_id, workflow.steps.iter())
+                .await?;
 
             if self.inner.parallel_mode {
                 if let Some(fallback) = self.sequential_fallback(&workflow) {
@@ -721,13 +740,21 @@ impl Engine {
                 .filter(|_| matches!(&step.target, Some(StepTarget::ChannelPath(_))))
             {
                 super::nats_transport_trial::execute(self, trial, exec_ctx, step, vars).await?
+            } else if super::engine_message::is_message_step(step) {
+                self.execute_message_step(exec_ctx, workflow_id, step, vars, depth)
+                    .await?
             } else {
                 self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
                     .await?
             }
             #[cfg(not(test))]
-            self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
-                .await?
+            if super::engine_message::is_message_step(step) {
+                self.execute_message_step(exec_ctx, workflow_id, step, vars, depth)
+                    .await?
+            } else {
+                self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+                    .await?
+            }
         };
         if let Some(req) = execution.dry_run_request.clone() {
             let _ = exec_ctx

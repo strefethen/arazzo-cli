@@ -7,6 +7,7 @@
 - Included request/response summaries, criteria outcomes, flow decision, outputs, and error fields.
 - Added built-in redaction for sensitive headers/query params/JSON keys.
 - Added optional `run.sequentialFallbacks`: each workflow that ran its steps one at a time although `parallel` was requested, with the reason.
+- Added optional `steps[*].message` for AsyncAPI receive steps (Kafka): transport, host, topic, partition, offset, timestamp, key, headers, payload preview and payload with the response-body redaction and truncation rules, and `simulated` for dry runs. `steps[*].kind` may now be `asyncapi`.
 
 ## Change policy
 

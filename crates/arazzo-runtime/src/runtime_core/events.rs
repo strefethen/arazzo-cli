@@ -17,6 +17,8 @@ pub enum EngineEvent {
     /// Parallel mode was requested, but a workflow invocation runs its steps
     /// one at a time.
     SequentialFallback(SequentialFallback),
+    /// A receive step's topic was armed at invocation start.
+    ReceiverArmed(ReceiverArmed),
 }
 
 /// Handle returned by [`Engine::execute`] for streaming execution results.
@@ -372,6 +374,51 @@ pub struct TraceCriterionResult {
     pub warnings: Vec<String>,
 }
 
+/// Trace record of the message an AsyncAPI receive step consumed (or, in a
+/// dry run, simulated). Additive to `trace.v1`; absent for HTTP steps.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceMessage {
+    /// Always `"kafka"` in this release.
+    pub transport: String,
+    /// Broker `host[:port]` the message came from.
+    pub host: String,
+    pub topic: String,
+    pub partition: i32,
+    pub offset: i64,
+    pub timestamp_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    pub payload_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub payload_lossy: bool,
+    /// True for a dry run: nothing was received, the step evaluated against
+    /// an empty object.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub simulated: bool,
+}
+
+/// A receive step's topic was armed: its partition end offsets were
+/// snapshotted and any message produced from now on is received. Emitted
+/// once per topic per invocation, before the first step runs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiverArmed {
+    pub workflow_id: String,
+    pub step_id: String,
+    pub source_name: String,
+    pub server_key: String,
+    pub host: String,
+    pub topic: String,
+    pub partitions: u32,
+}
+
 /// Runtime trace record for one step attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -399,6 +446,9 @@ pub struct TraceStepRecord {
     pub outputs: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The message a receive step consumed; absent for HTTP and workflow steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<TraceMessage>,
 }
 
 /// Trace payload for step lifecycle events.
@@ -464,6 +514,18 @@ pub trait TraceHook: Send + Sync {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ObserverEvent {
+    /// A receive step's topic was armed (partition end offsets snapshotted)
+    /// before the invocation's first step; delivered live, so a caller can
+    /// start producing. Fields mirror [`ReceiverArmed`].
+    MessageReceiverArmed {
+        workflow_id: String,
+        step_id: String,
+        source_name: String,
+        server_key: String,
+        host: String,
+        topic: String,
+        partitions: u32,
+    },
     /// Step is about to begin execution.
     StepStarted {
         workflow_id: String,

@@ -254,6 +254,34 @@ fn redact_trace_file(
             }
         }
 
+        if let Some(message) = &mut step.message {
+            redact_headers(&mut message.headers);
+            if let Some(key) = &mut message.key {
+                *key = redact_text_patterns(key);
+            }
+            for text in [&mut message.payload_preview, &mut message.payload]
+                .into_iter()
+                .flatten()
+            {
+                if let Ok(mut value) = serde_json::from_str::<Value>(text) {
+                    redact_json_value(&mut value);
+                    if let Ok(serialized) = serde_json::to_string(&value) {
+                        *text = serialized;
+                    }
+                } else {
+                    *text = redact_text_patterns(text);
+                }
+                if text.len() > max_body_bytes {
+                    let mut end = max_body_bytes;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    text.truncate(end);
+                    text.push_str("...");
+                }
+            }
+        }
+
         redact_json_object(&mut step.outputs);
     }
 }
@@ -309,7 +337,58 @@ mod tests {
                 decision: TraceDecision::with_path(TraceDecisionPath::Next),
                 outputs: BTreeMap::new(),
                 error: None,
+                message: None,
             }],
+        }
+    }
+
+    #[test]
+    fn redact_trace_redacts_and_truncates_a_receive_step_message() {
+        // `zz_note` sorts last, so truncation removes it, not the marker.
+        let payload = format!(
+            r#"{{"token":"secret123","orderId":42,"zz_note":"{}"}}"#,
+            "x".repeat(40)
+        );
+        let mut trace = make_trace_file(TraceResponse::default());
+        trace.steps[0].request = None;
+        trace.steps[0].response = None;
+        trace.steps[0].message = Some(arazzo_runtime::TraceMessage {
+            transport: "kafka".to_string(),
+            host: "127.0.0.1:19092".to_string(),
+            topic: "orders.placed".to_string(),
+            partition: 0,
+            offset: 7,
+            timestamp_ms: 1,
+            key: Some("Bearer abcdef0123456789".to_string()),
+            headers: BTreeMap::from([("Authorization".to_string(), "Bearer xyz".to_string())]),
+            payload_bytes: payload.len() as u64,
+            payload_preview: Some(payload.clone()),
+            payload: Some(payload),
+            payload_lossy: false,
+            simulated: false,
+        });
+        redact_trace_file(&mut trace, 60, &BTreeSet::new());
+
+        let message = trace.steps[0]
+            .message
+            .as_ref()
+            .unwrap_or_else(|| panic!("message missing"));
+        assert_eq!(
+            message.headers.get("Authorization").map(String::as_str),
+            Some(REDACTED)
+        );
+        let key = message.key.as_deref().unwrap_or_default();
+        assert!(!key.contains("abcdef0123456789"), "key leaked: {key}");
+        for text in [&message.payload, &message.payload_preview]
+            .into_iter()
+            .flatten()
+        {
+            assert!(!text.contains("secret123"), "payload leaked: {text}");
+            assert!(text.contains(REDACTED), "payload not redacted: {text}");
+            assert!(
+                text.ends_with("..."),
+                "payload not truncated to 24 bytes: {text}"
+            );
         }
     }
 

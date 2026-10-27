@@ -43,7 +43,7 @@ arazzo --json run <spec> <workflow-id> --trace <path>
 - `workflowId` (string)
 - `stepId` (string)
 - `attempt` (number)
-- `kind` (string: `http` or `workflow`)
+- `kind` (string: `http`, `workflow`, or `asyncapi`)
 - `operationPath` (string, optional)
 - `workflowIdRef` (string, optional)
 - `durationMs` (number)
@@ -53,6 +53,7 @@ arazzo --json run <spec> <workflow-id> --trace <path>
 - `decision` (object)
 - `outputs` (object, optional)
 - `error` (string, optional)
+- `message` (object, optional): the message an AsyncAPI receive step consumed — `transport` (`kafka`), `host`, `topic`, `partition`, `offset`, `timestampMs`, `key` (optional), `headers` (optional), `payloadBytes`, `payloadPreview`/`payload` (optional, redacted and truncated like response bodies), `payloadLossy`, `simulated` (true for a dry run, which evaluates an empty object instead of receiving). Absent for HTTP and workflow steps.
 
 ## Compatibility guarantees
 

@@ -303,6 +303,7 @@ fn replay_record(url: &str) -> TraceStepRecord {
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
         error: None,
+        message: None,
     }
 }
 

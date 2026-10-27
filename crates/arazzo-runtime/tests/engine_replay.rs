@@ -72,6 +72,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
         error: None,
+        message: None,
     }]
 }
 
@@ -177,6 +178,7 @@ async fn replay_uses_full_body_not_truncated_preview() {
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
         error: None,
+        message: None,
     }];
 
     let engine = match common::fixture_engine_builder(replay_spec())

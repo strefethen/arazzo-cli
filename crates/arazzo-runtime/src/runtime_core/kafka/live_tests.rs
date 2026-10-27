@@ -132,6 +132,10 @@ async fn plain_client() -> (String, Arc<Client>) {
     (host, client)
 }
 
+/// Creates the topic and waits until every partition has a leader that
+/// answers an offset query: creation is asynchronous on the broker, and a
+/// producer or receiver that follows immediately can otherwise see
+/// `UnknownTopicOrPartition` or a missing leader.
 async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     client
         .controller_client()
@@ -139,6 +143,29 @@ async fn create_topic(client: &Client, topic: &str, partitions: i32) {
         .create_topic(topic, partitions, 1, 10_000)
         .await
         .expect("create topic");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    for partition in 0..partitions {
+        loop {
+            let ready = match client
+                .partition_client(topic, partition, UnknownTopicHandling::Retry)
+                .await
+            {
+                Ok(pc) => pc
+                    .get_offset(rskafka::client::partition::OffsetAt::Latest)
+                    .await
+                    .is_ok(),
+                Err(_) => false,
+            };
+            if ready {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "topic {topic} partition {partition} never became ready"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 async fn delete_topic(client: &Client, topic: &str) {

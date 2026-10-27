@@ -54,6 +54,7 @@ impl Engine {
             vars,
             response: None,
             request: None,
+            message: None,
             current_outputs: &empty_outputs,
             depth,
         };
@@ -232,6 +233,7 @@ impl Engine {
             vars: debug.vars,
             response: debug.response,
             request: None,
+            message: None,
             current_outputs: &current_outputs,
             depth: debug.depth,
         };
@@ -274,6 +276,7 @@ impl Engine {
             vars: debug.vars,
             response: debug.response,
             request: None,
+            message: None,
             current_outputs: &current_outputs,
             depth: debug.depth,
         };
@@ -295,7 +298,10 @@ impl Engine {
             return Ok(());
         };
 
-        let mut eval_ctx = self.make_eval_context(gate.vars, gate.response);
+        let mut eval_ctx = super::step_context::with_message(
+            self.make_eval_context(gate.vars, gate.response),
+            gate.message,
+        );
         if !gate.current_outputs.is_empty() {
             let scoped_outputs = std::sync::Arc::make_mut(&mut eval_ctx.steps)
                 .entry(gate.step_id.to_string())
@@ -479,6 +485,7 @@ impl Engine {
             decision,
             outputs,
             error,
+            message: trace.message.clone(),
         }
     }
 
@@ -493,6 +500,9 @@ pub(super) struct DebugGateContext<'a> {
     pub vars: &'a VarStore,
     pub response: Option<&'a Response>,
     pub request: Option<&'a TraceRequest>,
+    /// The attempt's received message, so `$message.*` evaluates at
+    /// receive-step checkpoints and in conditional breakpoints.
+    pub message: Option<&'a super::step_context::MessageSnapshot>,
     pub current_outputs: &'a BTreeMap<String, Value>,
     pub depth: usize,
 }
@@ -692,6 +702,7 @@ mod output_metadata_tests {
             vars: &vars,
             response: None,
             request: None,
+            message: None,
             current_outputs: &outputs,
             depth: 0,
         };

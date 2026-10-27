@@ -40,6 +40,6 @@ mod live_tests;
 mod options;
 mod receiver;
 
-pub(super) use connection::{connect, plan, ConnectionIdentity, KafkaEndpoint, SaslMechanism};
+pub(super) use connection::{connect, ConnectionIdentity, KafkaEndpoint, SaslMechanism};
 pub use options::{MessageTransportOptions, Secret, DEFAULT_CONNECT_TIMEOUT};
 pub(super) use receiver::{arm, ArmedTopic, ReceiveOutcome, ReceivedRecord};

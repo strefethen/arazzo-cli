@@ -90,6 +90,14 @@ fn config_error(message: String) -> RuntimeError {
     RuntimeError::new(RuntimeErrorKind::MessageTransportConfig, message)
 }
 
+/// The client stops retrying this long before the outer connect timeout:
+/// one second earlier, but never less than half the timeout.
+fn retry_deadline(connect_timeout: Duration) -> Duration {
+    connect_timeout
+        .saturating_sub(Duration::from_secs(1))
+        .max(connect_timeout / 2)
+}
+
 /// Appends the default port when the authored host has none. Bracketed IPv6
 /// literals keep their brackets.
 pub(crate) fn bootstrap_address(host: &str) -> String {
@@ -230,9 +238,19 @@ pub(crate) async fn connect(
     let host = &endpoint.identity.host;
     let mut builder = ClientBuilder::new(vec![plan.bootstrap.clone()])
         .client_id(client_id)
+        // Bounded retries: a freshly created topic can still be electing its
+        // leader when arming starts, and the client's default backoff grows by
+        // a factor of three (0.1 s, 0.3 s, 0.9 s, 2.7 s, 8.1 s, …), so one
+        // unlucky retry would overshoot a short connect timeout. Cap each
+        // pause at one second, and stop retrying before the outer timeout so
+        // the client's own error — which names the cause (refused connection,
+        // untrusted certificate, failed authentication) — is what the user
+        // sees, not the outer "did not complete" message.
         .backoff_config(BackoffConfig {
-            deadline: Some(plan.deadline),
-            ..BackoffConfig::default()
+            init_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(1),
+            base: 2.0,
+            deadline: Some(retry_deadline(plan.deadline)),
         });
     if let Some(tls) = plan.tls.clone() {
         builder = builder.tls_config(tls);

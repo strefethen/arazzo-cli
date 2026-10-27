@@ -21,6 +21,7 @@ pub struct EngineBuilder {
     debug_controller: Option<Arc<DebugController>>,
     openapi_specs: Vec<ProvidedDocument>,
     source_base_dir: Option<PathBuf>,
+    message_transport: MessageTransportOptions,
 }
 
 impl EngineBuilder {
@@ -35,6 +36,7 @@ impl EngineBuilder {
             trace: false,
             capture_run: false,
             replay_trace_steps: None,
+            message_transport: MessageTransportOptions::default(),
             strict_inputs: false,
             channel_capacity: DEFAULT_CHANNEL_CAPACITY,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
@@ -84,6 +86,14 @@ impl EngineBuilder {
     /// Enables body-free records for each settled step attempt, independently of tracing.
     pub fn capture_run(mut self, enabled: bool) -> Self {
         self.capture_run = enabled;
+        self
+    }
+
+    /// Broker connection options for AsyncAPI receive steps: credentials,
+    /// TLS, CA bundle, connect timeout, server selection. The default means
+    /// plaintext, no credentials, bundled roots, 30 s.
+    pub fn message_transport(mut self, options: MessageTransportOptions) -> Self {
+        self.message_transport = options;
         self
     }
 
@@ -158,6 +168,7 @@ impl EngineBuilder {
     /// to a provided/local document, be parsed, or yield a usable server base.
     pub fn build(self) -> Result<Engine, RuntimeError> {
         let config = self.client_config.unwrap_or_default();
+        let replay_mode = self.replay_trace_steps.is_some();
         let client = HttpClient::new(&config, self.max_response_bytes, self.replay_trace_steps)?;
 
         // Resolution runs before any source is bound: every provided document
@@ -250,6 +261,9 @@ impl EngineBuilder {
                 observer: self.observer,
                 regex_cache: helpers::RegexCache::new(),
                 debug_controller: self.debug_controller,
+                message_options: self.message_transport,
+                source_base_dir: self.source_base_dir,
+                replay_mode,
             }),
         })
     }

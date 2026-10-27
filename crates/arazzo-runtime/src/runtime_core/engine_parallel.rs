@@ -73,6 +73,7 @@ impl Engine {
                 let wf_id = workflow_id.to_string();
                 let cancel = exec_ctx.cancel.clone();
                 let is_timeout = Arc::clone(&exec_ctx.is_timeout);
+                let receivers = Arc::clone(&exec_ctx.message_receivers);
                 join_set.spawn(async move {
                     let run = engine
                         .execute_parallel_step(ParallelStepContext {
@@ -84,6 +85,7 @@ impl Engine {
                             depth,
                             cancel: &cancel,
                             is_timeout: &is_timeout,
+                            message_receivers: &receivers,
                         })
                         .await;
                     (idx, step, run)
@@ -321,11 +323,25 @@ impl Engine {
             cancel: ctx.cancel.clone(),
             is_timeout: Arc::clone(ctx.is_timeout),
             completed_workflows: Mutex::new(BTreeSet::new()),
+            message_receivers: Arc::clone(ctx.message_receivers),
         };
 
         let start = Instant::now();
-        let execution =
-            self.execute_http_step(&minimal_ctx, ctx.workflow_id, ctx.step, ctx.vars, ctx.depth);
+        let execution = async {
+            if super::engine_message::is_message_step(ctx.step) {
+                self.execute_message_step(
+                    &minimal_ctx,
+                    ctx.workflow_id,
+                    ctx.step,
+                    ctx.vars,
+                    ctx.depth,
+                )
+                .await
+            } else {
+                self.execute_http_step(&minimal_ctx, ctx.workflow_id, ctx.step, ctx.vars, ctx.depth)
+                    .await
+            }
+        };
         tokio::pin!(execution);
         let mut events = Vec::new();
         let execution = loop {
@@ -360,6 +376,8 @@ struct ParallelStepContext<'a> {
     depth: usize,
     cancel: &'a CancellationToken,
     is_timeout: &'a Arc<AtomicBool>,
+    /// The invocation's armed receivers, shared with the attempt context.
+    message_receivers: &'a Arc<super::engine_message::MessageReceivers>,
 }
 
 /// Everything one step did inside its task, kept for in-order replay.
