@@ -9,11 +9,21 @@
 //! [`RuntimeErrorKind::UnsupportedAsyncApiTransport`]; structural and
 //! selection problems with [`RuntimeErrorKind::MessageTransportConfig`].
 //! Every message names the source, the document, and the offending element.
+//!
+//! Reference Objects: AsyncAPI 3.0.0 says a Reference Object "is defined by
+//! JSON Reference" and that other properties in the same object are ignored,
+//! so any mapping carrying a `$ref` key is a reference here, whatever its
+//! siblings. One local hop into `components` is followed for the objects
+//! this module interprets; everything else that is reference-capable and
+//! consequential (channels, operations, bindings) is refused rather than
+//! guessed.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_operation_id, ArazzoSpec, OperationIdTarget, SourceType, Step, StepAction, StepTarget,
+    classify_operation_id, classify_operation_path, ArazzoSpec, OperationIdTarget,
+    OperationPathTarget, SourceType, Step, StepAction, StepTarget,
 };
 use serde_yaml_ng::Value as Yaml;
 
@@ -58,12 +68,44 @@ const REFUSED_MESSAGE_BINDING_FIELDS: &[&str] = &[
     "schemaLookupStrategy",
 ];
 
+/// Provenance carried into every diagnostic: the source description, and
+/// the document once it is loaded (the target string before that).
 struct Context {
     source_name: String,
     document: String,
 }
 
 impl Context {
+    fn before_load(step: &Step) -> Self {
+        let (source_name, document) = match &step.target {
+            Some(StepTarget::ChannelPath(target)) => match classify_operation_path(target) {
+                OperationPathTarget::SourcePointer { source_name, .. } => {
+                    (source_name.to_string(), format!("target {target:?}"))
+                }
+                OperationPathTarget::Malformed(_) => {
+                    ("?".to_string(), format!("target {target:?}"))
+                }
+            },
+            Some(StepTarget::OperationId(target)) => match classify_operation_id(target) {
+                OperationIdTarget::SourceQualified { source_name, .. } => {
+                    (source_name.to_string(), format!("target {target:?}"))
+                }
+                _ => ("?".to_string(), format!("target {target:?}")),
+            },
+            Some(StepTarget::OperationPath(target)) => {
+                ("?".to_string(), format!("target {target:?}"))
+            }
+            Some(StepTarget::WorkflowId(target)) => {
+                ("?".to_string(), format!("workflowId {target:?}"))
+            }
+            None => ("?".to_string(), "no target".to_string()),
+        };
+        Self {
+            source_name,
+            document,
+        }
+    }
+
     fn unsupported(&self, detail: impl std::fmt::Display) -> RuntimeError {
         RuntimeError::new(
             RuntimeErrorKind::UnsupportedAsyncApiTransport,
@@ -105,59 +147,121 @@ fn resolve_error(err: ResolveError) -> RuntimeError {
     RuntimeError::new(kind, message)
 }
 
-/// Local `#/a/b/<key>` reference: returns the unescaped key when `reference`
-/// is exactly `prefix` followed by one more token.
-fn local_ref_key(reference: &str, prefix: &str) -> Option<String> {
-    let rest = reference.strip_prefix(prefix)?;
-    if rest.is_empty() || rest.contains('/') {
-        return None;
-    }
-    Some(rest.replace("~1", "/").replace("~0", "~"))
+/// Outcome of reading a local `#/<prefix><key>` reference.
+enum LocalRef {
+    /// The decoded, unescaped last token.
+    Key(String),
+    /// Not `#/<prefix>` followed by exactly one token.
+    OtherShape,
+    /// The fragment is not valid percent-encoded UTF-8.
+    BadEncoding,
 }
 
-fn ref_of(value: &Yaml) -> Option<&str> {
-    let map = value.as_mapping()?;
-    if map.len() != 1 {
-        return None;
+/// Reads a local JSON Reference whose fragment is `prefix` followed by one
+/// more token. The fragment is percent-decoded first (RFC 3986), then the
+/// RFC 6901 escapes are undone, so `#/channels/%66oo` names `foo`, never a
+/// key literally spelled `%66oo`.
+fn local_ref_key(reference: &str, prefix: &str) -> LocalRef {
+    let Some(fragment) = reference.strip_prefix('#') else {
+        return LocalRef::OtherShape;
+    };
+    let Ok(decoded) = percent_encoding::percent_decode_str(fragment).decode_utf8() else {
+        return LocalRef::BadEncoding;
+    };
+    let Some(rest) = decoded.strip_prefix(prefix) else {
+        return LocalRef::OtherShape;
+    };
+    if rest.is_empty() || rest.contains('/') {
+        return LocalRef::OtherShape;
     }
-    map.get(Yaml::String("$ref".into()))?.as_str()
+    LocalRef::Key(rest.replace("~1", "/").replace("~0", "~"))
+}
+
+/// The `$ref` of a Reference Object. AsyncAPI 3.0.0 Reference Object: the
+/// object "is defined by JSON Reference" — any mapping with a `$ref` key is a
+/// reference, and its other properties are not interpreted.
+fn ref_of(value: &Yaml) -> Option<&str> {
+    value
+        .as_mapping()?
+        .get(Yaml::String("$ref".into()))?
+        .as_str()
+}
+
+fn is_reference(value: &Yaml) -> bool {
+    value
+        .as_mapping()
+        .is_some_and(|map| map.contains_key(Yaml::String("$ref".into())))
 }
 
 fn components<'a>(root: &'a Yaml, section: &str) -> Option<&'a Yaml> {
     root.get("components")?.get(section)
 }
 
-/// Follows one local `$ref` into `components.<section>`; nested refs are
-/// refused. Returns the object and the name it was found under.
+/// Follows one local `$ref` into `components.<section>`; nested references
+/// are refused. `what` names the referring element for diagnostics.
 fn deref_component<'a>(
     ctx: &Context,
     root: &'a Yaml,
     value: &'a Yaml,
     section: &str,
     what: &str,
-) -> Result<(&'a Yaml, Option<String>), RuntimeError> {
-    let Some(reference) = ref_of(value) else {
-        return Ok((value, None));
+) -> Result<&'a Yaml, RuntimeError> {
+    if !is_reference(value) {
+        return Ok(value);
+    }
+    let reference =
+        ref_of(value).ok_or_else(|| ctx.config(format!("{what}: $ref must be a string")))?;
+    let prefix = format!("/components/{section}/");
+    let key = match local_ref_key(reference, &prefix) {
+        LocalRef::Key(key) => key,
+        LocalRef::BadEncoding => {
+            return Err(ctx.config(format!(
+                "{what}: $ref {reference:?} is not valid percent-encoded UTF-8"
+            )));
+        }
+        LocalRef::OtherShape => {
+            return Err(ctx.unsupported(format!(
+                "{what}: $ref {reference:?} is not a local #/components/{section}/<name> \
+                 reference"
+            )));
+        }
     };
-    let prefix = format!("#/components/{section}/");
-    let key = local_ref_key(reference, &prefix).ok_or_else(|| {
-        ctx.unsupported(format!(
-            "{what} $ref {reference:?} is not a local #/components/{section}/<name> reference"
-        ))
-    })?;
     let target = components(root, section)
         .and_then(|map| map.get(Yaml::String(key.clone())))
         .ok_or_else(|| {
             ctx.config(format!(
-                "{what} $ref {reference:?} names a missing components.{section} entry"
+                "{what}: $ref {reference:?} names a missing components.{section} entry"
             ))
         })?;
-    if ref_of(target).is_some() {
+    if is_reference(target) {
         return Err(ctx.unsupported(format!(
-            "{what} $ref {reference:?} resolves to another $ref; nested references are not followed"
+            "{what}: $ref {reference:?} resolves to another $ref; nested references are not \
+             followed"
         )));
     }
-    Ok((target, Some(key)))
+    Ok(target)
+}
+
+/// A `bindings` value that is itself a reference is refused: the D11 rule
+/// needs to see the fields to decide, and components.*Bindings are not
+/// followed.
+fn refuse_reference_bindings(ctx: &Context, owner: &Yaml, what: &str) -> Result<(), RuntimeError> {
+    if let Some(bindings) = owner.get("bindings") {
+        if is_reference(bindings) {
+            return Err(ctx.unsupported(format!(
+                "{what}: bindings is a Reference Object, which is not resolved; inline the \
+                 bindings so they can be checked"
+            )));
+        }
+        if let Some(kafka) = bindings.get("kafka") {
+            if is_reference(kafka) {
+                return Err(ctx.unsupported(format!(
+                    "{what}: bindings.kafka is a Reference Object, which is not resolved"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Projects `step` onto one Kafka receive target, or refuses.
@@ -167,52 +271,41 @@ pub(crate) fn project_receive_target(
     retrieval_dir: Option<&Path>,
     selection: Option<&str>,
 ) -> Result<ReceiveTarget, RuntimeError> {
+    let early = Context::before_load(step);
     // Rule 1: step form. Arazzo 1.1.0 Step Object: `action` "Indicates
     // whether the step will send (publish) or receive (subscribe)".
     match step.action {
         Some(StepAction::Receive) => {}
         Some(StepAction::Send) => {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::UnsupportedAsyncApiTransport,
-                format!(
-                    "step \"{}\": AsyncAPI send steps are not supported; the outgoing message \
-                     contract is unresolved upstream (OAI/Arazzo-Specification#617)",
-                    step.step_id
-                ),
-            ));
+            return Err(early.unsupported(format!(
+                "step \"{}\": AsyncAPI send steps are not supported; the outgoing message \
+                 contract is unresolved upstream (OAI/Arazzo-Specification#617)",
+                step.step_id
+            )));
         }
         None => {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::UnsupportedAsyncApiTransport,
-                format!(
-                    "step \"{}\": an AsyncAPI step must declare action: receive",
-                    step.step_id
-                ),
-            ));
+            return Err(early.unsupported(format!(
+                "step \"{}\": an AsyncAPI step must declare action: receive",
+                step.step_id
+            )));
         }
     }
     if step.correlation_id.is_some() {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::UnsupportedAsyncApiTransport,
-            format!(
-                "step \"{}\": correlationId filtering is not supported in this release; \
-                 remove correlationId or select the message with successCriteria",
-                step.step_id
-            ),
-        ));
+        return Err(early.unsupported(format!(
+            "step \"{}\": correlationId filtering is not supported in this release; remove \
+             correlationId or select the message with successCriteria",
+            step.step_id
+        )));
     }
     if step.request_body.is_some() {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::UnsupportedAsyncApiTransport,
-            format!(
-                "step \"{}\": requestBody has no meaning on a receive step",
-                step.step_id
-            ),
-        ));
+        return Err(early.unsupported(format!(
+            "step \"{}\": requestBody has no meaning on a receive step",
+            step.step_id
+        )));
     }
 
     // Rule 2: target form.
-    let (ctx, loaded, channel_key, channel, address, admitted_messages) = match &step.target {
+    let (ctx, loaded, channel_key, channel, address) = match &step.target {
         Some(StepTarget::ChannelPath(_)) => {
             let resolved =
                 resolve_local_channel(spec, step, retrieval_dir).map_err(resolve_error)?;
@@ -230,46 +323,45 @@ pub(crate) fn project_receive_target(
                 resolved.channel_key,
                 resolved.channel,
                 resolved.address,
-                None,
             )
         }
         Some(StepTarget::OperationId(target)) => {
-            resolve_operation(spec, step, target, retrieval_dir)?
+            resolve_operation(spec, step, target, retrieval_dir, &early)?
         }
         Some(StepTarget::OperationPath(_)) | Some(StepTarget::WorkflowId(_)) | None => {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::MessageTransportConfig,
-                format!(
-                    "step \"{}\": an AsyncAPI receive step needs channelPath or a \
-                     source-qualified operationId",
-                    step.step_id
-                ),
-            ));
+            return Err(early.config(format!(
+                "step \"{}\": an AsyncAPI receive step needs channelPath or a source-qualified \
+                 operationId",
+                step.step_id
+            )));
         }
     };
     let root = &loaded.root;
+    let channel_what = format!("channel \"{channel_key}\"");
 
     // Rule 3: address. AsyncAPI 3.0.0 Channel Object: "When null or absent, it
     // MUST be interpreted as unknown"; it "MAY contain Channel Address
     // Expressions", which this runtime does not evaluate.
     let topic = address.ok_or_else(|| {
         ctx.unsupported(format!(
-            "channel \"{channel_key}\" has no address; the specification says an absent or \
-             null address MUST be interpreted as unknown, so no topic can be derived"
+            "{channel_what} has no address; the specification says an absent or null address \
+             MUST be interpreted as unknown, so no topic can be derived"
         ))
     })?;
     if topic.is_empty() {
-        return Err(ctx.unsupported(format!("channel \"{channel_key}\" has an empty address")));
+        return Err(ctx.unsupported(format!("{channel_what} has an empty address")));
     }
     if topic.contains('{') || topic.contains('}') || channel.get("parameters").is_some() {
         return Err(ctx.unsupported(format!(
-            "channel \"{channel_key}\" address {topic:?} uses Channel Address Expressions / \
-             parameters, which are not supported; the address must be a literal topic name"
+            "{channel_what} address {topic:?} uses Channel Address Expressions / parameters, \
+             which are not supported; the address must be a literal topic name"
         )));
     }
 
     // Rule 9 (channel part): a kafka binding `topic` that disagrees with the
-    // address is refused rather than silently preferred (D11).
+    // address is refused rather than silently preferred (D11). Referenced
+    // bindings cannot be checked and are refused.
+    refuse_reference_bindings(&ctx, &channel, &channel_what)?;
     if let Some(bound) = channel
         .get("bindings")
         .and_then(|b| b.get("kafka"))
@@ -279,8 +371,8 @@ pub(crate) fn project_receive_target(
             Some(t) if t == topic => {}
             _ => {
                 return Err(ctx.unsupported(format!(
-                    "channel \"{channel_key}\" bindings.kafka.topic {bound:?} differs from the \
-                     address {topic:?}; the address is the topic and the binding cannot override it"
+                    "{channel_what} bindings.kafka.topic {bound:?} differs from the address \
+                     {topic:?}; the address is the topic and the binding cannot override it"
                 )));
             }
         }
@@ -294,14 +386,8 @@ pub(crate) fn project_receive_target(
     // Rule 7: security.
     let sasl = security_mechanism(&ctx, root, &server_key, server)?;
 
-    // Rule 8: content types for every admitted message.
-    admit_content_types(
-        &ctx,
-        root,
-        &channel,
-        &channel_key,
-        admitted_messages.as_deref(),
-    )?;
+    // Rule 8 (and the message part of rule 9) for every channel message.
+    admit_messages(&ctx, root, &channel, &channel_key)?;
 
     Ok(ReceiveTarget {
         source_name: ctx.source_name.clone(),
@@ -321,14 +407,7 @@ pub(crate) fn project_receive_target(
     })
 }
 
-type OperationResolution = (
-    Context,
-    LoadedAsyncApi,
-    String,
-    Yaml,
-    Option<String>,
-    Option<Vec<String>>,
-);
+type OperationResolution = (Context, LoadedAsyncApi, String, Yaml, Option<String>);
 
 /// The `operationId: $sourceDescriptions.<name>.<operationId>` form: the
 /// named Operation Object must be a direct `receive` on a local channel.
@@ -337,6 +416,7 @@ fn resolve_operation(
     step: &Step,
     target: &str,
     retrieval_dir: Option<&Path>,
+    early: &Context,
 ) -> Result<OperationResolution, RuntimeError> {
     let (source_name, operation_id) = match classify_operation_id(target) {
         OperationIdTarget::SourceQualified {
@@ -344,23 +424,17 @@ fn resolve_operation(
             operation_id,
         } => (source_name, operation_id),
         OperationIdTarget::Bare(_) => {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::MessageTransportConfig,
-                format!(
-                    "step \"{}\": an AsyncAPI receive step's operationId must be source-qualified \
-                     as $sourceDescriptions.<name>.<operationId>",
-                    step.step_id
-                ),
-            ));
+            return Err(early.config(format!(
+                "step \"{}\": an AsyncAPI receive step's operationId must be source-qualified as \
+                 $sourceDescriptions.<name>.<operationId>",
+                step.step_id
+            )));
         }
         OperationIdTarget::Malformed(reason) => {
-            return Err(RuntimeError::new(
-                RuntimeErrorKind::MessageTransportConfig,
-                format!(
-                    "step \"{}\": operationId {target:?}: {reason}",
-                    step.step_id
-                ),
-            ));
+            return Err(early.config(format!(
+                "step \"{}\": operationId {target:?}: {reason}",
+                step.step_id
+            )));
         }
     };
     let source = spec
@@ -368,24 +442,18 @@ fn resolve_operation(
         .iter()
         .find(|sd| sd.name == source_name)
         .ok_or_else(|| {
-            RuntimeError::new(
-                RuntimeErrorKind::MessageTransportConfig,
-                format!(
-                    "step \"{}\": operationId names sourceDescription \"{source_name}\", which \
-                     is not declared",
-                    step.step_id
-                ),
-            )
+            early.config(format!(
+                "step \"{}\": operationId names sourceDescription \"{source_name}\", which is \
+                 not declared",
+                step.step_id
+            ))
         })?;
     if source.type_ != SourceType::AsyncApi {
-        return Err(RuntimeError::new(
-            RuntimeErrorKind::UnsupportedAsyncApiTransport,
-            format!(
-                "step \"{}\": action: receive needs an asyncapi source, but sourceDescription \
-                 \"{source_name}\" is of type \"{}\"",
-                step.step_id, source.type_
-            ),
-        ));
+        return Err(early.unsupported(format!(
+            "step \"{}\": action: receive needs an asyncapi source, but sourceDescription \
+             \"{source_name}\" is of type \"{}\"",
+            step.step_id, source.type_
+        )));
     }
     let loaded =
         load_local_asyncapi(spec, source_name, target, retrieval_dir).map_err(resolve_error)?;
@@ -393,19 +461,20 @@ fn resolve_operation(
         source_name: source_name.to_string(),
         document: loaded.label.clone(),
     };
+    let what = format!("operation \"{operation_id}\"");
     let operation = loaded
         .root
         .get("operations")
         .and_then(|ops| ops.get(Yaml::String(operation_id.to_string())))
-        .ok_or_else(|| ctx.config(format!("operation \"{operation_id}\" is absent")))?;
-    if ref_of(operation).is_some() {
+        .ok_or_else(|| ctx.config(format!("{what} is absent")))?;
+    if is_reference(operation) {
         return Err(ctx.unsupported(format!(
-            "operation \"{operation_id}\" is a Reference Object, which is not resolved"
+            "{what} is a Reference Object, which is not resolved"
         )));
     }
     let fields = operation
         .as_mapping()
-        .ok_or_else(|| ctx.config(format!("operation \"{operation_id}\" must be a mapping")))?;
+        .ok_or_else(|| ctx.config(format!("{what} must be a mapping")))?;
     // AsyncAPI 3.0.0 Operation Object: `action` is "Required. Use send when
     // […], and receive when the application should expect receiving
     // messages from the given channel."
@@ -413,106 +482,108 @@ fn resolve_operation(
         Some("receive") => {}
         Some(other) => {
             return Err(ctx.unsupported(format!(
-                "operation \"{operation_id}\" has action \"{other}\" but the step declares \
-                 action: receive"
+                "{what} has action \"{other}\" but the step declares action: receive"
             )));
         }
         None => {
-            return Err(ctx.config(format!("operation \"{operation_id}\" has no action")));
+            return Err(ctx.config(format!("{what} has no action")));
         }
     }
     for field in ["security", "traits", "reply"] {
         if fields.contains_key(Yaml::String(field.into())) {
             return Err(ctx.unsupported(format!(
-                "operation \"{operation_id}\" declares `{field}`, which this runtime does not \
-                 apply (operation-level security, trait merging and request-reply are \
-                 unsupported); remove it or use channelPath"
+                "{what} declares `{field}`, which this runtime does not apply (operation-level \
+                 security, trait merging and request-reply are unsupported); remove it or use \
+                 channelPath"
             )));
         }
     }
-    let channel_ref = operation.get("channel").and_then(ref_of).ok_or_else(|| {
-        ctx.config(format!(
-            "operation \"{operation_id}\" channel must be a Reference Object"
-        ))
-    })?;
-    let channel_key = local_ref_key(channel_ref, "#/channels/").ok_or_else(|| {
-        ctx.unsupported(format!(
-            "operation \"{operation_id}\" channel $ref {channel_ref:?} is not a local \
-             #/channels/<key> reference"
-        ))
-    })?;
+    let channel_value = operation
+        .get("channel")
+        .ok_or_else(|| ctx.config(format!("{what} has no channel")))?;
+    let channel_ref = ref_of(channel_value)
+        .ok_or_else(|| ctx.config(format!("{what} channel must be a Reference Object")))?;
+    let channel_key = match local_ref_key(channel_ref, "/channels/") {
+        LocalRef::Key(key) => key,
+        LocalRef::BadEncoding => {
+            return Err(ctx.config(format!(
+                "{what} channel $ref {channel_ref:?} is not valid percent-encoded UTF-8"
+            )));
+        }
+        LocalRef::OtherShape => {
+            return Err(ctx.unsupported(format!(
+                "{what} channel $ref {channel_ref:?} is not a local #/channels/<key> reference"
+            )));
+        }
+    };
     let resolved =
         channel_from_root(&loaded, &channel_key, target, source_name).map_err(resolve_error)?;
 
-    // `messages`, when present, must name every channel message: without
-    // schema validation the runtime cannot tell which message type a record
-    // is, so a strict subset could let an excluded type drive the step.
-    let admitted = match operation.get("messages") {
-        None => None,
-        Some(list) => {
-            let items = list.as_sequence().ok_or_else(|| {
-                ctx.config(format!(
-                    "operation \"{operation_id}\" messages must be a list"
-                ))
+    // `messages`, when present, must name every channel message and nothing
+    // else: without schema validation the runtime cannot tell which message
+    // type a record is, so a strict subset could let an excluded type drive
+    // the step.
+    if let Some(list) = operation.get("messages") {
+        let items = list
+            .as_sequence()
+            .ok_or_else(|| ctx.config(format!("{what} messages must be a list")))?;
+        let prefix = format!(
+            "/channels/{}/messages/",
+            channel_key.replace('~', "~0").replace('/', "~1")
+        );
+        let channel_messages: BTreeSet<String> = resolved
+            .channel
+            .get("messages")
+            .and_then(Yaml::as_mapping)
+            .map(|m| {
+                m.keys()
+                    .filter_map(Yaml::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut listed = BTreeSet::new();
+        for item in items {
+            let reference = ref_of(item).ok_or_else(|| {
+                ctx.config(format!("{what} messages entries must be Reference Objects"))
             })?;
-            let prefix = format!(
-                "#/channels/{}/messages/",
-                channel_key.replace('~', "~0").replace('/', "~1")
-            );
-            let mut names = Vec::new();
-            for item in items {
-                let reference = ref_of(item).ok_or_else(|| {
-                    ctx.config(format!(
-                        "operation \"{operation_id}\" messages entries must be Reference Objects"
-                    ))
-                })?;
-                let name = local_ref_key(reference, &prefix).ok_or_else(|| {
-                    ctx.unsupported(format!(
-                        "operation \"{operation_id}\" messages $ref {reference:?} does not point \
-                         into channel \"{channel_key}\" messages"
-                    ))
-                })?;
-                names.push(name);
-            }
-            let channel_messages: Vec<String> = resolved
-                .channel
-                .get("messages")
-                .and_then(Yaml::as_mapping)
-                .map(|m| {
-                    m.keys()
-                        .filter_map(Yaml::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
-            let missing: Vec<&String> = channel_messages
-                .iter()
-                .filter(|name| !names.contains(name))
-                .collect();
-            if !missing.is_empty() {
-                return Err(ctx.unsupported(format!(
-                    "operation \"{operation_id}\" messages omits channel message(s) {missing:?}; \
-                     received messages cannot be identified by type, so list every channel \
-                     message or omit `messages`"
+            let name = match local_ref_key(reference, &prefix) {
+                LocalRef::Key(name) => name,
+                LocalRef::BadEncoding => {
+                    return Err(ctx.config(format!(
+                        "{what} messages $ref {reference:?} is not valid percent-encoded UTF-8"
+                    )));
+                }
+                LocalRef::OtherShape => {
+                    return Err(ctx.unsupported(format!(
+                        "{what} messages $ref {reference:?} does not point into channel \
+                         \"{channel_key}\" messages"
+                    )));
+                }
+            };
+            if !channel_messages.contains(&name) {
+                return Err(ctx.config(format!(
+                    "{what} messages $ref {reference:?} names a message that channel \
+                     \"{channel_key}\" does not declare"
                 )));
             }
-            Some(names)
+            listed.insert(name);
         }
-    };
+        let missing: Vec<&String> = channel_messages.difference(&listed).collect();
+        if !missing.is_empty() {
+            return Err(ctx.unsupported(format!(
+                "{what} messages omits channel message(s) {missing:?}; received messages cannot \
+                 be identified by type, so list every channel message or omit `messages`"
+            )));
+        }
+    }
 
-    Ok((
-        ctx,
-        loaded,
-        channel_key,
-        resolved.channel,
-        resolved.address,
-        admitted,
-    ))
+    Ok((ctx, loaded, channel_key, resolved.channel, resolved.address))
 }
 
 /// Rules 4–6. AsyncAPI 3.0.0 Channel Object `servers`: "If servers is absent
 /// or empty, this channel MUST be available on all the servers defined in
-/// the Servers Object."
+/// the Servers Object." Any other shape is a document error, not a fallback.
 fn select_server<'a>(
     ctx: &Context,
     root: &'a Yaml,
@@ -520,48 +591,55 @@ fn select_server<'a>(
     channel_key: &str,
     selection: Option<&str>,
 ) -> Result<(String, &'a Yaml), RuntimeError> {
-    let servers = root.get("servers").and_then(Yaml::as_mapping);
+    let what = format!("channel \"{channel_key}\"");
+    let root_servers = root.get("servers").and_then(Yaml::as_mapping);
     let candidate_keys: Vec<String> = match channel.get("servers") {
-        Some(list) if !list.as_sequence().is_none_or(|s| s.is_empty()) => {
-            let mut keys = Vec::new();
-            for item in list.as_sequence().into_iter().flatten() {
+        None | Some(Yaml::Null) => root_keys(root_servers),
+        Some(Yaml::Sequence(list)) if list.is_empty() => root_keys(root_servers),
+        Some(Yaml::Sequence(list)) => {
+            let mut keys: Vec<String> = Vec::new();
+            for item in list {
                 let reference = ref_of(item).ok_or_else(|| {
-                    ctx.config(format!(
-                        "channel \"{channel_key}\" servers entries must be Reference Objects"
-                    ))
+                    ctx.config(format!("{what} servers entries must be Reference Objects"))
                 })?;
-                let key = local_ref_key(reference, "#/servers/").ok_or_else(|| {
-                    ctx.config(format!(
-                        "channel \"{channel_key}\" servers $ref {reference:?} is not a local \
-                         #/servers/<key> reference"
-                    ))
-                })?;
-                keys.push(key);
+                let key = match local_ref_key(reference, "/servers/") {
+                    LocalRef::Key(key) => key,
+                    LocalRef::BadEncoding => {
+                        return Err(ctx.config(format!(
+                            "{what} servers $ref {reference:?} is not valid percent-encoded UTF-8"
+                        )));
+                    }
+                    LocalRef::OtherShape => {
+                        return Err(ctx.config(format!(
+                            "{what} servers $ref {reference:?} is not a local #/servers/<key> \
+                             reference"
+                        )));
+                    }
+                };
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
             }
             keys
         }
-        _ => servers
-            .map(|m| {
-                m.keys()
-                    .filter_map(Yaml::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        Some(_) => {
+            return Err(ctx.config(format!(
+                "{what} servers must be a list of Reference Objects (or absent/empty for all \
+                 servers)"
+            )));
+        }
     };
     if candidate_keys.is_empty() {
-        return Err(ctx.config(format!(
-            "channel \"{channel_key}\" has no servers: the document declares none"
-        )));
+        return Err(ctx.config(format!("{what} has no servers: the document declares none")));
     }
-    let servers = servers.ok_or_else(|| ctx.config("servers must be a mapping"))?;
+    let servers = root_servers.ok_or_else(|| ctx.config("servers must be a mapping"))?;
     let mut eligible: Vec<(String, &Yaml)> = Vec::new();
     let mut described: Vec<String> = Vec::new();
     for key in &candidate_keys {
         let server = servers
             .get(Yaml::String(key.clone()))
             .ok_or_else(|| ctx.config(format!("server \"{key}\" is absent from servers")))?;
-        if ref_of(server).is_some() {
+        if is_reference(server) {
             return Err(ctx.unsupported(format!(
                 "server \"{key}\" is a Reference Object, which is not resolved"
             )));
@@ -577,10 +655,15 @@ fn select_server<'a>(
     }
     if eligible.is_empty() {
         return Err(ctx.config(format!(
-            "channel \"{channel_key}\" has no Kafka server: candidates are {}",
+            "{what} has no Kafka server: candidates are {}",
             described.join(", ")
         )));
     }
+    let eligible_keys = eligible
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     match selection {
         Some(selected) => eligible
             .into_iter()
@@ -588,39 +671,51 @@ fn select_server<'a>(
             .ok_or_else(|| {
                 ctx.config(format!(
                     "--asyncapi-server selects \"{selected}\" but the eligible Kafka servers for \
-                     channel \"{channel_key}\" are {}",
-                    described.join(", ")
+                     {what} are {eligible_keys}"
                 ))
             }),
         None if eligible.len() == 1 => Ok(eligible.remove(0)),
         None => Err(ctx.config(format!(
-            "channel \"{channel_key}\" is available on several Kafka servers ({}); pick one with \
+            "{what} is available on several Kafka servers ({eligible_keys}); pick one with \
              --asyncapi-server {}=<key>",
-            eligible
-                .iter()
-                .map(|(key, _)| key.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
             ctx.source_name
         ))),
     }
 }
 
+fn root_keys(servers: Option<&serde_yaml_ng::Mapping>) -> Vec<String> {
+    servers
+        .map(|m| {
+            m.keys()
+                .filter_map(Yaml::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Rule 6. AsyncAPI 3.0.0 Server Object: `host` is "REQUIRED. The server host
 /// name. It MAY include the port. This field supports Server Variables."
-/// Only `default` values substitute (D3).
+/// Only `default` values substitute (D3), and the result must contain no
+/// brace at all.
 fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String, RuntimeError> {
+    let what = format!("server \"{server_key}\"");
+    if is_reference(server) {
+        return Err(ctx.unsupported(format!(
+            "{what} is a Reference Object, which is not resolved"
+        )));
+    }
     let host = server
         .get("host")
         .and_then(Yaml::as_str)
-        .ok_or_else(|| ctx.config(format!("server \"{server_key}\" has no string host")))?;
+        .ok_or_else(|| ctx.config(format!("{what} has no string host")))?;
     if server
         .get("pathname")
         .and_then(Yaml::as_str)
         .is_some_and(|p| !p.is_empty())
     {
         return Err(ctx.unsupported(format!(
-            "server \"{server_key}\" declares a pathname, which has no meaning for Kafka"
+            "{what} declares a pathname, which has no meaning for Kafka"
         )));
     }
     let mut out = String::new();
@@ -629,9 +724,7 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
         out.push_str(&rest[..open]);
         let after = &rest[open + 1..];
         let close = after.find('}').ok_or_else(|| {
-            ctx.config(format!(
-                "server \"{server_key}\" host {host:?} has an unterminated variable"
-            ))
+            ctx.config(format!("{what} host {host:?} has an unterminated variable"))
         })?;
         let name = &after[..close];
         let variable = server
@@ -639,8 +732,8 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
             .and_then(|v| v.get(name))
             .ok_or_else(|| {
                 ctx.config(format!(
-                    "server \"{server_key}\" host {host:?} uses variable {{{name}}} that is not \
-                     declared under variables"
+                    "{what} host {host:?} uses variable {{{name}}} that is not declared under \
+                     variables"
                 ))
             })?;
         let default = variable
@@ -648,15 +741,14 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
             .and_then(Yaml::as_str)
             .ok_or_else(|| {
                 ctx.config(format!(
-                    "server \"{server_key}\" variable {{{name}}} has no string default; only \
-                     defaults substitute in this release"
+                    "{what} variable {{{name}}} has no string default; only defaults substitute \
+                     in this release"
                 ))
             })?;
         if let Some(choices) = variable.get("enum").and_then(Yaml::as_sequence) {
             if !choices.iter().any(|c| c.as_str() == Some(default)) {
                 return Err(ctx.config(format!(
-                    "server \"{server_key}\" variable {{{name}}} default {default:?} is not in \
-                     its enum"
+                    "{what} variable {{{name}}} default {default:?} is not in its enum"
                 )));
             }
         }
@@ -665,7 +757,13 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
     }
     out.push_str(rest);
     if out.is_empty() {
-        return Err(ctx.config(format!("server \"{server_key}\" host is empty")));
+        return Err(ctx.config(format!("{what} host is empty")));
+    }
+    if out.contains('{') || out.contains('}') {
+        return Err(ctx.config(format!(
+            "{what} host {host:?} still contains a brace after substitution ({out:?}); variable \
+             defaults must not introduce placeholders"
+        )));
     }
     Ok(out)
 }
@@ -679,23 +777,29 @@ fn security_mechanism(
     server_key: &str,
     server: &Yaml,
 ) -> Result<Option<SaslMechanism>, RuntimeError> {
+    let what = format!("server \"{server_key}\" security");
     let Some(list) = server.get("security") else {
         return Ok(None);
     };
     let entries = list
         .as_sequence()
-        .ok_or_else(|| ctx.config(format!("server \"{server_key}\" security must be a list")))?;
+        .ok_or_else(|| ctx.config(format!("{what} must be a list")))?;
     if entries.is_empty() {
         return Ok(None);
     }
     let mut declared = Vec::new();
-    for entry in entries {
-        let (scheme, _) = deref_component(ctx, root, entry, "securitySchemes", "security scheme")?;
-        let type_ = scheme.get("type").and_then(Yaml::as_str).ok_or_else(|| {
-            ctx.config(format!(
-                "server \"{server_key}\" has a security scheme without a type"
-            ))
-        })?;
+    for (index, entry) in entries.iter().enumerate() {
+        let scheme = deref_component(
+            ctx,
+            root,
+            entry,
+            "securitySchemes",
+            &format!("{what}[{index}]"),
+        )?;
+        let type_ = scheme
+            .get("type")
+            .and_then(Yaml::as_str)
+            .ok_or_else(|| ctx.config(format!("{what}[{index}] has no type")))?;
         let mechanism = match type_ {
             "plain" => Some(SaslMechanism::Plain),
             "scramSha256" => Some(SaslMechanism::ScramSha256),
@@ -708,20 +812,21 @@ fn security_mechanism(
         declared.push(type_.to_string());
     }
     Err(ctx.unsupported(format!(
-        "server \"{server_key}\" security schemes {declared:?} are all unsupported; this runtime \
-         performs SASL plain, scramSha256 and scramSha512"
+        "{what} schemes {declared:?} are all unsupported; this runtime performs SASL plain, \
+         scramSha256 and scramSha512"
     )))
 }
 
-/// Rule 8. Effective content type with AsyncAPI precedence — the message's
-/// own `contentType`, otherwise the last trait's, otherwise the document
-/// `defaultContentType` — must be JSON.
-fn admit_content_types(
+/// Rule 8 and the message part of rule 9, for every channel message:
+/// referenced bindings and schema-registry framing are refused on the
+/// message and on each of its traits, whichever content type wins; the
+/// effective content type — the message's own `contentType`, otherwise the
+/// last trait's, otherwise the document `defaultContentType` — must be JSON.
+fn admit_messages(
     ctx: &Context,
     root: &Yaml,
     channel: &Yaml,
     channel_key: &str,
-    admitted: Option<&[String]>,
 ) -> Result<(), RuntimeError> {
     let Some(messages) = channel.get("messages") else {
         return Ok(());
@@ -738,49 +843,40 @@ fn admit_content_types(
                 "channel \"{channel_key}\" has a non-string message key"
             ))
         })?;
-        if admitted.is_some_and(|list| !list.iter().any(|n| n == name)) {
-            continue;
+        let what = format!("channel \"{channel_key}\" message \"{name}\"");
+        let message = deref_component(ctx, root, value, "messages", &what)?;
+        if !message.is_mapping() {
+            return Err(ctx.config(format!("{what} must be a mapping")));
         }
-        let (message, _) = deref_component(ctx, root, value, "messages", "message")?;
-        let message_map = message.as_mapping().ok_or_else(|| {
-            ctx.config(format!(
-                "channel \"{channel_key}\" message \"{name}\" must be a mapping"
-            ))
-        })?;
-        if let Some(bindings) = message_map
-            .get(Yaml::String("bindings".into()))
-            .and_then(|b| b.get("kafka"))
-        {
-            refuse_message_binding(ctx, channel_key, name, bindings)?;
+        refuse_reference_bindings(ctx, message, &what)?;
+        if let Some(kafka) = message.get("bindings").and_then(|b| b.get("kafka")) {
+            refuse_message_binding(ctx, &what, kafka)?;
         }
-        let mut effective = message_map
-            .get(Yaml::String("contentType".into()))
-            .and_then(Yaml::as_str);
-        if effective.is_none() {
-            if let Some(traits) = message_map.get(Yaml::String("traits".into())) {
-                let traits = traits.as_sequence().ok_or_else(|| {
-                    ctx.config(format!(
-                        "channel \"{channel_key}\" message \"{name}\" traits must be a list"
-                    ))
-                })?;
-                for trait_ in traits {
-                    let (trait_obj, _) =
-                        deref_component(ctx, root, trait_, "messageTraits", "message trait")?;
-                    if let Some(bindings) = trait_obj.get("bindings").and_then(|b| b.get("kafka")) {
-                        refuse_message_binding(ctx, channel_key, name, bindings)?;
-                    }
-                    if let Some(ct) = trait_obj.get("contentType").and_then(Yaml::as_str) {
-                        effective = Some(ct);
-                    }
+
+        let own = message.get("contentType").and_then(Yaml::as_str);
+        let mut from_traits: Option<&str> = None;
+        if let Some(traits) = message.get("traits") {
+            let traits = traits
+                .as_sequence()
+                .ok_or_else(|| ctx.config(format!("{what} traits must be a list")))?;
+            for (index, trait_) in traits.iter().enumerate() {
+                let trait_what = format!("{what} trait [{index}]");
+                let trait_obj = deref_component(ctx, root, trait_, "messageTraits", &trait_what)?;
+                refuse_reference_bindings(ctx, trait_obj, &trait_what)?;
+                if let Some(kafka) = trait_obj.get("bindings").and_then(|b| b.get("kafka")) {
+                    refuse_message_binding(ctx, &trait_what, kafka)?;
+                }
+                if let Some(ct) = trait_obj.get("contentType").and_then(Yaml::as_str) {
+                    from_traits = Some(ct);
                 }
             }
         }
-        let effective = effective.or(default);
+        let effective = own.or(from_traits).or(default);
         if let Some(ct) = effective {
             if !is_json_content_type(ct) {
                 return Err(ctx.unsupported(format!(
-                    "channel \"{channel_key}\" message \"{name}\" has effective content type \
-                     {ct:?}; only JSON (application/json or a +json suffix) is supported"
+                    "{what} has effective content type {ct:?}; only JSON (application/json or a \
+                     +json suffix) is supported"
                 )));
             }
         }
@@ -788,17 +884,12 @@ fn admit_content_types(
     Ok(())
 }
 
-fn refuse_message_binding(
-    ctx: &Context,
-    channel_key: &str,
-    name: &str,
-    bindings: &Yaml,
-) -> Result<(), RuntimeError> {
+fn refuse_message_binding(ctx: &Context, what: &str, bindings: &Yaml) -> Result<(), RuntimeError> {
     for field in REFUSED_MESSAGE_BINDING_FIELDS {
         if bindings.get(*field).is_some() {
             return Err(ctx.unsupported(format!(
-                "channel \"{channel_key}\" message \"{name}\" bindings.kafka.{field} declares a \
-                 schema-registry framing this runtime cannot decode"
+                "{what} bindings.kafka.{field} declares a schema-registry framing this runtime \
+                 cannot decode"
             )));
         }
     }

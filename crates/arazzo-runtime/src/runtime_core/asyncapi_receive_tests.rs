@@ -448,3 +448,143 @@ fn document_and_channel_problems_keep_the_resolver_kinds() {
         "outside supported 3.0.x",
     );
 }
+
+// ---- review round 1 counterexamples -------------------------------------
+
+#[test]
+fn trait_bindings_are_checked_even_when_the_message_sets_its_own_content_type() {
+    let mut doc = Doc::default();
+    doc.messages = "      orderPlaced:\n        contentType: application/json\n        traits:\n          - bindings:\n              kafka:\n                schemaIdLocation: payload\n".into();
+    expect_unsupported(project(&doc, channel_step()), "schemaIdLocation");
+}
+
+#[test]
+fn a_ref_with_sibling_properties_is_still_a_reference() {
+    let mut doc = Doc::default();
+    doc.operations = "  receiveOrderPlaced:\n    $ref: '#/components/operations/x'\n    action: receive\n    channel:\n      $ref: '#/channels/orderPlaced'\n".into();
+    expect_unsupported(project(&doc, operation_step()), "Reference Object");
+
+    doc.operations = Doc::default().operations;
+    doc.servers = "  local:\n    $ref: '#/components/servers/x'\n    host: 127.0.0.1:19092\n    protocol: kafka\n".into();
+    expect_unsupported(project(&doc, channel_step()), "Reference Object");
+
+    doc.servers = Doc::default().servers;
+    doc.messages = "      orderPlaced:\n        $ref: '#/components/messages/placed'\n        contentType: application/json\n".into();
+    doc.components = "  messages:\n    placed:\n      contentType: text/plain\n".into();
+    expect_unsupported(project(&doc, channel_step()), "text/plain");
+}
+
+#[test]
+fn reference_fragments_are_percent_decoded_before_lookup() {
+    let mut doc = Doc::default();
+    doc.servers = "  foo:\n    host: foo:9092\n    protocol: kafka\n  '%66oo':\n    host: percent:9092\n    protocol: kafka\n".into();
+    doc.channel_extra = "    servers:\n      - $ref: '#/servers/%66oo'\n".into();
+    let target = project(&doc, channel_step()).expect("decoded reference");
+    assert_eq!(target.server_key, "foo");
+    assert_eq!(target.endpoint.identity.host, "foo:9092");
+
+    doc.channel_extra = "    servers:\n      - $ref: '#/servers/%FF'\n".into();
+    expect_config(project(&doc, channel_step()), "percent-encoded");
+}
+
+#[test]
+fn referenced_bindings_are_refused_not_ignored() {
+    let mut doc = Doc::default();
+    doc.messages = "      orderPlaced:\n        contentType: application/json\n        bindings:\n          $ref: '#/components/messageBindings/framed'\n".into();
+    expect_unsupported(
+        project(&doc, channel_step()),
+        "bindings is a Reference Object",
+    );
+
+    doc.messages = Doc::default().messages;
+    doc.channel_extra = "    bindings:\n      $ref: '#/components/channelBindings/other'\n".into();
+    expect_unsupported(
+        project(&doc, channel_step()),
+        "bindings is a Reference Object",
+    );
+
+    doc.channel_extra =
+        "    bindings:\n      kafka:\n        $ref: '#/components/channelBindings/other'\n".into();
+    expect_unsupported(
+        project(&doc, channel_step()),
+        "bindings.kafka is a Reference Object",
+    );
+}
+
+#[test]
+fn non_list_channel_servers_do_not_fall_back_to_all_servers() {
+    let mut doc = Doc::default();
+    doc.channel_extra = "    servers: {}\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "must be a list of Reference Objects",
+    );
+    doc.channel_extra = "    servers: dev\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "must be a list of Reference Objects",
+    );
+    doc.channel_extra = "    servers: []\n".into();
+    project(&doc, channel_step()).expect("empty list means every server");
+}
+
+#[test]
+fn operation_messages_referencing_undeclared_messages_are_refused() {
+    let mut doc = Doc::default();
+    doc.operations = "  receiveOrderPlaced:\n    action: receive\n    channel:\n      $ref: '#/channels/orderPlaced'\n    messages:\n      - $ref: '#/channels/orderPlaced/messages/orderPlaced'\n      - $ref: '#/channels/orderPlaced/messages/missing'\n".into();
+    expect_config(project(&doc, operation_step()), "does not declare");
+}
+
+#[test]
+fn repeated_server_references_count_once_and_selection_errors_list_only_eligible_keys() {
+    let mut doc = Doc::default();
+    doc.servers = "  dev:\n    host: dev:9092\n    protocol: kafka\n  mq:\n    host: mq:5672\n    protocol: amqp\n".into();
+    doc.channel_extra =
+        "    servers:\n      - $ref: '#/servers/dev'\n      - $ref: '#/servers/dev'\n".into();
+    let target = project(&doc, channel_step()).expect("one server listed twice is one server");
+    assert_eq!(target.server_key, "dev");
+
+    doc.channel_extra = String::new();
+    let err =
+        project_with(&doc, channel_step(), "asyncapi", Some("mq")).expect_err("mq is not eligible");
+    assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
+    assert!(err.message.contains("are dev"), "{}", err.message);
+    assert!(!err.message.contains("mq (amqp)"), "{}", err.message);
+}
+
+#[test]
+fn substituted_hosts_must_not_keep_any_brace() {
+    let mut doc = Doc::default();
+    doc.servers = "  local:\n    host: '{host}'\n    protocol: kafka\n    variables:\n      host:\n        default: '{missing}'\n".into();
+    expect_config(project(&doc, channel_step()), "still contains a brace");
+    doc.servers = "  local:\n    host: 'broker}:9092'\n    protocol: kafka\n".into();
+    expect_config(project(&doc, channel_step()), "still contains a brace");
+    doc.servers = "  local:\n    host: '{host:9092'\n    protocol: kafka\n".into();
+    expect_config(project(&doc, channel_step()), "unterminated");
+}
+
+#[test]
+fn step_form_and_component_refusals_carry_provenance() {
+    let doc = Doc::default();
+    let err = project(
+        &doc,
+        json!({"stepId": "s", "channelPath": CHANNEL_PATH, "action": "send"}),
+    )
+    .expect_err("send is refused");
+    assert!(
+        err.message.contains("sourceDescription \"orders\""),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("step \"s\""), "{}", err.message);
+
+    let mut doc = Doc::default();
+    doc.messages = "      orderPlaced:\n        $ref: '#/components/messages/missing'\n".into();
+    let err = project(&doc, channel_step()).expect_err("dangling message ref");
+    assert!(
+        err.message
+            .contains("channel \"orderPlaced\" message \"orderPlaced\""),
+        "{}",
+        err.message
+    );
+}
