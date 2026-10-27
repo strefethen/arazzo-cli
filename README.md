@@ -261,6 +261,8 @@ This is useful when replaying a trace against a modified spec to detect drift.
 
 ## VS Code Debugger
 
+Install [Arazzo Debug from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug) to debug workflows in VS Code.
+
 The project includes a full Debug Adapter Protocol (DAP) implementation with a VS Code extension for interactive workflow debugging.
 
 ![VS Code Debugger](docs/images/vscode-debugger.png)
