@@ -133,6 +133,37 @@ fn dry_run_requests(result: &ExecutionResult) -> Vec<arazzo_runtime::DryRunReque
         .collect()
 }
 
+/// Releases a debugged run whether or not it is parked, so a check that
+/// failed (or a checkpoint that arrives after a wait expired) cannot leave
+/// the engine on the controller's condition variable with nobody to resume
+/// it: future stops are disarmed, the run is cancelled when the checks
+/// failed, and any stop that still lands is resumed until the run returns.
+async fn release_debug_run(
+    controller: &DebugController,
+    handle: arazzo_runtime::ExecutionHandle,
+    checks: &Result<(), String>,
+) -> ExecutionResult {
+    let _ = controller.set_breakpoints(Vec::new());
+    if checks.is_err() {
+        handle.cancel_token().cancel();
+    }
+    let _ = controller.continue_execution();
+    let mut collect = std::pin::pin!(handle.collect());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match tokio::time::timeout(Duration::from_millis(200), &mut collect).await {
+            Ok(result) => return result,
+            Err(_) => {
+                let _ = controller.continue_execution();
+                assert!(
+                    Instant::now() < deadline,
+                    "engine did not finish after release; checks: {checks:?}"
+                );
+            }
+        }
+    }
+}
+
 // ───────────────────────── hermetic ─────────────────────────
 
 #[tokio::test]
@@ -360,8 +391,8 @@ async fn an_unsupported_later_target_is_refused_before_the_first_one_connects() 
 
 // The controller's waits block the calling thread, so the engine needs a
 // worker of its own. Every check is collected before the controller is
-// released: a panic while the engine is parked at a gate would otherwise keep
-// the runtime from shutting down.
+// released through `release_debug_run`: a panic while the engine is parked at
+// a gate would otherwise keep the runtime from shutting down.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn debugger_evaluates_message_expressions_at_a_receive_checkpoint() {
     let fixture = Fixture::new();
@@ -423,8 +454,7 @@ async fn debugger_evaluates_message_expressions_at_a_receive_checkpoint() {
         Ok(())
     })();
 
-    let _ = controller.continue_execution();
-    let _ = handle.collect().await;
+    let _ = release_debug_run(&controller, handle, &checks).await;
     checks.expect("debugger sees the message snapshot");
 }
 
@@ -670,7 +700,7 @@ async fn kafka_receive_then_http_delivers_a_message_produced_after_arming() {
 
 // The controller's waits block the calling thread, so the engine needs a
 // worker of its own; checks are collected before the controller is released
-// (see the hermetic debugger case).
+// through `release_debug_run` (see the hermetic debugger case).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
 async fn kafka_debugger_evaluates_the_received_payload_at_the_criterion_checkpoint() {
@@ -739,8 +769,7 @@ async fn kafka_debugger_evaluates_the_received_payload_at_the_criterion_checkpoi
         Ok(())
     })();
 
-    let _ = controller.continue_execution();
-    let result = handle.collect().await;
+    let result = release_debug_run(&controller, handle, &checks).await;
     checks.expect("debugger sees the received message at the criterion checkpoint");
     let outputs = result.outputs.expect("workflow succeeds after continue");
     assert_eq!(outputs.get("id"), Some(&json!(42)));
