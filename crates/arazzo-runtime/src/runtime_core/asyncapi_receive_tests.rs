@@ -641,3 +641,23 @@ fn malformed_content_types_and_enums_are_document_errors_not_absences() {
     doc.servers = "  local:\n    host: '{env}:9092'\n    protocol: kafka\n    variables:\n      env:\n        default: 7\n".into();
     expect_config(project(&doc, channel_step()), "default must be a string");
 }
+
+// ---- review round 3 counterexamples -------------------------------------
+
+#[test]
+fn malformed_pathname_and_enum_elements_are_document_errors() {
+    let mut doc = Doc::default();
+    doc.servers =
+        "  local:\n    host: broker:9092\n    protocol: kafka\n    pathname: ['/production']\n"
+            .into();
+    expect_config(project(&doc, channel_step()), "pathname must be a string");
+
+    doc.servers = "  local:\n    host: broker:9092\n    protocol: kafka\n    pathname: ''\n".into();
+    project(&doc, channel_step()).expect("an empty pathname is no pathname");
+
+    doc.servers = "  local:\n    host: '{env}:9092'\n    protocol: kafka\n    variables:\n      env:\n        default: production\n        enum: [production, 7]\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "enum must be a list of strings",
+    );
+}

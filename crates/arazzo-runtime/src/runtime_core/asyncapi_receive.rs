@@ -714,14 +714,17 @@ fn server_host(
         .get("host")
         .and_then(Yaml::as_str)
         .ok_or_else(|| ctx.config(format!("{what} has no string host")))?;
-    if server
-        .get("pathname")
-        .and_then(Yaml::as_str)
-        .is_some_and(|p| !p.is_empty())
-    {
-        return Err(ctx.unsupported(format!(
-            "{what} declares a pathname, which has no meaning for Kafka"
-        )));
+    match server.get("pathname") {
+        None | Some(Yaml::Null) => {}
+        Some(Yaml::String(pathname)) if pathname.is_empty() => {}
+        Some(Yaml::String(_)) => {
+            return Err(ctx.unsupported(format!(
+                "{what} declares a pathname, which has no meaning for Kafka"
+            )));
+        }
+        Some(_) => {
+            return Err(ctx.config(format!("{what} pathname must be a string")));
+        }
     }
     let mut out = String::new();
     let mut rest = host;
@@ -767,7 +770,16 @@ fn server_host(
         match variable.get("enum") {
             None => {}
             Some(Yaml::Sequence(choices)) => {
-                if !choices.iter().any(|c| c.as_str() == Some(default)) {
+                let mut allowed = Vec::with_capacity(choices.len());
+                for choice in choices {
+                    let Some(choice) = choice.as_str() else {
+                        return Err(ctx.config(format!(
+                            "{what} variable {{{name}}} enum must be a list of strings"
+                        )));
+                    };
+                    allowed.push(choice);
+                }
+                if !allowed.contains(&default) {
                     return Err(ctx.config(format!(
                         "{what} variable {{{name}}} default {default:?} is not in its enum"
                     )));
