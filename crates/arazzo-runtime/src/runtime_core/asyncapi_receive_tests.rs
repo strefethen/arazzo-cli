@@ -329,7 +329,7 @@ fn host_variables_substitute_defaults_only_and_pathname_is_refused() {
     );
 
     doc.servers = "  local:\n    host: '{host}:9092'\n    protocol: kafka\n    variables:\n      host:\n        enum: [a]\n".into();
-    expect_config(project(&doc, channel_step()), "no string default");
+    expect_config(project(&doc, channel_step()), "has no default");
 
     doc.servers = "  local:\n    host: '{port}'\n    protocol: kafka\n    variables:\n      port:\n        default: '1'\n        enum: ['2']\n".into();
     expect_config(project(&doc, channel_step()), "not in");
@@ -587,4 +587,57 @@ fn step_form_and_component_refusals_carry_provenance() {
         "{}",
         err.message
     );
+}
+
+// ---- review round 2 counterexamples -------------------------------------
+
+#[test]
+fn server_variable_references_are_followed_one_hop_and_their_siblings_ignored() {
+    let mut doc = Doc::default();
+    doc.servers = "  local:\n    host: '{host}:9092'\n    protocol: kafka\n    variables:\n      host:\n        $ref: '#/components/serverVariables/host'\n        default: wrong-broker\n".into();
+    doc.components = "  serverVariables:\n    host:\n      default: right-broker\n".into();
+    let target = project(&doc, channel_step()).expect("component variable");
+    assert_eq!(target.endpoint.identity.host, "right-broker:9092");
+
+    doc.components = String::new();
+    expect_config(
+        project(&doc, channel_step()),
+        "missing components.serverVariables",
+    );
+
+    doc.servers = "  local:\n    host: '{host}:9092'\n    protocol: kafka\n    variables:\n      host:\n        $ref: '#/servers/local'\n        default: wrong-broker\n".into();
+    expect_unsupported(
+        project(&doc, channel_step()),
+        "not a local #/components/serverVariables",
+    );
+}
+
+#[test]
+fn malformed_content_types_and_enums_are_document_errors_not_absences() {
+    let mut doc = Doc::default();
+    doc.messages = "      orderPlaced:\n        contentType: [application/xml]\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "contentType must be a string",
+    );
+
+    doc.messages = "      orderPlaced:\n        traits:\n          - contentType: {a: b}\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "contentType must be a string",
+    );
+
+    doc.messages = Doc::default().messages;
+    doc.preamble = "defaultContentType: [text/plain]\n".into();
+    expect_config(
+        project(&doc, channel_step()),
+        "defaultContentType must be a string",
+    );
+
+    doc.preamble = String::new();
+    doc.servers = "  local:\n    host: '{env}:9092'\n    protocol: kafka\n    variables:\n      env:\n        default: production\n        enum: staging\n".into();
+    expect_config(project(&doc, channel_step()), "enum must be a list");
+
+    doc.servers = "  local:\n    host: '{env}:9092'\n    protocol: kafka\n    variables:\n      env:\n        default: 7\n".into();
+    expect_config(project(&doc, channel_step()), "default must be a string");
 }

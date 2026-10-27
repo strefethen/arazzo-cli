@@ -381,7 +381,7 @@ pub(crate) fn project_receive_target(
     // Rules 4–6: servers.
     let (server_key, server) = select_server(&ctx, root, &channel, &channel_key, selection)?;
     let tls_required = server.get("protocol").and_then(Yaml::as_str) == Some("kafka-secure");
-    let host = server_host(&ctx, &server_key, server)?;
+    let host = server_host(&ctx, root, &server_key, server)?;
 
     // Rule 7: security.
     let sasl = security_mechanism(&ctx, root, &server_key, server)?;
@@ -698,7 +698,12 @@ fn root_keys(servers: Option<&serde_yaml_ng::Mapping>) -> Vec<String> {
 /// name. It MAY include the port. This field supports Server Variables."
 /// Only `default` values substitute (D3), and the result must contain no
 /// brace at all.
-fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String, RuntimeError> {
+fn server_host(
+    ctx: &Context,
+    root: &Yaml,
+    server_key: &str,
+    server: &Yaml,
+) -> Result<String, RuntimeError> {
     let what = format!("server \"{server_key}\"");
     if is_reference(server) {
         return Err(ctx.unsupported(format!(
@@ -727,7 +732,7 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
             ctx.config(format!("{what} host {host:?} has an unterminated variable"))
         })?;
         let name = &after[..close];
-        let variable = server
+        let declared = server
             .get("variables")
             .and_then(|v| v.get(name))
             .ok_or_else(|| {
@@ -736,19 +741,41 @@ fn server_host(ctx: &Context, server_key: &str, server: &Yaml) -> Result<String,
                      variables"
                 ))
             })?;
-        let default = variable
-            .get("default")
-            .and_then(Yaml::as_str)
-            .ok_or_else(|| {
-                ctx.config(format!(
-                    "{what} variable {{{name}}} has no string default; only defaults substitute \
-                     in this release"
-                ))
-            })?;
-        if let Some(choices) = variable.get("enum").and_then(Yaml::as_sequence) {
-            if !choices.iter().any(|c| c.as_str() == Some(default)) {
+        // Server Variable Object | Reference Object: one local hop into
+        // components.serverVariables; a reference's siblings are never read.
+        let variable = deref_component(
+            ctx,
+            root,
+            declared,
+            "serverVariables",
+            &format!("{what} variable {{{name}}}"),
+        )?;
+        let default = match variable.get("default") {
+            Some(Yaml::String(default)) => default.as_str(),
+            Some(_) => {
                 return Err(ctx.config(format!(
-                    "{what} variable {{{name}}} default {default:?} is not in its enum"
+                    "{what} variable {{{name}}} default must be a string"
+                )));
+            }
+            None => {
+                return Err(ctx.config(format!(
+                    "{what} variable {{{name}}} has no default; only defaults substitute in this \
+                     release"
+                )));
+            }
+        };
+        match variable.get("enum") {
+            None => {}
+            Some(Yaml::Sequence(choices)) => {
+                if !choices.iter().any(|c| c.as_str() == Some(default)) {
+                    return Err(ctx.config(format!(
+                        "{what} variable {{{name}}} default {default:?} is not in its enum"
+                    )));
+                }
+            }
+            Some(_) => {
+                return Err(ctx.config(format!(
+                    "{what} variable {{{name}}} enum must be a list of strings"
                 )));
             }
         }
@@ -836,7 +863,7 @@ fn admit_messages(
             "channel \"{channel_key}\" messages must be a mapping"
         ))
     })?;
-    let default = root.get("defaultContentType").and_then(Yaml::as_str);
+    let default = content_type_field(ctx, root, "defaultContentType", "document")?;
     for (key, value) in messages {
         let name = key.as_str().ok_or_else(|| {
             ctx.config(format!(
@@ -853,7 +880,7 @@ fn admit_messages(
             refuse_message_binding(ctx, &what, kafka)?;
         }
 
-        let own = message.get("contentType").and_then(Yaml::as_str);
+        let own = content_type_field(ctx, message, "contentType", &what)?;
         let mut from_traits: Option<&str> = None;
         if let Some(traits) = message.get("traits") {
             let traits = traits
@@ -866,7 +893,7 @@ fn admit_messages(
                 if let Some(kafka) = trait_obj.get("bindings").and_then(|b| b.get("kafka")) {
                     refuse_message_binding(ctx, &trait_what, kafka)?;
                 }
-                if let Some(ct) = trait_obj.get("contentType").and_then(Yaml::as_str) {
+                if let Some(ct) = content_type_field(ctx, trait_obj, "contentType", &trait_what)? {
                     from_traits = Some(ct);
                 }
             }
@@ -894,6 +921,21 @@ fn refuse_message_binding(ctx: &Context, what: &str, bindings: &Yaml) -> Result<
         }
     }
     Ok(())
+}
+
+/// `contentType` (or `defaultContentType`) when present: a non-string value
+/// is a document error rather than an absent field.
+fn content_type_field<'a>(
+    ctx: &Context,
+    owner: &'a Yaml,
+    field: &str,
+    what: &str,
+) -> Result<Option<&'a str>, RuntimeError> {
+    match owner.get(field) {
+        None | Some(Yaml::Null) => Ok(None),
+        Some(Yaml::String(value)) => Ok(Some(value.as_str())),
+        Some(_) => Err(ctx.config(format!("{what} {field} must be a string"))),
+    }
 }
 
 fn is_json_content_type(value: &str) -> bool {
