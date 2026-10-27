@@ -189,9 +189,11 @@ cmd_produce() {
   if [ -n "$key" ]; then
     # The console producer only takes keys from the input line
     # (headers<TAB>key<TAB>value with parse.key), so insert the fixed key
-    # after the headers of every line.
+    # after the headers of every line. The key travels through ENVIRON, not
+    # `awk -v`, because -v interprets backslash escapes and would corrupt a
+    # key such as order\next.
     props+=(--property parse.key=true)
-    awk -v k="$key" 'BEGIN { FS = "\t"; OFS = "\t" } { h = $1; sub(/^[^\t]*\t/, ""); print h, k, $0 }' \
+    ARAZZO_KAFKA_RECORD_KEY="$key" awk 'BEGIN { FS = "\t"; OFS = "\t"; k = ENVIRON["ARAZZO_KAFKA_RECORD_KEY"] } { h = $1; sub(/^[^\t]*\t/, ""); print h, k, $0 }' \
       | in_container /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9095 \
           --topic "$topic" --compression-codec "$codec" "${props[@]}" >/dev/null
     return

@@ -343,9 +343,10 @@ async fn kafka_every_enabled_codec_decodes_and_zstd_is_refused_explicitly() {
         );
     }
     // The contracted `produce <topic> --key <k>` form: every line carries the
-    // fixed key after its headers.
+    // fixed key after its headers, byte for byte — a backslash sequence in
+    // the key must not be interpreted (round-2 review regression).
     script(
-        &["produce", &topic, "--key", "order-7"],
+        &["produce", &topic, "--key", "order\\next"],
         Some("kind:keyed\t{\"keyed\":true}\n"),
     );
     let outcome = armed
@@ -357,7 +358,7 @@ async fn kafka_every_enabled_codec_decodes_and_zstd_is_refused_explicitly() {
     let ReceiveOutcome::Received(record) = outcome else {
         panic!("keyed: expected a record, got {outcome:?}");
     };
-    assert_eq!(record.key.as_deref(), Some(&b"order-7"[..]));
+    assert_eq!(record.key.as_deref(), Some(&b"order\\next"[..]));
     assert_eq!(record.value.as_deref(), Some(&br#"{"keyed":true}"#[..]));
     assert_eq!(
         record.headers.get("kind").map(Vec::as_slice),
