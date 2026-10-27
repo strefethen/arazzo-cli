@@ -26,6 +26,7 @@ the method and path from those documents.
 | `sub-workflow.arazzo.yaml` | `parent-flow`, `child-create` | Parent/child workflow composition with input/output passing | `cargo run -p arazzo-cli -- run examples/sub-workflow.arazzo.yaml parent-flow --dry-run --input item_name=widget` |
 | `swagger-petstore-crud.arazzo.yaml` | `crud-pet`, `crud-order`, `crud-user` | Generated CRUD lifecycles against the Swagger Petstore | `cargo run -p arazzo-cli -- run examples/swagger-petstore-crud.arazzo.yaml crud-pet --dry-run` |
 | `soap-customer-crud.arazzo.yaml` | `soap-crud` | SOAP envelopes as `text/xml` bodies, XPath success criteria | `cargo run -p arazzo-cli -- run examples/soap-customer-crud.arazzo.yaml soap-crud --dry-run` |
+| `kafka-order-followup.arazzo.yaml` | `order-followup`, `await-only` | AsyncAPI `receive` step on a Kafka topic feeding an HTTP step; both target spellings (`operationId` and `channelPath`); needs the pinned broker — see [docs/kafka-receive.md](../docs/kafka-receive.md) | `cargo run -p arazzo-cli -- run examples/kafka-order-followup.arazzo.yaml order-followup --dry-run` |
 | `self-base-referencing.arazzo.yaml` | `list-then-read` | `$self` as the base URI for a relative `sourceDescriptions` url; requests resolve against the bound document's own `servers` | `cargo run -p arazzo-cli -- run examples/self-base-referencing.arazzo.yaml list-then-read --dry-run` |
 
 ## Deep-Dive Examples
@@ -59,6 +60,11 @@ Arazzo document. It is the input that produced
 cargo run -p arazzo-cli -- generate --spec examples/swagger-petstore.openapi.json --scenario crud
 ```
 
+`descriptions/orders.asyncapi.yaml` (AsyncAPI 3.0, the `orders.placed` Kafka
+topic on the harness broker) and `descriptions/orders.openapi.yaml` (the
+`GET /orders/{orderId}` the demo responder `scripts/kafka/order-server.py`
+answers) are the two sources of `kafka-order-followup.arazzo.yaml`.
+
 `descriptions/petstore.openapi.yaml` is the document
 `self-base-referencing.arazzo.yaml` binds to. It is deliberately *not* beside
 that file: the Arazzo document is read from `examples/`, but its `$self`
@@ -72,6 +78,10 @@ Delete the `$self` line and the run fails, naming the file it looked for in
 - `soap-customer-crud.arazzo.yaml` points at a SOAP mock on
   `http://localhost:4010`, which this repo does not ship. Validate and dry-run
   it as-is; a live run needs your own mock at that address.
+- `kafka-order-followup.arazzo.yaml` validates and dry-runs offline; a live run
+  needs `scripts/kafka/broker.sh up` and `scripts/kafka/order-server.py`, and
+  a record produced after the armed line — the full sequence is in
+  [docs/kafka-receive.md](../docs/kafka-receive.md).
 - `swagger-petstore-crud.arazzo.yaml` uses the public Swagger Petstore, whose
   data is shared and periodically reset — live runs may fail on state left by
   other callers.

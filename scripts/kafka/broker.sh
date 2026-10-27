@@ -7,7 +7,8 @@
 #   scripts/kafka/broker.sh topic <name> [n]  create a topic with n partitions (default 1)
 #   scripts/kafka/broker.sh produce <topic> [--codec none|gzip|snappy|lz4|zstd] [--key <k>]
 #                                             stdin lines: headers<TAB>payload;
-#                                             headers are h1:v1,h2:v2 or empty;
+#                                             headers are h1:v1,h2:v2 (at least one;
+#                                             the console producer rejects an empty field);
 #                                             --key <k> sends every line with record key k
 #   scripts/kafka/broker.sh groups            list consumer groups (expected: none)
 #   scripts/kafka/broker.sh connections       count established client connections

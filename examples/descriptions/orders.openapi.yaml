@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+  title: Orders API
+  version: 1.0.0
+  description: >-
+    The HTTP side of the Kafka receive example. `scripts/kafka/order-server.py`
+    answers this operation on 127.0.0.1:18080.
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Fetch one order by id.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: integer
+                  status:
+                    type: string

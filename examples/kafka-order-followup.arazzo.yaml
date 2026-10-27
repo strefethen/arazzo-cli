@@ -1,0 +1,54 @@
+arazzo: 1.1.0
+info:
+  title: Kafka order follow-up
+  version: 1.0.0
+  summary: Wait for an order event on Kafka, then fetch the order over HTTP.
+  description: >-
+    The receive step is armed when the run starts, so an event produced after
+    the verbose "Kafka receiver armed" line is the one it consumes. See
+    docs/kafka-receive.md for the full reproduction with the pinned broker.
+sourceDescriptions:
+  - name: orders
+    url: ./descriptions/orders.asyncapi.yaml
+    type: asyncapi
+  - name: shop
+    url: ./descriptions/orders.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: order-followup
+    summary: Receive the next placed order and read it back from the API.
+    steps:
+      - stepId: await-order
+        description: The next orders.placed record produced after arming.
+        operationId: $sourceDescriptions.orders.receiveOrderPlaced
+        action: receive
+        timeout: 30000
+        successCriteria:
+          - condition: "$message.payload#/status == 'placed'"
+        outputs:
+          orderId: $message.payload#/orderId
+          status: $message.payload#/status
+      - stepId: fetch-order
+        description: Read the order the event announced.
+        operationId: $sourceDescriptions.shop.getOrder
+        dependsOn: [await-order]
+        parameters:
+          - name: orderId
+            in: path
+            value: $steps.await-order.outputs.orderId
+        successCriteria:
+          - condition: $statusCode == 200
+    outputs:
+      orderId: $steps.await-order.outputs.orderId
+      status: $steps.await-order.outputs.status
+  - workflowId: await-only
+    summary: The receive step alone, spelled with channelPath.
+    steps:
+      - stepId: await-order
+        channelPath: '{$sourceDescriptions.orders.url}#/channels/orderPlaced'
+        action: receive
+        timeout: 30000
+        outputs:
+          orderId: $message.payload#/orderId
+    outputs:
+      orderId: $steps.await-order.outputs.orderId

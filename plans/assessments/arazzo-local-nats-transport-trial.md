@@ -63,3 +63,10 @@ The first sandboxed live run was denied loopback access (`live-debug.log`). A pe
 With the broker-side readiness observation in place, the ordinary filter passed four tests and ignored ten live cases (`focused-monitor.log`), and the serial debug live suite passed all ten (`live-debug-monitor.log`). In the serial release live suite, all three new cases passed, but the existing changed-receive case failed before its route mutation with `receive guard change_step_id=false: NATS_TRIAL_BUFFER_EXPIRED` (`live-release-monitor.log`). That run had not yet applied the new barrier to the existing case and was not a full pass. The same exact-subject check was subsequently applied before its old-reply publication; its route/identity rejection assertions and timeouts remain unchanged. Logs are under `/private/tmp/asyncapi-receive-http-evidence/`, using the same pinned server and commands above.
 
 Final verification with the readiness check applied passed all ten live cases in both debug and release (`live-debug-verified.log`, `live-release-verified.log`). The ordinary filter passed four tests with ten live cases explicitly ignored (`focused-verified.log`). `cargo check --workspace`, formatting, Clippy with all targets/features and warnings denied, and `cargo test --workspace` all exited 0 (`check-verified.log`, `fmt-verified.log`, `clippy-verified.log`, `workspace-verified.log`; commands and exits in `verified-results.json`). These runs used the pre-existing uncommitted workspace version/profile settings; those manifest/lock changes are unrelated and excluded from this ticket. The final passes establish the observed trial results, not a retrospective diagnosis of every earlier timeout.
+
+## Disposition (2026-10-27)
+
+The production decision went to Kafka: see
+[`arazzo-first-asyncapi-transport-decision.md`](arazzo-first-asyncapi-transport-decision.md)
+(D1–D11) and the shipped contract in [`docs/kafka-receive.md`](../../docs/kafka-receive.md).
+The NATS trial is retained as test-only (`cfg(test)` modules and their ignored live cases); nothing here is activated for users.

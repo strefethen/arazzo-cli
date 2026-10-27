@@ -67,6 +67,18 @@ records contain execution facts; CLI code owns the persisted `run.v1` envelope,
 grouping, redaction and atomic writing. Undeclared request/response bodies are
 absent from run records; a body explicitly selected as an output remains data.
 
+Beside the HTTP executor (`runtime_core/engine_http.rs`) sits the message
+executor (`runtime_core/engine_message.rs`): it arms every Kafka receive step
+of an invocation before the first step runs (connecting through the
+`runtime_core/kafka/` client module and snapshotting partition end offsets),
+owns the per-invocation cursors keyed by connection identity and topic, and
+turns the next record into the step's `$message` context, criteria, outputs,
+and the optional `message` object on its trace record. Document admission
+(`asyncapi_receive.rs`) decides, before any connection, which AsyncAPI forms
+the executor will run; the CLI's `message_transport.rs` converts the Kafka
+flags into the engine's options. The user-facing contract is
+[kafka-receive.md](kafka-receive.md).
+
 The [cumulative structure assessment](../plans/assessments/project-structure.md)
 records dated measurements, ownership guidance and remaining structural debt.
 
