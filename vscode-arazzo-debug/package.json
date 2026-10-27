@@ -2,7 +2,7 @@
   "name": "arazzo-debug",
   "displayName": "Arazzo Debugger",
   "description": "Debug Arazzo workflow files with breakpoints and step controls.",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "strefethen",
   "license": "MIT",
   "preview": true,
@@ -40,6 +40,10 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      { "command": "arazzo.sendFeedback", "title": "Arazzo: Send Feedback" },
+      { "command": "arazzo.reportBug", "title": "Arazzo: Report a Bug" }
+    ],
     "languages": [
       {
         "id": "arazzo",

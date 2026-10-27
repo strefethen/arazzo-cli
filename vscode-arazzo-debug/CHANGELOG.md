@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.9] - 2026-10-27
+
+Share feedback directly from VS Code to help shape Arazzo Debugger.
+
+**Upgrade if** you want a quick way to report debugger bugs or suggest improvements.
+
+- New **Arazzo: Send Feedback** and **Arazzo: Report a Bug** commands open GitHub issue drafts with environment details for you to review and submit.
+- A one-time invitation appears after your third debug session ends. Dismiss it with **Don’t Ask Again** or close it; it will not appear again.
+- The Marketplace README explains how to share feedback. Session counts stay in local extension storage.
+
 ## [0.0.8] - 2026-10-17
 
 Debugger failures now explain what went wrong and where, with reliable inspection of parent and child workflows.

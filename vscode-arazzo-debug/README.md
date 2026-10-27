@@ -23,6 +23,14 @@ Step-through debugging for [Arazzo](https://spec.openapis.org/arazzo/v1.1.0) API
 3. Open the Run and Debug panel (`Ctrl+Shift+D` / `Cmd+Shift+D`)
 4. Click **"create a launch.json file"** → select **Arazzo: Debug Workflow** → fill in your workflow ID
 
+## Feedback
+
+Tell us what works, what is confusing, or what you need next. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and run **Arazzo: Send Feedback** or **Arazzo: Report a Bug**. Both open a GitHub issue draft with your extension version, VS Code version, and OS; you review and submit it yourself. A GitHub account is required to submit an issue.
+
+After your third debug session ends, a one-time invitation offers **Send Feedback** and **Don’t Ask Again**. Closing it also dismisses it permanently. The session counter stays in VS Code’s local extension storage and is not sent to a server. Feedback commands remain available anytime.
+
+You can also [share feedback or report a bug on GitHub](https://github.com/strefethen/arazzo-cli/issues).
+
 ## Launch Configuration
 
 Add to `.vscode/launch.json`:
