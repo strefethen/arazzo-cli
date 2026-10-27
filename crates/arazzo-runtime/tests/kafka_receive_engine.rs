@@ -668,6 +668,86 @@ async fn kafka_receive_then_http_delivers_a_message_produced_after_arming() {
     producer.delete_topic(&topic).await;
 }
 
+// The controller's waits block the calling thread, so the engine needs a
+// worker of its own; checks are collected before the controller is released
+// (see the hermetic debugger case).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
+async fn kafka_debugger_evaluates_the_received_payload_at_the_criterion_checkpoint() {
+    let bootstrap = bootstrap();
+    let producer = Producer::connect(&bootstrap).await;
+    let topic = unique_topic("debugger");
+    producer.create_topic(&topic, 1).await;
+    let fixture = Fixture::new();
+    fixture.asyncapi(&bootstrap, &topic);
+    let (server, hits, _paths) = ok_server();
+    fixture.openapi(&server.base_url);
+    let observer = ArmedObserver::new();
+    let controller = Arc::new(DebugController::new());
+    controller
+        .set_breakpoints(vec![
+            StepBreakpoint::new("followup", "await-order").at_success_criterion(0)
+        ])
+        .expect("breakpoint");
+    let engine = EngineBuilder::new(fixture.arazzo(RECEIVE_THEN_HTTP))
+        .source_base_dir(fixture.path())
+        .trace(true)
+        .observer(Arc::clone(&observer) as Arc<dyn ExecutionObserver>)
+        .debug_controller(Arc::clone(&controller))
+        .message_transport(options(Duration::from_secs(15)))
+        .build()
+        .expect("engine");
+
+    let handle = engine.execute("followup", BTreeMap::new());
+    wait_armed(&observer).await;
+    producer
+        .produce(&topic, 0, r#"{"id":42,"status":"placed"}"#)
+        .await;
+
+    let checks: Result<(), String> = (|| {
+        if !controller
+            .wait_for_stop_count(1, Duration::from_secs(15))
+            .map_err(|e| e.to_string())?
+        {
+            return Err("not paused at the receive criterion".into());
+        }
+        let checkpoint = controller
+            .stop_events()
+            .map_err(|e| e.to_string())?
+            .last()
+            .map(|event| event.checkpoint.clone());
+        if checkpoint != Some(StepCheckpoint::SuccessCriterion { index: 0 }) {
+            return Err(format!("unexpected checkpoint {checkpoint:?}"));
+        }
+        let id = controller
+            .evaluate_expression("$message.payload#/id")
+            .map_err(|e| e.to_string())?;
+        if id != json!(42) {
+            return Err(format!(
+                "received payload not visible at the criterion: {id}"
+            ));
+        }
+        let status = controller
+            .evaluate_expression("$message.payload#/status")
+            .map_err(|e| e.to_string())?;
+        if status != json!("placed") {
+            return Err(format!("unexpected status at the criterion: {status}"));
+        }
+        if hits.load(Ordering::SeqCst) != 0 {
+            return Err("the dependent HTTP step ran before the criterion was released".into());
+        }
+        Ok(())
+    })();
+
+    let _ = controller.continue_execution();
+    let result = handle.collect().await;
+    checks.expect("debugger sees the received message at the criterion checkpoint");
+    let outputs = result.outputs.expect("workflow succeeds after continue");
+    assert_eq!(outputs.get("id"), Some(&json!(42)));
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    producer.delete_topic(&topic).await;
+}
+
 #[tokio::test]
 #[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
 async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
@@ -683,12 +763,19 @@ async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let done_rx = Mutex::new(done_rx);
+    // The handler records whether production finished before it replied;
+    // asserted after the run, so a slow producer fails the test instead of
+    // letting the ordering go unproven.
+    let barrier_held = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let barrier_flag = Arc::clone(&barrier_held);
     let server = start_server(move |_m, _u, _h, _b| {
         let _ = tx.send(());
-        let _ = done_rx
+        let completed = done_rx
             .lock()
             .unwrap()
-            .recv_timeout(Duration::from_secs(15));
+            .recv_timeout(Duration::from_secs(15))
+            .is_ok();
+        barrier_flag.store(completed, Ordering::SeqCst);
         MockHttpResponse::json(200, "{}")
     });
     fixture.openapi(&server.base_url);
@@ -718,6 +805,10 @@ async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
     assert!(
         produced.load(Ordering::SeqCst),
         "event was produced after the HTTP call"
+    );
+    assert!(
+        barrier_held.load(Ordering::SeqCst),
+        "the HTTP response was released before production completed"
     );
     let records = trace_records(&result);
     let outputs = result
@@ -782,18 +873,37 @@ async fn kafka_step_timeout_and_execution_timeout_are_distinct_and_leave_no_conn
         .parse()
         .unwrap();
 
-    // Step timeout: fails the attempt with the message code.
-    let with_timeout = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: await-order\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        timeout: 1500\n");
+    // Step timeout: the attempt fails with the message code and is routed
+    // through the step's `onFailure: end`, which ends the workflow with the
+    // original error kind rather than a generic criteria failure.
+    let with_timeout = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: await-order\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        timeout: 1500\n        onFailure:\n          - name: stop\n            type: end\n");
     let observer = ArmedObserver::new();
     let engine = live_engine(&fixture, with_timeout, observer, false);
     let started = Instant::now();
-    let err = engine
-        .execute_collect("w", BTreeMap::new())
-        .await
-        .outputs
-        .expect_err("times out");
+    let result = engine.execute_collect("w", BTreeMap::new()).await;
+    let err = result.outputs.as_ref().expect_err("times out");
     assert_eq!(err.kind, RuntimeErrorKind::MessageReceiveTimeout, "{err}");
     assert_eq!(err.code(), "RUNTIME_MESSAGE_RECEIVE_TIMEOUT");
+    assert!(
+        err.message.contains("workflow ended by onFailure action"),
+        "onFailure end was not applied: {err}"
+    );
+    let record = trace_records(&result)
+        .into_iter()
+        .find(|record| record.step_id == "await-order")
+        .expect("timed-out attempt is traced");
+    assert_eq!(
+        record.decision.path,
+        arazzo_runtime::TraceDecisionPath::Done
+    );
+    assert_eq!(record.decision.action_type, "end");
+    assert!(record.message.is_none(), "nothing was received: {record:?}");
+    // The record carries the routed outcome (as HTTP failures do); the
+    // timeout's own kind survives in the workflow error asserted above.
+    assert_eq!(
+        record.error.as_deref(),
+        Some("step await-order: workflow ended by onFailure action")
+    );
     assert!(
         started.elapsed() >= Duration::from_millis(1_400)
             && started.elapsed() < Duration::from_secs(5),
