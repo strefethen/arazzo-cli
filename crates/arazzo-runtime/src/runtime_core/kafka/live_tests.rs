@@ -315,12 +315,12 @@ async fn kafka_consecutive_receives_return_consecutive_records() {
 
 #[tokio::test]
 #[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
-async fn kafka_every_enabled_codec_decodes() {
+async fn kafka_every_enabled_codec_decodes_and_zstd_is_refused_explicitly() {
     let (host, client) = plain_client().await;
     let topic = unique_topic("codecs");
     create_topic(&client, &topic, 1).await;
     let mut armed = arm_topic(&client, &host, &topic).await;
-    for codec in ["gzip", "snappy", "lz4", "zstd"] {
+    for codec in ["gzip", "snappy", "lz4"] {
         let payload = format!(r#"{{"codec":"{codec}"}}"#);
         script(
             &["produce", &topic, "--codec", codec],
@@ -342,6 +342,49 @@ async fn kafka_every_enabled_codec_decodes() {
             "{codec}"
         );
     }
+    // The contracted `produce <topic> --key <k>` form: every line carries the
+    // fixed key after its headers.
+    script(
+        &["produce", &topic, "--key", "order-7"],
+        Some("kind:keyed\t{\"keyed\":true}\n"),
+    );
+    let outcome = armed
+        .receive_next(
+            Some(Instant::now() + Duration::from_secs(10)),
+            &CancellationToken::new(),
+        )
+        .await;
+    let ReceiveOutcome::Received(record) = outcome else {
+        panic!("keyed: expected a record, got {outcome:?}");
+    };
+    assert_eq!(record.key.as_deref(), Some(&b"order-7"[..]));
+    assert_eq!(record.value.as_deref(), Some(&br#"{"keyed":true}"#[..]));
+    assert_eq!(
+        record.headers.get("kind").map(Vec::as_slice),
+        Some(&b"keyed"[..])
+    );
+
+    // zstd is compiled out (unpatched advisories in the only zstd line rskafka
+    // 0.6.0 accepts); a zstd batch must fail visibly, never hang or vanish.
+    script(
+        &["produce", &topic, "--codec", "zstd"],
+        Some("codec:zstd\t{\"codec\":\"zstd\"}\n"),
+    );
+    let outcome = armed
+        .receive_next(
+            Some(Instant::now() + Duration::from_secs(10)),
+            &CancellationToken::new(),
+        )
+        .await;
+    let ReceiveOutcome::Transport(err) = outcome else {
+        panic!("zstd: expected an explicit transport error, got {outcome:?}");
+    };
+    assert_eq!(err.kind, RuntimeErrorKind::MessageTransport);
+    assert!(
+        err.message.to_ascii_lowercase().contains("zstd"),
+        "{}",
+        err.message
+    );
     delete_topic(&client, &topic).await;
 }
 
@@ -363,8 +406,8 @@ async fn kafka_deadline_and_cancellation_are_distinct_and_prompt() {
     assert!(matches!(outcome, ReceiveOutcome::TimedOut), "{outcome:?}");
     let elapsed = started.elapsed();
     assert!(
-        elapsed >= Duration::from_millis(1_100) && elapsed < Duration::from_millis(2_500),
-        "{elapsed:?}"
+        elapsed >= Duration::from_millis(1_150) && elapsed <= Duration::from_millis(1_450),
+        "deadline 1 200 ms must end within one fetch wait (250 ms): {elapsed:?}"
     );
 
     let cancel = CancellationToken::new();

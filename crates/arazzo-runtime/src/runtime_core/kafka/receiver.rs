@@ -15,9 +15,6 @@ use crate::runtime_core::error::{RuntimeError, RuntimeErrorKind};
 /// Longest a single fetch asks the broker to hold the request open. Short so
 /// that deadlines and cancellation are honoured promptly.
 const FETCH_WAIT: Duration = Duration::from_millis(250);
-/// Bound on one fetch round trip. rskafka 0.6.0 has no request timeout of
-/// its own, so a broker that stops answering would otherwise hang the wait.
-const FETCH_CALL_LIMIT: Duration = Duration::from_secs(10);
 /// Largest batch one fetch may return.
 const MAX_FETCH_BYTES: i32 = 1024 * 1024;
 
@@ -204,6 +201,12 @@ impl ArmedTopic {
     /// Waits for the next record at or after the cursors. Partitions are
     /// polled round-robin from where the previous call stopped; the first
     /// non-empty batch wins and only that partition's cursor advances.
+    ///
+    /// Bounded exactly by the caller's `deadline` and `cancel`, nothing else
+    /// (D8): a broker that stops answering mid-fetch is a wait the step
+    /// `timeout` or the run's execution timeout ends, because rskafka 0.6.0
+    /// has no request timeout of its own and this module adds no policy of
+    /// its own.
     pub(crate) async fn receive_next(
         &mut self,
         deadline: Option<Instant>,
@@ -219,11 +222,6 @@ impl ArmedTopic {
             }
             let wait = remaining.map_or(FETCH_WAIT, |left| left.min(FETCH_WAIT));
             let wait_ms = i32::try_from(wait.as_millis()).unwrap_or(i32::MAX);
-            // One round trip may not exceed the step's remaining time and
-            // may never exceed the stall bound.
-            let call_limit = remaining
-                .map_or(FETCH_CALL_LIMIT, |left| left.min(FETCH_CALL_LIMIT))
-                .max(Duration::from_millis(1));
 
             let index = self.next_index % self.partitions.len();
             self.next_index = (index + 1) % self.partitions.len();
@@ -233,13 +231,23 @@ impl ArmedTopic {
                 .client
                 .fetch_records(offset, 1..MAX_FETCH_BYTES, wait_ms);
 
-            let fetched = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return ReceiveOutcome::Cancelled,
-                result = tokio::time::timeout(call_limit, fetch) => result,
+            let fetched = match remaining {
+                Some(left) => tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return ReceiveOutcome::Cancelled,
+                    result = tokio::time::timeout(left, fetch) => match result {
+                        Ok(result) => result,
+                        Err(_) => return ReceiveOutcome::TimedOut,
+                    },
+                },
+                None => tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return ReceiveOutcome::Cancelled,
+                    result = fetch => result,
+                },
             };
             match fetched {
-                Ok(Ok((records, _high_watermark))) => {
+                Ok((records, _high_watermark)) => {
                     if let Some(record) = earliest(records) {
                         cursor.next_offset = record.offset + 1;
                         return ReceiveOutcome::Received(ReceivedRecord {
@@ -254,29 +262,19 @@ impl ArmedTopic {
                     }
                     // Empty: fall through to the next partition.
                 }
-                Ok(Err(KafkaError::ServerError {
+                Err(KafkaError::ServerError {
                     protocol_error: ProtocolError::OffsetOutOfRange,
                     ..
-                })) => {
+                }) => {
                     return ReceiveOutcome::Transport(transport(format!(
                         "offset {offset} of partition {} of topic \"{}\" on Kafka broker {} is no \
                          longer available (retention removed records this run had not read)",
                         cursor.partition, self.topic, self.host
                     )));
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     return ReceiveOutcome::Transport(transport(format!(
                         "fetching partition {} of topic \"{}\" on Kafka broker {} failed: {err}",
-                        cursor.partition, self.topic, self.host
-                    )));
-                }
-                Err(_) => {
-                    if deadline.is_some_and(|at| Instant::now() >= at) {
-                        return ReceiveOutcome::TimedOut;
-                    }
-                    return ReceiveOutcome::Transport(transport(format!(
-                        "fetching partition {} of topic \"{}\" on Kafka broker {} did not answer \
-                         within {FETCH_CALL_LIMIT:?}",
                         cursor.partition, self.topic, self.host
                     )));
                 }

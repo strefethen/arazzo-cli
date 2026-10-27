@@ -5,10 +5,10 @@
 #   scripts/kafka/broker.sh up [--secure]     start; prints bootstrap address(es)
 #   scripts/kafka/broker.sh down              graceful stop (container runs with --rm)
 #   scripts/kafka/broker.sh topic <name> [n]  create a topic with n partitions (default 1)
-#   scripts/kafka/broker.sh produce <topic> [--codec none|gzip|snappy|lz4|zstd] [--key]
-#                                             stdin lines: headers<TAB>payload
-#                                             (with --key: headers<TAB>key<TAB>payload);
-#                                             headers are h1:v1,h2:v2 or empty
+#   scripts/kafka/broker.sh produce <topic> [--codec none|gzip|snappy|lz4|zstd] [--key <k>]
+#                                             stdin lines: headers<TAB>payload;
+#                                             headers are h1:v1,h2:v2 or empty;
+#                                             --key <k> sends every line with record key k
 #   scripts/kafka/broker.sh groups            list consumer groups (expected: none)
 #   scripts/kafka/broker.sh connections       count established client connections
 #
@@ -95,6 +95,17 @@ write_properties() {
   } > "$file"
 }
 
+MARKER=".arazzo-kafka-harness"
+
+# Refuse to treat anything but a directory this script created as harness
+# state: `down` deletes it.
+state_dir_is_ours() {
+  case "$STATE_DIR" in
+    ""|/|/tmp|/var|/var/tmp|/private/tmp|"$HOME"|"$HOME"/) return 1 ;;
+  esac
+  [ -f "$STATE_DIR/$MARKER" ]
+}
+
 cmd_up() {
   local secure=0
   [ "${1:-}" = "--secure" ] && secure=1
@@ -102,7 +113,14 @@ cmd_up() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     die "container $CONTAINER is already running (scripts/kafka/broker.sh down)"
   fi
+  case "$STATE_DIR" in
+    ""|/|/tmp|/var|/var/tmp|/private/tmp|"$HOME"|"$HOME"/) die "ARAZZO_KAFKA_STATE_DIR=$STATE_DIR is not a dedicated directory" ;;
+  esac
+  if [ -e "$STATE_DIR" ] && [ ! -f "$STATE_DIR/$MARKER" ]; then
+    die "ARAZZO_KAFKA_STATE_DIR=$STATE_DIR exists but was not created by this script"
+  fi
   mkdir -p "$STATE_DIR"
+  : > "$STATE_DIR/$MARKER"
   write_properties "$secure"
   local format_args=""
   local publish=(-p "127.0.0.1:${PORT}:9092")
@@ -143,7 +161,11 @@ cmd_down() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     docker stop "$CONTAINER" >/dev/null
   fi
-  rm -rf "$STATE_DIR"
+  if state_dir_is_ours; then
+    rm -rf -- "$STATE_DIR"
+  elif [ -e "$STATE_DIR" ]; then
+    echo "broker.sh: leaving $STATE_DIR alone (not created by this script)" >&2
+  fi
 }
 
 cmd_topic() {
@@ -155,16 +177,25 @@ cmd_topic() {
 
 cmd_produce() {
   local topic="${1:?topic}"; shift
-  local codec="none" key=0
+  local codec="none" key=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --codec) codec="$2"; shift 2 ;;
-      --key) key=1; shift ;;
+      --codec) codec="${2:?--codec needs a value}"; shift 2 ;;
+      --key) key="${2:?--key needs a value}"; shift 2 ;;
       *) die "produce: unknown argument $1" ;;
     esac
   done
   local props=(--property parse.headers=true)
-  [ "$key" = 1 ] && props+=(--property parse.key=true)
+  if [ -n "$key" ]; then
+    # The console producer only takes keys from the input line
+    # (headers<TAB>key<TAB>value with parse.key), so insert the fixed key
+    # after the headers of every line.
+    props+=(--property parse.key=true)
+    awk -v k="$key" 'BEGIN { FS = "\t"; OFS = "\t" } { h = $1; sub(/^[^\t]*\t/, ""); print h, k, $0 }' \
+      | in_container /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9095 \
+          --topic "$topic" --compression-codec "$codec" "${props[@]}" >/dev/null
+    return
+  fi
   in_container /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9095 \
     --topic "$topic" --compression-codec "$codec" "${props[@]}" >/dev/null
 }

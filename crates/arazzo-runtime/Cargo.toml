@@ -17,18 +17,22 @@ arazzo-spec = { path = "../arazzo-spec" }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Kafka receive client: pure Rust, rustls/ring TLS, SASL PLAIN/SCRAM. Exact pin
-# for the same reason as async-nats below; every codec a producer may have used
-# is decodable (lz4/zstd compile C through cc, as ring already does).
+# for the same reason as async-nats below. gzip, snappy and lz4 batches decode
+# (lz4 compiles C through cc, as ring already does). zstd is deliberately off:
+# rskafka 0.6.0 only accepts zstd 0.13 / zstd-safe 7, which carry unpatched
+# RUSTSEC-2026-0391/0398/0403; a zstd batch fails with an explicit codec error
+# (follow-up ac-e20be epic) until a release built on zstd 0.14 exists.
 rskafka = { version = "=0.6.0", default-features = false, features = [
     "transport-tls",
     "compression-gzip",
     "compression-lz4",
     "compression-snappy",
-    "compression-zstd",
 ] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = { version = "1.14", features = ["std"] }
-webpki-roots = "1"
+# 1.0.10 is the first bundle without the distrusted emSign intermediates
+# (RUSTSEC-2026-0381).
+webpki-roots = "1.0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"

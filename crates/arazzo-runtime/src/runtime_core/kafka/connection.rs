@@ -164,8 +164,12 @@ pub(crate) fn plan(
         (None, None) => (None, None),
     };
 
+    // A supplied CA bundle is validated whether or not this endpoint uses
+    // TLS: a bad file is a configuration error the user must see, not one
+    // that waits for the first secure server to surface it.
+    let roots = root_store(options.ca_pem.as_deref())?;
     let tls = if endpoint.tls_required || options.tls {
-        Some(Arc::new(tls_config(options.ca_pem.as_deref())?))
+        Some(Arc::new(tls_config(roots)?))
     } else {
         None
     };
@@ -179,7 +183,7 @@ pub(crate) fn plan(
     })
 }
 
-fn tls_config(ca_pem: Option<&[u8]>) -> Result<rustls::ClientConfig, RuntimeError> {
+fn root_store(ca_pem: Option<&[u8]>) -> Result<rustls::RootCertStore, RuntimeError> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(pem) = ca_pem {
@@ -203,6 +207,10 @@ fn tls_config(ca_pem: Option<&[u8]>) -> Result<rustls::ClientConfig, RuntimeErro
             ));
         }
     }
+    Ok(roots)
+}
+
+fn tls_config(roots: rustls::RootCertStore) -> Result<rustls::ClientConfig, RuntimeError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -406,6 +414,21 @@ mod tests {
     }
 
     #[test]
+    fn bad_ca_bundle_is_refused_even_for_a_plaintext_endpoint() {
+        let options = MessageTransportOptions {
+            ca_pem: Some(b"not a pem".to_vec()),
+            ..MessageTransportOptions::default()
+        };
+        let err = plan(&endpoint(false, None), &options).unwrap_err();
+        assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
+        assert!(
+            err.message.contains("no CERTIFICATE blocks"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
     fn plan_debug_never_shows_credentials() {
         let plan = plan(
             &endpoint(true, Some(SaslMechanism::Plain)),
@@ -439,7 +462,7 @@ mod tests {
         assert_eq!(err.kind, RuntimeErrorKind::MessageTransport);
         assert!(err.message.contains("127.0.0.1:1"), "{}", err.message);
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            started.elapsed() < Duration::from_secs(1),
             "{:?}",
             started.elapsed()
         );
