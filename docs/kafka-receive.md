@@ -57,6 +57,18 @@ credentials were supplied. Operation-level `security` is refused (AsyncAPI
 requires it in addition to server security; one SASL identity cannot satisfy
 two lists).
 
+**References.** `$ref` is followed exactly one hop, and only into the
+document's own `components`: a channel message into `components.messages`, a
+trait into `components.messageTraits`, a server variable into
+`components.serverVariables`, and a security requirement into
+`components.securitySchemes`. The channel itself must be inline under
+`channels` and the operation's `channel` must be a local `#/channels/<key>`
+reference. Refused: a server that is a Reference Object; a `bindings` object
+(or its `kafka` entry) on a channel, message, or trait that is a Reference
+Object; a reference that is not local, or that resolves to another reference
+(nested). A local reference whose target does not exist is a configuration
+error naming the missing component.
+
 **Messages.** JSON only. A channel message's *effective* content type follows
 AsyncAPI precedence — the message's own `contentType`, otherwise the last
 `contentType` among its `traits` in order, otherwise the document
@@ -67,13 +79,22 @@ strict subset is refused, because without schema validation the runtime
 cannot tell which message type a record is. Message schemas are not
 validated at runtime (a documented choice, matching the HTTP side).
 
-**Refused before any connection**, with `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`
-or `RUNTIME_MESSAGE_TRANSPORT_CONFIG` naming the field: `action: send`;
-`correlationId`; `requestBody` on a receive step; a `$ref` channel or
-operation; channel `parameters`; a null or templated `address`; operation
-`traits`, `security`, or `reply`; a strict `messages` subset; server
-`pathname`; a non-JSON effective content type; no eligible server, or several
-without a selection.
+**Compression.** Batches compressed with gzip, snappy, or lz4 are decoded.
+**zstd is not built in** (its only compatible crate line carries open security
+advisories): a zstd-compressed batch fails the attempt with
+`RUNTIME_MESSAGE_TRANSPORT` naming the codec.
+
+**Refused before any connection.** Unsupported forms report
+`RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` naming the field: `action: send`; a
+step without `action`; `correlationId`; `requestBody` on a receive step; a
+`$ref` channel, operation, or server; a null or templated `address` (Channel
+Address Expressions and channel `parameters`); operation `traits`, `security`,
+or `reply`; a strict `messages` subset; server `pathname`; a security list
+with no supported scheme; a non-JSON effective content type. Structural and
+selection problems — a malformed target, an undeclared source, a `$ref` to a
+missing component, no eligible server, several without a selection, an
+unresolved server variable — report `RUNTIME_MESSAGE_TRANSPORT_CONFIG`. The
+Codes table below has the full split.
 
 ### Bindings
 
@@ -100,8 +121,10 @@ connects, and records the end offset of every partition of each topic
 *before the first step runs*. A receive step consumes from those offsets. So
 an event produced by an earlier step of the same workflow (the HTTP call that
 triggers it) is received even though it arrived before the receive step
-began, while records produced before the run started are never received.
-This is the tool's documented starting position, not an option. Arming
+began, while, on topics without transactional producers, records produced
+before the run started are never received (see Limitations for the
+transactional case). This is the tool's documented starting position, not an
+option. Arming
 completion is observable: `--verbose` prints one line per armed topic, and
 that line is the readiness signal to produce against.
 
@@ -166,7 +189,7 @@ plaintext, no credentials, bundled roots, 30 s.
 | Flag or variable | Commands | Meaning |
 | --- | --- | --- |
 | `--kafka-username <USER>` / `ARAZZO_KAFKA_USERNAME` | `run`, `test` | SASL username, when the selected server declares a supported scheme |
-| `ARAZZO_KAFKA_PASSWORD` | `run`, `test` | SASL password. **Environment only** — there is no flag, so the secret never enters process arguments or shell history. |
+| `ARAZZO_KAFKA_PASSWORD` | `run`, `test` | SASL password. **Environment only** — there is no flag, so the secret is never a process argument visible to other users. An inline `VAR=value command` assignment can still land in your shell's history; load it from a protected source (a secret manager, or `export` from a file your shell does not record) instead. |
 | `--kafka-tls` | `run`, `test` | Use TLS for a plain `kafka` server (`kafka-secure` servers always use TLS) |
 | `--kafka-ca-cert <PEM>` | `run`, `test` | Additional CA certificate(s) trusted for broker verification, on top of the bundled Mozilla roots |
 | `--kafka-connect-timeout <DURATION>` | `run`, `test` | Preparation deadline for one arming pass (default `30s`) |
@@ -195,16 +218,17 @@ Kafka receiver armed: orders.placed on 127.0.0.1:19092 (1 partitions)
 it carries an optional `message` object: `transport` (`kafka`), `host`,
 `topic`, `partition`, `offset`, `timestampMs`, `key`, `headers`,
 `payloadBytes`, `payloadPreview`, `payload`, `payloadLossy`, and `simulated`
-(dry run). Headers, key, and payload are redacted and truncated by the same
-rules as HTTP responses (`--trace-max-body-bytes`). See
+(dry run). Header values and the key are redacted by the same patterns as
+HTTP headers; the payload and its preview are redacted like HTTP response
+bodies and truncated to `--trace-max-body-bytes`. See
 [trace-schema-v1.md](trace-schema-v1.md).
 
 **Codes.**
 
 | Code | Cause |
 | --- | --- |
-| `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` | A document form this release does not execute: `send`, `correlationId`, `$ref` channel/operation, channel parameters, templated address, operation traits/security/reply, strict `messages` subset, replay of a receive step |
-| `RUNTIME_MESSAGE_TRANSPORT_CONFIG` | Document or option problems found before connecting: no eligible server, several without `--asyncapi-server`, unresolved server variable, `pathname`, unsupported security list, non-JSON content type, refused binding, credentials for a server without security, incomplete credentials |
+| `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` | A document form this release does not execute: `send`, a step without `action`, `correlationId`, `requestBody` on a receive, a `$ref` channel, operation, server, or bindings object, a null or templated address, `bindings.kafka.topic` differing from the address, an operation whose `action` is not `receive`, operation `traits`/`security`/`reply`, a strict `messages` subset, server `pathname`, a security list with no supported scheme, a non-JSON effective content type, the schema-registry message binding fields, and replay of a receive step |
+| `RUNTIME_MESSAGE_TRANSPORT_CONFIG` | Structural or selection problems found before connecting: a target that is not `channelPath` or a source-qualified `operationId`, an undeclared source, a `$ref` that names a missing component, no eligible Kafka server, several servers without `--asyncapi-server` (or a selection that names none of them), an undeclared or default-less server variable, malformed `messages`/`servers` lists, credentials supplied for a server that declares no security, incomplete credentials, an unreadable CA bundle |
 | `RUNTIME_MESSAGE_TRANSPORT` | Connecting, TLS, SASL, metadata, a missing topic, the preparation deadline, a trimmed cursor, or a fetch failure |
 | `RUNTIME_MESSAGE_RECEIVE_TIMEOUT` | The step `timeout` elapsed before a record arrived |
 | `RUNTIME_MESSAGE_MALFORMED` | The record's value is not JSON or a header value is not UTF-8 |
@@ -221,6 +245,8 @@ object. In `test`, a run-time failure is a case error with `errorCode`.
   send-payload contract yet.
 - **No schema validation** of received payloads against the channel's
   message schema.
+- **No zstd.** gzip, snappy, and lz4 batches decode; a zstd batch fails with
+  `RUNTIME_MESSAGE_TRANSPORT`.
 - **Transactional producers.** Records from aborted transactions are
   delivered (client limitation), and the arming position is the last
   *stable* offset, so non-transactional records queued behind a transaction
@@ -293,8 +319,10 @@ from this process. `--json` turns every outcome into one JSON object;
 `--trace trace.json` writes the redacted record. For the secured listener,
 start the broker with `scripts/kafka/broker.sh up --secure`, point a
 `kafka-secure` server at `127.0.0.1:19093` with a `scramSha256` security
-scheme, and run with `ARAZZO_KAFKA_USERNAME=arazzo ARAZZO_KAFKA_PASSWORD=arazzo-secret`
-and `--kafka-ca-cert /tmp/arazzo-kafka/ca.pem`.
+scheme, export `ARAZZO_KAFKA_USERNAME=arazzo` and `ARAZZO_KAFKA_PASSWORD` (the
+harness's fixed test value, `arazzo-secret`, is fine to type here; a real
+password should come from a secret store rather than an inline assignment),
+and run with `--kafka-ca-cert /tmp/arazzo-kafka/ca.pem`.
 
 Finish with:
 
