@@ -87,12 +87,23 @@ step without `timeout` waits for.
 
 Pin: `rskafka = { version = "=0.6.0", default-features = false, features =
 ["transport-tls", "compression-gzip", "compression-lz4",
-"compression-snappy", "compression-zstd"] }`. The exact pin matches the
-repository's existing practice for `async-nats`. All four codecs are enabled
-(**implementation choice**): a producer's compression setting is invisible to
-the Arazzo author, and a receive capability that fails on compressed batches is
-a sharp edge. `lz4-sys` and `zstd-sys` compile C through `cc`; `ring` already
-does, so this adds build time, not a new toolchain requirement. The unreleased
+"compression-snappy"] }`. The exact pin matches the repository's existing
+practice for `async-nats`. gzip, snappy and lz4 are enabled (**implementation
+choice**): a producer's compression setting is invisible to the Arazzo author,
+and a receive capability that fails on compressed batches is a sharp edge.
+`lz4-sys` compiles C through `cc`; `ring` already does, so this adds build
+time, not a new toolchain requirement. **zstd is deliberately excluded**
+(decided by recommendation during ac-a16ea, 2026-10-27): rskafka 0.6.0 only
+accepts `zstd 0.13` / `zstd-safe 7`, and `cargo audit` on the candidate
+lockfile reported RUSTSEC-2026-0391, -0398 and -0403 (patched only in zstd
+0.14.3 / zstd-safe 8.2.0, which the client's unreleased main adopts) plus
+eleven `unsound` warnings on that line. A release binary does not ship those; a
+zstd-compressed batch fails with an explicit `RUNTIME_MESSAGE_TRANSPORT`
+naming the codec, the live suite proves it, and the docs list it. The same
+audit surfaced two pre-existing advisories on the TLS path this feature now
+depends on directly (`webpki-roots` 1.0.6 → RUSTSEC-2026-0381, patched 1.0.10;
+`rustls-webpki` 0.103.15 → RUSTSEC-2026-0382, patched 0.103.16); the lockfile
+is moved to the patched versions in the same candidate. The unreleased
 main branch raises MSRV to 1.95, so the next `rskafka` release will not be
 adoptable until this workspace's MSRV moves; 0.6.0 is sufficient for this
 milestone.
