@@ -206,7 +206,7 @@ readiness, and future dates are not promised before scope and proof are settled.
   files remained unchanged throughout the gates. Fresh independent review
   **PASS**, with no findings or evidence gaps, covers
   [b68625f](https://github.com/strefethen/arazzo-cli/commit/b68625fa8934c2e6aa6fbb8b253ff7d8bf94c2a1)
-  **(local; not pushed)**. The reviewer independently reran both retained
+  **(pushed to main)**. The reviewer independently reran both retained
   binaries for all 21 scenarios and confirmed equivalent results. Evidence lives
   at `/private/tmp/arazzo-maintainer-20261028/ac-df1d6/` and the ticket retains
   the exact execution contract. The harness has no native per-criterion progress
@@ -217,13 +217,16 @@ readiness, and future dates are not promised before scope and proof are settled.
 - Checkpoint **2026-10-28 13:26 PDT / 20:26 UTC**: one source outcome delivered,
   one of two review rounds used, about 11 minutes consumed from conservative
   kickoff. `tkt` owns revision-safe closure and the final lifecycle state.
-- Publication is held by the existing SDLC check: Fable's preceding
+- Publication was briefly held by the existing SDLC check: Fable's preceding
   [841aa5c](https://github.com/strefethen/arazzo-cli/commit/841aa5ccb37afc9b84540565b696e2cbb7b67718)
   and [8e3d5cb](https://github.com/strefethen/arazzo-cli/commit/8e3d5cb8b968315458af8401145415a2679cea11)
-  are still the candidate of active
+  were still the candidate of active
   [ac-b0044](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b0044) at this
-  checkpoint. They remain outside this team's review and publication authority.
-  Fable continues its work; no interruption or Steve decision is needed.
+  checkpoint. Fable closed that ticket completed at **20:26:59 UTC**, with
+  independent review evidence identifying both commits. The gate then cleared:
+  the reviewed catalog source and checkpoint were pushed through
+  [3e39566](https://github.com/strefethen/arazzo-cli/commit/3e395663bb9a6121126d2ec8943af96ad85085ec).
+  No Fable interruption or Steve decision was needed.
 - Next structural increment: refine runtime operation projection ownership
   ([ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05)) against
   current code and reservations in the next renewed cycle. The two-child
