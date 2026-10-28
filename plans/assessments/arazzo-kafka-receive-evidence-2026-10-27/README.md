@@ -2,7 +2,7 @@
 
 Recorded run of the scenarios in [`docs/kafka-receive.md`](../../../docs/kafka-receive.md)
 against the plan's system success condition
-([`plans/current/arazzo-kafka-receive.md`](../../current/arazzo-kafka-receive.md)).
+([`plans/completed/arazzo-kafka-receive.md`](../../completed/arazzo-kafka-receive.md)).
 
 **Candidate.** Docs/example commit `49a6578c432c9fcd03be1c9f975ba1e400de74cd`
 (`candidate.txt`), which contains the engine (`38ed5fe`) and CLI (`288d7c2`)

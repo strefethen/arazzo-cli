@@ -1,7 +1,7 @@
 # First AsyncAPI transport decision: Kafka receive (2026-10-27)
 
 Mandate epic: [epic:ac-4a01f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a01f).
-Plan: [`plans/current/arazzo-kafka-receive.md`](../current/arazzo-kafka-receive.md).
+Plan: [`plans/completed/arazzo-kafka-receive.md`](../completed/arazzo-kafka-receive.md).
 Predecessor evidence: the test-only Core NATS trial
 ([`arazzo-local-nats-transport-trial.md`](arazzo-local-nats-transport-trial.md)),
 the send-payload clarification gate

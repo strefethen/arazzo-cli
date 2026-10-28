@@ -1,7 +1,8 @@
 ---
-status: accepted
+status: completed
 epic: epic:ac-4a01f
 created: 2026-10-27
+completed: 2026-10-28
 ---
 
 # Kafka receive: first production AsyncAPI transport
