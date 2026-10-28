@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846).
+Latest source cycle: [ac-e767c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e767c).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,13 +44,14 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: typed Criterion interpolation
-([ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846)). Regex,
-JSONPath and explicit XPath 1.0 conditions can substitute workflow values before
-evaluation; null context fails typed checks. The source passed independent review
-and is committed locally. Publication is held by Fable’s earlier paused
-conformance candidate. Next is refinement of ordinary Criterion error reporting
-([ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c)).
+Latest delivery: strict version syntax and supported feature-set validation
+([ac-e767c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e767c)). Malformed
+versions and unsupported major/minor pairs now fail validation, while patches
+within 1.0 and 1.1 remain compatible. Independent review passed; the source is
+committed locally. Publication is held by Fable’s earlier paused conformance
+candidate. The remaining source-descriptor work needs Steve’s public-output choice
+in [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367);
+independent ready work can continue.
 
 ## Direction and initial cycle
 
@@ -200,19 +201,42 @@ it. There is no duplicate parser, new public field or new God module.
   adjusts the existing expected totals for one claim moving from deviation to
   covered. No acceptance criterion or negative test was weakened.
 
-## Next — ordinary Criterion error reporting
+## Delivered — cycle 5: version syntax and feature-set validation
 
-[ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c),
-**Report Criterion evaluation errors in ordinary traces**, is the next refinement
-candidate from the accepted conformance lane. Its intended benefit is diagnosis
-of failed evaluations outside the debugger. This error-projection capability is
-not delivered by the interpolation change.
+[ac-e767c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e767c) delivers the
+independent version-validation part of
+[ac-d15a3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d15a3), under the
+existing conformance epic. The parent retains its full acceptance criteria and
+testing obligations; the child is a prerequisite, not a replacement. One private
+`version.rs` owns syntax, supported feature sets and the pre-1.1 vocabulary
+classification. The validator facade delegates and shrinks; no runtime or public
+output shape changes.
 
-Refresh its current contracts, file declarations, dependencies and trace/output
-ownership before implementation; do not infer readiness from priority alone.
-Preserve existing schema/error contracts and route any substantive public-output
-decision through its stated gate. Inspect Fable’s live reservations before
-selecting writer paths.
+## Next dependency checkpoint — source descriptors and ordinary diagnostics
+
+The current dependency chain runs from ordinary Criterion error reporting
+([ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c)) through
+interpolation warnings
+([ac-681d4](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-681d4)), exact runtime
+action targets ([ac-cd36b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-cd36b)),
+exact validated action targets
+([ac-a7fe9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a7fe9)), and source
+descriptors ([ac-d15a3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d15a3)).
+Do not bypass these dependencies merely because the downstream item is valuable.
+
+The source-descriptor parent is paused for
+[ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367): **ask Steve
+for the omitted source-type representation in CLI and MCP JSON**. Recommendation:
+preserve the key with `"type": null` and show “unspecified” in human output,
+without inferring OpenAPI or AsyncAPI. This changes a public string field and
+needs Steve’s choice before implementation.
+
+After that choice, refresh the parent’s consumer boundaries against current
+DocumentSet binding, operation targets and Fable’s AsyncAPI applicability work.
+Its historical URL-as-base fallback paragraph is stale; current binding no longer
+has that fallback. Source URL validation and aggregate source-descriptor proof
+remain outstanding. Preserve the full parent criteria, Fable’s live reservations
+and the existing publication gate while selecting other independent ready work.
 
 ## Following cycles — ordered by value and readiness
 
@@ -370,3 +394,36 @@ readiness, and future dates are not promised before scope and proof are settled.
 - Hourly continuation remains active. Refine the next bounded, available ticket
   against current evidence and reservations; do not reopen paused work or treat
   this cycle as completion of the full conformance roadmap.
+
+## Checkpoint — cycle 5
+
+- Source delivered in
+  [32ebfed](https://github.com/strefethen/arazzo-cli/commit/32ebfede58c315a682022edb75c3b2bee0a4ef2a)
+  **(local; not pushed)**. Fresh independent review **PASS**, one of two source
+  review rounds used. Only the version-grammar/feature-set conformance claim
+  moves to covered; source-descriptor obligations remain open under their parent.
+- Six focused tests exercise YAML, JSON and direct validation. Five fail on the
+  original implementation; the required-field control remains green. Validator
+  tests: **212 passed**. Conformance manifest: **13 passed**. Full workspace:
+  **1,520 passed, 0 failed, 35 ignored**. Formatting, compilation, strict Clippy
+  and all four drift guards pass. All 272 tracked build inputs match the reviewed
+  candidate; three vendored specifications remained unchanged during verification.
+- The private classifier removes version responsibility from the validator facade,
+  reducing it from 2,933 to 2,916 lines and lowering its size cap. Decimal
+  components compare numerically without integer bounds; leading-zero handling
+  is documented as an interpretation accepted by independent review.
+- Decided by recommendation: correct the adjacent assertion that incomplete
+  `1.0` selects a feature set, retaining the test and its other controls. Strict
+  Clippy also caught two fixture `expect()` calls; explicit handling repaired
+  them before the final full gates. No criterion, negative test or lint was weakened.
+- Evidence: `/private/tmp/arazzo-maintainer-20261028/version-cycle/`. The single
+  delivery log now explains the validation benefit, before/after examples and
+  private ownership. Desktop 1280px and mobile 390px checks passed without page
+  overflow or console errors; section navigation works and the temporary viewport
+  was reset. Style and script blocks are byte-identical to the preceding journal.
+- Publication remains held by Fable’s paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate.
+  Fable’s lane is untouched. The separate omitted-source-type decision is captured
+  in [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367); its parent
+  is paused with all original acceptance criteria and testing obligations retained.
+  No nullable output schema, source-kind inference or fallback is implemented.
