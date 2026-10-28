@@ -42,9 +42,21 @@
       "specAnchors": ["spec/arazzo/v1.1.0.html#runtime-expressions-in-conditions", "spec/arazzo/v1.1.0.html#condition-evaluation"],
       "normativeLevels": ["MUST"],
       "claim": "Typed Criterion conditions interpolate braced runtime expressions and fail on null or undefined context.",
-      "status": "deviation",
-      "owner": "ac-50846",
-      "reason": "Typed Criterion interpolation and null-context handling are scheduled in ac-50846."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#typed_conditions_interpolate_scalars_multiple_spans_and_entire_templates",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#typed_conditions_use_frozen_json_string_conversions",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#native_dollars_literal_braces_and_omitted_context_remain_compatible"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#expanded_conditions_that_do_not_match_fail_without_interpolation_warnings",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#typed_conditions_fail_on_null_and_undefined_context",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#unresolved_substitutions_never_dispatch_partial_conditions",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#malformed_templates_fail_direct_engine_calls_before_partial_resolution",
+          "crates/arazzo-runtime/tests/typed_criterion_interpolation.rs#expanded_jsonpath_admission_errors_survive_null_context"
+        ]
+      }
     },
     {
       "id": "runtime.criterion-evaluation-error-reporting",

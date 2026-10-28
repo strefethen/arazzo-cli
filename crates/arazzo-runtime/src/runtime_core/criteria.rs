@@ -1,4 +1,5 @@
 use super::*;
+use std::borrow::Cow;
 
 pub(crate) struct RegexCache {
     cache: Mutex<HashMap<String, Regex>>,
@@ -56,109 +57,127 @@ pub(crate) fn evaluate_criterion_detailed(
     regex_cache: &RegexCache,
 ) -> CriterionEvaluation {
     let type_name = criterion.resolved_type_name();
+    let mut expr_warnings = Vec::new();
+    let prepared_condition = if matches!(type_name.as_str(), "regex" | "jsonpath" | "xpath") {
+        prepare_typed_condition(&criterion.condition, eval, &mut expr_warnings)
+    } else {
+        Ok(Cow::Borrowed(criterion.condition.as_str()))
+    };
     // §5.8.11.4.3 / §5.8.11.4.5: a jsonpath condition is version-admitted,
     // budgeted and parsed in full before its context is resolved, so an
     // unsupported version, an exceeded admission limit or a syntax error is
     // reported even when the context turns out to be null, and a predicate
     // that would short-circuit cannot hide a malformed remainder.
-    let prepared_jsonpath = (type_name == "jsonpath").then(|| {
-        arazzo_expr::JsonPathQuery::parse(&criterion.condition, criterion.declared_type_version())
+    let prepared_jsonpath = prepared_condition.as_ref().ok().and_then(|condition| {
+        (type_name == "jsonpath").then(|| {
+            arazzo_expr::JsonPathQuery::parse(condition, criterion.declared_type_version())
+        })
     });
-    let mut expr_warnings = Vec::new();
     let mut context_value = if criterion.context.trim().is_empty() {
         default_criterion_context(response)
     } else {
         let (val, warnings) = eval.evaluate_with_diagnostics(&criterion.context);
-        expr_warnings = warnings;
+        expr_warnings.extend(warnings);
         val
     };
     let mut error = None;
 
-    let condition_result = if let Some(prepared) = prepared_jsonpath {
-        let decision = prepared.and_then(|query| {
-            // §5.8.11.4.3: a null or undefined context MUST fail. This is the
-            // spec's own rule, not an error, so it carries no diagnostic.
-            if context_value.is_null() {
-                Ok(false)
-            } else {
-                jsonpath_condition_holds(&query, &context_value)
-            }
-        });
-        match decision {
-            Ok(matched) => matched,
-            Err(err) => {
-                // §5.8.11.4.5: the condition fails and the error is reported.
-                // The detailed error feeds the debugger locals; the single
-                // warning rides the existing nested/enclosing trace channels.
-                let message = err.to_string();
-                expr_warnings.push(arazzo_expr::ExpressionWarning {
-                    expression: criterion.condition.clone(),
-                    message: message.clone(),
-                });
-                error = Some(message);
-                false
-            }
+    let condition_result = match (prepared_condition, prepared_jsonpath) {
+        (Err(message), _) => {
+            error = Some(message);
+            false
         }
-    } else {
-        // `prepared_jsonpath` is `Some` for every jsonpath criterion, so no
-        // "jsonpath" arm belongs here.
-        match type_name.as_str() {
-            "regex" => {
-                let context_text = value_to_string(&context_value);
-                match regex_cache.is_match(&criterion.condition, &context_text) {
-                    Ok(matched) => matched,
-                    Err(err) => {
-                        error = Some(format!("invalid regex: {err}"));
-                        false
-                    }
+        (Ok(_), Some(prepared)) => {
+            let decision = prepared.and_then(|query| {
+                // §5.8.11.4.3: a null or undefined context MUST fail. This is the
+                // spec's own rule, not an error, so it carries no diagnostic.
+                if context_value.is_null() {
+                    Ok(false)
+                } else {
+                    jsonpath_condition_holds(&query, &context_value)
+                }
+            });
+            match decision {
+                Ok(matched) => matched,
+                Err(err) => {
+                    // §5.8.11.4.5: the condition fails and the error is reported.
+                    // The detailed error feeds the debugger locals; the single
+                    // warning rides the existing nested/enclosing trace channels.
+                    let message = err.to_string();
+                    expr_warnings.push(arazzo_expr::ExpressionWarning {
+                        expression: criterion.condition.clone(),
+                        message: message.clone(),
+                    });
+                    error = Some(message);
+                    false
                 }
             }
-            "xpath" => {
-                // §5.8.11.4.4: a null/undefined context MUST fail the criterion,
-                // same as the jsonpath arm. No fallback to the raw response body:
-                // eval_context resolves $response.body to the raw text for
-                // XML/non-JSON responses (strict UTF-8 — an undecodable body
-                // yields null and fails closed here), so a null context means the
-                // expression resolved to nothing to evaluate against.
-                if context_value.is_null() {
-                    false
-                } else {
-                    let xml_text = match &context_value {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    context_value = Value::String(xml_text.clone());
-                    // The declared version routes the evaluation (ac-46638): only
-                    // explicit `xpath-10` reaches the engine; the omitted form and
-                    // every other version fail the criterion with an error before
-                    // evaluation.
-                    match select_xpath(
-                        xml_text.as_bytes(),
-                        &criterion.condition,
-                        criterion.declared_type_version(),
-                    ) {
-                        // §5.8.11.4.4: the criterion passes on the effective boolean
-                        // value of the raw XPath result, not on the truthiness of the
-                        // normalized selection value — `false` and `0` stringify to
-                        // non-empty strings and must still fail.
-                        Ok(selection) => selection.truthy,
-                        Err(message) => {
-                            error = Some(message);
-                            false
+        }
+        (Ok(condition), None) => {
+            // `prepared_jsonpath` is `Some` for every jsonpath criterion, so no
+            // "jsonpath" arm belongs here.
+            match type_name.as_str() {
+                "regex" => {
+                    if context_value.is_null() {
+                        false
+                    } else {
+                        let context_text = value_to_string(&context_value);
+                        match regex_cache.is_match(&condition, &context_text) {
+                            Ok(matched) => matched,
+                            Err(err) => {
+                                error = Some(format!("invalid regex: {err}"));
+                                false
+                            }
                         }
                     }
                 }
-            }
-            _ => {
-                let evaluation = eval.evaluate_condition_detailed(&criterion.condition);
-                expr_warnings.extend(evaluation.warnings);
-                error = evaluation.error.map(|error| {
-                    format!(
-                        "invalid simple condition at byte {}: {}",
-                        error.byte_offset, error.message
-                    )
-                });
-                evaluation.result
+                "xpath" => {
+                    // §5.8.11.4.4: a null/undefined context MUST fail the criterion,
+                    // same as the jsonpath arm. No fallback to the raw response body:
+                    // eval_context resolves $response.body to the raw text for
+                    // XML/non-JSON responses (strict UTF-8 — an undecodable body
+                    // yields null and fails closed here), so a null context means the
+                    // expression resolved to nothing to evaluate against.
+                    if context_value.is_null() {
+                        false
+                    } else {
+                        let xml_text = match &context_value {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        };
+                        context_value = Value::String(xml_text.clone());
+                        // The declared version routes the evaluation (ac-46638): only
+                        // explicit `xpath-10` reaches the engine; the omitted form and
+                        // every other version fail the criterion with an error before
+                        // evaluation.
+                        match select_xpath(
+                            xml_text.as_bytes(),
+                            &condition,
+                            criterion.declared_type_version(),
+                        ) {
+                            // §5.8.11.4.4: the criterion passes on the effective boolean
+                            // value of the raw XPath result, not on the truthiness of the
+                            // normalized selection value — `false` and `0` stringify to
+                            // non-empty strings and must still fail.
+                            Ok(selection) => selection.truthy,
+                            Err(message) => {
+                                error = Some(message);
+                                false
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let evaluation = eval.evaluate_condition_detailed(&criterion.condition);
+                    expr_warnings.extend(evaluation.warnings);
+                    error = evaluation.error.map(|error| {
+                        format!(
+                            "invalid simple condition at byte {}: {}",
+                            error.byte_offset, error.message
+                        )
+                    });
+                    evaluation.result
+                }
             }
         }
     };
@@ -173,6 +192,32 @@ pub(crate) fn evaluate_criterion_detailed(
         context_value,
         error,
         warnings: expr_warnings,
+    }
+}
+
+/// Typed conditions use brace-only interpolation; native dollar syntax and
+/// literal braces otherwise belong to the selected condition language.
+fn prepare_typed_condition<'a>(
+    condition: &'a str,
+    eval: &ExpressionEvaluator,
+    warnings: &mut Vec<arazzo_expr::ExpressionWarning>,
+) -> Result<Cow<'a, str>, String> {
+    if !condition.contains("{$") {
+        return Ok(Cow::Borrowed(condition));
+    }
+    let (value, substitution_warnings) = eval.resolve_value_with_diagnostics(condition);
+    if !substitution_warnings.is_empty() {
+        let details = substitution_warnings
+            .iter()
+            .map(|warning| format!("{}: {}", warning.expression, warning.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        warnings.extend(substitution_warnings);
+        return Err(format!("typed condition interpolation failed: {details}"));
+    }
+    match value {
+        Value::String(text) => Ok(Cow::Owned(text)),
+        _ => Err("typed condition interpolation did not produce a string".to_owned()),
     }
 }
 
@@ -508,6 +553,49 @@ mod tests {
         assert!(evaluation.context_value.is_null());
         assert!(evaluation.error.is_none());
         assert!(evaluation.warnings.is_empty());
+    }
+
+    #[test]
+    fn typed_interpolation_failures_preserve_detailed_errors_and_warnings() {
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!("ready")),
+            ..EvalContext::default()
+        });
+        for kind in ["regex", "jsonpath", "xpath"] {
+            for (condition, warning_count, needle) in [
+                (
+                    "ready|{$inputs.absent}|{$outputs.other}",
+                    2,
+                    "input \"absent\" not found",
+                ),
+                ("{$inputs.absent} then {$", 1, "missing closing '}'"),
+            ] {
+                let criterion = SuccessCriterion {
+                    condition: condition.to_owned(),
+                    context: "$response.body".to_owned(),
+                    type_: Some(arazzo_spec::CriterionType::Name(kind.to_owned())),
+                    ..SuccessCriterion::default()
+                };
+                let evaluation =
+                    evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
+                assert!(!evaluation.condition_result);
+                assert!(!evaluation.matched);
+                let error = match evaluation.error.as_deref() {
+                    Some(error) => error,
+                    None => panic!("interpolation must retain a detailed error"),
+                };
+                assert!(error.starts_with("typed condition interpolation failed:"));
+                assert!(error.contains(needle), "{error}");
+                assert_eq!(evaluation.warnings.len(), warning_count);
+                if warning_count == 2 {
+                    assert_eq!(evaluation.warnings[0].expression, "$inputs.absent");
+                    assert_eq!(evaluation.warnings[1].expression, "$outputs.other");
+                } else {
+                    assert_eq!(evaluation.warnings[0].expression, condition);
+                    assert!(!error.contains("not found"), "no partial lookup: {error}");
+                }
+            }
+        }
     }
 
     /// §5.8.11.4.4 at the criterion decision point. The falsy boolean and
