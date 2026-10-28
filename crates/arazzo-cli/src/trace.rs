@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_headers, redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
-    redact_url_query, SequentialFallback, TraceStepRecord, TransportWarning,
+    redact_url, SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -201,10 +201,10 @@ fn redact_trace_file(
     for step in &mut trace.steps {
         if let Some(request) = &mut step.request {
             redact_headers(&mut request.headers);
-            redact_url_query(&mut request.url);
+            redact_url(&mut request.url);
             for hop in &mut request.redirects {
-                redact_url_query(&mut hop.from);
-                redact_url_query(&mut hop.to);
+                redact_url(&mut hop.from);
+                redact_url(&mut hop.to);
             }
             if let Some(body) = &mut request.body {
                 redact_json_value(body);
@@ -442,6 +442,32 @@ mod tests {
                 "payload not truncated to 24 bytes: {text}"
             );
         }
+    }
+
+    #[test]
+    fn redact_trace_redacts_request_and_redirect_userinfo() {
+        let mut trace = make_trace_file(TraceResponse::default());
+        let request = trace.steps[0]
+            .request
+            .as_mut()
+            .unwrap_or_else(|| panic!("request"));
+        request.url = "https://user:trace-password@host/start".to_string();
+        request.redirects = vec![arazzo_runtime::TraceRedirectHop {
+            status_code: 302,
+            from: request.url.clone(),
+            to: "https://redirect-token@host/end?token=query-secret".to_string(),
+        }];
+        redact_trace_file(&mut trace, 2048, &BTreeSet::new());
+        let request = trace.steps[0]
+            .request
+            .as_ref()
+            .unwrap_or_else(|| panic!("request"));
+        assert_eq!(request.url, "https://[REDACTED]@host/start");
+        assert_eq!(request.redirects[0].from, request.url);
+        assert_eq!(
+            request.redirects[0].to,
+            "https://[REDACTED]@host/end?token=[REDACTED]"
+        );
     }
 
     #[test]

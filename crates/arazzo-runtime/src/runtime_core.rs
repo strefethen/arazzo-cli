@@ -128,6 +128,6 @@ pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{
     is_schema_declared_secret, is_sensitive_key, redact_dry_run_request, redact_headers,
-    redact_inputs, redact_json_object, redact_json_value, redact_text_patterns, redact_url_query,
+    redact_inputs, redact_json_object, redact_json_value, redact_text_patterns, redact_url,
     redacted_dry_run_request, sensitive_input_names, REDACTED,
 };

@@ -10,7 +10,7 @@ impl Engine {
     }
 
     /// Emits the once-per-host cleartext-credential warning when a
-    /// prepared live request would send Authorization/Cookie over
+    /// prepared live request would send Authorization/Cookie or URL userinfo over
     /// non-loopback http. The structured event is emitted regardless;
     /// `transport_warnings: false` squelches only the stderr line.
     async fn warn_cleartext_credentials(
@@ -34,13 +34,16 @@ impl Engine {
         if is_loopback_host(host) {
             return;
         }
-        let has_credentials = prep
-            .headers
-            .keys()
-            .chain(client.default_headers().keys())
-            .any(|name| {
-                name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("cookie")
-            });
+        let has_userinfo = !url.username().is_empty() || url.password().is_some();
+        let has_credentials = has_userinfo
+            || prep
+                .headers
+                .keys()
+                .chain(client.default_headers().keys())
+                .any(|name| {
+                    name.eq_ignore_ascii_case("authorization")
+                        || name.eq_ignore_ascii_case("cookie")
+                });
         if !has_credentials {
             return;
         }
@@ -51,7 +54,12 @@ impl Engine {
             kind: TransportWarningKind::CleartextCredentials,
             hosts: vec![host.to_string()],
             message: format!(
-                "credentials (Authorization/Cookie header) sent over cleartext http to non-loopback host \"{host}\""
+                "credentials ({}) sent over cleartext http to non-loopback host \"{host}\"",
+                if has_userinfo {
+                    "URL userinfo"
+                } else {
+                    "Authorization/Cookie header"
+                }
             ),
         };
         if client.transport_warnings_enabled() {

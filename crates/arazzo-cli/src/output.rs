@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{
-    redact_dry_run_request, redact_url_query, DryRunRequest, TraceStepRecord, TransportWarning,
+    redact_dry_run_request, redact_url, DryRunRequest, TraceStepRecord, TransportWarning,
 };
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Diagnostic, Error as ValidateError};
@@ -680,7 +680,7 @@ pub fn emit_run_steps(steps: &[TraceStepRecord]) {
             || step.operation_path.clone(),
             |r| {
                 let mut url = r.url.clone();
-                redact_url_query(&mut url);
+                redact_url(&mut url);
                 url
             },
         );

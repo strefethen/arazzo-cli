@@ -420,6 +420,34 @@ fn transport_warning_events(events: &[EngineEvent]) -> Vec<&arazzo_runtime::Tran
 }
 
 #[tokio::test]
+async fn cleartext_userinfo_only_credentials_warning_exempts_loopback() {
+    let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
+    let loopback = server.base_url.replacen("http://", "http://user:pass@", 1);
+    for (base, expected) in [("http://user:pass@192.0.2.1", 1), (loopback.as_str(), 0)] {
+        let spec = single_step_spec(
+            base,
+            get_step("s1", "{$sourceDescriptions.test.url}#/paths/~1ok/get"),
+        );
+        let engine = common::fixture_engine_builder(spec)
+            .client_config(ClientConfig {
+                timeout: Duration::from_millis(250),
+                ..ClientConfig::default()
+            })
+            .build()
+            .unwrap_or_else(|err| panic!("building engine: {err}"));
+        let result = engine.execute_collect("wf", BTreeMap::new()).await;
+        let warnings = transport_warning_events(&result.events);
+        assert_eq!(warnings.len(), expected, "userinfo-only request: {base}");
+        if expected == 1 {
+            assert_eq!(warnings[0].kind, TransportWarningKind::CleartextCredentials);
+            assert_eq!(warnings[0].hosts, ["192.0.2.1"]);
+        } else {
+            assert!(result.outputs.is_ok(), "loopback request should succeed");
+        }
+    }
+}
+
+#[tokio::test]
 async fn cleartext_credentials_warning_event_once_per_host() {
     // TEST-NET-1 (RFC 5737): guaranteed non-loopback and unroutable.
     // The requests fail; the warning fires before send.

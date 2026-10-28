@@ -97,7 +97,7 @@ pub fn redact_inputs(map: &mut BTreeMap<String, Value>, sensitive: &BTreeSet<Str
 
 pub fn redact_dry_run_request(request: &mut DryRunRequest) {
     redact_headers(&mut request.headers);
-    redact_url_query(&mut request.url);
+    redact_url(&mut request.url);
     if let Some(body) = &mut request.body {
         redact_json_value(body);
     }
@@ -116,7 +116,17 @@ pub fn redact_headers(headers: &mut BTreeMap<String, String>) {
     }
 }
 
-pub fn redact_url_query(url: &mut String) {
+pub fn redact_url(url: &mut String) {
+    // Edit only the authority's userinfo, preserving the original URL bytes
+    // everywhere else. An @ in the path, query, or fragment is not userinfo.
+    if let Some(scheme_end) = url.find("://") {
+        let authority_start = scheme_end + 3;
+        let authority = &url[authority_start..];
+        let authority_end = authority.find(['/', '?', '#']).unwrap_or(authority.len());
+        if let Some(userinfo_end) = authority[..authority_end].find('@') {
+            url.replace_range(authority_start..authority_start + userinfo_end, REDACTED);
+        }
+    }
     // Parse query params without reconstructing the URL to avoid
     // normalization artifacts (percent-encoding changes, reordering)
     // that could cause replay drift.
@@ -211,6 +221,36 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn url_userinfo_is_redacted_without_normalizing_other_bytes() {
+        for (input, expected) in [
+            (
+                "https://user:pass@EXAMPLE.com/%2f",
+                "https://[REDACTED]@EXAMPLE.com/%2f",
+            ),
+            ("https://token@host/", "https://[REDACTED]@host/"),
+            ("https://@host/", "https://[REDACTED]@host/"),
+            (
+                "https://EXAMPLE.com/%2f?Name=%2f&Name=%2F&name=a+b",
+                "https://EXAMPLE.com/%2f?Name=%2f&Name=%2F&name=a+b",
+            ),
+            (
+                "https://host/path?next=user@other",
+                "https://host/path?next=user@other",
+            ),
+            ("https://host/path@other", "https://host/path@other"),
+            ("https://host#user@other", "https://host#user@other"),
+            (
+                "https://user:pass@host/items?token=secret&page=%2f",
+                "https://[REDACTED]@host/items?token=[REDACTED]&page=%2f",
+            ),
+        ] {
+            let mut actual = input.to_string();
+            redact_url(&mut actual);
+            assert_eq!(actual, expected, "input: {input}");
+        }
+    }
+
+    #[test]
     fn dry_run_request_redacts_sensitive_parts() {
         let mut req = DryRunRequest {
             step_id: "s1".to_string(),
@@ -280,7 +320,7 @@ mod tests {
     #[test]
     fn query_param_api_key_is_redacted() {
         let mut url = "https://example.com/items?api_key=SECRET-QUERY-VALUE&page=2".to_string();
-        redact_url_query(&mut url);
+        redact_url(&mut url);
         assert_eq!(url, "https://example.com/items?api_key=[REDACTED]&page=2");
     }
 

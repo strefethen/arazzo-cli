@@ -94,3 +94,80 @@ fn verbose_step_line_redacts_sensitive_query_values() {
         "unexpected step line: {line}"
     );
 }
+
+#[test]
+fn credentialed_request_trace_and_verbose_output_redact_userinfo() {
+    const PASSWORD: &str = "URL-USERINFO-PASSWORD";
+    let server = tiny_http::Server::http("127.0.0.1:0")
+        .unwrap_or_else(|err| panic!("binding test server: {err:?}"));
+    let base_url = format!("http://user:{PASSWORD}@{}", server.server_addr());
+    let destination = format!("{base_url}/final");
+    let handle = thread::spawn(move || {
+        for index in 0..2 {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_else(|err| panic!("receiving: {err:?}"))
+                .unwrap_or_else(|| panic!("request"));
+            let response = if index == 0 {
+                tiny_http::Response::from_string("")
+                    .with_status_code(302)
+                    .with_header(
+                        tiny_http::Header::from_bytes("Location", destination.as_str())
+                            .unwrap_or_else(|err| panic!("location header: {err:?}")),
+                    )
+            } else {
+                tiny_http::Response::from_string("{}")
+            };
+            request
+                .respond(response)
+                .unwrap_or_else(|err| panic!("responding: {err:?}"));
+        }
+    });
+    let dir =
+        std::env::temp_dir().join(format!("arazzo-userinfo-redaction-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("creating fixture directory: {err:?}"));
+    let spec_path = dir.join("spec.arazzo.yaml");
+    let trace_path = dir.join("trace.json");
+    fs::write(&spec_path, spec(&base_url)).unwrap_or_else(|err| panic!("writing spec: {err:?}"));
+    let output = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+        .arg("run")
+        .arg(&spec_path)
+        .args(["wf", "--verbose", "--trace"])
+        .arg(&trace_path)
+        .current_dir(&dir)
+        .output()
+        .unwrap_or_else(|err| panic!("running CLI: {err:?}"));
+    handle
+        .join()
+        .unwrap_or_else(|err| panic!("server thread: {err:?}"));
+    assert!(output.status.success(), "run failed: {output:?}");
+    let bytes = fs::read(&trace_path).unwrap_or_else(|err| panic!("reading trace bytes: {err:?}"));
+    assert!(
+        !bytes
+            .windows(PASSWORD.len())
+            .any(|part| part == PASSWORD.as_bytes()),
+        "password leaked in trace bytes"
+    );
+    let trace: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or_else(|err| panic!("trace JSON: {err:?}"));
+    let request = &trace["steps"][0]["request"];
+    assert!(request["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("request URL"))
+        .contains("[REDACTED]@"));
+    let hops = request["redirects"]
+        .as_array()
+        .unwrap_or_else(|| panic!("redirects"));
+    assert_eq!(hops.len(), 1);
+    for field in ["from", "to"] {
+        assert!(hops[0][field]
+            .as_str()
+            .unwrap_or_else(|| panic!("hop URL"))
+            .contains("[REDACTED]@"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains(PASSWORD) && !stderr.contains(PASSWORD));
+    assert!(stdout.contains("[REDACTED]@"));
+    fs::remove_dir_all(&dir).unwrap_or_else(|err| panic!("removing fixture directory: {err:?}"));
+}
