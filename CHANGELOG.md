@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwrite protection now covers AsyncAPI source documents as well as
   OpenAPI ones.
 
+### Fixed
+
+- Structural validation now rejects `action` and `correlationId` on operation IDs
+  qualified to non-AsyncAPI sources, and `channelPath` references to those sources.
+  Errors identify the field, source name, and declared source type.
+
 ## [0.9.0] - 2026-10-18
 
 Use standard Arazzo operation targets and make CLI failures predictable for automation.

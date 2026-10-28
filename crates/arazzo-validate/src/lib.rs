@@ -15,6 +15,7 @@ use arazzo_spec::{
 };
 use iri_string::types::UriReferenceStr;
 
+mod async_applicability;
 mod expressions;
 mod step_dependencies;
 mod xpath_advisory;
@@ -1419,6 +1420,7 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                 });
             }
 
+            async_applicability::check(spec, wf_idx, step_idx, step, &step_path, &mut diagnostics);
             for (dependency_idx, dependency) in step.depends_on.iter().enumerate() {
                 let dependency_path = format!("{step_path}.dependsOn[{dependency_idx}]");
                 match classify_step_dependency(dependency) {

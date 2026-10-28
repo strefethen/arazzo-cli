@@ -170,6 +170,50 @@ fn receive_refusals_report_runtime_codes_and_fixed_documents_validate() {
 }
 
 #[test]
+fn non_asyncapi_receive_reports_structural_errors_before_runtime_admission() {
+    let fixture = Fixture::new();
+    let mut spec = spec();
+    spec["sourceDescriptions"][0]["type"] = json!("openapi");
+    let step = &mut spec["workflows"][0]["steps"][0];
+    step.as_object_mut().unwrap().remove("channelPath");
+    step["operationId"] = json!("$sourceDescriptions.orders.getEvent");
+    step["correlationId"] = json!("fixed-id");
+    fixture.write(
+        &spec,
+        &json!({
+            "openapi": "3.0.3", "info": {"title": "Events", "version": "1"},
+            "paths": {"/events": {"get": {"operationId": "getEvent", "responses": {
+                "200": {"description": "Event"}
+            }}}}
+        }),
+    );
+
+    let output = fixture.run(&["--strict", "--json"]);
+    assert!(!output.status.success());
+    let body = body(&output);
+    assert_eq!(body["kind"], "error");
+    assert_eq!(body["code"], "VALIDATE_SPEC_VALIDATION");
+    assert_eq!(body["valid"], false);
+    let errors = body["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{body}");
+    for (error, field) in errors.iter().zip(["action", "correlationId"]) {
+        assert_eq!(error["kind"], "invalidAsyncStep");
+        assert_eq!(
+            error["path"],
+            format!("workflow \"flow\" > step \"receive\".{field}")
+        );
+        assert_eq!(
+            error["message"],
+            format!(
+                "{field} is only applicable to asyncapi steps; source \"orders\" is type openapi"
+            )
+        );
+    }
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("RUNTIME_"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("RUNTIME_"));
+}
+
+#[test]
 fn server_selection_is_shared_repeatable_and_offline() {
     let fixture = Fixture::new();
     let mut spec = spec();
