@@ -684,6 +684,93 @@ impl Drop for LiveRun {
 
 #[test]
 #[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up --secure)"]
+fn kafka_cli_correlated_receive_skips_other_orders() {
+    let bootstrap = bootstrap();
+    let topic = unique_topic("correlated");
+    let baseline = connections();
+
+    for json in [true, false] {
+        let fixture = Fixture::new();
+        let server = HttpServer::start();
+        fs::create_dir(fixture.path("descriptions")).unwrap();
+        fixture.write(
+            "descriptions/orders.asyncapi.yaml",
+            &include_str!("../../../examples/descriptions/orders.asyncapi.yaml")
+                .replace("127.0.0.1:19092", &bootstrap)
+                .replace("address: orders.placed", &format!("address: {topic}")),
+        );
+        fixture.write(
+            "descriptions/orders.openapi.yaml",
+            &include_str!("../../../examples/descriptions/orders.openapi.yaml")
+                .replace("http://127.0.0.1:18080", &server.base_url),
+        );
+        let spec = fixture.write(
+            "kafka-order-followup.arazzo.yaml",
+            include_str!("../../../examples/kafka-order-followup.arazzo.yaml"),
+        );
+        let trace = fixture.path("correlated.trace.json");
+        let run = LiveRun::spawn(
+            &fixture,
+            json,
+            &[
+                "run",
+                spec.to_str().unwrap(),
+                "order-followup-correlated",
+                "--input",
+                "orderId=42",
+                "--verbose",
+                "--trace",
+                trace.to_str().unwrap(),
+            ],
+            &[],
+        );
+        run.wait_armed();
+        assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+        produce(
+            &topic,
+            "source:demo,orderId:41",
+            r#"{"orderId":41,"status":"placed"}"#,
+        );
+        produce(
+            &topic,
+            "source:demo,orderId:42",
+            r#"{"orderId":42,"status":"placed"}"#,
+        );
+        let (status, stdout, stderr, _) = run.finish_raw();
+        assert!(status.success(), "{stdout}\n{stderr}");
+        if json {
+            let value: Value = serde_json::from_str(stdout.trim()).unwrap();
+            assert_eq!(value["kind"], "success");
+            assert_eq!(
+                value["outputs"],
+                serde_json::json!({"orderId": 42, "status": "placed"})
+            );
+        } else {
+            let line = stdout
+                .lines()
+                .find(|line| line.contains("[msg] RECEIVE "))
+                .unwrap_or_else(|| panic!("no receive step line: {stdout}"));
+            assert!(line.contains(" skipped=1  ("), "{line}");
+        }
+        assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(*server.paths.lock().unwrap(), ["/orders/42"]);
+        let recorded: Value = serde_json::from_str(&fs::read_to_string(&trace).unwrap()).unwrap();
+        let step = recorded["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|step| step["stepId"] == "await-my-order")
+            .expect("correlated receive step record");
+        assert_eq!(step["message"]["skippedRecords"], 1);
+        assert_eq!(step["message"]["correlationId"], "42");
+        assert_eq!(step["message"]["headers"]["source"], "demo");
+        assert_eq!(step["message"]["headers"]["orderId"], "42");
+        assert_broker_clean(baseline);
+    }
+}
+
+#[test]
+#[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up --secure)"]
 fn kafka_cli_receive_then_http_end_to_end_with_a_redacted_trace() {
     let bootstrap = bootstrap();
     let topic = unique_topic("followup");
@@ -767,6 +854,7 @@ fn kafka_cli_receive_then_http_end_to_end_with_a_redacted_trace() {
         line.contains(&format!("kafka://{bootstrap}/{topic} partition=0 offset=")),
         "{line}"
     );
+    assert!(!line.contains(" skipped="), "{line}");
     assert!(
         stdout
             .lines()

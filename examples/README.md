@@ -26,7 +26,7 @@ the method and path from those documents.
 | `sub-workflow.arazzo.yaml` | `parent-flow`, `child-create` | Parent/child workflow composition with input/output passing | `cargo run -p arazzo-cli -- run examples/sub-workflow.arazzo.yaml parent-flow --dry-run --input item_name=widget` |
 | `swagger-petstore-crud.arazzo.yaml` | `crud-pet`, `crud-order`, `crud-user` | Generated CRUD lifecycles against the Swagger Petstore | `cargo run -p arazzo-cli -- run examples/swagger-petstore-crud.arazzo.yaml crud-pet --dry-run` |
 | `soap-customer-crud.arazzo.yaml` | `soap-crud` | SOAP envelopes as `text/xml` bodies, XPath success criteria | `cargo run -p arazzo-cli -- run examples/soap-customer-crud.arazzo.yaml soap-crud --dry-run` |
-| `kafka-order-followup.arazzo.yaml` | `order-followup`, `await-only` | AsyncAPI `receive` step on a Kafka topic feeding an HTTP step; both target spellings (`operationId` and `channelPath`); needs the pinned broker — see [docs/kafka-receive.md](../docs/kafka-receive.md) | `cargo run -p arazzo-cli -- run examples/kafka-order-followup.arazzo.yaml order-followup --dry-run` |
+| `kafka-order-followup.arazzo.yaml` | `order-followup`, `await-only`, `order-followup-correlated` | AsyncAPI `receive` step on a Kafka topic feeding an HTTP step; both target spellings (`operationId` and `channelPath`), plus `correlationId` header filtering; needs the pinned broker — see [docs/kafka-receive.md](../docs/kafka-receive.md) | `cargo run -p arazzo-cli -- run examples/kafka-order-followup.arazzo.yaml order-followup-correlated --input orderId=42 --dry-run` |
 | `self-base-referencing.arazzo.yaml` | `list-then-read` | `$self` as the base URI for a relative `sourceDescriptions` url; requests resolve against the bound document's own `servers` | `cargo run -p arazzo-cli -- run examples/self-base-referencing.arazzo.yaml list-then-read --dry-run` |
 
 ## Deep-Dive Examples
@@ -81,7 +81,15 @@ Delete the `$self` line and the run fails, naming the file it looked for in
 - `kafka-order-followup.arazzo.yaml` validates and dry-runs offline; a live run
   needs `scripts/kafka/broker.sh up` and `scripts/kafka/order-server.py`, and
   a record produced after the armed line — the full sequence is in
-  [docs/kafka-receive.md](../docs/kafka-receive.md).
+  [docs/kafka-receive.md](../docs/kafka-receive.md). `order-followup` and
+  `await-only` receive the next record; `order-followup-correlated --input
+  orderId=42` skips other orders. After arming, demonstrate the skip and match
+  with these lines (comma-separated headers, then one tab before the payload):
+
+  ```bash
+  printf 'source:demo,orderId:41\t{"orderId":41,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+  printf 'source:demo,orderId:42\t{"orderId":42,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+  ```
 - `swagger-petstore-crud.arazzo.yaml` uses the public Swagger Petstore, whose
   data is shared and periodically reset — live runs may fail on state left by
   other callers.

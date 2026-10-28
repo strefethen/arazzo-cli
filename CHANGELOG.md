@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Kafka receive correlation filtering** — a step's literal-or-expression
+  `correlationId` selects the first matching record using the AsyncAPI message's
+  Correlation ID Object. `trace.v1` records `correlationId` and nonzero
+  `skippedRecords`; `run --verbose` shows `skipped=<n>`. Missing or malformed
+  correlation definitions (including `location`) and non-scalar expected values
+  report `RUNTIME_MESSAGE_TRANSPORT_CONFIG`; disagreeing channel-message
+  locations report `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`. Try the shipped
+  `order-followup-correlated` workflow with `--input orderId=42`.
 - **AsyncAPI receive on Kafka** — `run` and `test` execute Arazzo 1.1 `receive`
   steps whose source is an AsyncAPI 3.0 document and whose server is a Kafka
   broker: receivers are armed when the run starts, the next JSON record drives

@@ -17,6 +17,9 @@ channels:
     messages:
       orderPlaced:
         contentType: application/json
+        correlationId:
+          description: Order id the record carries in its orderId header.
+          location: "$message.header#/orderId"
         payload:
           type: object
           required: [orderId, status]

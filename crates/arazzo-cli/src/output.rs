@@ -694,8 +694,13 @@ pub fn emit_run_steps(steps: &[TraceStepRecord]) {
         // A receive step has no request; its record names where the
         // message came from. Nothing here is user data.
         if let (None, Some(message)) = (&step.request, &step.message) {
+            let skipped_suffix = if message.skipped_records > 0 {
+                format!(" skipped={}", message.skipped_records)
+            } else {
+                String::new()
+            };
             println!(
-                "  [msg] RECEIVE {}://{}/{} partition={} offset={}  ({duration}ms){retry_suffix}",
+                "  [msg] RECEIVE {}://{}/{} partition={} offset={}{skipped_suffix}  ({duration}ms){retry_suffix}",
                 message.transport,
                 message.host,
                 message.topic,

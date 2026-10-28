@@ -806,7 +806,7 @@ workflows:
           orderId: $message.payload#/orderId
 ```
 
-Receivers are armed when the run starts, so an event produced after the verbose `Kafka receiver armed` line is the one the step consumes; the first record decides the step's criteria and outputs. Run the shipped example against the pinned broker:
+Receivers are armed when the run starts. Without correlation filtering, the first record produced after the verbose `Kafka receiver armed` line decides the step's criteria and outputs. Run the shipped example against the pinned broker:
 
 ```bash
 scripts/kafka/broker.sh up && scripts/kafka/broker.sh topic orders.placed
@@ -816,7 +816,16 @@ arazzo-cli run examples/kafka-order-followup.arazzo.yaml order-followup --verbos
 printf 'source:demo\t{"orderId":42,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
 ```
 
-Sending, `correlationId`, schema validation, and consumer groups are out of scope. [docs/kafka-receive.md](docs/kafka-receive.md) has the full contract: supported document forms, server and credential configuration, timeouts and cancellation, trace fields, error codes, and the complete reproduction.
+To receive only a matching order, use the example's `order-followup-correlated` workflow with `--input orderId=42`; it filters using the message's AsyncAPI Correlation ID Object and skips other orders:
+
+```yaml
+action: receive
+correlationId: $inputs.orderId
+```
+
+The trace records `correlationId` and a nonzero `skippedRecords`; `--verbose` adds `skipped=<n>` when records were skipped. Missing or malformed correlation definitions and non-scalar expected values report `RUNTIME_MESSAGE_TRANSPORT_CONFIG`; disagreeing channel-message locations report `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`.
+
+Sending, schema validation, and consumer groups are out of scope. [docs/kafka-receive.md](docs/kafka-receive.md) has the full contract: supported document forms, server and credential configuration, timeouts and cancellation, trace fields, error codes, and the complete reproduction.
 
 ## Generating Workflows
 

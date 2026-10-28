@@ -61,7 +61,8 @@ two lists).
 document's own `components`: a channel message into `components.messages`, a
 trait into `components.messageTraits`, a server variable into
 `components.serverVariables`, and a security requirement into
-`components.securitySchemes`. The channel itself must be inline under
+`components.securitySchemes`; a Correlation ID Object may reference
+`components.correlationIds`. The channel itself must be inline under
 `channels` and the operation's `channel` must be a local `#/channels/<key>`
 reference. Refused: a server that is a Reference Object; a `bindings` object
 (or its `kafka` entry) on a channel, message, or trait that is a Reference
@@ -86,7 +87,7 @@ advisories): a zstd-compressed batch fails the attempt with
 
 **Refused before any connection.** Unsupported forms report
 `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` naming the field: `action: send`; a
-step without `action`; `correlationId`; `requestBody` on a receive step; a
+step without `action`; `requestBody` on a receive step; a
 `$ref` channel, operation, or server; a null or templated `address` (Channel
 Address Expressions and channel `parameters`); operation `traits`, `security`,
 or `reply`; a strict `messages` subset; server `pathname`; a security list
@@ -146,7 +147,8 @@ receives on one topic are serialized and get distinct records in an
 unspecified order. A cursor the broker has since trimmed fails the attempt
 with `RUNTIME_MESSAGE_TRANSPORT`; the runtime never re-seeks.
 
-**The first record is the message.** The first record at or after the cursor
+**The first matching record is the message.** Without `correlationId`, the
+first record at or after the cursor
 is exposed as `$message.payload` (the parsed JSON value; a record with no
 value is `null`) and `$message.header.<name>` (UTF-8 header values; duplicate
 names collapse to the last value). Criteria evaluate it, outputs are taken
@@ -157,6 +159,35 @@ received message and reserves filtering for `correlationId`. A non-JSON
 value or a non-UTF-8 header fails the attempt with `RUNTIME_MESSAGE_MALFORMED`.
 Record key, partition, offset, and timestamp are diagnostics only (trace),
 because Arazzo defines no expression for them.
+
+**Correlation.** Set the receive step's `correlationId` to the identifier
+you want, for example `correlationId: $inputs.orderId`. *Interpretation:*
+the field is a literal-or-expression value: a plain string is used as-is,
+a Runtime Expression resolves at step entry, and a braced template renders
+to a string. The expected value is rendered to text: strings as-is, numbers
+and booleans as JSON text; null, arrays, and objects are configuration errors
+before any fetch (arming has already occurred).
+
+The location comes from the AsyncAPI message's Correlation ID Object: its
+own `correlationId` wins, otherwise the last trait declaring one wins; one
+local reference hop into `components.correlationIds` is supported. The
+`location` is an AsyncAPI expression over `$message.header` or
+`$message.payload`, optionally followed by a JSON Pointer, for example
+`$message.header#/orderId` or `$message.payload#/orderId`. Every channel
+message must define the same location text. A missing object or malformed
+location is `RUNTIME_MESSAGE_TRANSPORT_CONFIG`; disagreeing locations are
+`RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`.
+
+*Interpretation (comparison and channel-wide location are repository
+choices):* compare exact text after rendering the located scalar the same
+way. Expected `"42"` matches a header string `42` or payload number `42`,
+but number `42.0` renders differently from `42`. Missing, null, array, or
+object values at the location never match. Decoded non-matching records
+advance the cursor and are skipped without evaluating criteria or outputs;
+the first match wins. Malformed JSON or non-UTF-8 headers still fail before
+matching. The step timeout bounds the entire wait, including skipped
+records; when the skipped count is nonzero, its error text adds
+`after skipping <n> non-matching record(s)`.
 
 **Timeouts.** Step `timeout` (milliseconds) bounds the attempt from step
 entry, including any wait for the cursor; expiry is
@@ -214,11 +245,17 @@ Kafka receiver armed: orders.placed on 127.0.0.1:19092 (1 partitions)
   [200] GET http://127.0.0.1:18080/orders/42  (4ms)
 ```
 
+When correlation filtering skipped records, the receive line adds
+` skipped=<n>` before the duration; it is unchanged when none were skipped.
+
 **Trace.** A receive step's `trace.v1` record has no `request`/`response`;
 it carries an optional `message` object: `transport` (`kafka`), `host`,
 `topic`, `partition`, `offset`, `timestampMs`, `key`, `headers`,
 `payloadBytes`, `payloadPreview`, `payload`, `payloadLossy`, and `simulated`
-(dry run). Header values and the key are redacted by the same patterns as
+(dry run). With correlation enabled, `correlationId` holds the resolved
+expected text (also in dry runs); `skippedRecords` counts decoded records
+skipped before the match and is omitted when zero. Without correlation,
+`correlationId` is omitted. Header values and the key are redacted by the same patterns as
 HTTP headers; the payload and its preview are redacted like HTTP response
 bodies and truncated to `--trace-max-body-bytes`. See
 [trace-schema-v1.md](trace-schema-v1.md).
@@ -227,10 +264,10 @@ bodies and truncated to `--trace-max-body-bytes`. See
 
 | Code | Cause |
 | --- | --- |
-| `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` | A document form this release does not execute: `send`, a step without `action`, `correlationId`, `requestBody` on a receive, a `$ref` channel, operation, server, or bindings object, a null or templated address, `bindings.kafka.topic` differing from the address, an operation whose `action` is not `receive`, operation `traits`/`security`/`reply`, a strict `messages` subset, server `pathname`, a security list with no supported scheme, a non-JSON effective content type, the schema-registry message binding fields, and replay of a receive step |
-| `RUNTIME_MESSAGE_TRANSPORT_CONFIG` | Structural or selection problems found before connecting: a target that is not `channelPath` or a source-qualified `operationId`, an undeclared source, a `$ref` that names a missing component, no eligible Kafka server, several servers without `--asyncapi-server` (or a selection that names none of them), an undeclared or default-less server variable, malformed `messages`/`servers` lists, credentials supplied for a server that declares no security, incomplete credentials, an unreadable CA bundle |
+| `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` | A document form this release does not execute: `send`, a step without `action`, `requestBody` on a receive, a `$ref` channel, operation, server, or bindings object, a null or templated address, `bindings.kafka.topic` differing from the address, an operation whose `action` is not `receive`, operation `traits`/`security`/`reply`, a strict `messages` subset, server `pathname`, a security list with no supported scheme, a non-JSON effective content type, the schema-registry message binding fields, disagreeing correlation locations among channel messages, and replay of a receive step |
+| `RUNTIME_MESSAGE_TRANSPORT_CONFIG` | Structural or selection problems found before connecting: a target that is not `channelPath` or a source-qualified `operationId`, an undeclared source, a `$ref` that names a missing component, no eligible Kafka server, several servers without `--asyncapi-server` (or a selection that names none of them), an undeclared or default-less server variable, malformed `messages`/`servers` lists, credentials supplied for a server that declares no security, incomplete credentials, an unreadable CA bundle; with step `correlationId`, any channel message missing a Correlation ID Object, an invalid object or malformed `location`. At step entry before fetching: an expected correlation value resolving to null, an array, or an object |
 | `RUNTIME_MESSAGE_TRANSPORT` | Connecting, TLS, SASL, metadata, a missing topic, the preparation deadline, a trimmed cursor, or a fetch failure |
-| `RUNTIME_MESSAGE_RECEIVE_TIMEOUT` | The step `timeout` elapsed before a record arrived |
+| `RUNTIME_MESSAGE_RECEIVE_TIMEOUT` | The step `timeout` elapsed before a matching record arrived (any record when no correlation is set); the error names the skipped count when nonzero |
 | `RUNTIME_MESSAGE_MALFORMED` | The record's value is not JSON or a header value is not UTF-8 |
 | `RUN_KAFKA_CREDENTIALS` / `TEST_KAFKA_CREDENTIALS` | Username without `ARAZZO_KAFKA_PASSWORD`, or the reverse |
 | `RUN_KAFKA_CA_CERT_READ` / `TEST_KAFKA_CA_CERT_READ` | `--kafka-ca-cert` could not be read |
@@ -241,8 +278,9 @@ object. In `test`, a run-time failure is a case error with `errorCode`.
 
 ## Limitations
 
-- **Sending** (`action: send`) and `correlationId` are refused; there is no
+- **Sending** (`action: send`) is refused; there is no
   send-payload contract yet.
+- **One correlation location per channel**; correlation never applies to `send`.
 - **No schema validation** of received payloads against the channel's
   message schema.
 - **No zstd.** gzip, snappy, and lz4 batches decode; a zstd batch fails with
@@ -323,6 +361,37 @@ scheme, export `ARAZZO_KAFKA_USERNAME=arazzo` and `ARAZZO_KAFKA_PASSWORD` (the
 harness's fixed test value, `arazzo-secret`, is fine to type here; a real
 password should come from a secret store rather than an inline assignment),
 and run with `--kafka-ca-cert /tmp/arazzo-kafka/ca.pem`.
+
+### Correlated receive
+
+With the broker, `orders.placed` topic, and HTTP responder above running,
+build a release binary and select the third workflow. The original
+`order-followup` and `await-only` workflows still accept any next record.
+
+```bash
+cargo build --release
+target/release/arazzo-cli run examples/kafka-order-followup.arazzo.yaml order-followup-correlated --input orderId=42 --verbose --json --trace /tmp/kafka-correlated.trace.json
+```
+
+The CLI parses `orderId=42` as a number and warns that the example declares
+a string input; execution succeeds because correlation renders either scalar
+as the text `42`.
+
+After the armed line, run these two lines in another shell. Both headers
+occupy one tab-delimited field, separated by a comma:
+
+```bash
+printf 'source:demo,orderId:41\t{"orderId":41,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+printf 'source:demo,orderId:42\t{"orderId":42,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+```
+
+The run exits 0 with `"outputs":{"orderId":42,"status":"placed"}` and
+performs just `GET /orders/42`. The `await-my-order` trace message contains
+`"correlationId":"42","skippedRecords":1`. Repeat the same run without
+`--json`, producing the two lines again after arming, to see
+`[msg] RECEIVE … skipped=1  (…ms)`. `scripts/kafka/broker.sh groups`
+prints nothing and `scripts/kafka/broker.sh connections` returns to its
+pre-run count (normally `0`).
 
 Finish with:
 

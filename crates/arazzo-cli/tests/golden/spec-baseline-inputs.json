@@ -45,6 +45,11 @@
       "name": "golden-name"
     }
   },
+  "examples/kafka-order-followup.arazzo.yaml": {
+    "order-followup-correlated": {
+      "orderId": "42"
+    }
+  },
   "examples/sub-workflow.arazzo.yaml": {
     "child-create": {
       "item_name": "golden-item"
