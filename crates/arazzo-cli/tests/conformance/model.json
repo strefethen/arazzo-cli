@@ -8,9 +8,15 @@
       "specAnchors": ["spec/arazzo/v1.1.0.html#arazzoVersion", "spec/arazzo/v1.1.0.html#versions"],
       "normativeLevels": ["REQUIRED", "MUST", "SHALL", "SHOULD NOT"],
       "claim": "Arazzo Descriptions require a version declaration that tooling uses to select the major.minor feature set without distinguishing patch versions.",
-      "status": "deviation",
-      "owner": "ac-d15a3",
-      "reason": "Version syntax and feature-set validation are scheduled in ac-d15a3."
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-validate/tests/version_validation.rs#supported_versions_preserve_decimal_patch_and_declared_text"
+        ],
+        "negative": [
+          "crates/arazzo-validate/tests/version_validation.rs#malformed_and_unsupported_versions_report_exact_diagnostics"
+        ]
+      }
     },
     {
       "id": "model.source-descriptor-wire-rules",

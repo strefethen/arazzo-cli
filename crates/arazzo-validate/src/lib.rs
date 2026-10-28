@@ -18,6 +18,7 @@ use iri_string::types::UriReferenceStr;
 mod async_applicability;
 mod expressions;
 mod step_dependencies;
+mod version;
 mod xpath_advisory;
 
 use expressions::{
@@ -28,6 +29,7 @@ use step_dependencies::{
     classify_step_dependency, local_step_depends_on_has_cycle, local_workflow_depends_on_has_cycle,
     StepDependency,
 };
+use version::declares_pre_1_1;
 
 /// Parser/validation error type for Arazzo specs.
 #[derive(Debug)]
@@ -953,20 +955,8 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
     check_unknown_fields("", &spec.extensions, &mut diagnostics);
     check_unknown_fields("info", &spec.info.extensions, &mut diagnostics);
 
-    if spec.arazzo.is_empty() {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::MissingRequiredField,
-            path: "arazzo".to_string(),
-            message: "arazzo version is required".to_string(),
-        });
-    } else if !spec.arazzo.starts_with("1.") {
-        diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            kind: ValidationErrorKind::UnsupportedVersion,
-            path: "arazzo".to_string(),
-            message: format!("unsupported arazzo version: {} (expected 1.x)", spec.arazzo),
-        });
+    if let Some(diagnostic) = version::diagnostic(&spec.arazzo) {
+        diagnostics.push(diagnostic);
     }
 
     if let Some(self_uri) = &spec.self_uri {
@@ -1852,13 +1842,6 @@ fn validate_component_keys<'a>(
             diagnostics.push(diag);
         }
     }
-}
-
-/// True for a document declaring an Arazzo version older than 1.1.0, which is
-/// where `in: querystring` was introduced.
-fn declares_pre_1_1(version: &str) -> bool {
-    let mut parts = version.trim().split('.');
-    matches!((parts.next(), parts.next()), (Some("1"), Some("0")))
 }
 
 /// One Parameter after the same inheritance/override selection the runtime

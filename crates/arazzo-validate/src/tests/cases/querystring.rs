@@ -362,7 +362,7 @@ workflows:
 
         assert!(declares_pre_1_1("1.0.0"));
         assert!(declares_pre_1_1("1.0.1"));
-        assert!(declares_pre_1_1("1.0"));
+        assert!(!declares_pre_1_1("1.0"));
         assert!(!declares_pre_1_1("1.1.0"));
         assert!(!declares_pre_1_1("1.10.0"));
         assert!(!declares_pre_1_1("2.0.0"));

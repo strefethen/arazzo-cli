@@ -13,7 +13,7 @@
 /// Measured line count of `src/lib.rs`, lowered after the step dependency
 /// extraction (ac-ded8d, 2026-10-07). Lower it when `lib.rs` shrinks; raising
 /// it needs Steve's approval.
-const LIB_RS_MAX_LINES: usize = 3_315;
+const LIB_RS_MAX_LINES: usize = 2_916;
 
 const LIB_RS_SOURCE: &str = include_str!("../src/lib.rs");
 
