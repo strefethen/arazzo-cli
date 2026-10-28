@@ -74,3 +74,104 @@ A first attempt of this run (`23:01`–`23:04` UTC) produced the same outcomes
 but its driver lost the `arrival` bookkeeping lines to a shell arithmetic bug;
 it was set aside and the whole sequence rerun from a fresh broker. Nothing was
 retried individually.
+
+## Correlation filtering (2026-10-28)
+
+Ticket: [ac-b0044](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b0044).
+Source candidate:
+[841aa5c](https://github.com/strefethen/arazzo-cli/commit/841aa5ccb37afc9b84540565b696e2cbb7b67718)
+(local; not pushed at capture). Clean detached worktree:
+`/tmp/kafka-design/wt-b0044`; `git status --porcelain` was empty before
+and after the reproduction. Ran `./spec/fetch.sh --if-missing` (all four
+vendored hashes OK), then `cargo build --release` (exit 0, optimized build,
+2m 08s). No changes to the two original workflows, runtime, transport
+configuration, or broker script.
+
+The commands below are from the **Correlated receive** reproduction in
+[`docs/kafka-receive.md`](../../../docs/kafka-receive.md), executed verbatim
+with the release binary. The driver waited for the stderr armed line before
+executing the two producer commands, and repeated the scenario without
+`--json` for the text output. Each run served exactly one `GET /orders/42`;
+no request for order 41 was served.
+
+```text
+$ scripts/kafka/broker.sh up
+ARAZZO_KAFKA_BOOTSTRAP=127.0.0.1:19092
+$ scripts/kafka/broker.sh topic orders.placed
+orders.placed
+$ scripts/kafka/broker.sh connections
+0
+$ python3 scripts/kafka/order-server.py &
+$ target/release/arazzo-cli run examples/kafka-order-followup.arazzo.yaml order-followup-correlated --input orderId=42 --verbose --json --trace /tmp/kafka-correlated.trace.json
+Executing workflow: order-followup-correlated
+Inputs: {"orderId": Number(42)}
+warning: input "orderId": expected type string, got integer
+Kafka receiver armed: orders.placed on 127.0.0.1:19092 (1 partitions)
+$ printf 'source:demo,orderId:41\t{"orderId":41,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+$ printf 'source:demo,orderId:42\t{"orderId":42,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+```
+
+Both producers and the receiver exited 0. The JSON stdout was one object:
+
+```json
+{
+  "kind": "success",
+  "outputs": {"orderId": 42, "status": "placed"}
+}
+```
+
+The first run's `await-my-order` trace `message` excerpt:
+
+```json
+{
+  "transport": "kafka",
+  "host": "127.0.0.1:19092",
+  "topic": "orders.placed",
+  "partition": 0,
+  "offset": 1,
+  "headers": {"orderId": "42", "source": "demo"},
+  "correlationId": "42",
+  "skippedRecords": 1
+}
+```
+
+Text repeat, with the same two producer commands after its armed line
+(exit 0; recorded timings, not a timing assertion):
+
+```text
+$ target/release/arazzo-cli run examples/kafka-order-followup.arazzo.yaml order-followup-correlated --input orderId=42 --verbose --trace /tmp/kafka-correlated.trace.json
+  [msg] RECEIVE kafka://127.0.0.1:19092/orders.placed partition=0 offset=3 skipped=1  (8047ms)
+  [200] GET http://127.0.0.1:18080/orders/42  (1ms)
+
+Outputs:
+
+  orderId: 42
+  status: placed
+```
+
+After **each** run, `scripts/kafka/broker.sh groups` printed nothing and
+`scripts/kafka/broker.sh connections` printed `0`, equal to the baseline.
+The HTTP log recorded exactly two lines `GET /orders/42 -> 200`, one per
+run. The responder was stopped and `scripts/kafka/broker.sh down` exited 0.
+The input warning is expected: the CLI parses `orderId=42` as a number,
+while the example declares a string; scalar text rendering matches header
+`42` in either case.
+
+Full local artifacts:
+`/tmp/kafka-design/evidence/ac-b0044/source-candidate/` contains
+`candidate.txt`, `transcript.log`, `json.stdout`, `json.stderr`,
+`json.trace.json`, `text.stdout`, `text.stderr`, `text.trace.json`, and
+`order-server.log`. The parent evidence packet is
+`/tmp/kafka-design/evidence/ac-b0044/evidence.md`; it also binds the final
+evidence-only commit to the repeated clean-worktree reproduction under
+`final-candidate/`, without changing this source candidate's executable
+content. These local artifacts are not public release evidence.
+
+CLI regression proof: all eight hermetic cases and all five live cases
+passed, including `kafka_cli_correlated_receive_skips_other_orders`
+(JSON and text plus `assert_broker_clean`). The uncorrelated live case
+asserts that `skipped=` is absent. The golden baseline adds only the new
+workflow (18 insertions, zero deletions); its required-input fixture adds
+five lines. Workspace fmt, clippy, tests, CLI snapshots, and schema drift
+checks passed; the full command/log mapping is in the parent evidence
+packet. Fresh-context review remains the parent's gate.
