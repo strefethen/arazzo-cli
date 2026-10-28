@@ -336,10 +336,17 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                 error_code,
             });
 
-            // A completed test case establishes workflow completion even when
-            // its result is a normal criteria failure. Only fail-fast prevents
-            // the next case from being started.
-            completed_workflows.insert(workflow_id.clone());
+            // Non-cancelled cases establish workflow completion even on failure.
+            // Timeout and cancellation end an invocation without completing it.
+            if !matches!(
+                &exec_result.outputs,
+                Err(err) if matches!(
+                    err.kind,
+                    RuntimeErrorKind::ExecutionTimeout | RuntimeErrorKind::ExecutionCancelled
+                )
+            ) {
+                completed_workflows.insert(workflow_id.clone());
+            }
 
             if opts.fail_fast && failed {
                 bail = true;
