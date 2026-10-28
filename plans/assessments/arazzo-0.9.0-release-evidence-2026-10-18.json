@@ -1,0 +1,530 @@
+{
+  "date": "2026-10-18",
+  "timezone": "America/Los_Angeles",
+  "source_baseline": "aa58c2d59bc5ed2fb7609837162d73b834ad8a29",
+  "prepared_version": "0.9.0",
+  "release_disposition": "hold",
+  "candidate_release_file_diff_sha256": "ca0e28283e583afca94db143030380afece3e67f1f1a166ac9b5d31db9cb0952",
+  "source_code_modified": false,
+  "tagged": false,
+  "published": false,
+  "committed": false,
+  "verification": {
+    "workspace_build": "passed",
+    "format": "passed",
+    "clippy": "passed",
+    "workspace_tests": {
+      "passed": 1350,
+      "ignored": 1
+    },
+    "schema_drift": {
+      "passed": 9
+    },
+    "extension_typecheck": "passed",
+    "extension_build": "passed",
+    "extension_tests": {
+      "passed": 28
+    },
+    "release_binary_smoke": "passed",
+    "changelog_version_pairing": "passed",
+    "diff_check": "passed",
+    "preflight_exit": 1,
+    "failed_stage": "cargo audit",
+    "audit_package": "rustls",
+    "audit_locked_version": "0.23.45",
+    "audit_patched_requirement": ">=0.23.46",
+    "audit_ids": [
+      "RUSTSEC-2026-0346",
+      "RUSTSEC-2026-0347",
+      "RUSTSEC-2026-0348",
+      "RUSTSEC-2026-0349"
+    ],
+    "audit_warnings": [
+      "unsafe-libyaml 0.2.11: unmaintained",
+      "chacha20 0.10.1: yanked"
+    ]
+  },
+  "scope_notes": [
+    "All network probes used a loopback fixture",
+    "All credential-like values and file contents were synthetic",
+    "Timed-out adapter subprocesses were killed and reaped",
+    "No large resource-exhaustion probe was run",
+    "No audit finding was repaired or ticket state changed"
+  ],
+  "logs_and_harness": {
+    "temporary_directory": "/tmp/arazzo-0.9.0-release-20261018",
+    "sha256": {
+      "workspace-build.log": "ddbe0c34ac91aaf5264ca82218cd665ad6243c64291c38b75ab68424f2bd22d8",
+      "preflight.log": "41ca358702962dffb7dd02fbe8c5c2640b2b3bd51dc913f8af7eff52cd6478b4",
+      "preflight-unsandboxed.log": "7c516bc96daea2ec495831abc37c925dac77c1271c8e93e0c8cd7475ef18b979",
+      "triage_probes.py": "fd35b1f57b57abae81d6a1c2b53e778a181160eb3fef543b2885f65fe45e656f",
+      "triage-results.json": "b4c3df56f2c39aebffd440bb622ec23c0fce0ccaf1182bd64771d340b37d4168",
+      "extension-tests.log": "347a70cffcda527b981f4e842ee69c5db57752933b25c128b89010771d271c4f"
+    }
+  },
+  "probes": {
+    "L3": {
+      "exit": 0,
+      "observed_request": {
+        "method": "POST",
+        "path": "/token",
+        "content_type": "application/x-www-form-urlencoded",
+        "body": "{\"client_id\":\"synthetic-client\",\"grant_type\":\"authorization_code\"}"
+      },
+      "confirmed": true
+    },
+    "L4": {
+      "exit": 0,
+      "observed_request": {
+        "method": "DELETE",
+        "path": "/pets/",
+        "content_type": null,
+        "body": ""
+      },
+      "stderr": "",
+      "confirmed": true
+    },
+    "L5": {
+      "exit": 0,
+      "dry_run_requests": [
+        {
+          "stepId": "request",
+          "method": "GET",
+          "url": "http://127.0.0.1:49229/probe?api_key=SYNTHETIC-RELEASE-TRIAGE-CANARY&key=SYNTHETIC-RELEASE-TRIAGE-CANARY&access_token=[REDACTED]",
+          "headers": {
+            "X-API-Key": "[REDACTED]",
+            "X-Auth-Key": "SYNTHETIC-RELEASE-TRIAGE-CANARY"
+          }
+        }
+      ],
+      "confirmed": true
+    },
+    "L6": {
+      "confirmed": true,
+      "default_response": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "parsing OpenAPI spec \"/tmp/arazzo-0.9.0-release-20261018/synthetic-document.txt\": invalid type: string \"SYNTHETIC_PARSE_ERROR_CANARY_090\", expected struct OpenAPI",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      },
+      "allowed_dir_control": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "path not allowed: /tmp/arazzo-0.9.0-release-20261018/synthetic-document.txt",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      }
+    },
+    "L7": {
+      "bounded_probe_minLength": 2000,
+      "returned_text_length": 2002,
+      "elapsed_seconds": 0.005114583997055888,
+      "source_confirms_unbounded_quadratic_padding": true,
+      "large_resource_exhaustion_probe_run": false
+    },
+    "L8": {
+      "default": {
+        "exit": 0,
+        "stdout": {
+          "kind": "success",
+          "outputs": {
+            "received": "{\"id\":\"42\"}"
+          }
+        },
+        "stderr": "warning: input \"config\": expected type object, got string\n"
+      },
+      "strict": {
+        "exit": 1,
+        "stdout": {
+          "kind": "error",
+          "error": "step invoke: sub-workflow child: input validation failed for workflow \"child\": input \"config\": expected type object, got string",
+          "code": "RUNTIME_SUB_WORKFLOW_FAILED"
+        },
+        "stderr": ""
+      },
+      "literal_object_control": {
+        "exit": 0,
+        "stdout": {
+          "kind": "success",
+          "outputs": {
+            "received": {
+              "id": "42"
+            }
+          }
+        },
+        "stderr": ""
+      }
+    },
+    "L1": {
+      "timed_out_after_2_seconds": true,
+      "stopped_event": {
+        "body": {
+          "allThreadsStopped": true,
+          "reason": "breakpoint",
+          "threadId": 1
+        },
+        "event": "stopped",
+        "seq": 6,
+        "type": "event"
+      },
+      "messages": [
+        {
+          "body": {
+            "supportsConditionalBreakpoints": true,
+            "supportsConfigurationDoneRequest": true,
+            "supportsEvaluateForHovers": true,
+            "supportsSetVariable": false,
+            "supportsStepBack": false
+          },
+          "command": "initialize",
+          "request_seq": 1,
+          "seq": 1,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "initialized",
+          "seq": 2,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "launch",
+          "request_seq": 2,
+          "seq": 3,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "breakpoints": [
+              {
+                "line": 15,
+                "verified": true
+              },
+              {
+                "line": 17,
+                "verified": true
+              }
+            ]
+          },
+          "command": "setBreakpoints",
+          "request_seq": 3,
+          "seq": 4,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "command": "configurationDone",
+          "request_seq": 4,
+          "seq": 5,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "allThreadsStopped": true,
+            "reason": "breakpoint",
+            "threadId": 1
+          },
+          "event": "stopped",
+          "seq": 6,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "disconnect",
+          "request_seq": 5,
+          "seq": 7,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "terminated",
+          "seq": 8,
+          "type": "event"
+        }
+      ],
+      "exit_before_cleanup": null,
+      "stderr": ""
+    },
+    "L1_control": {
+      "timed_out_after_2_seconds": false,
+      "stopped_event": {
+        "body": {
+          "allThreadsStopped": true,
+          "reason": "breakpoint",
+          "threadId": 1
+        },
+        "event": "stopped",
+        "seq": 6,
+        "type": "event"
+      },
+      "messages": [
+        {
+          "body": {
+            "supportsConditionalBreakpoints": true,
+            "supportsConfigurationDoneRequest": true,
+            "supportsEvaluateForHovers": true,
+            "supportsSetVariable": false,
+            "supportsStepBack": false
+          },
+          "command": "initialize",
+          "request_seq": 1,
+          "seq": 1,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "initialized",
+          "seq": 2,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "launch",
+          "request_seq": 2,
+          "seq": 3,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "breakpoints": [
+              {
+                "line": 15,
+                "verified": true
+              }
+            ]
+          },
+          "command": "setBreakpoints",
+          "request_seq": 3,
+          "seq": 4,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "command": "configurationDone",
+          "request_seq": 4,
+          "seq": 5,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "allThreadsStopped": true,
+            "reason": "breakpoint",
+            "threadId": 1
+          },
+          "event": "stopped",
+          "seq": 6,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "disconnect",
+          "request_seq": 5,
+          "seq": 7,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "terminated",
+          "seq": 8,
+          "type": "event"
+        }
+      ],
+      "exit_before_cleanup": 0,
+      "stderr": ""
+    },
+    "L2": {
+      "timed_out_after_2_seconds": true,
+      "stopped_event": {
+        "body": {
+          "allThreadsStopped": true,
+          "reason": "pause",
+          "threadId": 1
+        },
+        "event": "stopped",
+        "seq": 6,
+        "type": "event"
+      },
+      "messages": [
+        {
+          "body": {
+            "supportsConditionalBreakpoints": true,
+            "supportsConfigurationDoneRequest": true,
+            "supportsEvaluateForHovers": true,
+            "supportsSetVariable": false,
+            "supportsStepBack": false
+          },
+          "command": "initialize",
+          "request_seq": 1,
+          "seq": 1,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "initialized",
+          "seq": 2,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "launch",
+          "request_seq": 2,
+          "seq": 3,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "breakpoints": []
+          },
+          "command": "setBreakpoints",
+          "request_seq": 3,
+          "seq": 4,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "command": "configurationDone",
+          "request_seq": 4,
+          "seq": 5,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "allThreadsStopped": true,
+            "reason": "pause",
+            "threadId": 1
+          },
+          "event": "stopped",
+          "seq": 6,
+          "type": "event"
+        }
+      ],
+      "exit_before_cleanup": null,
+      "stderr": ""
+    },
+    "L2_control": {
+      "timed_out_after_2_seconds": false,
+      "stopped_event": {
+        "body": {
+          "allThreadsStopped": true,
+          "reason": "pause",
+          "threadId": 1
+        },
+        "event": "stopped",
+        "seq": 6,
+        "type": "event"
+      },
+      "messages": [
+        {
+          "body": {
+            "supportsConditionalBreakpoints": true,
+            "supportsConfigurationDoneRequest": true,
+            "supportsEvaluateForHovers": true,
+            "supportsSetVariable": false,
+            "supportsStepBack": false
+          },
+          "command": "initialize",
+          "request_seq": 1,
+          "seq": 1,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "event": "initialized",
+          "seq": 2,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "command": "launch",
+          "request_seq": 2,
+          "seq": 3,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "breakpoints": []
+          },
+          "command": "setBreakpoints",
+          "request_seq": 3,
+          "seq": 4,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {},
+          "command": "configurationDone",
+          "request_seq": 4,
+          "seq": 5,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "allThreadsStopped": true,
+            "reason": "pause",
+            "threadId": 1
+          },
+          "event": "stopped",
+          "seq": 6,
+          "type": "event"
+        },
+        {
+          "body": {
+            "allThreadsContinued": true
+          },
+          "command": "continue",
+          "request_seq": 5,
+          "seq": 7,
+          "success": true,
+          "type": "response"
+        },
+        {
+          "body": {
+            "exitCode": 0
+          },
+          "event": "exited",
+          "seq": 8,
+          "type": "event"
+        },
+        {
+          "body": {},
+          "event": "terminated",
+          "seq": 9,
+          "type": "event"
+        }
+      ],
+      "exit_before_cleanup": 0,
+      "stderr": ""
+    }
+  }
+}

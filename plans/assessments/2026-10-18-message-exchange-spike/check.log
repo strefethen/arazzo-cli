@@ -1,0 +1,7 @@
+    Checking tokio-rustls v0.26.4
+    Checking arazzo-expr v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-expr)
+    Checking arazzo-spec v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-spec)
+    Checking hyper-rustls v0.27.7
+    Checking reqwest v0.12.28
+    Checking arazzo-runtime v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-runtime)
+    Finished `dev` profile [unoptimized] target(s) in 2.20s

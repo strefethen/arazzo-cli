@@ -1,0 +1,5 @@
+    Checking serde_yaml_ng v0.10.0
+    Checking criterion v0.5.1
+    Checking arazzo-spec v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-spec)
+    Checking arazzo-runtime v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-runtime)
+    Finished `dev` profile [unoptimized] target(s) in 9.19s

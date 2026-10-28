@@ -1,0 +1,21 @@
+   Compiling rustls v0.23.46
+   Compiling arazzo-expr v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-expr)
+   Compiling arazzo-spec v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-spec)
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.12.28
+   Compiling arazzo-runtime v0.9.0 (/private/tmp/arazzo-message-spike-26yek6fj/crates/arazzo-runtime)
+    Finished `release` profile [optimized] target(s) in 45.22s
+     Running unittests src/lib.rs (/Users/stevetrefethen/github/arazzo-cli/target/release/deps/arazzo_runtime-ae6b22a6bce50352)
+
+running 7 tests
+test runtime_core::message_spike::send_failure_never_starts_receive ... ok
+test runtime_core::message_spike::failed_message_criterion_stops_before_forwarding ... ok
+test runtime_core::message_spike::immediate_reply_criteria_and_typed_output_chaining ... ok
+test runtime_core::message_spike::cancellation_drops_active_receive ... ok
+test runtime_core::message_spike::characterizes_message_context_lost_at_action_boundary ... ok
+test runtime_core::message_spike::missing_message_reports_receive_timeout ... ok
+test runtime_core::message_spike::step_timeout_uses_existing_failure_retry_without_cancelling_run ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 190 filtered out; finished in 0.03s
+

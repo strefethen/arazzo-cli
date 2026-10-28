@@ -1,0 +1,16 @@
+Disposable snapshot: /var/folders/k6/c_770tqj1y173g8ckb2zqxhr0000gn/T/arazzo-message-spike-qkc6woq1
+   Compiling arazzo-runtime v0.9.0 (/private/var/folders/k6/c_770tqj1y173g8ckb2zqxhr0000gn/T/arazzo-message-spike-qkc6woq1/crates/arazzo-runtime)
+    Finished `test` profile [unoptimized] target(s) in 7.28s
+     Running unittests src/lib.rs (/Users/stevetrefethen/github/arazzo-cli/target/debug/deps/arazzo_runtime-90e9bbd948322d42)
+
+running 7 tests
+test runtime_core::message_spike::send_failure_never_starts_receive ... ok
+test runtime_core::message_spike::cancellation_drops_active_receive ... ok
+test runtime_core::message_spike::failed_message_criterion_stops_before_forwarding ... ok
+test runtime_core::message_spike::immediate_reply_criteria_and_typed_output_chaining ... ok
+test runtime_core::message_spike::characterizes_message_context_lost_at_action_boundary ... ok
+test runtime_core::message_spike::missing_message_reports_receive_timeout ... ok
+test runtime_core::message_spike::step_timeout_uses_existing_failure_retry_without_cancelling_run ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 190 filtered out; finished in 0.03s
+

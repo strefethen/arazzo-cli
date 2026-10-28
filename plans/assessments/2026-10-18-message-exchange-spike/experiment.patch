@@ -1,0 +1,427 @@
+--- a/crates/arazzo-runtime/src/runtime_core.rs
++++ b/crates/arazzo-runtime/src/runtime_core.rs
+@@ -27,6 +27,9 @@
+ pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
+ /// Default maximum response body size: 10 MiB.
+ pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
++
++#[cfg(test)]
++mod message_spike;
+ 
+ mod builder;
+ mod client;
+--- a/crates/arazzo-runtime/src/runtime_core/state.rs
++++ b/crates/arazzo-runtime/src/runtime_core/state.rs
+@@ -344,6 +344,8 @@
+ 
+ /// Shared immutable core of the engine, wrapped in `Arc`.
+ pub(super) struct EngineInner {
++    #[cfg(test)]
++    pub(super) spike_exchange: Option<Arc<super::message_spike::Exchange>>,
+     pub(super) index: WorkflowIndex,
+     pub(super) client: HttpClient,
+     pub(super) parallel_mode: bool,
+--- a/crates/arazzo-runtime/src/runtime_core/builder.rs
++++ b/crates/arazzo-runtime/src/runtime_core/builder.rs
+@@ -226,6 +226,8 @@
+ 
+         Ok(Engine {
+             inner: Arc::new(EngineInner {
++                #[cfg(test)]
++                spike_exchange: None,
+                 index: WorkflowIndex {
+                     spec: self.spec,
+                     source_descriptions_map,
+--- a/crates/arazzo-runtime/src/runtime_core/engine_impl.rs
++++ b/crates/arazzo-runtime/src/runtime_core/engine_impl.rs
+@@ -686,6 +686,18 @@
+             });
+         }
+ 
++        #[cfg(test)]
++        if let Some(exchange) = &self.inner.spike_exchange {
++            if step.action.is_some() {
++                let execution =
++                    super::message_spike::execute(self, exchange, exec_ctx, step, vars).await?;
++                for (name, value) in &execution.outputs {
++                    vars.set_step_output(&step.step_id, name, value.clone());
++                }
++                return Ok(execution);
++            }
++        }
++
+         let execution = self
+             .execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+             .await?;
+--- /dev/null
++++ b/crates/arazzo-runtime/src/runtime_core/message_spike.rs
+@@ -0,0 +1,369 @@
++//! Disposable, test-only experiment. No AsyncAPI resolution or broker I/O.
++//! The one-slot inbox retains an immediate reply; that is a fixture property,
++//! not a guarantee supplied by the workflow engine. Only sequential mode.
++
++use super::*;
++use arazzo_spec::StepAction;
++use std::sync::atomic::AtomicUsize;
++
++#[derive(Clone)]
++pub(super) struct Message {
++    headers: BTreeMap<String, String>,
++    payload: Value,
++}
++
++pub(super) struct Exchange {
++    sent: Mutex<Vec<Value>>,
++    reply: Option<Message>,
++    inbox_tx: mpsc::Sender<Message>,
++    inbox_rx: tokio::sync::Mutex<mpsc::Receiver<Message>>,
++    receive_started: tokio::sync::Notify,
++    active_waits: AtomicUsize,
++    receive_attempts: AtomicUsize,
++    fail_send: bool,
++}
++
++struct Waiting<'a>(&'a AtomicUsize);
++impl Drop for Waiting<'_> {
++    fn drop(&mut self) {
++        self.0.fetch_sub(1, Ordering::SeqCst);
++    }
++}
++
++impl Exchange {
++    fn new(reply: Option<Message>, fail_send: bool) -> Arc<Self> {
++        let (inbox_tx, inbox_rx) = mpsc::channel(1);
++        Arc::new(Self {
++            sent: Mutex::new(Vec::new()),
++            reply,
++            inbox_tx,
++            inbox_rx: tokio::sync::Mutex::new(inbox_rx),
++            receive_started: tokio::sync::Notify::new(),
++            active_waits: AtomicUsize::new(0),
++            receive_attempts: AtomicUsize::new(0),
++            fail_send,
++        })
++    }
++
++    async fn receive(&self, ctx: &ExecutionContext, step: &Step) -> Result<Message, RuntimeError> {
++        self.active_waits.fetch_add(1, Ordering::SeqCst);
++        self.receive_attempts.fetch_add(1, Ordering::SeqCst);
++        let _waiting = Waiting(&self.active_waits);
++        self.receive_started.notify_one();
++        let millis = step.timeout.ok_or_else(|| {
++            RuntimeError::unspecified("spike requires an explicit receive timeout")
++        })?;
++        let receive = async {
++            self.inbox_rx
++                .lock()
++                .await
++                .recv()
++                .await
++                .ok_or_else(|| RuntimeError::unspecified("spike inbox closed"))
++        };
++        tokio::select! {
++            biased;
++            () = ctx.cancel.cancelled() => Err(ctx.cancelled_error()),
++            result = tokio::time::timeout(Duration::from_millis(millis), receive) => {
++                // Deliberately not ExecutionTimeout: that kind is invocation-terminal.
++                // This is a private experimental marker, not a proposed public error.
++                result.map_err(|_| RuntimeError::unspecified("SPIKE_STEP_TIMEOUT"))?
++            }
++        }
++    }
++}
++
++pub(super) async fn execute(
++    engine: &Engine,
++    exchange: &Exchange,
++    ctx: &ExecutionContext,
++    step: &Step,
++    vars: &VarStore,
++) -> Result<StepExecution, RuntimeError> {
++    if engine.inner.parallel_mode
++        || engine.inner.dry_run_mode
++        || engine.inner.trace_enabled
++        || engine.inner.capture_run
++        || engine.inner.debug_controller.is_some()
++    {
++        return Err(RuntimeError::unspecified(
++            "spike only supports sequential execution without dry-run, trace, capture or debugger",
++        ));
++    }
++    ctx.check_cancelled()?;
++    let mut eval_ctx = engine.make_eval_context(vars, None);
++    match step.action {
++        Some(StepAction::Send) => {
++            if exchange.fail_send {
++                return Err(RuntimeError::unspecified("SPIKE_SEND_FAILURE"));
++            }
++            let payload = step
++                .request_body
++                .as_ref()
++                .and_then(|body| body.payload.as_ref())
++                .ok_or_else(|| RuntimeError::unspecified("spike send needs a payload"))?;
++            let (resolved, warnings) =
++                resolve_payload_detailed(payload, &ExpressionEvaluator::new(eval_ctx.clone()));
++            if !warnings.is_empty() {
++                return Err(RuntimeError::unspecified(format!(
++                    "spike payload diagnostics: {warnings:?}"
++                )));
++            }
++            let first = {
++                let mut sent = exchange
++                    .sent
++                    .lock()
++                    .map_err(|_| RuntimeError::unspecified("spike sent lock poisoned"))?;
++                sent.push(resolved);
++                sent.len() == 1
++            };
++            if first {
++                if let Some(reply) = &exchange.reply {
++                    // Deliver before send returns; receive has not been scheduled yet.
++                    exchange
++                        .inbox_tx
++                        .try_send(reply.clone())
++                        .map_err(|err| RuntimeError::unspecified(err.to_string()))?;
++                }
++            }
++        }
++        Some(StepAction::Receive) => {
++            let message = exchange.receive(ctx, step).await?;
++            eval_ctx.message_headers = message.headers;
++            eval_ctx.message_payload = Some(message.payload);
++        }
++        None => return Err(RuntimeError::unspecified("spike needs an action")),
++    }
++    let eval = ExpressionEvaluator::new(eval_ctx);
++    let mut outputs = BTreeMap::new();
++    let mut success = true;
++    for criterion in &step.success_criteria {
++        let evaluated =
++            evaluate_criterion_detailed(criterion, &eval, None, &engine.inner.regex_cache);
++        if !evaluated.warnings.is_empty() || evaluated.error.is_some() {
++            return Err(RuntimeError::unspecified(format!(
++                "spike criterion diagnostic: {evaluated:?}"
++            )));
++        }
++        if !evaluated.matched {
++            success = false;
++            break;
++        }
++    }
++    if success {
++        for (name, value) in &step.outputs {
++            let (value, warnings) = evaluate_output_value_detailed(value, &eval, None);
++            if !warnings.is_empty() {
++                return Err(RuntimeError::unspecified(format!(
++                    "spike output diagnostics: {warnings:?}"
++                )));
++            }
++            outputs.insert(name.clone(), value);
++        }
++    }
++    Ok(StepExecution {
++        result: StepResult {
++            success,
++            response: None,
++            err: None,
++            err_kind: None,
++        },
++        outputs,
++        dry_run_request: None,
++        trace: StepTraceData::default(),
++    })
++}
++
++type TestResult = Result<(), Box<dyn std::error::Error>>;
++
++fn spec() -> Result<ArazzoSpec, serde_json::Error> {
++    // JSON is only fixture construction. These use existing Arazzo fields.
++    serde_json::from_value(json!({
++        "arazzo": "1.1.0", "info": {"title":"message spike", "version":"1"},
++        "sourceDescriptions": [{"name":"events", "url":"events.asyncapi.yaml", "type":"asyncapi"}],
++        "workflows": [{"workflowId":"exchange", "steps":[
++            {"stepId":"send", "operationId":"$sourceDescriptions.events.send", "action":"send",
++             "requestBody":{"payload":{"order":"$inputs.order"}}},
++            {"stepId":"receive", "operationId":"$sourceDescriptions.events.receive", "action":"receive",
++             "dependsOn":["send"], "timeout":1000,
++             "successCriteria":[{"condition":"$message.payload#/accepted == true"}],
++             "outputs":{"id":"$message.payload#/id", "tag":"$message.header.x-tag"}},
++            {"stepId":"forward", "operationId":"$sourceDescriptions.events.forward", "action":"send",
++             "requestBody":{"payload":{"id":"$steps.receive.outputs.id"}}}
++        ], "outputs":{"id":"$steps.receive.outputs.id", "tag":"$steps.receive.outputs.tag"}}]
++    }))
++}
++
++fn reply(accepted: bool) -> Message {
++    Message {
++        headers: BTreeMap::from([("x-tag".into(), "reply".into())]),
++        payload: json!({"id":42,"accepted":accepted}),
++    }
++}
++
++fn engine(
++    spec: ArazzoSpec,
++    reply: Option<Message>,
++    fail_send: bool,
++) -> Result<(Engine, Arc<Exchange>), RuntimeError> {
++    let exchange = Exchange::new(reply, fail_send);
++    let mut engine = EngineBuilder::new(spec).build()?;
++    Arc::get_mut(&mut engine.inner)
++        .ok_or_else(|| RuntimeError::unspecified("engine already shared"))?
++        .spike_exchange = Some(Arc::clone(&exchange));
++    Ok((engine, exchange))
++}
++
++fn inputs() -> BTreeMap<String, Value> {
++    BTreeMap::from([("order".into(), json!(7))])
++}
++
++#[tokio::test]
++async fn immediate_reply_criteria_and_typed_output_chaining() -> TestResult {
++    let (engine, exchange) = engine(spec()?, Some(reply(true)), false)?;
++    let result = engine.execute_collect("exchange", inputs()).await;
++    assert_eq!(
++        result.outputs?,
++        BTreeMap::from([("id".into(), json!(42)), ("tag".into(), json!("reply"))])
++    );
++    assert_eq!(
++        *exchange.sent.lock().map_err(|_| "poisoned")?,
++        vec![json!({"order":7}), json!({"id":42})]
++    );
++    assert_eq!(exchange.receive_attempts.load(Ordering::SeqCst), 1);
++    assert_eq!(exchange.active_waits.load(Ordering::SeqCst), 0);
++    Ok(())
++}
++
++#[tokio::test]
++async fn failed_message_criterion_stops_before_forwarding() -> TestResult {
++    let (engine, exchange) = engine(spec()?, Some(reply(false)), false)?;
++    let error = engine
++        .execute_collect("exchange", inputs())
++        .await
++        .outputs
++        .err()
++        .ok_or("expected failure")?;
++    assert_eq!(error.kind, RuntimeErrorKind::SuccessCriteriaFailed);
++    assert_eq!(exchange.sent.lock().map_err(|_| "poisoned")?.len(), 1);
++    assert_eq!(exchange.active_waits.load(Ordering::SeqCst), 0);
++    Ok(())
++}
++
++#[tokio::test]
++async fn missing_message_reports_receive_timeout() -> TestResult {
++    let mut spec = spec()?;
++    spec.workflows[0].steps[1].timeout = Some(10);
++    let (engine, exchange) = engine(spec, None, false)?;
++    let result = tokio::time::timeout(
++        Duration::from_secs(2),
++        engine.execute_collect("exchange", inputs()),
++    )
++    .await?;
++    let error = result.outputs.err().ok_or("expected receive timeout")?;
++    assert_eq!(error.kind, RuntimeErrorKind::Unspecified);
++    assert!(error.message.contains("SPIKE_STEP_TIMEOUT"));
++    assert_eq!(exchange.receive_attempts.load(Ordering::SeqCst), 1);
++    assert_eq!(exchange.active_waits.load(Ordering::SeqCst), 0);
++    assert!(exchange.inbox_rx.try_lock().is_ok());
++    Ok(())
++}
++
++#[tokio::test]
++async fn step_timeout_uses_existing_failure_retry_without_cancelling_run() -> TestResult {
++    let mut spec = spec()?;
++    let receive = &mut spec.workflows[0].steps[1];
++    receive.timeout = Some(10);
++    receive.on_failure = vec![OnAction {
++        name: "retry_wait".into(),
++        type_: Some(ActionType::Retry),
++        retry_limit: Some(1),
++        ..OnAction::default()
++    }];
++    let (engine, exchange) = engine(spec, None, false)?;
++    let result = tokio::time::timeout(
++        Duration::from_secs(2),
++        engine.execute_collect("exchange", inputs()),
++    )
++    .await?;
++    assert_eq!(
++        result
++            .outputs
++            .as_ref()
++            .err()
++            .ok_or("expected exhausted retry")?
++            .kind,
++        RuntimeErrorKind::RetryLimitExceeded
++    );
++    let timeout_completions = result.events.iter().filter(|event| matches!(
++        event, EngineEvent::Observer(ObserverEvent::StepCompleted { step_id, error: Some(error), .. })
++        if step_id == "receive" && error.contains("SPIKE_STEP_TIMEOUT")
++    )).count();
++    assert_eq!(timeout_completions, 2);
++    assert_eq!(exchange.receive_attempts.load(Ordering::SeqCst), 2);
++    assert_eq!(exchange.active_waits.load(Ordering::SeqCst), 0);
++    assert_eq!(exchange.sent.lock().map_err(|_| "poisoned")?.len(), 1);
++    assert!(exchange.inbox_rx.try_lock().is_ok());
++    Ok(())
++}
++
++#[tokio::test]
++async fn cancellation_drops_active_receive() -> TestResult {
++    let (engine, exchange) = engine(spec()?, None, false)?;
++    let handle = engine.execute("exchange", inputs());
++    tokio::time::timeout(Duration::from_secs(1), exchange.receive_started.notified()).await?;
++    handle.cancel_token().cancel();
++    let result = tokio::time::timeout(Duration::from_secs(1), handle.collect()).await?;
++    assert_eq!(
++        result.outputs.err().ok_or("expected cancellation")?.kind,
++        RuntimeErrorKind::ExecutionCancelled
++    );
++    assert_eq!(exchange.active_waits.load(Ordering::SeqCst), 0);
++    assert!(exchange.inbox_rx.try_lock().is_ok());
++    assert_eq!(exchange.sent.lock().map_err(|_| "poisoned")?.len(), 1);
++    Ok(())
++}
++
++#[tokio::test]
++async fn send_failure_never_starts_receive() -> TestResult {
++    let (engine, exchange) = engine(spec()?, Some(reply(true)), true)?;
++    let result = engine.execute_collect("exchange", inputs()).await;
++    assert!(result
++        .outputs
++        .err()
++        .ok_or("expected send failure")?
++        .message
++        .contains("SPIKE_SEND_FAILURE"));
++    assert_eq!(exchange.receive_attempts.load(Ordering::SeqCst), 0);
++    Ok(())
++}
++
++#[tokio::test]
++async fn characterizes_message_context_lost_at_action_boundary() -> TestResult {
++    // Both conditions should match the received id. Only the output-based one
++    // works today: the unchanged action owner reconstructs context from Response.
++    for (condition, sends) in [
++        ("$message.payload#/id == 42", 2),
++        ("$steps.receive.outputs.id == 42", 1),
++    ] {
++        let mut spec = spec()?;
++        spec.workflows[0].steps[1].on_success = vec![OnAction {
++            name: "end_if_match".into(),
++            type_: Some(ActionType::End),
++            criteria: vec![SuccessCriterion {
++                condition: condition.into(),
++                ..SuccessCriterion::default()
++            }],
++            ..OnAction::default()
++        }];
++        let (engine, exchange) = engine(spec, Some(reply(true)), false)?;
++        let result = engine.execute_collect("exchange", inputs()).await;
++        assert_eq!(result.outputs?["id"], json!(42));
++        assert_eq!(
++            exchange.sent.lock().map_err(|_| "poisoned")?.len(),
++            sends,
++            "{condition}"
++        );
++    }
++    Ok(())
++}

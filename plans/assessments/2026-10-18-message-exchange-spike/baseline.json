@@ -1,0 +1,22 @@
+{
+  "head": "be999695b166472eff8bcf9d7cc3521d795c4cfa",
+  "snapshot": "/private/tmp/arazzo-message-spike-26yek6fj",
+  "note": "Current working source; pre-existing manifest/lock changes included. No production source changes.",
+  "sha256": {
+    "crates/arazzo-runtime/src/runtime_core.rs": "8ad056015e5836030a3d825b4475e6b92aa6139ff33e9f9779c2d60cce3e3d0b",
+    "crates/arazzo-runtime/src/runtime_core/state.rs": "85a9d9d7f7146c98841cb821f87e4534d661f544a7e842f4ce80f6d9f0d2f34a",
+    "crates/arazzo-runtime/src/runtime_core/builder.rs": "bbfe9f91b0d15004a59b55bc8e9ac8567aa7d52aa2deaccb67ae01ea32e1f6fe",
+    "crates/arazzo-runtime/src/runtime_core/engine_impl.rs": "da90099ff07c2f885fdebf1a682e230b6369a8e80175b4c8ad202779a9f531bc",
+    "Cargo.toml": "edd509b3a46f51892098e4346aa08036cd86506d3b64edf63adc061ea8527cf1",
+    "Cargo.lock": "562c3251563a188190542f041904080ed0cabbefe00c1eb5e30d3c277b8682be",
+    "rust-toolchain.toml": "a7a23801522d469e93021507fc88e9f5651056fce0e6aa22b3d3157c5f3dc6fe",
+    "spec/SHA256SUMS": "b6b78d07f1008b3221125d8e5ab4dcc23a6e428df607850d489de982b78e2181",
+    "crates/arazzo-runtime/src/runtime_core/criteria.rs": "cb1a4c7a72772f15f7a1fa23791e73b6fb602a3be752d7f9057b34144c7af9ea",
+    "crates/arazzo-runtime/src/runtime_core/engine_actions.rs": "ca7b93be3297c9b319a2786935459a32ccebdd524697083d91bcd53324090c70",
+    "crates/arazzo-runtime/src/runtime_core/step_attempt.rs": "3785d30a77b2126fc9c732bdb17cbbad7e1c729ce0b6fb3b1a9b12d48be92627",
+    "crates/arazzo-expr/src/lib.rs": "e9856195a2a81d89aeb79fc767adb083a44c7fcf87343f0be105210d2a9558f5"
+  },
+  "new_files": [
+    "crates/arazzo-runtime/src/runtime_core/message_spike.rs"
+  ]
+}
