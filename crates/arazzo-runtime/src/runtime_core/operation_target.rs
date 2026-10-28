@@ -3,6 +3,76 @@ use super::*;
 use arazzo_spec::SourceDescription;
 use serde_yaml_ng::Value as Yaml;
 
+/// An `operationId` resolved to the request it names.
+pub(crate) struct ResolvedOperation {
+    pub method: String,
+    pub path: String,
+    /// Effective operation/path/document server from its bound source.
+    pub base: String,
+}
+
+/// Shared final projection for ID and pointer resolution.
+pub(super) fn resolved_operation(
+    target: &str,
+    entry: &OperationEntry,
+    document_base: &str,
+) -> Result<ResolvedOperation, RuntimeError> {
+    Ok(ResolvedOperation {
+        method: entry.method.clone(),
+        path: entry.path.clone(),
+        base: operation_base(target, entry, document_base)?,
+    })
+}
+
+/// The request base a source-bound operation is sent to: the server it
+/// declares for itself, else its source description's document base.
+fn operation_base(
+    target: &str,
+    entry: &OperationEntry,
+    document_base: &str,
+) -> Result<String, RuntimeError> {
+    entry
+        .server
+        .base(document_base)
+        .map_err(|unusable| unusable_operation_server(target, entry, unusable))
+}
+
+/// The refusal for an operation whose own `servers` declaration yields no
+/// usable request base. Like every refusal at resolution it says whose limit
+/// it is: a relative url is this runtime's — OpenAPI allows it, but it
+/// resolves against where the document is served from — while a malformed
+/// declaration is the document's to correct.
+fn unusable_operation_server(
+    target: &str,
+    entry: &OperationEntry,
+    unusable: &UnusableServer,
+) -> RuntimeError {
+    let named = format!(
+        "operation target \"{target}\" names {} {} in {}",
+        entry.method,
+        entry.path,
+        entry.origin.describe()
+    );
+    let level = unusable.level.object_name();
+    let message = match &unusable.issue {
+        ServerIssue::Relative(url) => format!(
+            "{named}, and its {level} declares servers[0].url \"{url}\", which is relative. \
+             OpenAPI resolves a relative server url against the location the document is served \
+             from; this runtime reads the document from disk, so it has no HTTP location to \
+             resolve it against — declare an absolute server url there"
+        ),
+        ServerIssue::NotAnArray => format!(
+            "{named}, and its {level} declares a servers field that is not an array. OpenAPI \
+             requires an array of Server Objects there, so the document must be corrected"
+        ),
+        ServerIssue::MissingUrl => format!(
+            "{named}, and its {level} declares a first Server Object with no url. OpenAPI \
+             requires a url on every Server Object, so the document must be corrected"
+        ),
+    };
+    RuntimeError::new(RuntimeErrorKind::SourceDescriptionParse, message)
+}
+
 pub(super) struct BoundOpenApi {
     pub(super) root: Yaml,
     pub(super) label: String,
@@ -117,7 +187,7 @@ impl Engine {
     pub(super) fn resolve_operation_path(
         &self,
         target: &str,
-    ) -> Result<engine_http::ResolvedOperation, RuntimeError> {
+    ) -> Result<ResolvedOperation, RuntimeError> {
         let (source_name, encoded_pointer) = match classify_operation_path(target) {
             OperationPathTarget::SourcePointer { source_name, encoded_pointer } => (source_name, encoded_pointer),
             OperationPathTarget::Malformed(reason) => return Err(RuntimeError::new(
@@ -179,7 +249,7 @@ impl Engine {
                     format!("sourceDescription \"{source_name}\" has no document request base"),
                 )
             })?;
-        engine_http::resolved_operation(target, &entry, base)
+        resolved_operation(target, &entry, base)
     }
 }
 
