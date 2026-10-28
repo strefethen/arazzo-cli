@@ -17,6 +17,11 @@ mod interpolation;
 mod resolution;
 mod runtime_expression;
 mod simple_condition;
+mod step_output_reference;
+
+pub use step_output_reference::{
+    local_step_output_references, LocalStepOutputReference, StepReferenceError, StepReferenceSyntax,
+};
 
 pub use expression_string::{
     classify_value_string, EmbeddedExpression, ExpressionStringError, ExpressionStringErrorKind,

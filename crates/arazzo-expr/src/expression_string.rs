@@ -76,41 +76,54 @@ pub fn classify_value_string(input: &str) -> Result<ValueStringSyntax<'_>, Expre
         return Ok(ValueStringSyntax::Expression(expression));
     }
 
-    let mut expressions = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = input[cursor..].find("{$") {
-        let start = cursor + offset;
-        let inner_start = start + 1;
-        let Some(close_offset) = input[inner_start..].find('}') else {
-            return Err(ExpressionStringError {
-                kind: ExpressionStringErrorKind::Syntax,
-                byte_range: start..input.len(),
-                message: "embedded Runtime Expression is missing closing '}'".to_owned(),
-            });
-        };
-        let inner_end = inner_start + close_offset;
-        let expression =
-            parse_runtime_expression(&input[inner_start..inner_end]).map_err(|error| {
-                ExpressionStringError {
-                    kind: ExpressionStringErrorKind::EmbeddedRuntimeExpression,
-                    byte_range: (inner_start + error.byte_range.start)
-                        ..(inner_start + error.byte_range.end),
-                    message: error.to_string(),
-                }
-            })?;
-        cursor = inner_end + 1;
-        expressions.push(EmbeddedExpression {
-            full_range: start..cursor,
-            inner_range: inner_start..inner_end,
-            expression,
-        });
-    }
+    let expressions: Vec<_> = reserved_embedded_expressions(input).collect::<Result<_, _>>()?;
 
     if expressions.is_empty() {
         Ok(ValueStringSyntax::Literal(input))
     } else {
         Ok(ValueStringSyntax::Template(expressions))
     }
+}
+
+/// Parse only reserved candidates, leaving all surrounding bytes uninterpreted.
+/// Each candidate closes at its first raw `}`; the iterator stops at its first error.
+pub(crate) fn reserved_embedded_expressions(
+    input: &str,
+) -> impl Iterator<Item = Result<EmbeddedExpression<'_>, ExpressionStringError>> {
+    let mut cursor = Some(0);
+    std::iter::from_fn(move || {
+        // Taking the cursor also makes errors terminal without a partial candidate.
+        let cursor_start = cursor.take()?;
+        let offset = input[cursor_start..].find("{$")?;
+        let start = cursor_start + offset;
+        let inner_start = start + 1;
+        let Some(close_offset) = input[inner_start..].find('}') else {
+            return Some(Err(ExpressionStringError {
+                kind: ExpressionStringErrorKind::Syntax,
+                byte_range: start..input.len(),
+                message: "embedded Runtime Expression is missing closing '}'".to_owned(),
+            }));
+        };
+        let inner_end = inner_start + close_offset;
+        let expression = match parse_runtime_expression(&input[inner_start..inner_end]) {
+            Ok(expression) => expression,
+            Err(error) => {
+                return Some(Err(ExpressionStringError {
+                    kind: ExpressionStringErrorKind::EmbeddedRuntimeExpression,
+                    byte_range: (inner_start + error.byte_range.start)
+                        ..(inner_start + error.byte_range.end),
+                    message: error.to_string(),
+                }));
+            }
+        };
+        let end = inner_end + 1;
+        cursor = Some(end);
+        Some(Ok(EmbeddedExpression {
+            full_range: start..end,
+            inner_range: inner_start..inner_end,
+            expression,
+        }))
+    })
 }
 
 #[cfg(test)]
