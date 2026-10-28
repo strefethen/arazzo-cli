@@ -16,7 +16,10 @@ Applies to any change touching document shape, field meaning, the `$…`
 expression grammar, the `successCriteria` condition grammar, or accepted
 `arazzo:` versions. For those:
 
-- Implement what v1.1.0 says, nothing more. Not in the spec → stop and ask.
+- **Explicit specification requirements:** follow them.
+- **Implementation choices the specification leaves open:** choose documented, predictable behavior that supports ordinary user workflows.
+- **Ambiguous specification meaning:** inspect normative text, examples, and maintainer discussions; select the best-supported interpretation, label it as an interpretation, and obtain independent review.
+- **New document syntax or a direct contradiction of a normative requirement:** remain outside delegated authority.
 - Quote the spec in your plan, from [`spec/`](spec/README.md) — verbatim
   vendored copies of the published documents, so there is no network round trip
   and no drift between what you cited and what you implemented. Do not work
