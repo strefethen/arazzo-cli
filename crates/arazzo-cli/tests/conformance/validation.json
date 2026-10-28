@@ -57,5 +57,23 @@
       "owner": "ac-68f7d",
       "reason": "The duplicate-action identity decision is owned by ac-68f7d."
     }
+    ,
+    {
+      "id": "validation.async-step-field-applicability",
+      "area": "validation",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#stepCorrelationId", "spec/arazzo/v1.1.0.html#stepAction", "spec/arazzo/v1.1.0.html#step-object"],
+      "normativeLevels": ["MUST"],
+      "claim": "action is only applicable to asyncapi steps, and correlationId is only applicable to asyncapi steps with action: receive.",
+      "status": "deviation",
+      "owner": "ac-c0fc6",
+      "reason": "Validation enforces the action half: correlationId requires action: receive, action values are send/receive, and both fields need an operationId or channelPath target. It does not enforce the source-type half: an operationId naming a type: openapi source with action: receive and correlationId validates clean even under --strict (reproduced 2026-10-28). The runtime refuses that source type during receive-target admission; ac-c0fc6 owns the validation fix.",
+      "evidence": {
+        "negative": [
+          "crates/arazzo-validate/src/tests/cases/async_steps.rs#validate_async_field_combinations_fail_with_specific_diagnostics",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#operation_form_needs_a_source_qualified_id_naming_an_asyncapi_source"
+        ]
+      }
+    }
   ]
 }

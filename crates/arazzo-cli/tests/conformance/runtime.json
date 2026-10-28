@@ -168,5 +168,86 @@
         ]
       }
     }
+    ,
+    {
+      "id": "runtime.asyncapi-receive-admission-before-connection",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#defining-success-for-asynchronous-steps", "spec/arazzo/v1.1.0.html#stepAction", "spec/arazzo/v1.1.0.html#step-object"],
+      "normativeLevels": ["MAY", "SHOULD"],
+      "claim": "AsyncAPI receive-target admission reads the local document before any connection and accepts supported channelPath and operationId targets. Admission refuses send, missing action, requestBody, referenced channel/operation/server objects, templated addresses, strict messages subsets, non-JSON content types, and no eligible server with RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT or RUNTIME_MESSAGE_TRANSPORT_CONFIG without opening a socket.",
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#both_target_forms_project_the_same_target"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#send_absent_action_and_request_body_are_refused",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#operation_form_refuses_mismatched_action_ref_operations_and_executable_fields",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#a_ref_with_sibling_properties_is_still_a_reference",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_target_tests.rs#unsupported_versions_references_forms_and_remote_uri_fail_explicitly",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#address_must_be_a_literal_topic",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#operation_messages_must_list_every_channel_message",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#effective_content_type_follows_message_then_traits_then_default",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#channel_servers_subset_root_fallback_and_selection",
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#send_missing_correlation_object_and_replay_fail_before_any_connection",
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#an_unsupported_later_target_is_refused_before_the_first_one_connects"
+        ]
+      }
+    },
+    {
+      "id": "runtime.asyncapi-receive-dry-run-outputs",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#defining-success-for-asynchronous-steps", "spec/arazzo/v1.1.0.html#stepOutputs"],
+      "normativeLevels": ["MUST"],
+      "claim": "In dry run, an AsyncAPI receive step evaluates its outputs against a simulated empty message without connecting, so dependent steps resolve.",
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#dry_run_simulates_a_message_without_connecting"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#execution_timeout_during_preparation_keeps_its_classification",
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#arming_fails_the_run_before_any_http_request_and_covers_the_step_closure"
+        ]
+      }
+    },
+    {
+      "id": "runtime.step-correlationid-filter",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#stepCorrelationId", "spec/arazzo/v1.1.0.html#defining-success-for-asynchronous-steps"],
+      "normativeLevels": ["MAY"],
+      "claim": "Step correlationId is a literal-or-expression value resolved before the wait and compared as scalar text with the value at the AsyncAPI Correlation ID Object location shared by every channel message (repository interpretation, see plans/current/arazzo-1.1-conformance-evidence.md). The end-to-end skip loop is exercised only by live tests in CI's Kafka job, which this manifest does not count.",
+      "status": "covered",
+      "evidence": {
+        "positive": [
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#correlation_projects_own_trait_and_referenced_locations_for_both_targets",
+          "crates/arazzo-runtime/src/runtime_core/engine_message.rs#correlation_matches_only_located_scalar_text",
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#correlation_dry_run_resolves_scalars_and_rejects_missing_or_non_scalar_inputs"
+        ],
+        "negative": [
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#correlation_rejects_missing_malformed_and_ambiguous_locations_only_when_requested",
+          "crates/arazzo-runtime/src/runtime_core/asyncapi_receive_tests.rs#correlation_references_keep_the_one_local_hop_rule"
+        ]
+      }
+    },
+    {
+      "id": "runtime.asyncapi-send-unsupported",
+      "area": "runtime",
+      "authority": "arazzoSpec",
+      "specAnchors": ["spec/arazzo/v1.1.0.html#defining-success-for-asynchronous-steps", "spec/arazzo/v1.1.0.html#stepAction"],
+      "normativeLevels": ["MAY"],
+      "claim": "An AsyncAPI action: send step sends a message to its channel and completes immediately after the message is sent.",
+      "status": "unsupported",
+      "owner": "ac-1a498",
+      "reason": "The specification does not say where a send step's payload comes from (OAI/Arazzo-Specification#617, recorded open on 2026-10-28). The runtime refuses action: send with RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT before any connection; ac-1a498 owns support pending the outgoing-message contract.",
+      "evidence": {
+        "negative": [
+          "crates/arazzo-runtime/tests/kafka_receive_engine.rs#send_missing_correlation_object_and_replay_fail_before_any_connection"
+        ]
+      }
+    }
   ]
 }

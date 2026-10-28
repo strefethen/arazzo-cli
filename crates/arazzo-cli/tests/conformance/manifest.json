@@ -37,6 +37,11 @@
       "versions",
       "workflow-object",
       "xpath-conditions"
+      ,
+      "defining-success-for-asynchronous-steps",
+      "stepAction",
+      "stepOutputs",
+      "stepCorrelationId"
     ]
   },
   "inventory": [
@@ -61,5 +66,11 @@
     { "id": "document.identity-and-reference-resolution", "area": "runtime" },
     { "id": "runtime.source-qualified-operation-id-routing", "area": "runtime" },
     { "id": "surfaces.cli-test-tap-junit-contract", "area": "surfaces" }
+    ,
+    { "id": "runtime.asyncapi-receive-admission-before-connection", "area": "runtime" },
+    { "id": "runtime.asyncapi-receive-dry-run-outputs", "area": "runtime" },
+    { "id": "runtime.step-correlationid-filter", "area": "runtime" },
+    { "id": "runtime.asyncapi-send-unsupported", "area": "runtime" },
+    { "id": "validation.async-step-field-applicability", "area": "validation" }
   ]
 }
