@@ -620,11 +620,59 @@ value path, and field mode, and performs no `$`/brace/condition parsing.
 that same owner with effective Success/Failure Action sites after the Action
 overlay decision is accepted.
 
-Step `correlationId` is not assigned a field mode by example inference.
-[ac-dc3f2](https://sonos.scapedeck.com/docs/ac-tickets/ac-dc3f2) must record
-whether it is opaque, executable with an exact field mode/consumer, or
-fail-visibly deferred for AsyncAPI execution. The non-action inventory remains
-non-dispatchable until its conditional row is replaced by that accepted result.
+**Accepted `correlationId` disposition (2026-10-28, ac-dc3f2; interpretation,
+independently reviewed).** Step `correlationId` is a *literal-or-expression
+value*, the same field mode as a Parameter `value`. This is the best-supported
+reading of the vendored text, not specification wording: the fixed-field table
+types it `string` and says it "has to be in-sync with correlationId defined in
+the AsyncAPI document" (`#stepCorrelationId`); the tool-behavior clause makes
+it executable ("If correlationId is specified, only messages matching the
+correlation identifier are considered", `#tool-behavior`); and both Step
+examples write it as `$inputs.correlationId` while the paired `send` step puts
+the same expression into a header. A plain string is therefore a literal
+identifier, a complete Runtime Expression resolves to its typed value, and a
+braced template renders to a string; the canonical expression-string
+classifier owns that split. The row freezes:
+
+- *Field mode:* literal-or-expression, like `#parameterValue`. Not opaque
+  (the tool-behavior clause requires filtering) and not a required Runtime
+  Expression (the field is typed `string` and a fixed identifier is a
+  legitimate value).
+- *Parser and evaluator ownership:* the syntax owner
+  [ac-2f84e](https://sonos.scapedeck.com/docs/ac-tickets/ac-2f84e) classifies
+  the text; the runtime resolves it with the existing literal-or-expression
+  resolver at receive time. The validator keeps only the existing
+  applicability check (receive steps of asyncapi sources) and parses nothing.
+- *`$steps` dependency treatment:* a conformant
+  `$steps.<stepId>.outputs.<name>` occurrence creates an implicit Step
+  dependency exactly as it does in a Parameter value; the non-action
+  inventory ([ac-89176](https://sonos.scapedeck.com/docs/ac-tickets/ac-89176))
+  lists `correlationId` as an expression site with this mode.
+- *Runtime consumer:* the AsyncAPI receive executor. The expected value is
+  the resolved Step value; the actual value is read from each received
+  message at the location named by the AsyncAPI Correlation ID Object of the
+  operation's effective message(s) (`location` is an AsyncAPI runtime
+  expression over `$message.header` / `$message.payload`, vendored AsyncAPI
+  3.0.0 "Correlation ID Object"). Messages whose located value does not equal
+  the expected value are skipped without evaluating criteria; the first match
+  is the step's message; the step `timeout` bounds the whole wait. Comparison
+  is scalar string equality (the expected value rendered as text; a located
+  non-scalar never matches). A receive operation whose effective messages
+  declare no Correlation ID Object cannot honour the field and is a
+  configuration error, because the Step value must be "in-sync" with a
+  document-side definition.
+- *Direct typed Engine callers:* the model keeps `Step::correlation_id` as
+  the authored string; evaluation happens only in the receive executor, so
+  typed callers see no behaviour change until that executor accepts the
+  field.
+- *Unsupported behaviour today:* the Kafka receive executor still refuses a
+  step carrying `correlationId` with `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`
+  (fail-visible). That refusal is a deferral of the filter, not a competing
+  semantic, and it cannot contribute to a coverage claim. Implementing the
+  filter is a separate contained ticket under the Kafka receive follow-ups.
+- *Evidence owner:* the conformance manifest row for `#stepCorrelationId`
+  reports "interpretation; filter pending" until the receive executor
+  implements it, then cites the executor's hermetic and live filter tests.
 
 [ac-2f84e](https://sonos.scapedeck.com/docs/ac-tickets/ac-2f84e) is the only
 syntax owner that turns a field-mode/text pair into ordered exact local
