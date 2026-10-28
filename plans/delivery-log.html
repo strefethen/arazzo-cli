@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://cdn.jsdelivr.net;">
+<title>Arazzo CLI · Delivery log</title>
+<!-- Maintained in place after each verified delivery cycle. Add a concise dated
+     cycle section, update the overview and navigation, and link exact reviewed
+     candidates. tkt owns live status; roadmap.md owns priority and checkpoints. -->
+<!-- Anti-FOUC -->
+<script>
+  (function(){var s=JSON.parse(localStorage.getItem('arazzo-delivery-settings')||'{}');
+  if(s.theme==='dark')document.documentElement.setAttribute('data-theme','dark');
+  else if(s.theme==='light')document.documentElement.setAttribute('data-theme','light');
+  else{document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');}
+  if(s.scale)document.documentElement.style.fontSize=s.scale+'%';
+  })();
+</script>
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+
+<!-- Tailwind v4 -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @import "tailwindcss";
+
+  @custom-variant dark (&:is([data-theme="dark"], [data-theme="dark"] *));
+
+  @theme inline {
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --radius-sm: calc(var(--radius) - 4px);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) + 4px);
+    --animate-fade-up: fade-up 0.5s ease-out both;
+    --animate-fade-in: fade-in 0.4s ease-out both;
+    --animate-scale-in: scale-in 0.3s ease-out both;
+  }
+
+  @keyframes fade-up { from { opacity: 0; transform: translateY(12px); } }
+  @keyframes fade-in { from { opacity: 0; } }
+  @keyframes scale-in { from { opacity: 0; transform: scale(0.95); } }
+  [style*="--i"] { animation-delay: calc(var(--i, 0) * 0.06s); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      /* `transition: none`, NOT a 0.01ms duration: a near-zero duration still
+         leaves every element transitioning `all`, and Mermaid then measures
+         node geometry mid-transition and lays diagrams out 10-30x too large. */
+      transition: none !important;
+    }
+  }
+
+  :root {
+    --font-body: 'Geist', system-ui, sans-serif;
+    --font-mono: 'Geist Mono', 'SF Mono', ui-monospace, monospace;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0.013 285.82);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0.013 285.82);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0.013 285.82);
+    --primary: oklch(0.205 0.027 285.82);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.965 0.001 286.38);
+    --secondary-foreground: oklch(0.205 0.027 285.82);
+    --muted: oklch(0.965 0.001 286.38);
+    --muted-foreground: oklch(0.47 0.017 285.88);
+    --accent: oklch(0.965 0.001 286.38);
+    --accent-foreground: oklch(0.205 0.027 285.82);
+    --destructive: oklch(0.577 0.245 27.33);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.922 0.004 286.32);
+    --input: oklch(0.922 0.004 286.32);
+    --ring: oklch(0.708 0.165 254.62);
+    --chart-1: oklch(0.646 0.222 41.116);
+    --chart-2: oklch(0.6 0.118 184.714);
+    --chart-3: oklch(0.398 0.07 227.392);
+    --chart-4: oklch(0.828 0.189 84.429);
+    --chart-5: oklch(0.769 0.188 70.08);
+    --radius: 0.625rem;
+  }
+
+  [data-theme="dark"] {
+    --background: oklch(0.145 0.013 285.82);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.17 0.014 285.82);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.17 0.014 285.82);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.205 0.027 285.82);
+    --secondary: oklch(0.269 0.015 285.89);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0.015 285.89);
+    --muted-foreground: oklch(0.708 0.014 285.82);
+    --accent: oklch(0.269 0.015 285.89);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.22);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.269 0.015 285.89);
+    --input: oklch(0.269 0.015 285.89);
+    --ring: oklch(0.551 0.027 286.03);
+    --chart-1: oklch(0.488 0.243 264.376);
+    --chart-2: oklch(0.696 0.17 162.48);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --background: oklch(0.145 0.013 285.82);
+      --foreground: oklch(0.985 0 0);
+      --card: oklch(0.17 0.014 285.82);
+      --card-foreground: oklch(0.985 0 0);
+      --popover: oklch(0.17 0.014 285.82);
+      --popover-foreground: oklch(0.985 0 0);
+      --primary: oklch(0.985 0 0);
+      --primary-foreground: oklch(0.205 0.027 285.82);
+      --secondary: oklch(0.269 0.015 285.89);
+      --secondary-foreground: oklch(0.985 0 0);
+      --muted: oklch(0.269 0.015 285.89);
+      --muted-foreground: oklch(0.708 0.014 285.82);
+      --accent: oklch(0.269 0.015 285.89);
+      --accent-foreground: oklch(0.985 0 0);
+      --destructive: oklch(0.704 0.191 22.22);
+      --destructive-foreground: oklch(0.985 0 0);
+      --border: oklch(0.269 0.015 285.89);
+      --input: oklch(0.269 0.015 285.89);
+      --ring: oklch(0.551 0.027 286.03);
+      --chart-1: oklch(0.488 0.243 264.376);
+      --chart-2: oklch(0.696 0.17 162.48);
+      --chart-3: oklch(0.769 0.188 70.08);
+      --chart-4: oklch(0.627 0.265 303.9);
+      --chart-5: oklch(0.645 0.246 16.439);
+    }
+  }
+
+  body { @apply font-sans antialiased; }
+  code { @apply rounded bg-muted px-1.5 py-0.5 text-sm font-mono [overflow-wrap:anywhere]; }
+  a { @apply underline underline-offset-4 decoration-border hover:decoration-current transition-colors; }
+  a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { @apply outline-2 outline-offset-4 outline-ring; }
+  .toc-link { @apply block rounded-md border-l-2 border-transparent px-3 py-2 text-muted-foreground no-underline hover:bg-accent hover:text-foreground max-lg:shrink-0 max-lg:whitespace-nowrap max-lg:border-l-0 max-lg:border-b-2; }
+  .toc-link.active { @apply border-primary bg-accent text-foreground; }
+  .badge { @apply inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium; }
+  .done { @apply bg-emerald-500/10 text-emerald-700 dark:text-emerald-300; }
+  .groundwork { @apply bg-blue-500/10 text-blue-700 dark:text-blue-300; }
+  .upcoming { @apply bg-amber-500/10 text-amber-800 dark:text-amber-300; }
+  .eyebrow { @apply text-sm font-mono uppercase tracking-widest text-muted-foreground; }
+  .panel { @apply min-w-0 rounded-xl border border-border bg-card p-6 no-underline; }
+  .section { @apply scroll-mt-6 max-lg:scroll-mt-24; }
+  .proof { @apply border-t border-border pt-4 text-muted-foreground; }
+  .cycle-title { @apply mt-3 text-3xl font-semibold tracking-tight; }
+  .example-label { @apply mb-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground; }
+  .data-table { @apply w-full text-left; }
+  .data-table th { @apply border-b border-border bg-muted/60 px-5 py-3 font-medium; }
+  .data-table td { @apply border-b border-border px-5 py-4 align-top; }
+  .data-table tbody tr:last-child td { @apply border-0; }
+  @theme { --font-sans: 'Geist', system-ui, sans-serif; --font-mono: 'Geist Mono', ui-monospace, monospace; }
+</style>
+</head>
+<body class="min-h-screen bg-background text-foreground">
+<a href="#main" class="fixed left-4 top-4 z-50 -translate-y-24 rounded-lg bg-primary px-4 py-3 text-primary-foreground no-underline focus:translate-y-0">Skip to content</a>
+<div class="mx-auto grid max-w-[1440px] grid-cols-[190px_minmax(0,1fr)] gap-x-12 px-10 py-10 max-lg:grid-cols-1 max-lg:px-5 max-lg:py-0">
+  <nav id="toc" aria-label="Delivery log sections" class="sticky top-8 row-span-full self-start space-y-1 max-lg:top-0 max-lg:z-30 max-lg:-mx-5 max-lg:flex max-lg:gap-1 max-lg:overflow-x-auto max-lg:border-b max-lg:border-border max-lg:bg-background max-lg:px-5 max-lg:py-3">
+    <a href="#overview" class="mb-7 block text-lg font-semibold tracking-tight no-underline max-lg:hidden">arazzo<span class="text-muted-foreground">/</span>cli</a>
+    <p class="eyebrow mb-3 px-3 max-lg:hidden">Delivery log</p>
+    <a href="#overview" class="toc-link active" aria-current="location">At a glance</a>
+    <a href="#cycle-3" class="toc-link">03 · Operation owner</a>
+    <a href="#cycle-2" class="toc-link">02 · Catalog owner</a>
+    <a href="#cycle-1" class="toc-link">01 · Safer execution</a>
+    <a href="#evidence" class="toc-link">Evidence</a>
+    <a href="#next" class="toc-link">Next increment</a>
+    <div class="mt-8 border-t border-border pt-4 text-sm text-muted-foreground max-lg:hidden">One file, updated<br>with every delivery cycle.<br><a class="mt-3 inline-block" href="roadmap.md">Open roadmap ↗</a></div>
+  </nav>
+  <main id="main" class="min-w-0 space-y-14 pb-24 max-lg:pt-8">
+    <header id="overview" class="section animate-fade-up" style="--i:0">
+      <div class="mb-5 flex flex-wrap items-center gap-3"><span class="eyebrow">Maintainer journal</span><span class="text-sm text-muted-foreground">Updated 28 October 2026</span></div>
+      <h1 class="max-w-4xl text-5xl font-semibold leading-[1.08] tracking-tight max-md:text-4xl">A more dependable engine.<br><span class="text-muted-foreground">One useful increment at a time.</span></h1>
+      <p class="mt-6 max-w-3xl text-lg leading-relaxed text-muted-foreground">Steve, here’s what the completed roadmap cycles give you: trustworthy test dependencies, safer diagnostic URLs, and cohesive owners for catalog behavior and operation routing.</p>
+      <div class="mt-8 grid gap-4 md:grid-cols-3">
+        <a href="#cycle-1" class="panel no-underline hover:border-foreground/40"><span class="badge done">Bug fix</span><h2 class="mt-4 font-semibold">Interrupted means incomplete</h2><p class="mt-2 text-muted-foreground">A timeout or cancellation cannot unlock a dependent test case.</p></a>
+        <a href="#url-redaction" class="panel no-underline hover:border-foreground/40"><span class="badge done">Credential protection</span><h2 class="mt-4 font-semibold">URLs omit userinfo</h2><p class="mt-2 text-muted-foreground">Trace and dry-run URLs replace the entire credential component.</p></a>
+        <a href="#cycle-3" class="panel no-underline hover:border-foreground/40"><span class="badge groundwork">Architectural groundwork</span><h2 class="mt-4 font-semibold">Clear catalog + routing owners</h2><p class="mt-2 text-muted-foreground">Catalog policy and operation projection have cohesive homes; behavior stays the same.</p></a>
+      </div>
+      <p class="mt-5 text-sm text-muted-foreground">Completed source changes are reviewed and pushed to <code>main</code>. This journal records delivery checkpoints; it does not claim a tagged release.</p>
+    </header>
+
+    <section id="cycle-3" class="section animate-fade-up" style="--i:1" aria-labelledby="cycle-3-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 03 · 28 Oct 2026</span><span class="badge groundwork">Groundwork · completed</span></div>
+      <h2 id="cycle-3-title" class="cycle-title">Operation routing has a cohesive owner</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">Future routing changes now have one home for the final request projection and declared-server refusal policy shared by <code>operationId</code> and <code>operationPath</code>. This removes a backward dependency while preserving execution behavior; it adds no new execution capability.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel"><p class="example-label">Before · ownership crossed back</p><h3 class="font-semibold">Target resolution called into HTTP execution</h3><p class="mt-3 text-muted-foreground"><code>operation_target.rs</code> resolved pointer targets, then called back into <code>engine_http.rs</code> for their final projection and server refusal.</p></div>
+        <div class="panel border-blue-500/30"><p class="example-label">After · HTTP preparation imports its owner</p><h3 class="font-semibold">Both target forms share operation-target projection</h3><p class="mt-3 text-muted-foreground"><code>operation_target.rs</code> owns the shared projection and server refusal. HTTP preparation imports it; the operation-target owner has no reference back to the HTTP engine.</p></div>
+      </div>
+      <div class="mt-4 rounded-xl bg-muted/70 p-6"><h3 class="font-semibold">Same resolved request, same refusal</h3><p class="mt-3 leading-relaxed text-muted-foreground">The four-item block moved verbatim into the existing owner. Method/path/base values, source identity, server precedence, refusal errors and no-send behavior remain unchanged. Visibility and public APIs stay the same; no new module was added.</p></div>
+      <p class="proof mt-5"><strong class="font-semibold text-foreground">65 focused tests passed before and after.</strong> Independent fresh review PASS with no findings · pushed to main · <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05">ac-67f05</a> · source <a href="https://github.com/strefethen/arazzo-cli/commit/1adaacb7c0910b95b53685821ee84f52ec6f62aa">1adaacb</a></p>
+      <p class="mt-4 text-muted-foreground">The <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d">responsibility-ownership epic</a> is completed: both the CLI catalog boundary and the runtime operation-target boundary were verified. Broader handler and HTTP responsibilities remain separate work.</p>
+    </section>
+
+    <section id="cycle-2" class="section animate-fade-up" style="--i:2" aria-labelledby="cycle-2-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 02 · 28 Oct 2026</span><span class="badge groundwork">Groundwork · completed</span></div>
+      <h2 id="cycle-2-title" class="cycle-title">Catalog policy has one home</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">Future catalog changes can be made in a private feature owner without adding more discovery policy to command dispatch. This is a behavior-preserving refactor, with no new CLI capability.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel"><p class="example-label">Before · mixed responsibilities</p><h3 class="font-semibold">Command handlers owned discovery</h3><div class="mt-4 rounded-lg bg-muted/70 p-4"><code>handlers.rs</code><ul class="mt-3 list-inside list-disc space-y-2 text-muted-foreground"><li>Catalog discovery and workflow lookup</li><li>Run, replay, generation, validation and test dispatch</li></ul></div></div>
+        <div class="panel border-blue-500/30"><p class="example-label">After · cohesive feature owner</p><h3 class="font-semibold">Handlers delegate; catalog owns policy</h3><ol class="mt-4 space-y-3" aria-label="Catalog command responsibility flow"><li class="rounded-lg bg-muted/70 p-3"><code>handlers.rs</code> <span class="ml-1 text-muted-foreground">thin command delegates</span></li><li class="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3"><code>workflow_catalog.rs</code> <span class="ml-1 text-muted-foreground">shallow discovery + unique lookup</span></li><li class="rounded-lg bg-muted/70 p-3"><code>output.rs</code> <span class="ml-1 text-muted-foreground">existing presentation</span></li></ol></div>
+      </div>
+      <div class="mt-4 grid gap-4 md:grid-cols-[1fr_1.2fr]">
+        <div class="rounded-xl bg-muted/70 p-6"><h3 class="font-semibold">Same command, same result</h3><p class="mt-3"><code>arazzo-cli catalog ./workflows</code></p><p class="mt-3 leading-relaxed text-muted-foreground">Before and after: the same shallow discovery, ordering, text/JSON output, skip diagnostics, errors and exit statuses.</p></div>
+        <div class="p-6"><p class="text-4xl font-semibold tabular-nums">21<span class="ml-2 text-base font-normal text-muted-foreground">identical CLI scenarios</span></p><p class="mt-3 text-muted-foreground">Compared stdout bytes, stderr bytes and exit status. The independent reviewer reran both retained binaries for all scenarios.</p><p class="mt-4 text-muted-foreground">Two internal entrypoints; private helpers; no dependency back into handlers. Remaining handler responsibilities are still debt.</p></div>
+      </div>
+      <p class="proof mt-5">Independent review PASS · pushed to main · <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6">ac-df1d6</a> · source <a href="https://github.com/strefethen/arazzo-cli/commit/b68625fa8934c2e6aa6fbb8b253ff7d8bf94c2a1">b68625f</a></p>
+    </section>
+
+    <section id="cycle-1" class="section animate-fade-up" style="--i:3" aria-labelledby="cycle-1-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 01 · 28 Oct 2026</span><span class="badge done">Two fixes · completed</span></div>
+      <h2 id="cycle-1-title" class="cycle-title">Safer execution, safer evidence</h2>
+      <div class="mt-6 space-y-6">
+        <article class="panel shadow-sm" aria-labelledby="dependency-title">
+          <h3 id="dependency-title" class="text-xl font-semibold">A timed-out test cannot unlock its dependent</h3><p class="mt-3 max-w-3xl text-muted-foreground">Your test suite now preserves the meaning of incomplete work. Timed-out and cancelled cases do not enter the completed-workflow set.</p>
+          <div class="mt-5 grid gap-4 md:grid-cols-2"><div class="rounded-lg bg-muted/60 p-4"><p class="example-label">Before</p><p>Case A times out → recorded as completed → dependent B runs.</p></div><div class="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4"><p class="example-label">After</p><p>Case A times out → remains incomplete → dependent B is refused before sending a request.</p></div></div>
+          <p class="mt-4 text-muted-foreground">A retains <code>RUNTIME_EXECUTION_TIMEOUT</code>. B reports <code>RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED</code>. Passing cases and ordinary failures retain their existing completion semantics.</p>
+          <p class="proof mt-5">Hermetic HTTP request log proves B sends no request; regression fails on the pre-change binary. Four focused tests pass. Independent review PASS · pushed · <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9cc68">ac-9cc68</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/bd009354d9083e850260408f34caba9be85f9141">bd00935</a></p>
+        </article>
+        <article id="url-redaction" class="panel section shadow-sm" aria-labelledby="redaction-title">
+          <h3 id="redaction-title" class="text-xl font-semibold">Diagnostic URLs redact the whole credential</h3><p class="mt-3 max-w-3xl text-muted-foreground">Persisted traces, redirect-hop URLs and MCP dry-run output no longer expose URL userinfo. The same rule covers a password, a token in the username slot, and multiple raw <code>@</code> characters.</p>
+          <div class="mt-5 grid gap-4 md:grid-cols-2"><div class="min-w-0 rounded-lg bg-muted/60 p-4"><p class="example-label">Before · synthetic example</p><code class="block break-all p-3">https://demo:sample@api.example.com/items</code></div><div class="min-w-0 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4"><p class="example-label">After</p><code class="block break-all p-3">https://[REDACTED]@api.example.com/items</code></div></div>
+          <p class="mt-4 text-muted-foreground">The bounded edit avoids URL normalization. URLs without userinfo keep their existing bytes; existing sensitive-query redaction continues. Non-loopback cleartext requests with URL credentials now trigger the transport warning.</p>
+          <p class="proof mt-5">Tests inspect persisted trace bytes, redirect fields and the MCP protocol response. Existing redaction behavior and trace schema stay stable. Cumulative independent review PASS after a multiple-<code>@</code> correction · pushed · <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d95a9">ac-d95a9</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/f9abdd01b16936fff37626f1337b1f1c4865b5b0">f9abdd0</a> + <a href="https://github.com/strefethen/arazzo-cli/commit/f3cfd102825127a93a7c4c8f34f8aa90d64adc1d">f3cfd10</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section id="evidence" class="section" aria-labelledby="evidence-title">
+      <p class="eyebrow">Delivery confidence</p><h2 id="evidence-title" class="cycle-title">Proof belongs to an exact checkpoint</h2><p class="mt-4 max-w-3xl text-muted-foreground">These are recorded workspace test results for the reviewed source at each cycle’s final checkpoint. They are not a coverage percentage, performance benchmark, or claim about later concurrent work.</p>
+      <p class="mt-4 text-sm text-muted-foreground md:hidden">Scroll the results table horizontally to read every column.</p>
+      <div tabindex="0" role="region" aria-label="Verification results, horizontally scrollable" class="mt-4 overflow-x-auto rounded-xl border border-border"><table class="data-table min-w-[620px]"><caption class="sr-only">Recorded verification results by completed delivery cycle</caption><thead><tr><th scope="col">Checkpoint</th><th scope="col">Workspace tests</th><th scope="col">Verification</th></tr></thead><tbody><tr><th scope="row" class="px-5 py-4 align-top font-medium">Cycle 1</th><td><span class="font-semibold tabular-nums">1,485 passed</span><br><span class="text-muted-foreground">0 failed · 31 ignored</span></td><td>Formatting + strict Clippy PASS<br>Four drift guards PASS<br><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d95a9">Final integrated evidence ↗</a></td></tr><tr><th scope="row" class="px-5 py-4 align-top font-medium">Cycle 2</th><td><span class="font-semibold tabular-nums">1,491 passed</span><br><span class="text-muted-foreground">0 failed · 35 ignored</span></td><td>Formatting + strict Clippy + check PASS<br>Four drift guards PASS<br><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6">Exact candidate and review ↗</a></td></tr><tr><th scope="row" class="px-5 py-4 align-top font-medium">Cycle 3</th><td><span class="font-semibold tabular-nums">1,491 passed</span><br><span class="text-muted-foreground">0 failed · 35 ignored</span></td><td>Formatting + strict Clippy + check PASS<br>Four drift guards PASS<br><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05">Exact candidate and review ↗</a></td></tr></tbody></table></div>
+      <p class="mt-4 text-sm text-muted-foreground">Drift guards: <code>golden_spec_baseline</code>, <code>schema_drift</code>, <code>operation_path_agreement</code> and <code>cli_contract_snapshots</code>. No rebaseline. Counts describe distinct checkpoints and must not be added together.</p>
+      <details class="mt-5 rounded-lg border border-border p-4"><summary class="cursor-pointer font-medium">Where the durable records live</summary><p class="mt-3 text-muted-foreground"><a href="roadmap.md">The roadmap</a> owns priority and checkpoints; linked tkt records retain execution contracts, evidence paths and review/closure status. Local raw evidence for this run is under <code>/private/tmp/arazzo-maintainer-20261028/</code>. This curated journal stays at <code>plans/delivery-log.html</code>.</p></details>
+    </section>
+
+    <section id="next" class="section rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 md:p-8" aria-labelledby="next-title">
+      <span class="badge upcoming">Upcoming · refinement needed</span><h2 id="next-title" class="mt-4 text-3xl font-semibold tracking-tight">Use workflow inputs in typed success checks</h2><p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">The next candidate is <strong class="font-semibold text-foreground">typed Criterion runtime-expression interpolation</strong>: let regex, JSONPath and XPath conditions use workflow inputs, and prevent missing context from accidentally passing a regex. This is proposed value, not an implemented capability.</p><p class="mt-4 max-w-3xl text-muted-foreground">Before implementation, the team must reconcile JSONPath admission-before-null ordering and migrate stale ticket file declarations. This is ordinary refinement; the ticket is not yet implementation-ready.</p><p class="mt-4"><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846">Follow ac-50846 ↗</a></p><p class="mt-5 border-t border-amber-500/20 pt-4 text-sm text-muted-foreground">Hourly maintainer follow-ups are active under Steve’s standing delegation. Each verified cycle updates this same file; live progress belongs to tkt. Fable’s Kafka/AsyncAPI lane remains outside these cycle claims.</p>
+    </section>
+    <footer class="flex flex-wrap justify-between gap-4 border-t border-border pt-6 text-sm text-muted-foreground"><span>Arazzo CLI · Maintainer delivery log</span><a href="roadmap.md">Priorities, ownership and gates ↗</a></footer>
+  </main>
+</div>
+
+<div id="ve-settings" class="fixed bottom-4 right-4 z-50">
+  <button id="ve-settings-btn" type="button" class="flex size-11 cursor-pointer items-center justify-center rounded-xl border border-border bg-card text-foreground shadow-lg hover:bg-accent" aria-label="Page settings" aria-expanded="false" aria-controls="ve-settings-pop"><svg class="size-5" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 3h6l1 3 3 1 3 5-2 2v4l-5 3-3-1-3 1-5-3v-4l-2-2 3-5 3-1 1-3Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+  <div id="ve-settings-pop" class="absolute bottom-14 right-0 hidden w-64 max-w-[calc(100vw-2rem)] space-y-5 rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-xl ring-1 ring-foreground/5" aria-label="Page appearance">
+    <fieldset><legend class="mb-2 text-sm font-medium">Theme</legend><div class="flex gap-1 rounded-lg border border-border bg-muted/50 p-1"><button type="button" data-theme-val="auto" class="ve-theme-btn flex-1 cursor-pointer rounded-md px-2 py-2 text-sm">Auto</button><button type="button" data-theme-val="light" class="ve-theme-btn flex-1 cursor-pointer rounded-md px-2 py-2 text-sm">Light</button><button type="button" data-theme-val="dark" class="ve-theme-btn flex-1 cursor-pointer rounded-md px-2 py-2 text-sm">Dark</button></div></fieldset>
+    <div><div class="mb-3 flex items-center justify-between gap-3"><label for="ve-scale" class="text-sm font-medium">Text scale</label><output for="ve-scale" id="ve-scale-val" class="text-sm font-mono">100%</output></div><input type="range" id="ve-scale" min="80" max="130" value="100" step="5" class="w-full cursor-pointer accent-primary" aria-valuetext="100 percent"></div>
+  </div>
+</div>
+<script>
+(function () {
+  const key = 'arazzo-delivery-settings';
+  const btn = document.getElementById('ve-settings-btn');
+  const pop = document.getElementById('ve-settings-pop');
+  const slider = document.getElementById('ve-scale');
+  const output = document.getElementById('ve-scale-val');
+  const systemTheme = window.matchMedia('(prefers-color-scheme:dark)');
+  const saved = JSON.parse(localStorage.getItem(key) || '{}');
+  function persist() { localStorage.setItem(key, JSON.stringify(saved)); }
+  function closeSettings() { pop.classList.add('hidden'); btn.setAttribute('aria-expanded', 'false'); }
+  function applyTheme(value) {
+    saved.theme = ['light', 'dark'].includes(value) ? value : 'auto';
+    document.documentElement.dataset.theme = saved.theme === 'auto' ? (systemTheme.matches ? 'dark' : 'light') : saved.theme;
+    pop.querySelectorAll('.ve-theme-btn').forEach(button => {
+      const active = button.dataset.themeVal === saved.theme;
+      button.setAttribute('aria-pressed', String(active));
+      button.classList.toggle('bg-background', active);
+      button.classList.toggle('shadow-sm', active);
+      button.classList.toggle('text-muted-foreground', !active);
+    });
+  }
+  function applyScale(value) {
+    const scale = Math.max(80, Math.min(130, Number(value) || 100));
+    saved.scale = scale;
+    slider.value = scale;
+    document.documentElement.style.fontSize = scale + '%';
+    output.textContent = scale + '%';
+    slider.setAttribute('aria-valuetext', scale + ' percent');
+  }
+  applyTheme(saved.theme);
+  applyScale(saved.scale);
+  btn.addEventListener('click', () => {
+    const opening = pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !opening);
+    btn.setAttribute('aria-expanded', String(opening));
+  });
+  document.addEventListener('click', event => { if (!event.target.closest('#ve-settings')) closeSettings(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !pop.classList.contains('hidden')) { closeSettings(); btn.focus(); } });
+  pop.querySelectorAll('.ve-theme-btn').forEach(button => button.addEventListener('click', () => { applyTheme(button.dataset.themeVal); persist(); }));
+  slider.addEventListener('input', () => { applyScale(slider.value); persist(); });
+  systemTheme.addEventListener('change', () => { if (saved.theme === 'auto') applyTheme('auto'); });
+  const links = [...document.querySelectorAll('.toc-link')];
+  const sections = links.map(link => document.querySelector(link.getAttribute('href')));
+  function activate(id) {
+    links.forEach(link => {
+      const active = link.getAttribute('href') === '#' + id;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current');
+    });
+  }
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => { if (entry.isIntersecting) activate(entry.target.id); });
+  }, { rootMargin: '-8% 0px -65% 0px' });
+  sections.forEach(section => observer.observe(section));
+  links.forEach(link => link.addEventListener('click', () => activate(link.hash.slice(1))));
+})();
+</script>
+</body>
+</html>

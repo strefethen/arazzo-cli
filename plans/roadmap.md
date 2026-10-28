@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Current cycle: [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6).
+Latest source cycle: [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -9,6 +9,49 @@ easy to understand and extend. Each delivery cycle should demonstrate a useful
 improvement through the real CLI, runtime, or agent surface. `tkt` owns live
 status, implementation contracts, evidence, and closure; this document owns
 priority, team coordination, and the program checkpoint.
+
+Visual delivery record: [delivery-log.html](delivery-log.html). Update this same
+file at every completed cycle with the practical benefit, before/after examples
+or architecture, proof and reviewed commits. Clearly distinguish added capability,
+correctness fixes and architectural groundwork. `tkt` remains the live authority.
+
+## Standing delegation and continuity
+
+On 2026-10-28 Steve explicitly reaffirmed the maintainer/Chief of Staff mandate
+after cycle 2 stopped at a self-imposed renewal boundary. That boundary was an
+overly restrictive interpretation: **ordinary delivery cycles continue under
+the standing delegation; Steve does not need to restart each one.** This
+supersedes the renewal wording in the historical cycle descriptions below.
+Existing pauses, substantive product/security/public-contract decisions and
+release/deployment safeguards retain their owners.
+
+Steve also requested a visual HTML explanation after every delivery cycle and
+selected **hourly while there is ready work** for unattended follow-ups. The
+active `Arazzo maintainer cycles` heartbeat continues this chat with the current
+roadmap, live tickets and reservations. It reports meaningful deliveries,
+failures and decisions, and stays quiet when nothing actionable changes.
+
+- Choose the next bounded, independently useful outcome from accepted direction;
+  refine it against current code before dispatch. Cycle sizes are checkpoints,
+  not permission gates. Do not reopen paused work or exceed the existing scope
+  and safeguard rules by calling it maintenance.
+- Retain at most three active agents alongside the Chief of Staff, disjoint
+  writer scopes, and independent review. Source candidates retain a two-round
+  review budget; a repeated unresolved finding becomes an explicit gate.
+- End each hourly run at a coherent completed outcome or a truthful parked
+  checkpoint. The next run rechecks current state and continues available work;
+  it does not reset blocked decisions or review budgets.
+- Escalate real process or decision blockers as **ask Steve for…** tickets,
+  with a concrete recommendation and evidence. Keep independent work moving.
+
+Latest delivery: runtime operation projection ownership
+([ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05)), with
+the visual delivery log tracked by
+[ac-a11ec](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a11ec). Runtime
+source writes, visual presentation and coordination documentation were explicitly
+disjoint. Next is grounded refinement of typed Criterion interpolation
+([ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846)); its two
+readiness gaps are recorded in the next-step section below.
 
 ## Direction and initial cycle
 
@@ -113,27 +156,46 @@ serialize overlapping writes; use isolation only when it offers a concrete
 coordination benefit. Any push that would include an unreviewed Fable
 candidate is held until the existing SDLC push checks pass.
 
-## Next — structure that supports further development
+## Delivered — structure that supports further development
 
-New epic: **Clarify runtime and CLI responsibility ownership**,
+Completed epic: **Clarify runtime and CLI responsibility ownership**,
 [epic:ac-d0d1d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d).
-Keep the eight existing crates. The CLI extraction is delivered in cycle 2;
-the runtime capture still requires grounded Tier 2 refinement.
+Both bounded extractions are delivered within the eight existing crates: CLI in
+cycle 2, runtime in cycle 3. Each candidate passed its own independent review.
 
-1. [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05): move
+1. [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05): moved
    resolved-operation projection and server-refusal helpers to the runtime's
    operation-target owner. At baseline [51e78d2](https://github.com/strefethen/arazzo-cli/commit/51e78d2c778f736dd8f28e2dfe417e93f5b7de3a),
    `runtime_core/operation_target.rs::resolve_operation_path` calls back into
-   `engine_http::resolved_operation`; move that responsibility to remove the
-   backward dependency. Preserve routing, server selection, refusal text and
-   no-send behavior. Verify through operation ID/path/server tests and drift
-   guards before considering the larger HTTP draft.
+   `engine_http::resolved_operation`. The move removes that backward dependency
+   and preserves routing, server selection, refusal text and no-send behavior.
+   Operation ID/path/server tests and drift guards passed. The larger HTTP
+   decomposition draft remains unaccepted.
 2. [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6): delivered
    in cycle 2 above. Focused tests and identical before/after CLI transcripts
    establish preserved shallow discovery semantics, errors and rendering.
 
 The older **Maintainability** [epic:ac-0c8d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0c8d)
 has a specific RequestBody-field retirement contract and is not repurposed.
+
+## Next — typed Criterion interpolation
+
+[ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846),
+**Interpolate typed Criterion runtime expressions**, is the next refinement
+target from the accepted conformance lane. Its intended user benefit is that
+success checks can incorporate workflow input values into regex, JSONPath and
+XPath conditions, with missing data unable to accidentally pass a regex check.
+This capability is **not yet delivered**.
+
+The bounded survey found lint and dependency eligibility passing, but two
+kickoff gaps remain. Reconcile the ticket's early-null wording with current
+JSONPath parse/admission error precedence; preserve the existing malformed and
+unsupported-query negative tests. Migrate only this ticket's legacy file
+declarations to explicit operations, distinguishing its new focused test from
+existing source. Then re-ground the vendored spec, rerun readiness/file checks
+and inspect live reservations before implementation. These are team refinement
+tasks, not new Steve approval gates. Preserve regex-cache, trace-schema and
+unsupported XPath-version behavior.
 
 ## Following cycles — ordered by value and readiness
 
@@ -227,7 +289,35 @@ readiness, and future dates are not promised before scope and proof are settled.
   the reviewed catalog source and checkpoint were pushed through
   [3e39566](https://github.com/strefethen/arazzo-cli/commit/3e395663bb9a6121126d2ec8943af96ad85085ec).
   No Fable interruption or Steve decision was needed.
-- Next structural increment: refine runtime operation projection ownership
+- Next structural increment at that checkpoint: refine runtime operation projection ownership
   ([ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05)) against
-  current code and reservations in the next renewed cycle. The two-child
-  ownership epic remains open; no runtime extraction is claimed here.
+  current code and reservations. Steve's standing-delegation clarification above
+  subsequently activated that work without another per-cycle permission gate.
+  The epic was still open at the cycle 2 checkpoint; its completion is recorded
+  in cycle 3 below.
+
+## Checkpoint — cycle 3
+
+- Runtime source delivered in
+  [1adaacb](https://github.com/strefethen/arazzo-cli/commit/1adaacb7c0910b95b53685821ee84f52ec6f62aa),
+  independently reviewed **PASS** with no findings, pushed to `main`, and
+  revision-safely closed completed. Four existing projection/refusal items now
+  live in the existing `operation_target` owner. HTTP preparation consumes it;
+  operation target resolution no longer depends back on HTTP execution.
+- Observable behavior remains unchanged. All **65 focused tests passed before
+  and after**; the moved block is byte-identical. Full gates passed:
+  **1,491 tests passed, 0 failed, 35 ignored**, all four drift guards, formatting,
+  compilation and strict Clippy. The final 270 source/input hashes match the
+  reviewed candidate. A formatting-only import-order correction was completed
+  before the final gates; no acceptance criterion or test was weakened.
+- Both ownership boundaries are observed, so
+  [epic:ac-d0d1d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d) is
+  **closed completed**. This resolves the two bounded outcomes, not all remaining
+  HTTP/CLI responsibility debt. No new crate, generic helper owner, or public
+  contract was introduced.
+- Evidence: `/private/tmp/arazzo-maintainer-20261028/ac-67f05/`. One of two
+  source review rounds used. The accompanying visual log explains cycles 1–3;
+  appearance, navigation and enlarged text are verified in a real browser.
+- Hourly continuation is active. The next run refines typed Criterion
+  interpolation through its named owning modules and the existing conformance
+  plan. No Steve decision currently blocks that refinement.
