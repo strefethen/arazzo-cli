@@ -384,7 +384,7 @@ async fn unrelated_completion_evidence_does_not_satisfy_unknown_dependency() {
 }
 
 #[tokio::test]
-async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {
+async fn channel_missing_source_and_dry_run_fail_before_http_with_the_same_error() {
     let hits = Arc::new(AtomicUsize::new(0));
     let hits_ref = Arc::clone(&hits);
     let server = start_server(move |_method, _url, _headers, _body| {
@@ -426,8 +426,9 @@ async fn channel_execution_and_dry_run_fail_before_http_with_the_same_error() {
             Ok(_) => panic!("channel execution should fail closed (dry_run={dry_run})"),
             Err(err) => err,
         };
-        assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
-        assert_eq!(err.code(), "RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT");
+        assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
+        assert_eq!(err.code(), "RUNTIME_MESSAGE_TRANSPORT_CONFIG");
+        assert!(err.message.contains("named source description is absent"));
         observed.push((err.kind, err.message));
     }
 

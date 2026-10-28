@@ -402,6 +402,16 @@ pub struct TraceMessage {
     /// an empty object.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub simulated: bool,
+    /// Resolved expected correlation text, including on a simulated message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
+    /// Decoded records skipped before the matching message.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skipped_records: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// A receive step's topic was armed: its partition end offsets were
@@ -618,6 +628,33 @@ pub trait ExecutionObserver: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_message_correlation_fields_are_backward_compatible() {
+        let old = json!({"transport":"kafka", "host":"localhost", "topic":"orders", "partition":0, "offset":1, "timestampMs":0, "payloadBytes":2});
+        let mut message: TraceMessage = serde_json::from_value(old)
+            .unwrap_or_else(|err| panic!("old trace message must deserialize: {err}"));
+        assert_eq!(message.correlation_id, None);
+        assert_eq!(message.skipped_records, 0);
+        let encoded =
+            serde_json::to_value(&message).unwrap_or_else(|err| panic!("serialize: {err}"));
+        assert!(encoded.get("correlationId").is_none());
+        assert!(encoded.get("skippedRecords").is_none());
+        message.correlation_id = Some("42".into());
+        message.skipped_records = 2;
+        let encoded =
+            serde_json::to_value(&message).unwrap_or_else(|err| panic!("serialize: {err}"));
+        assert_eq!(encoded["correlationId"], "42");
+        assert_eq!(encoded["skippedRecords"], 2);
+        let mut encoded = encoded;
+        encoded["skippedRecords"] = json!(0);
+        let zero: TraceMessage =
+            serde_json::from_value(encoded).unwrap_or_else(|err| panic!("deserialize: {err}"));
+        assert!(serde_json::to_value(zero)
+            .unwrap_or_else(|err| panic!("serialize: {err}"))
+            .get("skippedRecords")
+            .is_none());
+    }
 
     #[test]
     fn retry_scheduled_preserves_u64_boundary_values() {

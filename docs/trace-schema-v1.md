@@ -53,7 +53,7 @@ arazzo --json run <spec> <workflow-id> --trace <path>
 - `decision` (object)
 - `outputs` (object, optional)
 - `error` (string, optional)
-- `message` (object, optional): the message an AsyncAPI receive step consumed — `transport` (`kafka`), `host`, `topic`, `partition`, `offset`, `timestampMs`, `key` (optional), `headers` (optional), `payloadBytes`, `payloadPreview`/`payload` (optional, redacted and truncated like response bodies), `payloadLossy`, `simulated` (true for a dry run, which evaluates an empty object instead of receiving). Absent for HTTP and workflow steps.
+- `message` (object, optional): the message an AsyncAPI receive step consumed — `transport` (`kafka`), `host`, `topic`, `partition`, `offset`, `timestampMs`, `key` (optional), `headers` (optional), `payloadBytes`, `payloadPreview`/`payload` (optional, redacted and truncated like response bodies), `payloadLossy`, `simulated` (true for a dry run, which evaluates an empty object instead of receiving), `correlationId` (optional resolved expected text, also recorded in dry run), `skippedRecords` (nonnegative integer count of non-matching records before this message, omitted when zero). Absent for HTTP and workflow steps. Payload and header decoding precede correlation matching: malformed JSON or non-UTF-8 header values fail the receive even on a non-matching record.
 
 ## Compatibility guarantees
 

@@ -63,6 +63,12 @@ impl Fixture {
         .expect("write asyncapi");
     }
 
+    fn correlation(&self, location: &str) {
+        let path = self.dir.join("orders.asyncapi.yaml");
+        let text = fs::read_to_string(&path).expect("read asyncapi");
+        fs::write(path, text.replace("        contentType: application/json", &format!("        contentType: application/json\n        correlationId:\n          location: '{location}'"))).expect("write correlation");
+    }
+
     fn openapi(&self, base_url: &str) {
         fs::write(
             self.dir.join("shop.openapi.yaml"),
@@ -167,7 +173,7 @@ async fn release_debug_run(
 // ───────────────────────── hermetic ─────────────────────────
 
 #[tokio::test]
-async fn send_correlation_and_replay_are_refused_before_any_connection() {
+async fn send_missing_correlation_object_and_replay_fail_before_any_connection() {
     let fixture = Fixture::new();
     fixture.asyncapi("127.0.0.1:1", "orders.placed");
     fixture.openapi("http://127.0.0.1:1");
@@ -199,8 +205,8 @@ async fn send_correlation_and_replay_are_refused_before_any_connection() {
         .execute_collect("w", BTreeMap::new())
         .await
         .outputs
-        .expect_err("correlationId is refused");
-    assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
+        .expect_err("correlationId needs a document-side object");
+    assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
     assert!(err.message.contains("correlationId"), "{}", err.message);
 
     let replay = fixture.arazzo(RECEIVE_THEN_HTTP);
@@ -460,6 +466,229 @@ async fn debugger_evaluates_message_expressions_at_a_receive_checkpoint() {
 
 // ───────────────────────── live ─────────────────────────
 
+#[tokio::test]
+async fn correlation_dry_run_resolves_scalars_and_rejects_missing_or_non_scalar_inputs() {
+    let fixture = Fixture::new();
+    fixture.asyncapi("127.0.0.1:1", "orders.placed");
+    fixture.openapi("http://127.0.0.1:1");
+    fixture.correlation("$message.payload");
+    for (expression, input, expected) in [
+        ("literal", json!(null), Some("literal")),
+        ("$inputs.id", json!(7), Some("7")),
+        ("$inputs.id", json!(true), Some("true")),
+        ("order-{$inputs.id}", json!(7), Some("order-7")),
+        ("order-{$inputs.missing}", json!(7), Some("order-null")),
+        ("$inputs.id", json!(null), None),
+        ("$inputs.id", json!([]), None),
+        ("$inputs.id", json!({}), None),
+        ("$inputs.missing", json!(7), None),
+    ] {
+        let spec = fixture.arazzo(&format!("  - workflowId: w\n    steps:\n      - stepId: receive\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: '{expression}'\n"));
+        let result = EngineBuilder::new(spec)
+            .source_base_dir(fixture.path())
+            .dry_run(true)
+            .trace(true)
+            .build()
+            .expect("engine")
+            .execute_collect("w", BTreeMap::from([("id".into(), input)]))
+            .await;
+        if let Some(expected) = expected {
+            assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+            let message = trace_records(&result)[0]
+                .message
+                .clone()
+                .expect("simulated message");
+            assert!(message.simulated);
+            assert_eq!(message.correlation_id.as_deref(), Some(expected));
+            assert_eq!(message.skipped_records, 0);
+            if expression.contains("{$inputs.missing}") {
+                assert!(trace_records(&result)[0]
+                    .warnings
+                    .iter()
+                    .any(|w| w.starts_with("correlationId:")));
+            }
+        } else {
+            let record = &trace_records(&result)[0];
+            assert!(
+                record
+                    .error
+                    .as_ref()
+                    .expect("configuration error")
+                    .contains("must resolve to a scalar"),
+                "{record:?}"
+            );
+            assert_eq!(
+                result
+                    .outputs
+                    .as_ref()
+                    .expect_err("invalid expected value")
+                    .kind,
+                RuntimeErrorKind::MessageTransportConfig
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
+async fn kafka_correlation_header_skips_then_matches_and_advances_shared_cursor() {
+    let bootstrap = bootstrap();
+    let producer = Producer::connect(&bootstrap).await;
+    let topic = unique_topic("correlation-header");
+    producer.create_topic(&topic, 1).await;
+    let fixture = Fixture::new();
+    fixture.asyncapi(&bootstrap, &topic);
+    fixture.openapi("http://127.0.0.1:1");
+    fixture.correlation("$message.header#/correlationId");
+    let spec = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: matched\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: $inputs.orderId\n        timeout: 10000\n        successCriteria:\n          - condition: $message.payload#/id > 0\n        outputs:\n          id: $message.payload#/id\n      - stepId: following\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        dependsOn: [matched]\n        timeout: 500\n");
+    let observer = ArmedObserver::new();
+    let engine = live_engine(&fixture, spec, observer.clone(), false);
+    let handle = engine.execute("w", BTreeMap::from([("orderId".into(), json!("order-42"))]));
+    wait_armed(&observer).await;
+    producer
+        .produce(&topic, 0, r#"{"id":0}"#, &[("correlationId", "other")])
+        .await;
+    producer
+        .produce(&topic, 0, r#"{"id":42}"#, &[("correlationId", "order-42")])
+        .await;
+    let result = handle.collect().await;
+    let records = trace_records(&result);
+    let matched = records.iter().find(|r| r.step_id == "matched").unwrap();
+    assert_eq!(matched.outputs["id"], 42);
+    assert!(matched.criteria.iter().all(|c| c.result));
+    let message = matched.message.as_ref().unwrap();
+    assert_eq!(message.correlation_id.as_deref(), Some("order-42"));
+    assert_eq!(message.skipped_records, 1);
+    let following = records.iter().find(|r| r.step_id == "following").unwrap();
+    assert!(following.message.is_none());
+    assert!(
+        following
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("no message arrived"),
+        "{following:?}"
+    );
+    producer.delete_topic(&topic).await;
+}
+
+#[tokio::test]
+#[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
+async fn kafka_correlation_payload_matches_numeric_text_and_times_out_after_mismatches() {
+    let bootstrap = bootstrap();
+    let producer = Producer::connect(&bootstrap).await;
+    for only_mismatches in [false, true] {
+        let topic = unique_topic("correlation-payload");
+        producer.create_topic(&topic, 1).await;
+        let fixture = Fixture::new();
+        fixture.asyncapi(&bootstrap, &topic);
+        fixture.openapi("http://127.0.0.1:1");
+        fixture.correlation("$message.payload#/meta/corr");
+        let spec = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: receive\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: '7'\n        timeout: 2500\n        outputs:\n          id: $message.payload#/id\n    outputs:\n      id: $steps.receive.outputs.id\n");
+        let observer = ArmedObserver::new();
+        let engine = live_engine(&fixture, spec, observer.clone(), false);
+        let handle = engine.execute("w", BTreeMap::new());
+        wait_armed(&observer).await;
+        producer
+            .produce(&topic, 0, r#"{"meta":{"corr":7.0},"id":0}"#, &[])
+            .await;
+        producer
+            .produce(
+                &topic,
+                0,
+                if only_mismatches {
+                    r#"{"meta":{"corr":null}}"#
+                } else {
+                    r#"{"meta":{"corr":7},"id":42}"#
+                },
+                &[],
+            )
+            .await;
+        let result = handle.collect().await;
+        let records = trace_records(&result);
+        if only_mismatches {
+            let err = result.outputs.as_ref().expect_err("timeout");
+            assert_eq!(err.kind, RuntimeErrorKind::MessageReceiveTimeout, "{err}");
+            assert!(
+                records[0].error.as_ref().unwrap().contains("skipping 2"),
+                "{:?}",
+                records[0]
+            );
+        } else {
+            assert_eq!(result.outputs.expect("matched")["id"], 42);
+            let message = records[0].message.as_ref().unwrap();
+            assert_eq!(message.correlation_id.as_deref(), Some("7"));
+            assert_eq!(message.skipped_records, 1);
+        }
+        producer.delete_topic(&topic).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs ARAZZO_KAFKA_BOOTSTRAP (scripts/kafka/broker.sh up)"]
+async fn kafka_correlation_missing_input_fails_before_fetch_and_releases_connections() {
+    let bootstrap = bootstrap();
+    let producer = Producer::connect(&bootstrap).await;
+    let topic = unique_topic("correlation-missing");
+    producer.create_topic(&topic, 1).await;
+    let baseline: usize = broker_script(&["connections"])
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let fixture = Fixture::new();
+    fixture.asyncapi(&bootstrap, &topic);
+    fixture.openapi("http://127.0.0.1:1");
+    fixture.correlation("$message.header#/correlationId");
+    let spec = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: invalid\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: $inputs.missing\n        onFailure:\n          - name: next\n            type: goto\n            stepId: following\n      - stepId: following\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        timeout: 10000\n        outputs:\n          id: $message.payload#/id\n    outputs:\n      id: $steps.following.outputs.id\n");
+    let observer = ArmedObserver::new();
+    let engine = live_engine(&fixture, spec, observer.clone(), false);
+    let handle = engine.execute("w", BTreeMap::new());
+    wait_armed(&observer).await;
+    producer
+        .produce(&topic, 0, r#"{"id":42}"#, &[("correlationId", "any")])
+        .await;
+    let result = handle.collect().await;
+    assert_eq!(
+        result
+            .outputs
+            .as_ref()
+            .expect("following consumes untouched record")["id"],
+        42
+    );
+    let records = trace_records(&result);
+    let invalid = records.iter().find(|r| r.step_id == "invalid").unwrap();
+    assert!(invalid.message.is_none());
+    assert!(
+        invalid.error.as_ref().unwrap().contains("step \"invalid\""),
+        "{invalid:?}"
+    );
+    assert!(
+        invalid.error.as_ref().unwrap().contains("resolved to null"),
+        "{invalid:?}"
+    );
+    drop(engine);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let now: usize = broker_script(&["connections"])
+            .lines()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        if now <= baseline {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "connections did not return to {baseline}: {now}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    producer.delete_topic(&topic).await;
+}
+
 fn bootstrap() -> String {
     std::env::var("ARAZZO_KAFKA_BOOTSTRAP")
         .expect("ARAZZO_KAFKA_BOOTSTRAP must be set (scripts/kafka/broker.sh up)")
@@ -549,7 +778,7 @@ impl Producer {
             .await;
     }
 
-    async fn produce(&self, topic: &str, partition: i32, value: &str) {
+    async fn produce(&self, topic: &str, partition: i32, value: &str, headers: &[(&str, &str)]) {
         let now = i64::try_from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -570,7 +799,10 @@ impl Producer {
             vec![rskafka::record::Record {
                 key: None,
                 value: Some(value.as_bytes().to_vec()),
-                headers: BTreeMap::from([("source".to_string(), b"engine-test".to_vec())]),
+                headers: headers
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+                    .collect(),
                 timestamp: rskafka::chrono::DateTime::from_timestamp_millis(now).unwrap(),
             }],
             rskafka::client::partition::Compression::NoCompression,
@@ -666,7 +898,12 @@ async fn kafka_receive_then_http_delivers_a_message_produced_after_arming() {
         (topic.clone(), bootstrap.clone(), 2)
     );
     producer
-        .produce(&topic, 1, r#"{"id":42,"status":"placed"}"#)
+        .produce(
+            &topic,
+            1,
+            r#"{"id":42,"status":"placed"}"#,
+            &[("source", "engine-test")],
+        )
         .await;
     let result = handle.collect().await;
     let outputs = result.outputs.as_ref().expect("workflow succeeds").clone();
@@ -731,7 +968,12 @@ async fn kafka_debugger_evaluates_the_received_payload_at_the_criterion_checkpoi
     let handle = engine.execute("followup", BTreeMap::new());
     wait_armed(&observer).await;
     producer
-        .produce(&topic, 0, r#"{"id":42,"status":"placed"}"#)
+        .produce(
+            &topic,
+            0,
+            r#"{"id":42,"status":"placed"}"#,
+            &[("source", "engine-test")],
+        )
         .await;
 
     let checks: Result<(), String> = (|| {
@@ -824,7 +1066,9 @@ async fn kafka_trigger_then_receive_gets_the_event_the_http_step_caused() {
         tokio::spawn(async move {
             let signalled = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await;
             assert!(signalled.is_ok(), "the HTTP handler never signalled");
-            producer.produce(&topic, 0, r#"{"id":7}"#).await;
+            producer
+                .produce(&topic, 0, r#"{"id":7}"#, &[("source", "engine-test")])
+                .await;
             produced.store(true, Ordering::SeqCst);
             let _ = done_tx.send(());
         })
@@ -867,7 +1111,9 @@ async fn kafka_criterion_failure_stops_before_the_dependent_http_step() {
     );
     let handle = engine.execute("followup", BTreeMap::new());
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, r#"{"id":0}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"id":0}"#, &[("source", "engine-test")])
+        .await;
     let result = handle.collect().await;
     let err = result.outputs.as_ref().expect_err("criterion fails");
     assert_eq!(err.kind, RuntimeErrorKind::SuccessCriteriaFailed, "{err}");
@@ -1002,8 +1248,12 @@ async fn kafka_consecutive_parallel_and_subworkflow_receives_share_one_cursor() 
     );
     let handle = engine.execute("two", BTreeMap::new());
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, r#"{"n":1}"#).await;
-    producer.produce(&topic, 0, r#"{"n":2}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"n":1}"#, &[("source", "engine-test")])
+        .await;
+    producer
+        .produce(&topic, 0, r#"{"n":2}"#, &[("source", "engine-test")])
+        .await;
     let outputs = handle.collect().await.outputs.expect("two receives");
     assert_eq!(outputs.get("first"), Some(&json!(1)));
     assert_eq!(outputs.get("second"), Some(&json!(2)));
@@ -1018,8 +1268,12 @@ async fn kafka_consecutive_parallel_and_subworkflow_receives_share_one_cursor() 
     );
     let handle = engine.execute("two", BTreeMap::new());
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, r#"{"n":3}"#).await;
-    producer.produce(&topic, 0, r#"{"n":4}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"n":3}"#, &[("source", "engine-test")])
+        .await;
+    producer
+        .produce(&topic, 0, r#"{"n":4}"#, &[("source", "engine-test")])
+        .await;
     let outputs = handle.collect().await.outputs.expect("parallel receives");
     let mut got = vec![outputs["first"].clone(), outputs["second"].clone()];
     got.sort_by_key(|v| v.as_i64());
@@ -1039,8 +1293,12 @@ async fn kafka_consecutive_parallel_and_subworkflow_receives_share_one_cursor() 
     );
     let handle = engine.execute("parent", BTreeMap::new());
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, r#"{"n":5}"#).await;
-    producer.produce(&topic, 0, r#"{"n":6}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"n":5}"#, &[("source", "engine-test")])
+        .await;
+    producer
+        .produce(&topic, 0, r#"{"n":6}"#, &[("source", "engine-test")])
+        .await;
     let outputs = handle.collect().await.outputs.expect("parent and child");
     assert_eq!(outputs.get("first"), Some(&json!(5)));
     assert_eq!(outputs.get("child"), Some(&json!(6)));
@@ -1063,7 +1321,9 @@ async fn kafka_malformed_payload_and_retry_after_timeout() {
     let engine = live_engine(&fixture, plain, Arc::clone(&observer), false);
     let handle = engine.execute("w", BTreeMap::new());
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, "not json").await;
+    producer
+        .produce(&topic, 0, "not json", &[("source", "engine-test")])
+        .await;
     let err = handle.collect().await.outputs.expect_err("malformed");
     assert_eq!(err.kind, RuntimeErrorKind::MessageMalformed, "{err}");
     assert_eq!(err.code(), "RUNTIME_MESSAGE_MALFORMED");
@@ -1076,7 +1336,9 @@ async fn kafka_malformed_payload_and_retry_after_timeout() {
     let handle = engine.execute("w", BTreeMap::new());
     wait_armed(&observer).await;
     tokio::time::sleep(Duration::from_millis(2_000)).await;
-    producer.produce(&topic, 0, r#"{"id":9}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"id":9}"#, &[("source", "engine-test")])
+        .await;
     let result = handle.collect().await;
     let attempts: Vec<u32> = trace_records(&result)
         .into_iter()
@@ -1113,7 +1375,9 @@ async fn kafka_single_step_execution_arms_the_receive_dependency() {
     );
     let handle = engine.execute_step("followup", "fetch-event", BTreeMap::new(), false);
     wait_armed(&observer).await;
-    producer.produce(&topic, 0, r#"{"id":11}"#).await;
+    producer
+        .produce(&topic, 0, r#"{"id":11}"#, &[("source", "engine-test")])
+        .await;
     let result = handle.collect().await;
     result
         .outputs

@@ -168,7 +168,7 @@ fn both_target_forms_project_the_same_target() {
 }
 
 #[test]
-fn send_absent_action_correlation_and_request_body_are_refused() {
+fn send_absent_action_and_request_body_are_refused() {
     let doc = Doc::default();
     expect_unsupported(
         project(
@@ -184,17 +184,108 @@ fn send_absent_action_correlation_and_request_body_are_refused() {
     expect_unsupported(
         project(
             &doc,
-            json!({"stepId": "s", "channelPath": CHANNEL_PATH, "action": "receive", "correlationId": "$inputs.id"}),
-        ),
-        "correlationId",
-    );
-    expect_unsupported(
-        project(
-            &doc,
             json!({"stepId": "s", "channelPath": CHANNEL_PATH, "action": "receive", "requestBody": {"payload": {}}}),
         ),
         "requestBody",
     );
+}
+
+#[test]
+fn correlation_projects_own_trait_and_referenced_locations_for_both_targets() {
+    use super::asyncapi_receive::CorrelationSource;
+    for (location, source, pointer) in [
+        ("$message.header#/x", CorrelationSource::Header, Some("/x")),
+        (
+            "$message.payload#/a/b",
+            CorrelationSource::Payload,
+            Some("/a/b"),
+        ),
+        ("$message.payload", CorrelationSource::Payload, None),
+        ("$message.header#", CorrelationSource::Header, Some("")),
+        (
+            "$message.payload#/a~1b/~0",
+            CorrelationSource::Payload,
+            Some("/a~1b/~0"),
+        ),
+    ] {
+        for mode in ["own", "trait", "reference"] {
+            let mut doc = Doc::default();
+            doc.messages = match mode {
+                "own" => format!("      orderPlaced:\n        correlationId:\n          location: '{location}'\n        traits:\n          - correlationId:\n              location: '$message.payload#/loses'\n"),
+                "trait" => "      orderPlaced:\n        traits:\n          - correlationId:\n              location: '$message.payload#/loses'\n          - $ref: '#/components/messageTraits/last'\n          - description: no correlation here\n".into(),
+                _ => "      orderPlaced:\n        $ref: '#/components/messages/order'\n".into(),
+            };
+            doc.components = format!("  messageTraits:\n    last:\n      correlationId:\n        location: '{location}'\n  messages:\n    order:\n      correlationId:\n        $ref: '#/components/correlationIds/id'\n  correlationIds:\n    id:\n      location: '{location}'\n");
+            for mut step in [channel_step(), operation_step()] {
+                step["correlationId"] = json!("expected");
+                let got = project(&doc, step)
+                    .expect("correlation projects")
+                    .correlation
+                    .expect("location");
+                assert_eq!(got.source, source, "{mode} {location}");
+                assert_eq!(got.pointer.as_deref(), pointer, "{mode} {location}");
+            }
+        }
+    }
+}
+
+#[test]
+fn correlation_rejects_missing_malformed_and_ambiguous_locations_only_when_requested() {
+    let mut step = channel_step();
+    step["correlationId"] = json!("expected");
+    expect_config(project(&Doc::default(), step.clone()), "step \"await\"");
+    for object in [
+        "{}",
+        "null",
+        "[]",
+        "{location: 7}",
+        "{location: '$message.foo#/x'}",
+        "{location: '$message.header#x'}",
+        "{location: '$message.payload#/a~2'}",
+        "{location: '$message.payload#/a~'}",
+        "{location: '$message.header.x'}",
+    ] {
+        let mut doc = Doc::default();
+        doc.messages = format!("      orderPlaced:\n        correlationId: {object}\n");
+        expect_config(project(&doc, step.clone()), "message \"orderPlaced\"");
+    }
+    let mut doc = Doc::default();
+    doc.messages = "      first:\n        correlationId:\n          location: '$message.header#/x'\n      second:\n        correlationId:\n          location: '$message.payload#/x'\n".into();
+    expect_unsupported(project(&doc, step.clone()), "one correlation location");
+    assert!(project(&doc, channel_step())
+        .expect("no filter does not inspect locations")
+        .correlation
+        .is_none());
+    doc.messages = "      missing: {}\n      defined:\n        correlationId:\n          location: '$message.header#/x'\n".into();
+    expect_config(project(&doc, step.clone()), "message \"missing\"");
+    doc.messages = "      first:\n        correlationId:\n          location: '$message.header#/x'\n      second:\n        correlationId:\n          location: '$message.header#/x'\n".into();
+    assert!(project(&doc, step).is_ok());
+}
+
+#[test]
+fn correlation_references_keep_the_one_local_hop_rule() {
+    let mut step = operation_step();
+    step["correlationId"] = json!("expected");
+    for (reference, components, unsupported) in [
+        ("other.yaml#/id", "", true),
+        ("#/components/correlationIds/absent", "", false),
+        (
+            "#/components/correlationIds/id",
+            "  correlationIds:\n    id:\n      $ref: '#/components/correlationIds/next'\n",
+            true,
+        ),
+    ] {
+        let mut doc = Doc::default();
+        doc.messages =
+            format!("      orderPlaced:\n        correlationId:\n          $ref: '{reference}'\n");
+        doc.components = components.into();
+        let result = project(&doc, step.clone());
+        if unsupported {
+            expect_unsupported(result, "message \"orderPlaced\"");
+        } else {
+            expect_config(result, "message \"orderPlaced\"");
+        }
+    }
 }
 
 // ---- rule 2: target form -----------------------------------------------

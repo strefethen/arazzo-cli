@@ -239,6 +239,15 @@
               },
               "simulated": {
                 "type": "boolean"
+              },
+              "correlationId": {
+                "type": "string",
+                "description": "Resolved expected correlation text; also present on dry-run messages when specified."
+              },
+              "skippedRecords": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Decoded non-matching records skipped before this message; omitted when zero."
               }
             },
             "additionalProperties": true

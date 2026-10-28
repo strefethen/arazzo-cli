@@ -378,6 +378,7 @@ mod tests {
             payload: Some(payload),
             payload_lossy: false,
             simulated: false,
+            ..Default::default()
         });
         redact_trace_file(&mut trace, 2048, &BTreeSet::new());
         let message = trace.steps[0]
@@ -418,6 +419,7 @@ mod tests {
             payload: Some(payload),
             payload_lossy: false,
             simulated: false,
+            ..Default::default()
         });
         redact_trace_file(&mut trace, 60, &BTreeSet::new());
 

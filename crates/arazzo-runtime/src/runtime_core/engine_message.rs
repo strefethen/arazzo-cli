@@ -17,7 +17,9 @@ use rskafka::client::Client;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::asyncapi_receive::{project_receive_target, ReceiveTarget};
+use super::asyncapi_receive::{
+    project_receive_target, CorrelationLocation, CorrelationSource, ReceiveTarget,
+};
 use super::engine_trace::DebugGateContext;
 use super::kafka::{
     arm, connect, ArmedTopic, ConnectionIdentity, ReceiveOutcome, ReceivedRecord, SaslMechanism,
@@ -238,6 +240,29 @@ impl Engine {
         let deadline = step.timeout.map(|ms| entered + Duration::from_millis(ms));
         let target = self.project(step)?;
         let host = target.endpoint.identity.host.clone();
+        let mut warnings = Vec::new();
+        let expected = if let Some(text) = &step.correlation_id {
+            let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
+            let (value, diagnostics) = eval.resolve_value_with_diagnostics(text);
+            warnings.extend(
+                diagnostics
+                    .iter()
+                    .map(|warning| format!("correlationId: {warning}")),
+            );
+            Some(scalar_text(&value).ok_or_else(|| {
+                let kind = match value {
+                    Value::Null => "null",
+                    Value::Array(_) => "array",
+                    _ => "object",
+                };
+                RuntimeError::new(RuntimeErrorKind::MessageTransportConfig, format!(
+                    "step \"{}\": correlationId {text:?} resolved to {kind}; it must resolve to a scalar",
+                    step.step_id
+                ))
+            })?)
+        } else {
+            None
+        };
 
         if self.inner.dry_run_mode {
             let snapshot = MessageSnapshot {
@@ -258,6 +283,8 @@ impl Engine {
                 payload: Some("{}".to_string()),
                 payload_lossy: false,
                 simulated: true,
+                correlation_id: expected,
+                skipped_records: 0,
             };
             // Like the HTTP dry run, criteria are not evaluated against a
             // simulated message; outputs are, so dependent steps resolve.
@@ -271,6 +298,7 @@ impl Engine {
                     snapshot,
                     trace_message,
                     false,
+                    warnings,
                 )
                 .await?;
             execution.dry_run_request = Some(DryRunRequest {
@@ -310,7 +338,7 @@ impl Engine {
                     () = exec_ctx.cancel.cancelled() => return Err(exec_ctx.cancelled_error()),
                     locked = tokio::time::timeout(remaining, armed.lock()) => match locked {
                         Ok(guard) => guard,
-                        Err(_) => return Err(receive_timeout(step, &target, &host)),
+                        Err(_) => return Err(receive_timeout(step, &target, &host, 0)),
                     },
                 }
             }
@@ -320,15 +348,30 @@ impl Engine {
                 guard = armed.lock() => guard,
             },
         };
-        let record = match guard.receive_next(deadline, &exec_ctx.cancel).await {
-            ReceiveOutcome::Received(record) => record,
-            ReceiveOutcome::TimedOut => return Err(receive_timeout(step, &target, &host)),
-            ReceiveOutcome::Cancelled => return Err(exec_ctx.cancelled_error()),
-            ReceiveOutcome::Transport(err) => return Err(err),
+        let mut skipped = 0;
+        let (snapshot, mut trace_message) = loop {
+            let record = match guard.receive_next(deadline, &exec_ctx.cancel).await {
+                ReceiveOutcome::Received(record) => record,
+                ReceiveOutcome::TimedOut => {
+                    return Err(receive_timeout(step, &target, &host, skipped))
+                }
+                ReceiveOutcome::Cancelled => return Err(exec_ctx.cancelled_error()),
+                ReceiveOutcome::Transport(err) => return Err(err),
+            };
+            // Decode before matching: malformed payloads/headers remain errors,
+            // even if the record would not have matched the identifier.
+            let (snapshot, trace_message) = snapshot_from_record(step, &host, record)?;
+            if let (Some(expected), Some(location)) = (&expected, &target.correlation) {
+                if !correlation_matches(&snapshot, location, expected) {
+                    skipped += 1;
+                    continue;
+                }
+            }
+            break (snapshot, trace_message);
         };
         drop(guard);
-
-        let (snapshot, trace_message) = snapshot_from_record(step, &host, record)?;
+        trace_message.correlation_id = expected;
+        trace_message.skipped_records = skipped;
         self.evaluate_message(
             exec_ctx,
             workflow_id,
@@ -338,6 +381,7 @@ impl Engine {
             snapshot,
             trace_message,
             true,
+            warnings,
         )
         .await
     }
@@ -356,6 +400,7 @@ impl Engine {
         snapshot: MessageSnapshot,
         trace_message: TraceMessage,
         evaluate_criteria: bool,
+        mut warnings: Vec<String>,
     ) -> Result<StepExecution, RuntimeError> {
         let eval = ExpressionEvaluator::new(with_message(
             self.make_eval_context(vars, None),
@@ -363,7 +408,6 @@ impl Engine {
         ));
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
-        let mut warnings = Vec::new();
         let criteria_to_check: &[arazzo_spec::SuccessCriterion] = if evaluate_criteria {
             &step.success_criteria
         } else {
@@ -499,17 +543,58 @@ fn step_source_name(step: &Step) -> Option<&str> {
     }
 }
 
-fn receive_timeout(step: &Step, target: &ReceiveTarget, host: &str) -> RuntimeError {
+fn receive_timeout(step: &Step, target: &ReceiveTarget, host: &str, skipped: u64) -> RuntimeError {
+    let suffix = if skipped == 0 {
+        String::new()
+    } else {
+        format!(" after skipping {skipped} non-matching record(s)")
+    };
     RuntimeError::new(
         RuntimeErrorKind::MessageReceiveTimeout,
         format!(
             "step \"{}\": no message arrived on topic \"{}\" of Kafka broker {host} within the \
-             step timeout of {} ms",
+             step timeout of {} ms{suffix}",
             step.step_id,
             target.topic,
             step.timeout.unwrap_or(0)
         ),
     )
+}
+
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(_) | Value::Bool(_) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn correlation_matches(
+    snapshot: &MessageSnapshot,
+    location: &CorrelationLocation,
+    expected: &str,
+) -> bool {
+    let headers;
+    let value = match location.source {
+        CorrelationSource::Header => {
+            headers = Value::Object(
+                snapshot
+                    .headers
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                    .collect(),
+            );
+            &headers
+        }
+        CorrelationSource::Payload => snapshot.payload.as_ref().unwrap_or(&Value::Null),
+    };
+    let located = match &location.pointer {
+        Some(pointer) => value.pointer(pointer),
+        None => Some(value),
+    };
+    located
+        .and_then(scalar_text)
+        .is_some_and(|actual| actual == expected)
 }
 
 /// Turns a record into the `$message.*` snapshot and its trace record: the
@@ -577,6 +662,8 @@ fn snapshot_from_record(
         payload: payload_text,
         payload_lossy,
         simulated: false,
+        correlation_id: None,
+        skipped_records: 0,
     };
     Ok((
         MessageSnapshot {
@@ -585,4 +672,67 @@ fn snapshot_from_record(
         },
         trace_message,
     ))
+}
+
+#[cfg(test)]
+mod correlation_tests {
+    use super::*;
+
+    #[test]
+    fn correlation_matches_only_located_scalar_text() {
+        let payload_location = CorrelationLocation {
+            source: CorrelationSource::Payload,
+            pointer: Some("/corr".into()),
+        };
+        for (payload, expected, matches) in [
+            (json!({"corr": "42"}), "42", true),
+            (json!({"corr": 42}), "42", true),
+            (json!({"corr": 42.0}), "42", false),
+            (json!({"corr": true}), "true", true),
+            (json!({"corr": false}), "false", true),
+            (json!({"corr": null}), "null", false),
+            (json!({"corr": []}), "[]", false),
+            (json!({"corr": {}}), "{}", false),
+            (json!({}), "null", false),
+        ] {
+            let snapshot = MessageSnapshot {
+                headers: BTreeMap::new(),
+                payload: Some(payload),
+            };
+            assert_eq!(
+                correlation_matches(&snapshot, &payload_location, expected),
+                matches
+            );
+        }
+        let snapshot = MessageSnapshot {
+            headers: BTreeMap::from([("a/b~c".into(), "42".into())]),
+            payload: Some(json!(42)),
+        };
+        assert!(correlation_matches(
+            &snapshot,
+            &CorrelationLocation {
+                source: CorrelationSource::Header,
+                pointer: Some("/a~1b~0c".into())
+            },
+            "42"
+        ));
+        for pointer in [None, Some(String::new())] {
+            assert!(correlation_matches(
+                &snapshot,
+                &CorrelationLocation {
+                    source: CorrelationSource::Payload,
+                    pointer: pointer.clone()
+                },
+                "42"
+            ));
+            assert!(!correlation_matches(
+                &snapshot,
+                &CorrelationLocation {
+                    source: CorrelationSource::Header,
+                    pointer
+                },
+                "42"
+            ));
+        }
+    }
 }

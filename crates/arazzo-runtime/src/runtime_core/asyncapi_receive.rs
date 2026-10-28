@@ -49,6 +49,54 @@ pub(crate) struct ReceiveTarget {
     pub(crate) topic: String,
     pub(crate) server_key: String,
     pub(crate) endpoint: KafkaEndpoint,
+    pub(crate) correlation: Option<CorrelationLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CorrelationLocation {
+    pub(crate) source: CorrelationSource,
+    /// RFC 6901 text, without the leading `#`.
+    pub(crate) pointer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CorrelationSource {
+    Header,
+    Payload,
+}
+
+/// AsyncAPI 3.0.0 runtime-expression ABNF (spec/asyncapi/v3.0.0.md:2596–2604),
+/// distinct from the Arazzo expression grammar.
+fn parse_location(text: &str) -> Result<CorrelationLocation, String> {
+    let (base, pointer) = match text.split_once('#') {
+        Some((base, pointer)) => (base, Some(pointer)),
+        None => (text, None),
+    };
+    let source = match base {
+        "$message.header" => CorrelationSource::Header,
+        "$message.payload" => CorrelationSource::Payload,
+        _ => {
+            return Err(
+                "expected $message.header or $message.payload with an optional # JSON Pointer"
+                    .into(),
+            )
+        }
+    };
+    if let Some(pointer) = pointer {
+        if !pointer.is_empty() && !pointer.starts_with('/') {
+            return Err("JSON Pointer must be empty or start with /".into());
+        }
+        let mut chars = pointer.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                return Err("JSON Pointer escapes must be ~0 or ~1".into());
+            }
+        }
+    }
+    Ok(CorrelationLocation {
+        source,
+        pointer: pointer.map(str::to_owned),
+    })
 }
 
 /// Message binding fields that change what is on the wire and are refused.
@@ -280,13 +328,6 @@ pub(crate) fn project_receive_target(
             )));
         }
     }
-    if step.correlation_id.is_some() {
-        return Err(early.unsupported(format!(
-            "step \"{}\": correlationId filtering is not supported in this release; remove \
-             correlationId or select the message with successCriteria",
-            step.step_id
-        )));
-    }
     if step.request_body.is_some() {
         return Err(early.unsupported(format!(
             "step \"{}\": requestBody has no meaning on a receive step",
@@ -378,8 +419,19 @@ pub(crate) fn project_receive_target(
 
     // Rule 8 (and the message part of rule 9) for every channel message.
     admit_messages(&ctx, root, &channel, &channel_key)?;
+    let correlation = if step.correlation_id.is_some() {
+        Some(correlation_location(&ctx, root, &channel, &channel_key)?.ok_or_else(|| {
+            ctx.config(format!(
+                "step \"{}\" declares correlationId but no message of channel \"{channel_key}\" defines a Correlation ID Object",
+                step.step_id
+            ))
+        })?)
+    } else {
+        None
+    };
 
     Ok(ReceiveTarget {
+        correlation,
         source_name: ctx.source_name.clone(),
         document: ctx.document.clone(),
         channel_key,
@@ -911,6 +963,87 @@ fn admit_messages(
         }
     }
     Ok(())
+}
+
+/// The accepted correlation disposition selects the message's own object,
+/// otherwise the last declaring trait (AsyncAPI traits: v3.0.0.md:2617–2619).
+/// Records have no message type, so all channel messages must name one location.
+fn correlation_location(
+    ctx: &Context,
+    root: &Yaml,
+    channel: &Yaml,
+    channel_key: &str,
+) -> Result<Option<CorrelationLocation>, RuntimeError> {
+    // admit_messages has already checked the message mapping and traits list.
+    let Some(messages) = channel.get("messages").and_then(Yaml::as_mapping) else {
+        return Ok(None);
+    };
+    let mut selected: Option<(&str, CorrelationLocation)> = None;
+    let mut first_missing = None;
+    let mut different = false;
+    for (key, value) in messages {
+        let name = key
+            .as_str()
+            .ok_or_else(|| ctx.config("non-string message key"))?;
+        let what = format!("channel \"{channel_key}\" message \"{name}\"");
+        let message = deref_component(ctx, root, value, "messages", &what)?;
+        let mut effective = message.get("correlationId");
+        if effective.is_none() {
+            if let Some(traits) = message.get("traits").and_then(Yaml::as_sequence) {
+                for (index, trait_) in traits.iter().enumerate() {
+                    let trait_ = deref_component(
+                        ctx,
+                        root,
+                        trait_,
+                        "messageTraits",
+                        &format!("{what} trait [{index}]"),
+                    )?;
+                    if let Some(correlation) = trait_.get("correlationId") {
+                        effective = Some(correlation);
+                    }
+                }
+            }
+        }
+        let Some(effective) = effective else {
+            first_missing.get_or_insert(what);
+            continue;
+        };
+        let object = deref_component(ctx, root, effective, "correlationIds", &what)?;
+        if !object.is_mapping() {
+            return Err(ctx.config(format!("{what}: Correlation ID Object must be a mapping")));
+        }
+        let text = object
+            .get("location")
+            .and_then(Yaml::as_str)
+            .ok_or_else(|| {
+                ctx.config(format!(
+                    "{what}: Correlation ID Object requires a string location"
+                ))
+            })?;
+        let location = parse_location(text).map_err(|err| {
+            ctx.config(format!(
+                "{what}: invalid correlation location {text:?}: {err}"
+            ))
+        })?;
+        if let Some((previous, _)) = &selected {
+            different |= *previous != text;
+        } else {
+            selected = Some((text, location));
+        }
+    }
+    if selected.is_some() {
+        if let Some(what) = first_missing {
+            return Err(ctx.config(format!(
+                "{what} has no Correlation ID Object; every message must define one"
+            )));
+        }
+    }
+    if different {
+        return Err(ctx.unsupported(format!(
+            "channel \"{channel_key}\": one correlation location per channel in this release"
+        )));
+    }
+    Ok(selected.map(|(_, location)| location))
 }
 
 fn refuse_message_binding(ctx: &Context, what: &str, bindings: &Yaml) -> Result<(), RuntimeError> {

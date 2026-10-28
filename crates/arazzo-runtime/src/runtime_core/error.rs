@@ -68,7 +68,8 @@ pub enum RuntimeErrorKind {
     /// A message transport (AsyncAPI receive) cannot be configured from the
     /// document and options: no eligible server, an unresolved server
     /// variable, credentials without a scheme or a scheme without
-    /// credentials, an unreadable CA bundle. Raised before any connection.
+    /// credentials, an unreadable CA bundle. Document errors precede connection;
+    /// unresolved or non-scalar correlationId values fail before any fetch.
     MessageTransportConfig,
     /// A message transport operation failed against the broker: connect,
     /// TLS, authentication, metadata, a missing topic, the preparation
