@@ -113,6 +113,8 @@ Global flags:
 - `--verbose` — step-by-step execution details
 - `--strict` — promote spec validation warnings to errors in `validate`; distinct from runtime `--strict-inputs`
 
+`validate` admits receive steps offline against their local AsyncAPI documents; use the repeatable `--asyncapi-server <SOURCE=KEY>` flag to select among eligible Kafka servers.
+
 Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.json` files directly in the selected directory; `test` and `serve --dir` recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files.
 
 `run` flags:

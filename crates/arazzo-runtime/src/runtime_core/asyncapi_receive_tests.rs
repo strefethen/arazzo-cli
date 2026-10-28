@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture construction and expected outcomes use explicit failure labels.
 #![allow(clippy::field_reassign_with_default)] // Each rule mutates one fragment of the default document.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arazzo_spec::{parse_unvalidated_bytes, ArazzoSpec, Step};
 use serde_json::{json, Value};
 
-use super::asyncapi_receive::{project_receive_target, ReceiveTarget};
+use super::asyncapi_receive::{admit_receive_steps, project_receive_target, ReceiveTarget};
 use super::kafka::SaslMechanism;
 use super::RuntimeErrorKind;
 
@@ -146,6 +147,82 @@ fn expect_config(result: Result<ReceiveTarget, super::RuntimeError>, needle: &st
         err.message
     );
     assert!(err.message.contains(needle), "{}", err.message);
+}
+
+#[test]
+fn offline_admissions_preserve_document_order_indices_and_projection_results() {
+    let dir = FixtureDir::new();
+    let mut doc = Doc::default();
+    doc.servers
+        .push_str("  secure:\n    host: broker.invalid:9093\n    protocol: kafka-secure\n");
+    dir.write("orders.asyncapi.yaml", &doc.render());
+    let mut spec = arazzo(channel_step(), "asyncapi");
+    let http: Step =
+        serde_json::from_value(json!({"stepId": "http", "operationId": "get"})).unwrap();
+    let mut refused = spec.workflows[0].steps[0].clone();
+    refused.step_id = "send".into();
+    refused.action = Some(arazzo_spec::StepAction::Send);
+    spec.workflows[0].steps.insert(0, http.clone());
+    spec.workflows[0].steps.push(refused);
+    let mut second = spec.workflows[0].clone();
+    second.workflow_id = "second".into();
+    second.steps = vec![http, serde_json::from_value(operation_step()).unwrap()];
+    spec.workflows.push(second);
+
+    for selection in [
+        BTreeMap::new(),
+        BTreeMap::from([("orders".into(), "secure".into())]),
+    ] {
+        let admissions = admit_receive_steps(&spec, Some(dir.path()), &selection);
+        assert_eq!(admissions.len(), 3);
+        for (admission, (wi, si)) in admissions.iter().zip([(0, 1), (0, 2), (1, 1)]) {
+            let workflow = &spec.workflows[wi];
+            let step = &workflow.steps[si];
+            assert_eq!((admission.workflow_index, admission.step_index), (wi, si));
+            assert_eq!(admission.workflow_id, workflow.workflow_id);
+            assert_eq!(admission.step_id, step.step_id);
+            let projected = project_receive_target(
+                &spec,
+                step,
+                Some(dir.path()),
+                selection.get("orders").map(String::as_str),
+            );
+            match (&admission.result, projected) {
+                (Ok(summary), Ok(target)) => {
+                    assert_eq!(summary.source_name, target.source_name);
+                    assert_eq!(summary.server_key, target.server_key);
+                    assert_eq!(summary.host, target.endpoint.identity.host);
+                    assert_eq!(summary.topic, target.topic);
+                    assert_eq!(summary.server_key, "secure");
+                }
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.kind, expected.kind);
+                    assert_eq!(actual.message, expected.message);
+                }
+                mismatch => panic!("projection parity: {mismatch:?}"),
+            }
+        }
+        assert!(admissions[1].result.is_err());
+        assert_eq!(admissions[0].result.is_ok(), !selection.is_empty());
+        assert_eq!(admissions[2].result.is_ok(), !selection.is_empty());
+    }
+}
+
+#[test]
+fn offline_admission_without_base_directory_preserves_projection_error() {
+    let spec = arazzo(channel_step(), "asyncapi");
+    let expected = project_receive_target(&spec, &spec.workflows[0].steps[0], None, None)
+        .expect_err("relative source requires base directory");
+    let admission = admit_receive_steps(&spec, None, &BTreeMap::new()).remove(0);
+    let actual = admission.result.unwrap_err();
+    assert_eq!(actual.kind, expected.kind);
+    assert_eq!(actual.message, expected.message);
+}
+
+#[test]
+fn offline_admission_skips_non_message_steps_with_missing_sources() {
+    let spec = arazzo(json!({"stepId": "http", "operationId": "get"}), "asyncapi");
+    assert!(admit_receive_steps(&spec, None, &BTreeMap::new()).is_empty());
 }
 
 // ---- rule 1: step form -------------------------------------------------

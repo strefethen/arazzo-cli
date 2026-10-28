@@ -156,6 +156,8 @@ pub enum ValidationErrorKind {
     InvalidExpression,
     InvalidReference,
     InvalidAsyncStep,
+    /// A message step refused by the runtime's offline receive projection.
+    ReceiveTargetRefused,
     UnsupportedDependencyScope,
     DependencyCycle,
     InvalidRetryField,
@@ -202,6 +204,7 @@ impl ValidationErrorKind {
             Self::InvalidExpression => "invalidExpression",
             Self::InvalidReference => "invalidReference",
             Self::InvalidAsyncStep => "invalidAsyncStep",
+            Self::ReceiveTargetRefused => "receiveTargetRefused",
             Self::UnsupportedDependencyScope => "unsupportedDependencyScope",
             Self::DependencyCycle => "dependencyCycle",
             Self::InvalidRetryField => "invalidRetryField",

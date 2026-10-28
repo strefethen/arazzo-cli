@@ -23,7 +23,7 @@
 //! `kafka.topicConfiguration`, operation `kafka.groupId` / `kafka.clientId`,
 //! message `kafka.key`, and every non-`kafka` binding.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use arazzo_spec::{
@@ -38,6 +38,63 @@ use super::asyncapi_target::{
 };
 use super::kafka::{ConnectionIdentity, KafkaEndpoint, SaslMechanism};
 use super::{RuntimeError, RuntimeErrorKind};
+
+/// The offline projection outcome for one message step, in document order.
+#[derive(Debug)]
+pub struct ReceiveAdmission {
+    pub workflow_id: String,
+    pub step_id: String,
+    pub workflow_index: usize,
+    pub step_index: usize,
+    pub result: Result<ReceiveAdmissionSummary, RuntimeError>,
+}
+
+/// The selected receive endpoint, without credentials or a live connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveAdmissionSummary {
+    pub source_name: String,
+    pub server_key: String,
+    pub host: String,
+    pub topic: String,
+}
+
+/// Admit every message step using the same projection and server selection as
+/// the engine. Reads local source documents only; never opens a socket. Steps
+/// without a channel target or action are skipped without loading documents.
+pub fn admit_receive_steps(
+    spec: &ArazzoSpec,
+    source_base_dir: Option<&Path>,
+    server_selection: &BTreeMap<String, String>,
+) -> Vec<ReceiveAdmission> {
+    let mut admissions = Vec::new();
+    for (workflow_index, workflow) in spec.workflows.iter().enumerate() {
+        for (step_index, step) in workflow.steps.iter().enumerate() {
+            if !super::engine_message::is_message_step(step) {
+                continue;
+            }
+            let selection = super::engine_message::step_source_name(step)
+                .and_then(|source| server_selection.get(source))
+                .map(String::as_str);
+            let result =
+                project_receive_target(spec, step, source_base_dir, selection).map(|target| {
+                    ReceiveAdmissionSummary {
+                        source_name: target.source_name,
+                        server_key: target.server_key,
+                        host: target.endpoint.identity.host,
+                        topic: target.topic,
+                    }
+                });
+            admissions.push(ReceiveAdmission {
+                workflow_id: workflow.workflow_id.clone(),
+                step_id: step.step_id.clone(),
+                workflow_index,
+                step_index,
+                result,
+            });
+        }
+    }
+    admissions
+}
 
 /// Everything the engine needs to arm a receive step on Kafka.
 #[derive(Debug, Clone, PartialEq, Eq)]

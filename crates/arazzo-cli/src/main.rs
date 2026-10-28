@@ -249,9 +249,10 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
         )
         .await
         .map_err(CliFailure::from),
-        Commands::Validate { spec } => {
-            handlers::validate_spec(&spec, global).map_err(CliFailure::from)
-        }
+        Commands::Validate {
+            spec,
+            asyncapi_server,
+        } => handlers::validate_spec(&spec, &asyncapi_server, global).map_err(CliFailure::from),
         Commands::List { spec } => {
             handlers::list_workflows(&spec, global).map_err(CliFailure::from)
         }

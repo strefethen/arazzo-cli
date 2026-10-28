@@ -524,7 +524,7 @@ fn classify_cancellation(exec_ctx: &ExecutionContext, err: RuntimeError) -> Runt
     }
 }
 
-fn step_source_name(step: &Step) -> Option<&str> {
+pub(super) fn step_source_name(step: &Step) -> Option<&str> {
     match &step.target {
         Some(StepTarget::ChannelPath(target)) => match arazzo_spec::classify_operation_path(target)
         {

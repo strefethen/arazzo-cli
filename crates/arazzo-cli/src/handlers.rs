@@ -203,17 +203,56 @@ const VALIDATE_SPEC_CODES: SpecErrorCodes = SpecErrorCodes {
     component_resolution: "VALIDATE_SPEC_COMPONENT_RESOLUTION",
 };
 
-pub fn validate_spec(path: &str, global: GlobalOptions) -> Result<(), CliError> {
+pub fn validate_spec(
+    path: &str,
+    asyncapi_server: &[String],
+    global: GlobalOptions,
+) -> Result<(), CliError> {
+    let selection = crate::message_transport::parse_server_selection(asyncapi_server)
+        .map_err(|message| CliError::new(cli_error::VALIDATE_ASYNCAPI_SERVER_FLAG, message))?;
     let failure = |err: &arazzo_validate::Error| {
         let code = cli_error::spec_error(err, &VALIDATE_SPEC_CODES).code();
         output::validate_error(path, err, code)
     };
     match arazzo_validate::parse_with_diagnostics(path) {
-        Ok((_, warnings)) if global.strict && !warnings.is_empty() => {
-            Err(failure(&promote_warnings(Vec::new(), warnings)))
+        Ok((spec, warnings)) => {
+            let mut errors = Vec::new();
+            if spec
+                .workflows
+                .iter()
+                .flat_map(|workflow| &workflow.steps)
+                .any(|step| {
+                    matches!(step.target, Some(arazzo_spec::StepTarget::ChannelPath(_)))
+                        || step.action.is_some()
+                })
+            {
+                for admission in
+                    arazzo_runtime::admit_receive_steps(&spec, Path::new(path).parent(), &selection)
+                {
+                    if let Err(err) = admission.result {
+                        errors.push(arazzo_validate::Diagnostic {
+                            severity: arazzo_validate::Severity::Error,
+                            kind: arazzo_validate::ValidationErrorKind::ReceiveTargetRefused,
+                            path: format!(
+                                "workflows[{}].steps[{}]",
+                                admission.workflow_index, admission.step_index
+                            ),
+                            message: format!("{}: {}", err.kind.code(), err.message),
+                        });
+                    }
+                }
+            }
+            if global.strict && !warnings.is_empty() {
+                Err(failure(&promote_warnings(errors, warnings)))
+            } else if !errors.is_empty() {
+                Err(failure(&arazzo_validate::Error::Validation(
+                    arazzo_validate::ValidationReport { errors, warnings },
+                )))
+            } else {
+                output::emit_validate_result(path, &spec, &warnings, global.json)
+                    .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err))
+            }
         }
-        Ok((spec, warnings)) => output::emit_validate_result(path, &spec, &warnings, global.json)
-            .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err)),
         Err(arazzo_validate::Error::Validation(report))
             if global.strict && !report.warnings.is_empty() =>
         {

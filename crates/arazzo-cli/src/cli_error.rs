@@ -16,6 +16,8 @@ use serde_json::{Map, Value};
 pub const CLI_USAGE: &str = "CLI_USAGE";
 /// A JSON result or error object could not be written to stdout.
 pub const CLI_OUTPUT_WRITE: &str = "CLI_OUTPUT_WRITE";
+/// A malformed or duplicate offline validate server-selection flag.
+pub const VALIDATE_ASYNCAPI_SERVER_FLAG: &str = "VALIDATE_ASYNCAPI_SERVER_FLAG";
 
 /// A command failure that carries a code. There is no conversion from a bare
 /// `String`: every construction names its code.

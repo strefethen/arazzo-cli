@@ -28,7 +28,7 @@ pub(crate) const TRACE_BODY_PREVIEW_MAX_BYTES: usize = 2048;
 /// Default maximum response body size: 10 MiB.
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
-mod asyncapi_receive;
+pub(crate) mod asyncapi_receive;
 #[cfg(test)]
 mod asyncapi_receive_tests;
 mod asyncapi_target;

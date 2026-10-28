@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Offline receive validation** — `validate` uses the runtime's AsyncAPI
+  receive projection to report refused targets as error diagnostics, without
+  connecting to a broker. Select a server with `--asyncapi-server <SOURCE=KEY>`;
+  JSON diagnostics retain the runtime code and workflow/step path.
 - **Kafka receive correlation filtering** — a step's literal-or-expression
   `correlationId` selects the first matching record using the AsyncAPI message's
   Correlation ID Object. `trace.v1` records `correlationId` and nonzero

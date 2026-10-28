@@ -85,7 +85,10 @@ validated at runtime (a documented choice, matching the HTTP side).
 advisories): a zstd-compressed batch fails the attempt with
 `RUNTIME_MESSAGE_TRANSPORT` naming the codec.
 
-**Refused before any connection.** Unsupported forms report
+**Refused before any connection.** `validate` reports the same refusals offline
+against local AsyncAPI documents; pass `--asyncapi-server <SOURCE=KEY>` to select
+a server when several are eligible (repeatable for different sources).
+Unsupported forms report
 `RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT` naming the field: `action: send`; a
 step without `action`; `requestBody` on a receive step; a
 `$ref` channel, operation, or server; a null or templated `address` (Channel

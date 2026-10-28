@@ -112,7 +112,9 @@ impl MessageTransportFlags {
 }
 
 /// `<source>=<key>` pairs; a source may be named once.
-fn parse_server_selection(values: &[String]) -> Result<BTreeMap<String, String>, String> {
+pub(crate) fn parse_server_selection(
+    values: &[String],
+) -> Result<BTreeMap<String, String>, String> {
     let mut selection = BTreeMap::new();
     for value in values {
         let Some((source, key)) = value.split_once('=') else {

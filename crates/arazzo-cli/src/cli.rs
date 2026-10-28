@@ -211,6 +211,9 @@ pub enum Commands {
     Validate {
         /// Path to an Arazzo YAML or JSON spec file.
         spec: String,
+        /// Choose the AsyncAPI server for a source description listing several eligible Kafka servers, as SOURCE=KEY. Repeatable.
+        #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
+        asyncapi_server: Vec<String>,
     },
     /// List workflow IDs and summaries from one Arazzo spec.
     #[command(

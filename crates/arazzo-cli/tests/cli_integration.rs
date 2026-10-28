@@ -1369,7 +1369,28 @@ fn validate_json_accepts_arazzo_1_1_asyncapi_source() {
 fn validate_json_accepts_supported_async_step_metadata() {
     let temp = TempDir::new("arazzo-async-step-validate");
     let spec_path = temp.path().join("async-step.arazzo.yaml");
-    write_file(&spec_path, asyncapi_channel_spec());
+    write_file(
+        &spec_path,
+        &asyncapi_channel_spec().replace("https://example.com/asyncapi.yaml", "./events.json"),
+    );
+    // Validate now admits receive targets offline. Keep this metadata success
+    // case backed by a real local source, including its correlation definition.
+    write_file(
+        &temp.path().join("events.json"),
+        &json!({
+            "asyncapi": "3.0.0",
+            "info": {"title": "Events", "version": "1"},
+            "servers": {"local": {"host": "broker.invalid:9092", "protocol": "kafka"}},
+            "channels": {"events": {
+                "address": "events",
+                "messages": {"event": {
+                    "contentType": "application/json",
+                    "correlationId": {"location": "$message.payload#/eventId"}
+                }}
+            }}
+        })
+        .to_string(),
+    );
 
     let output = run(
         ["--json", "validate", &spec_path.to_string_lossy()].as_slice(),

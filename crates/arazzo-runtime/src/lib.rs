@@ -26,6 +26,9 @@ mod debug;
 mod runtime_core;
 
 pub use debug::*;
+pub use runtime_core::asyncapi_receive::{
+    admit_receive_steps, ReceiveAdmission, ReceiveAdmissionSummary,
+};
 pub use runtime_core::*;
 
 /// Stable internal runtime API baseline for trace/replay/debugger integrations.
