@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc).
+Latest source cycle: [ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,13 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: bounded regex-result caching with compilation and matching
-outside the map lock
-([ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc)). A private
-per-engine owner retains up to 256 successful or failed compilations. Oversized
-keys still evaluate without retention. Independent review passed; source is
-committed locally and publication remains held by Fable’s earlier paused candidate.
-Next refinement candidate: canonical Step-output reference extraction
-([ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e)). The separate
+Latest delivery: canonical local Step-output reference extraction
+([ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e)). Four field
+modes reuse the existing syntax owners and preserve exact names, duplicates and
+source order. This is library groundwork; runtime dependency scheduling is not
+changed. Independent review passed; publication remains held by Fable’s earlier
+paused candidate. Next refinement candidate: canonical effective Step parameters
+([ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e)). The separate
 source-type decision in
 [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367) remains open.
 
@@ -223,15 +222,41 @@ Compile counters, eviction/boundary tests and a real overlapping HTTP workflow
 prove reuse, bounds and serial/parallel semantic equivalence. This is a reliability
 fix and ownership improvement, without a new condition language or throughput claim.
 
-## Next independent candidate — canonical Step-output references
+## Delivered — cycle 7: canonical Step-output reference syntax
 
-[ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e) is queue-eligible
-under the accepted conformance plan, with its three prerequisites completed. Its
-intended outcome is one syntax-owned API for exact local Step-output occurrences,
-so dependency consumers can use the existing expression parsers. This is a
-refinement candidate, not a new implementation-readiness claim. Recheck its frozen
-surface, current parser ownership, file operations and live reservations before
-starting; no part of it is delivered by the regex-cache change.
+[ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e), in
+[epic:ac-59b5b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-59b5b), owns
+one syntax-only adapter for the four accepted field modes. It reuses canonical
+parsers and returns borrowed local Step-output occurrences in source order.
+The expression-string owner shares its existing reserved-candidate iterator;
+the crate root gains declarations and exports only. No graph, document model,
+evaluation or scheduling concern enters this owner.
+
+The vendored specification's [Tool Behavior](../spec/arazzo/v1.1.0.html#tool-behavior)
+states: “Tools MUST also treat runtime expression output references (e.g.,
+`$steps.stepId.outputs.field`) as implicit dependencies and ensure the referenced
+step completes before the referencing step executes.” Its Runtime Expressions
+section defines `steps-reference = step-id ".outputs." output-name [ "#" json-pointer ]`.
+This cycle supplies syntax groundwork; later tickets must prove the scheduling
+invariant. The accepted plan's literal-brace compatibility deviation remains
+explicit and unchanged.
+
+Frontier readiness confirmed the frozen API and four-file boundary. Decided by
+recommendation: clarify that the adapter adds no allocation beyond its result/error
+and the allocations already made by the mandated canonical parsers. Acceptance
+criteria and testing obligations remain byte-identical. Root owns tkt, docs and
+integration; Sol implements; a fresh frontier agent reviews the exact candidate.
+One source slice, at most two review rounds; kickoff 23:37 UTC, three-hour ceiling.
+Fable's source paths and paused decisions remain outside this cycle.
+
+## Next independent candidate — canonical effective Step parameters
+
+[ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e) is the next
+refinement candidate. Its model-only helper preserves Workflow/Step parameter
+provenance and exact overrides without parsing expressions. It is prerequisite
+to effective expression-site inventory
+[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176).
+Current source, accepted API and live ownership must be rechecked before start.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -489,3 +514,35 @@ readiness, and future dates are not promised before scope and proof are settled.
   [ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e). Its three
   prerequisites are completed, but current source grounding and live clearance
   must pass before a new start. The source-type decision and other pauses remain.
+
+## Checkpoint — cycle 7
+
+- Completed [ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e)
+  under [epic:ac-59b5b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-59b5b).
+  Source: [f4c6e48](https://github.com/strefethen/arazzo-cli/commit/f4c6e484cf3b7d6de02371fec8722d61173c87d0)
+  **(local; not pushed)**. The epic remains open; model inventories and dependency
+  consumers are not delivered by this syntax-only slice.
+- One new expression owner adapts the four accepted modes to canonical parsers.
+  The shared reserved-candidate iterator preserves first-raw-brace boundaries and
+  exact errors. The root adds only five declaration/export lines; evaluator,
+  runtime, validator and Fable’s paths are unchanged.
+- Ten public API tests prove canonical filtering, source order, duplicates,
+  borrowed names, literal/quoted/native controls, case-insensitive keywords,
+  pointers, Unicode and fail-closed malformed candidates. Expression crate:
+  142 passed. Full workspace: **1,540 passed / 0 failed / 35 ignored**.
+  Formatting, workspace check, strict all-target/all-feature Clippy, benchmark
+  compilation, public API docs and all four drift guards passed.
+- Fresh-context frontier review passed the exact source candidate and contract
+  revision `638ee59d055526dcb1d4e2bc056631b8f5b7cab71dbac1e37374438462a56b6e`.
+  The tracker’s evidence note and guarded close retain the final lifecycle fence.
+  Review used one of two allowed rounds; no source changed after PASS.
+- Raw evidence, source hashes, contract snapshots, scope, review and browser QA:
+  `/private/tmp/arazzo-maintainer-20261028/step-reference-cycle/`.
+  The delivery log labels this as groundwork and links the reviewed source.
+- Publication remains held by paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), whose earlier
+  candidate is in the same unpublished main history. No push, release, or Kafka
+  source mutation occurred. Existing unrelated untracked files are preserved.
+- Next refinement: [ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e),
+  then the effective expression-site inventory after its prerequisites pass.
+  The source-type decision and all existing pauses remain with their owners.
