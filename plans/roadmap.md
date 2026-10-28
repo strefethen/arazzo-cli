@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05).
+Latest source cycle: [ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,13 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: runtime operation projection ownership
-([ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05)), with
-the visual delivery log tracked by
-[ac-a11ec](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a11ec). Runtime
-source writes, visual presentation and coordination documentation were explicitly
-disjoint. Next is grounded refinement of typed Criterion interpolation
-([ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846)); its two
-readiness gaps are recorded in the next-step section below.
+Latest delivery: typed Criterion interpolation
+([ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846)). Regex,
+JSONPath and explicit XPath 1.0 conditions can substitute workflow values before
+evaluation; null context fails typed checks. The source passed independent review
+and is committed locally. Publication is held by Fable’s earlier paused
+conformance candidate. Next is refinement of ordinary Criterion error reporting
+([ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c)).
 
 ## Direction and initial cycle
 
@@ -178,24 +177,42 @@ cycle 2, runtime in cycle 3. Each candidate passed its own independent review.
 The older **Maintainability** [epic:ac-0c8d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0c8d)
 has a specific RequestBody-field retirement contract and is not repurposed.
 
-## Next — typed Criterion interpolation
+## Delivered — cycle 4: typed Criterion interpolation
 
-[ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846),
-**Interpolate typed Criterion runtime expressions**, is the next refinement
-target from the accepted conformance lane. Its intended user benefit is that
-success checks can incorporate workflow input values into regex, JSONPath and
-XPath conditions, with missing data unable to accidentally pass a regex check.
-This capability is **not yet delivered**.
+[ac-50846](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-50846), under
+[epic:ac-33d48](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-33d48),
+lets regex, JSONPath and explicit XPath 1.0 success checks incorporate braced
+runtime expressions. The existing expression renderer owns conversion and
+syntax; the existing Criterion owner prepares the completed string and dispatches
+it. There is no duplicate parser, new public field or new God module.
 
-The bounded survey found lint and dependency eligibility passing, but two
-kickoff gaps remain. Reconcile the ticket's early-null wording with current
-JSONPath parse/admission error precedence; preserve the existing malformed and
-unsupported-query negative tests. Migrate only this ticket's legacy file
-declarations to explicit operations, distinguishing its new focused test from
-existing source. Then re-ground the vendored spec, rerun readiness/file checks
-and inspect live reservations before implementation. These are team refinement
-tasks, not new Steve approval gates. Preserve regex-cache, trace-schema and
-unsupported XPath-version behavior.
+- Null/undefined context fails each typed engine, including regex `^$`.
+  JSONPath query admission errors retain their existing precedence over null.
+- Unresolved or malformed interpolation fails with diagnostics before typed
+  execution. Native dollar syntax, simple conditions, declared trace text and
+  unsupported XPath versions retain their existing behavior.
+- A frontier architecture agent confirmed the private owner boundary; one Sol
+  agent implemented three disjoint files; the Chief of Staff handled the exact
+  conformance-count guard and delivery record; a fresh frontier reviewer assessed
+  the immutable source. Fable’s Kafka/AsyncAPI work remained separate on main.
+- The legacy declaration migration and JSONPath wording clarification were
+  resolved by the team before implementation. The only added test-file scope
+  adjusts the existing expected totals for one claim moving from deviation to
+  covered. No acceptance criterion or negative test was weakened.
+
+## Next — ordinary Criterion error reporting
+
+[ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c),
+**Report Criterion evaluation errors in ordinary traces**, is the next refinement
+candidate from the accepted conformance lane. Its intended benefit is diagnosis
+of failed evaluations outside the debugger. This error-projection capability is
+not delivered by the interpolation change.
+
+Refresh its current contracts, file declarations, dependencies and trace/output
+ownership before implementation; do not infer readiness from priority alone.
+Preserve existing schema/error contracts and route any substantive public-output
+decision through its stated gate. Inspect Fable’s live reservations before
+selecting writer paths.
 
 ## Following cycles — ordered by value and readiness
 
@@ -321,3 +338,35 @@ readiness, and future dates are not promised before scope and proof are settled.
 - Hourly continuation is active. The next run refines typed Criterion
   interpolation through its named owning modules and the existing conformance
   plan. No Steve decision currently blocks that refinement.
+
+## Checkpoint — cycle 4
+
+- Source delivered in
+  [be884e2](https://github.com/strefethen/arazzo-cli/commit/be884e2a0fd79eac540cc852824e133f08cd5594)
+  **(local; not pushed)**. Fresh independent source review **PASS**, one of two
+  review rounds used. The existing runtime claim now has positive and negative
+  executable evidence; the conformance epic remains open for its other work.
+- Nine focused Engine tests and ten Criterion unit tests pass. Seven of the
+  initial eight focused tests fail on the old implementation; the compatibility
+  control remains green. Adjacent runtime tests: 30 passed. Validator expression
+  tests: 15 passed. Conformance manifest: 13 passed.
+- Full workspace verification: **1,514 passed, 0 failed, 35 ignored**; all four
+  drift guards, formatting, strict Clippy and compilation pass. All 270 tracked
+  build inputs match the candidate Git objects, and three vendored specifications
+  remained unchanged during verification. Fable’s preceding committed work is
+  included in that checkpoint without modification by this ticket.
+- Evidence: `/private/tmp/arazzo-maintainer-20261028/ac-50846/`. The visual
+  delivery log adds the practical before/after example and exact publication
+  status. Its settings and style blocks are byte-identical. Browser checks passed
+  at 1280px and 390px with no page overflow or console errors; section navigation
+  works and the temporary viewport override was reset.
+- Publication hold: main contains Fable’s paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate
+  [7f83a9e](https://github.com/strefethen/arazzo-cli/commit/7f83a9e7fb0bc532ffa9181095f9d86749698594)
+  **(local; not pushed)**. The existing review/scope gate must clear before a push
+  includes it. Fable remains uninterrupted; no new approval request or duplicate
+  decision ticket is created for the same gate. Local completion remains valid
+  under the SDLC’s explicit publication-hold procedure.
+- Hourly continuation remains active. Refine the next bounded, available ticket
+  against current evidence and reservations; do not reopen paused work or treat
+  this cycle as completion of the full conformance roadmap.
