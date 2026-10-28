@@ -1,6 +1,6 @@
 //! Workflow execution runtime for the Rust implementation.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -67,6 +67,7 @@ mod nats_transport_trial_tests;
 mod operation_target;
 mod payload;
 mod redaction;
+mod regex_cache;
 mod replay;
 mod run_record;
 mod state;
@@ -86,7 +87,6 @@ pub use client::{
     RedirectDecision, RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
 };
 use control::{sleep_with_cancel, step_result_error};
-use criteria::RegexCache;
 pub(crate) use criteria::{
     evaluate_criterion, evaluate_criterion_detailed, evaluate_output_value_detailed,
     CriterionEvaluation,
@@ -113,6 +113,7 @@ use payload::{
     apply_replacements, json_type_name, resolve_payload_detailed, resolve_selector,
     resolve_value_source, to_json_path, value_to_string,
 };
+use regex_cache::RegexCache;
 use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use run_record::{RunRequestMetadata, RunResponseMetadata, RunStepOutcome, RunStepRecord};
 pub use state::Engine;

@@ -1,33 +1,6 @@
 use super::*;
 use std::borrow::Cow;
 
-pub(crate) struct RegexCache {
-    cache: Mutex<HashMap<String, Regex>>,
-}
-
-impl RegexCache {
-    pub(crate) fn new() -> Self {
-        Self {
-            cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Compile a regex (or return cached) and test whether it matches `text`.
-    ///
-    /// The lock is held for the duration of the match, but matching takes
-    /// nanoseconds so contention is negligible.
-    pub(crate) fn is_match(&self, pattern: &str, text: &str) -> Result<bool, regex::Error> {
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(re) = cache.get(pattern) {
-            return Ok(re.is_match(text));
-        }
-        let re = Regex::new(pattern)?;
-        let result = re.is_match(text);
-        cache.insert(pattern.to_string(), re);
-        Ok(result)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct CriterionEvaluation {
     pub type_name: String,
