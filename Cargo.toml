@@ -14,7 +14,7 @@ exclude = ["vendor/serde_json_path_core"]
 resolver = "2"
 
 [workspace.package]
-version = "0.8.2"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -30,7 +30,10 @@ publish = false
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [profile.dev]
-debug = "line-tables-only"
+# No debuginfo: on macOS any debuginfo makes rustc keep every crate's .o files
+# in target/debug/deps, and they accumulate across rebuilds. Panic locations
+# still report file:line; only RUST_BACKTRACE frames lose line numbers.
+debug = false
 
 [profile.release]
 lto = "thin"

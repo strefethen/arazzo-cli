@@ -6,7 +6,7 @@
 
 **Execute multi-step API workflows from a YAML spec — no code generation, no glue scripts.**
 
-arazzo-cli is a standalone executor for [Arazzo](https://spec.openapis.org/arazzo/latest.html), the OpenAPI Initiative's spec for describing sequences of API calls as declarative workflows. Define your steps, parameters, success criteria, and control flow in YAML, then run them directly from the command line or step through them in VS Code.
+arazzo-cli is a standalone executor for [Arazzo](https://spec.openapis.org/arazzo/latest.html), the OpenAPI Initiative's spec for describing sequences of API calls as declarative workflows. Define your steps, parameters, success criteria, and control flow in YAML or JSON, then run them directly from the command line or step through YAML workflows in VS Code. It targets Arazzo 1.1.0 with [documented conformance gaps](#specification-conformance-extensions-and-gaps).
 
 ## Why?
 
@@ -23,6 +23,7 @@ arazzo-cli makes Arazzo specs executable: validate them, run them, trace them, a
 ```bash
 git clone https://github.com/strefethen/arazzo-cli.git
 cd arazzo-cli
+./spec/fetch.sh
 cargo run -p arazzo-cli -- validate examples/httpbin-get.arazzo.yaml
 cargo run -p arazzo-cli -- run examples/httpbin-get.arazzo.yaml get-origin
 ```
@@ -42,23 +43,25 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Run workflows** | Execute HTTP steps, resolve expressions, evaluate success criteria, route control flow |
 | **Run single steps** | Execute one step with automatic dependency resolution (`--step`) |
 | **Generate workflows** | Scaffold CRUD workflows from OpenAPI 3.0.x specs (`generate`); OpenAPI 3.1 and 3.2 are rejected |
-| **Validate specs** | Parse and structurally validate Arazzo YAML before running |
+| **Validate specs** | Parse and structurally validate Arazzo YAML or JSON before running |
 | **Parallel execution** | Run independent steps concurrently with DAG-based scheduling (`--parallel`) |
-| **Dry-run mode** | Resolve all requests without sending them (`--dry-run`) |
+| **Dry-run mode** | Preview requests without sending them; response-dependent values use a simulated response (`--dry-run`) |
+| **Test suites** | Run workflows from files or directories with TAP, JUnit XML, or JSON reports (`test`) |
 | **Input validation** | Require, type-check, and enforce top-level property enums for workflow inputs, with strict mode (`--strict-inputs`) |
 | **Execution traces** | Write detailed `trace.v1` JSON artifacts with pattern-based redaction of recognized sensitive values |
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
-| **JSON output** | `--json` on every command except `generate` (YAML only), for scripting and CI integration |
+| **JSON output** | Structured command results for scripting and CI; `generate` writes YAML, `serve` speaks MCP |
 | **Expression language** | `$inputs`, `$steps`, `$response`, JSON Pointer, interpolation |
 | **Arazzo 1.1 selectors** | Typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
-| **Control flow** | `onSuccess`/`onFailure` actions with goto, retry (with backoff), and end |
+| **Control flow** | `onSuccess`/`onFailure` actions with goto, delayed retry, and end |
 | **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
 | **SOAP support** | Execute SOAP workflows with XPath-based success criteria |
-| **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec default, configurable burst) |
-| **Reusable components** | `$ref` to shared parameters, inputs, and action handlers via `components` |
+| **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec, burst 20; configurable through the Rust API) |
+| **Transport controls** | Scoped TLS exceptions, redirect limits, HTTPS downgrade protection, and structured transport warnings |
+| **Reusable components** | `$ref` for input schemas; `reference` for shared parameters and actions in `components` |
 | **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
 
 Operation targets use standard Arazzo syntax: an `operationId`, or a source-description expression with a JSON Pointer in `operationPath`. Both resolve the method, path, and server from a bound OpenAPI document; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps) for remaining limits.
@@ -95,21 +98,25 @@ arazzo-cli replay <trace.json>             Replay a trace.v1 artifact with injec
 arazzo-cli validate <spec>                 Parse and validate a spec
 arazzo-cli list <spec>                     List workflows in a spec
 arazzo-cli steps <spec> <workflow-id>      List steps within a workflow
-arazzo-cli catalog <dir>                   Discover specs across a directory tree
+arazzo-cli catalog <dir>                   Discover specs directly within a directory
 arazzo-cli show <workflow-id> --dir <dir>  Display workflow details (inputs, outputs, steps)
 arazzo-cli generate --spec <openapi>       Generate Arazzo workflows from an OpenAPI spec
 arazzo-cli schema [command]                Print JSON Schema for a command's --json output
+arazzo-cli test <paths>...                 Run workflows as tests (TAP, JUnit XML, or JSON)
 arazzo-cli serve [specs...] [--dir <dir>]  Start an MCP server for AI agent integration
 ```
 
 Global flags:
 
-- `--json` — structured JSON output (all commands except `generate`, which writes YAML only and rejects it)
+- `--json` — structured command results; `generate` rejects it, `serve` reserves stdout for MCP protocol messages, and `schema` already writes JSON
 - `--verbose` — step-by-step execution details
+- `--strict` — promote spec validation warnings to errors in `validate`; distinct from runtime `--strict-inputs`
+
+Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.json` files directly in the selected directory; `test` and `serve --dir` recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files.
 
 `run` flags:
 
-- `--input key=value` — workflow input (repeatable)
+- `--input key=value` — workflow input with scalar coercion and environment-variable lookup (repeatable); use `--input-json` for explicit JSON types
 - `--input-json key=<json>` — JSON-typed input (repeatable)
 - `--header Name=value` — HTTP header applied to all requests (repeatable)
 - `--step <step-id>` — execute a single step (auto-resolves upstream dependencies)
@@ -120,11 +127,30 @@ Global flags:
 - `--max-response-size <bytes>` — response body size limit (default `10485760` = 10 MiB)
 - `--parallel` — execute independent steps concurrently
 - `--dry-run` — resolve requests without sending
-- `--openapi <path>` — operationId source spec (repeatable)
+- `--openapi <path>` — provide an OpenAPI document for operation ID or pointer resolution (repeatable)
 - `--expr-diagnostics <off|warn|error>` — expression warning level (default `off`)
 - `--trace <path>` — write a trace.v1 execution artifact
 - `--export-run <path>` — write a versioned JSON run artifact with declared outputs and step history
-- `--trace-max-body-bytes <n>` — max body size in trace (default `2048`)
+- `--trace-max-body-bytes <n>` — response body/preview truncation threshold in the trace (default `2048`, maximum `1048576`); declared outputs and request bodies are not capped by this flag
+- `--insecure-host <host[:port]>` — disable TLS certificate verification for a specific host (repeatable)
+- `--insecure` — disable TLS certificate verification for all hosts
+- `--allow-downgrade-redirects` — permit HTTPS → HTTP redirects (refused by default)
+- `--max-redirects <n>` — maximum redirect hops per request (default `10`)
+- `--no-transport-warnings` — silence transport warnings on stderr; structured warnings remain in JSON and traces (also settable with `ARAZZO_NO_TRANSPORT_WARNINGS`)
+
+Dry-run uses a simulated HTTP 200 response with an empty JSON object. Outputs and later requests that depend on real responses may therefore be unresolved or differ from a live run; it does not validate live success criteria.
+
+`test` flags:
+
+- `<paths>...` — spec files or directories; execute selected workflows as test cases
+- `--format <tap|junit|json>` — report format (default `tap`); global `--json` overrides it
+- `--filter <regex>` — select workflow IDs; excluding a required workflow dependency is a suite error
+- `--fail-fast` — stop after the first failed case or suite error
+- Shared execution options: `--input`, `--input-json`, `--header`, `--openapi`, `--http-timeout`, `--execution-timeout`, `--expr-diagnostics`, `--parallel`, `--strict-inputs`, `--max-response-size`, and all transport flags listed above
+
+`test` sends real HTTP requests and exits nonzero for failed criteria, execution errors, or suite errors. It has no `--dry-run` option. Use `run --dry-run` to preview individual workflows first.
+
+`schema` targets: `validate`, `list`, `catalog`, `show`, `steps`, `run`, `export-run`, `replay`, and `test`. Omit the target to list them.
 
 `replay` flags:
 
@@ -132,7 +158,7 @@ Global flags:
 - `--spec <path>` — override `run.specPath` recorded in the trace
 - `--workflow-id <id>` — override `run.workflowId` recorded in the trace
 - `--execution-timeout <duration>` — replay timeout (default `5m`)
-- `--openapi <path>` — operationId source spec (repeatable)
+- `--openapi <path>` — provide an OpenAPI document for operation ID or pointer resolution (repeatable)
 
 `generate` flags:
 
@@ -143,7 +169,8 @@ Global flags:
 `serve` flags:
 
 - `[specs...]` — Arazzo spec files to load (positional, repeatable)
-- `--dir <path>` — directory containing `.arazzo.yaml` files to discover and load
+- `--dir <path>` — recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files
+- `--allowed-dir <path>` — restrict file-accepting MCP tools and relative OpenAPI source paths to explicit roots (repeatable; see [MCP security](#security))
 
 ## Examples
 
@@ -178,6 +205,9 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=429 --
 # Write a JSON run artifact alongside ordinary stdout
 arazzo-cli run examples/httpbin-get.arazzo.yaml status-check --input code=200 --export-run ./run.json
 
+# Run a workflow as a test case (sends real HTTP requests)
+arazzo-cli test examples/httpbin-get.arazzo.yaml --filter '^get-origin$' --format junit
+
 # Replay a trace offline
 arazzo-cli replay ./trace.json
 ```
@@ -186,17 +216,20 @@ The `run.v1` export keeps typed declared outputs, ordered attempts, HTTP status 
 
 ## Execution Traces
 
-`run --trace <path>` writes a `trace.v1` JSON artifact capturing every step's request, response, criteria evaluation, and routing decision.
+`run --trace <path>` writes a `trace.v1` JSON artifact with per-attempt request, response, criteria evaluation, and routing records. Response bodies are truncated at `--trace-max-body-bytes` (default 2048 bytes, plus a truncation marker).
 
 Trace writing redacts values whose names or text match its common sensitive-value patterns. This is best-effort; secrets that do not match those patterns may remain in a trace:
+
 - Headers: `Authorization`, `Cookie`, `X-API-Key`
 - URL query params: `token`, `password`, `session`
 - JSON body fields with sensitive keys, and matching secret patterns in non-JSON response bodies
 
+Abbreviated structure (not a complete replayable artifact; the tool version reflects the producing binary):
+
 ```json
 {
   "schemaVersion": "trace.v1",
-  "tool": { "name": "arazzo", "version": "0.1.0" },
+  "tool": { "name": "arazzo", "version": "0.9.0" },
   "run": {
     "workflowId": "status-check",
     "status": "success",
@@ -213,11 +246,13 @@ Trace writing redacts values whose names or text match its common sensitive-valu
 }
 ```
 
-Schema reference: `docs/trace-schema-v1.md` | `docs/schemas/trace-v1.schema.json`
+Schema reference: [trace format](docs/trace-schema-v1.md) | [JSON Schema](docs/schemas/trace-v1.schema.json)
 
 ## Deterministic Replay
 
-The `replay` command re-executes a workflow using the recorded responses from a trace file instead of making live HTTP requests. This enables offline testing, regression detection, and CI validation without network access.
+The `replay` command re-executes a workflow using the recorded responses from a trace file instead of making live HTTP requests. Keep the Arazzo spec and its bound OpenAPI documents available locally for offline testing.
+
+Replay uses the trace exactly as stored: redaction can change inputs, headers, or bodies, and response truncation can remove data needed by criteria or later steps. Such traces may fail request comparison or produce different results. Increase `--trace-max-body-bytes` when recording suitable non-sensitive fixtures; replay cannot restore removed data. Records are keyed by workflow and step ID, so those IDs must match the recording.
 
 ```bash
 # Record a trace
@@ -227,7 +262,7 @@ arazzo-cli run spec.yaml my-workflow --trace ./trace.json
 arazzo-cli replay ./trace.json
 ```
 
-### How It Works
+### Replay Transport
 
 Replay operates at the HTTP transport layer. The engine resolves expressions, evaluates criteria, and routes control flow exactly as it would during a live run — but instead of sending HTTP requests, it serves the recorded responses from the trace file.
 
@@ -237,7 +272,7 @@ Before injecting each recorded response, the engine compares the replayed reques
 |---|---|---|
 | HTTP method | Yes | Step target changed |
 | URL | Yes | Parameters or base URL changed |
-| Headers | Yes | Authentication or header logic changed |
+| Prepared request headers | Yes | Workflow header logic changed; client defaults and transport-added headers are not a complete wire capture |
 | Request body | Yes (JSON-aware) | Payload construction changed |
 
 If any field differs, the engine reports a `RUNTIME_REPLAY_REQUEST_MISMATCH` error with the specific drift. This catches regressions where spec or expression changes silently alter what gets sent to the API.
@@ -246,7 +281,7 @@ If any field differs, the engine reports a `RUNTIME_REPLAY_REQUEST_MISMATCH` err
 
 - **CI regression tests** — record a golden trace, replay it on every push to verify that expression resolution and request construction haven't changed
 - **Offline development** — work on workflow logic without access to the target API
-- **Spec refactoring** — rename steps, restructure parameters, and verify the same requests are produced
+- **Spec refactoring** — restructure parameters while preserving workflow/step IDs, and check that prepared requests still match
 - **Review artifacts** — trace files are plain JSON, easy to diff and inspect in code review
 
 ### Overrides
@@ -302,12 +337,12 @@ The project includes a full Debug Adapter Protocol (DAP) implementation with a V
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `spec` | string | yes | Path to the `.arazzo.yaml` workflow spec |
-| `workflowId` | string | yes | Workflow to execute |
+| `workflowId` | string | no | Workflow to execute (default: first workflow) |
 | `inputs` | object | no | Key-value map passed as workflow inputs |
 | `stopOnEntry` | boolean | no | Pause before the first step (default: `false`) |
-| `runtimeExecutable` | string | no | Command to launch the debug adapter (default: `cargo`) |
-| `runtimeArgs` | string[] | no | Arguments for adapter launch |
-| `runtimeCwd` | string | no | Working directory for adapter launch |
+| `runtimeExecutable` | string | no | Override the bundled debug adapter executable |
+| `runtimeArgs` | string[] | no | Arguments used with `runtimeExecutable` |
+| `runtimeCwd` | string | no | Working directory used with `runtimeExecutable`; bundled launch uses the workspace or spec directory |
 
 ### Breakpoints
 
@@ -316,7 +351,7 @@ Set breakpoints on any meaningful line in a YAML spec. The debugger maps source 
 - **Step lines** (`- stepId: fetch-data`) — pause before execution
 - **Success criteria** (`- condition: $statusCode == 200`) — pause at evaluation
 - **onSuccess / onFailure actions** — pause at dispatch
-- **Output lines** (`title: //item[1]/title`) — pause at extraction
+- **Output lines** (`title: $response.body#/title`) — pause at extraction
 
 Conditional breakpoints are supported — right-click a breakpoint and add an expression:
 
@@ -495,13 +530,13 @@ For each step, the engine:
 4. **Extracts outputs** — pulls values through runtime expressions or typed JSONPath/JSON Pointer/XPath selectors into the step's output map for downstream steps to consume
 5. **Routes control flow** — matches `onSuccess` or `onFailure` action criteria to decide: advance to the next step, jump to another step (`goto`), retry with a delay, or end the workflow
 
-The engine streams events as it runs. CLI output, traces, verbose logging, and the VS Code debugger all consume the same event stream — there is no special path for any consumer.
+The engine streams execution and trace events for consumers such as the CLI. The VS Code debugger also uses a debug controller and checkpoint gates to pause and inspect execution.
 
 ### .env File Support
 
 On startup, arazzo-cli (and arazzo-mcp) loads a `.env` file from the current directory (if one exists) into the process environment. The file supplies defaults: a variable already set in the environment, even to an empty string, keeps its value. To use the file's value instead, unset the variable before running.
 
-Loaded values reach everything that reads the process environment, including the HTTP client's proxy resolution: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` in a `.env` beside a spec apply to every outbound request in the run unless the shell already sets them.
+Loaded values reach everything that reads the process environment, including the HTTP client's proxy resolution: `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` in the current directory's `.env` affect outbound requests unless the shell already sets them. The loader does not search beside the spec when it is in a different directory.
 
 Each load is reported on stderr: one line with how many names were set, how many were kept from the environment, and how many lines were ignored, plus a `warning:` naming the line number and reason for each ignored line (no `=`, an empty name, a NUL byte, or an unreadable line). Names and values are never printed. With no `.env`, nothing is printed.
 
@@ -543,7 +578,7 @@ Level 1:  [create-user] ──────┘              ← waits for both
 Level 2:  [verify-user]                     ← sequential
 ```
 
-**Determinism guarantee:** even with concurrent execution, event sequence numbers are assigned per-level in stable step order, so identical inputs always produce identical traces.
+**Stable trace ordering:** concurrent steps' trace records are emitted per-level in stable step order. Timestamps, durations, live responses, and response-dependent routing can still differ between runs; trace files are not byte-identical merely because inputs match.
 
 ### Retries and sequential fallback
 
@@ -557,6 +592,7 @@ With `--parallel`, a workflow still runs its steps one at a time when:
 - a `retry` failure action names a `stepId` or `workflowId`, which runs another step or workflow before the retry.
 - a step calls another workflow. The called workflow can still run its own steps in parallel.
 - `--step` selects a single step.
+- a debug controller is attached through the Rust API.
 
 `--verbose` prints the workflow, the step, and the reason:
 
@@ -602,7 +638,7 @@ successCriteria:
     type: regex
 ```
 
-Compiled regexes are cached for performance — repeated evaluation of the same pattern across steps or retries avoids recompilation (100–500x speedup).
+Compiled regexes are cached so repeated evaluation of the same pattern across steps or retries avoids recompilation.
 
 ### XPath
 
@@ -679,7 +715,7 @@ onFailure:
     type: end
 ```
 
-This retries on `429 Too Many Requests` up to 3 times with a 2-second delay, then fails on any other error. An omitted `retryLimit` performs one retry; explicit limits are exact, and bounded execution uses the declared effective retry budgets with 10 levels of sub-workflow nesting to prevent runaway execution.
+This retries on `429 Too Many Requests` up to 3 times, then proceeds to the failure-ending action if retries are exhausted or the guard does not match. The delay is 2 seconds unless a non-negative integer `Retry-After` response header overrides it. An omitted `retryLimit` performs one retry; explicit limits are exact, and bounded execution uses the declared effective retry budgets with 10 levels of sub-workflow nesting to prevent runaway execution.
 
 ### Goto with Criteria Guards
 
@@ -705,7 +741,7 @@ Workflow inputs are validated before execution begins:
 
 1. **Default injection** — missing inputs are populated from schema defaults
 2. **Required check** — required inputs that are missing or null produce an error
-3. **Type check** — values are validated against their declared JSON Schema type (string, integer, boolean, number)
+3. **Type check** — top-level values are checked for string, integer, boolean, number, array, or object type; this is not full recursive JSON Schema validation
 4. **Top-level property enum check** — present values, including injected defaults, must match a declared top-level property `enum` member
 5. **Undeclared input warning** — inputs not defined in the workflow schema are flagged
 
@@ -769,6 +805,8 @@ arazzo-cli includes a built-in [Model Context Protocol](https://modelcontextprot
 
 ### Starting the server
 
+`serve` is included in `arazzo-cli`. To use the standalone `arazzo-mcp` command, install it separately with `cargo install --path ./crates/arazzo-mcp --locked` from the repository root.
+
 ```bash
 # Standalone binary
 arazzo-mcp examples/httpbin-get.arazzo.yaml
@@ -784,13 +822,19 @@ The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the
 
 ### Security
 
-By default, file-accepting tools (`validate_spec`, `generate_workflow`, `describe_openapi`) can read any path the process has access to. Use `--allowed-dir` to restrict file access:
+**Enabling MCP gives an AI client tools that read local files and execute API workflows with the server process's privileges.** Untrusted documents, tool results, or prompts can steer an agent into unintended calls. Workflows can change or delete remote data, disclose credentials, or contact services reachable from your machine, including local and private networks.
+
+By default, file-accepting tools (`validate_spec`, `generate_workflow`, `describe_openapi`) can read any path the process has access to. Use narrow, explicit `--allowed-dir` roots:
 
 ```bash
 arazzo-cli serve --allowed-dir /home/user/specs examples/*.arazzo.yaml
 ```
 
-The flag is repeatable — pass it multiple times to allow several directories.
+The flag is repeatable. It also checks relative OpenAPI source paths used by workflows. It is not an operating-system sandbox: checks currently precede the actual file open, and parser errors may disclose file contents or internal paths. Dot-prefixed files such as `.env` are not currently excluded. Default startup-spec roots, denial when no roots exist, dotfile rejection, containment during file open, and sanitized errors are planned protections, not current guarantees. Network destination restrictions, including redirect and DNS checks, are also not yet enforced.
+
+Run the server in an isolated environment with only the required directories mounted read-only, narrowly scoped credentials, and externally enforced outbound network restrictions. Review workflows and destinations before enabling them, use test accounts and non-production data, and configure your MCP client to require approval for consequential tool calls. Treat tool output, errors, logs, and traces as potentially sensitive; redaction is best-effort. Follow the [official MCP local-server security guidance](https://modelcontextprotocol.io/docs/tutorials/security/local-server-security).
+
+**Use MCP at your own risk.** You assume the risks associated with enabling the feature and authorizing its file access and API operations. The software is provided as-is without warranty, subject to the [MIT License](LICENSE). See [SECURITY.md](SECURITY.md) for the security policy and private vulnerability-reporting instructions.
 
 ### Available tools
 
@@ -849,11 +893,11 @@ An AI agent creates a new Arazzo workflow from scratch:
 arazzo-cli is designed to be reliable and predictable:
 
 - **No unsafe code** — `#![forbid(unsafe_code)]` is enforced across the entire workspace. All concurrency uses safe abstractions (`Arc`, `Mutex`, `tokio::sync`, `CancellationToken`)
-- **No `.unwrap()` or `.expect()`** — Clippy's `unwrap_used` lint is set to `deny`. All error paths are handled explicitly
-- **Deterministic traces** — identical inputs always produce identical event sequences, even under parallel execution. Sequence numbers are assigned by level and step order, not by thread timing
+- **Error-handling lints** — workspace Clippy lints deny `unwrap_used` and `expect_used`; tests and benchmarks can explicitly allow them. This is not a guarantee that execution cannot panic
+- **Stable trace ordering** — parallel step records are ordered by level and step order; timing and live response data can vary
 - **Bounded execution** — declared effective retry budgets, 10 sub-workflow nesting levels, configurable per-request and overall timeouts, and a 10 MiB default response-body cap prevent runaway workflows
-- **Automatic redaction** — trace files redact 18 sensitive key patterns (`authorization`, `token`, `password`, `secret`, `cookie`, `api-key`, etc.) by default
-- **Rate limiting** — a built-in token-bucket rate limiter (10 requests/sec, burst of 20) prevents accidental API abuse
+- **Best-effort redaction** — trace files filter recognized sensitive keys (`authorization`, `token`, `password`, `secret`, `cookie`, `api-key`, etc.) and common secret patterns in non-JSON response text; review artifacts before sharing
+- **Rate limiting** — a built-in token-bucket rate limiter defaults to 10 requests/sec with a burst of 20 per client; it is not a global quota across processes
 
 ## Programmatic API
 
@@ -864,17 +908,23 @@ The `arazzo-runtime` crate exposes a Rust API for embedding the engine in other 
 ```rust
 use arazzo_runtime::{EngineBuilder, EngineEvent};
 
+let spec_path = std::path::Path::new("examples/httpbin-get.arazzo.yaml");
+let spec = arazzo_validate::parse(spec_path)?;
+let config = arazzo_runtime::ClientConfig::default();
+let inputs = std::collections::BTreeMap::new();
+let my_observer = std::sync::Arc::new(MyObserver); // Defined below
 let engine = EngineBuilder::new(spec)
+    .source_base_dir(spec_path.parent().unwrap_or(std::path::Path::new(".")))
     .client_config(config)          // Custom HTTP settings
     .parallel(true)                 // DAG-based parallel execution
     .dry_run(false)                 // Actually send requests
     .trace(true)                    // Record trace events
     .strict_inputs(true)            // Fatal input validation
-    .max_response_bytes(5_000_000)  // 5 MiB response limit
+    .max_response_bytes(5_242_880)   // 5 MiB response limit
     .observer(my_observer)          // Rich event callbacks
     .build()?;
 
-let handle = engine.execute("my-workflow", inputs);
+let handle = engine.execute("get-origin", inputs);
 
 // Collect all events and await the final result
 let result = handle.collect().await;
@@ -925,6 +975,7 @@ crates/
   arazzo-validate          YAML parser + structural validation
   arazzo-expr              Expression parser/evaluator
   arazzo-runtime           Execution engine + debug controller
+  arazzo-generate          OpenAPI 3.0.x workflow generation
   arazzo-cli               CLI binary
   arazzo-mcp               MCP server (Model Context Protocol) for AI agents
   arazzo-debug-adapter     DAP server (Debug Adapter Protocol)
@@ -932,6 +983,7 @@ vscode-arazzo-debug/       VS Code debugger extension (TypeScript)
 examples/                  Runnable workflow specs (see examples/README.md)
 testdata/                  Test fixtures
 docs/schemas/              JSON Schemas for --json output formats
+spec/                      Vendored specification sources and fetch script
 ```
 
 ## Building from Source
@@ -943,6 +995,7 @@ release builds via `rust-toolchain.toml`; the minimum supported Rust version
 ```bash
 git clone https://github.com/strefethen/arazzo-cli.git
 cd arazzo-cli
+./spec/fetch.sh
 cargo build --workspace --locked
 cargo test --workspace --locked
 ```
@@ -976,7 +1029,7 @@ Built with these open-source crates:
 - [reqwest](https://crates.io/crates/reqwest) — HTTP client
 - [tokio](https://crates.io/crates/tokio) — async runtime
 - [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) — serialization
-- [serde_yml](https://crates.io/crates/serde_yml) — YAML parsing
+- [serde_yaml_ng](https://crates.io/crates/serde_yaml_ng) — YAML parsing
 - [yaml-rust2](https://crates.io/crates/yaml-rust2) — YAML event parsing with source positions (debug adapter)
 - [openapiv3](https://crates.io/crates/openapiv3) — OpenAPI 3.0.x spec model used by generation
 - [uppsala](https://crates.io/crates/uppsala) — XPath evaluation

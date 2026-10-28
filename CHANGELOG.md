@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-18
+
+Use standard Arazzo operation targets and make CLI failures predictable for automation.
+
+**Upgrade if** you use CLI JSON output, generate workflows from OpenAPI, or need
+the execution and security fixes below. Review the breaking changes before
+upgrading existing workflows and scripts.
+
+- **Standard operation targets** — operation IDs and canonical JSON Pointers
+  resolve against bound OpenAPI documents; generation emits standard targets.
+- **Explicit action reuse** — component actions use `reference`, while action
+  names stay literal.
+- **Consistent JSON errors** — CLI failures carry a shared error object and a
+  machine-readable code, including usage and input errors.
+- **Safer execution** — redact verbose request URLs, reject deeply nested
+  JSONPath queries, avoid dependency-check stack overflows, and update the
+  vulnerable `quinn-proto` dependency.
+- **Runtime and debugger fixes** — preserve constant child-workflow inputs and
+  report debugger expression, breakpoint, and session failures with context.
+
 ### Changed
 
 - **Breaking:** Operation targets use standard Arazzo syntax exclusively. Both
@@ -72,6 +92,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the workflow is not paused, and `launch` without `spec`, with an
   error response. It used to report success and then exit, ending the
   debug session.
+- Debugger evaluation distinguishes unresolved expressions and invalid
+  conditions from ordinary null values, reports breakpoint resolution errors,
+  and evaluates watches in the selected stack frame. Session failures retain
+  request context instead of appearing as successful completion.
+- Update `quinn-proto` from 0.11.16 to 0.11.18 to include its security fix.
+
+### Migration
+
+- Replace custom operation-path forms, method prefixes, and URL-as-base routing
+  with an operation ID or canonical operation pointer resolved from a declared
+  OpenAPI source. See the updated examples for document bindings and targets.
+- Replace action reuse through `name: $components...` with the action's
+  `reference` field. Local field merging through action names is removed.
+- Remove `generate --json` and `schema generate` from scripts. Generation
+  produces YAML, and output filenames must end in `.yaml` or `.yml`.
+- Update JSON error consumers to use `kind`, `error`, and `code`; refresh any
+  locally copied command schemas from `docs/schemas/`.
 
 ## [0.8.2] - 2026-10-09
 
