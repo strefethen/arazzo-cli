@@ -635,6 +635,30 @@ fn test_dry_run() {
 }
 
 #[test]
+fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
+    let spec = make_spec("https://user:prefix@MCP-LEAKED-SECRET@example.com");
+    let source = spec.source_descriptions[0].url.clone();
+    let state = ServerState::from_spec("multiple-at.arazzo.yaml", spec);
+    let messages = build_messages(&[
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data","dry_run":true}}}),
+    ]);
+    let mut output = Vec::new();
+    protocol::serve(Cursor::new(messages), &mut output, &state)
+        .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
+    let responses = parse_responses(&output);
+    assert!(!is_tool_error(&responses[1]), "{responses:?}");
+    let result = extract_tool_text(&responses[1]).unwrap_or_else(|| panic!("dry-run response"));
+    assert_eq!(
+        result["requests"][0]["url"],
+        "https://[REDACTED]@example.com/data"
+    );
+    assert!(!String::from_utf8_lossy(&output).contains("MCP-LEAKED-SECRET"));
+    fs::remove_file(source).unwrap_or_else(|err| panic!("removing source: {err}"));
+}
+
+#[test]
 fn test_dry_run_redacts_url_userinfo() {
     let spec = make_spec("http://user:MCP-USERINFO-PASSWORD@example.com");
     let source = spec.source_descriptions[0].url.clone();

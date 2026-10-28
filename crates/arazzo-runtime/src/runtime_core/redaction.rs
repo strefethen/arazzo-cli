@@ -123,7 +123,7 @@ pub fn redact_url(url: &mut String) {
         let authority_start = scheme_end + 3;
         let authority = &url[authority_start..];
         let authority_end = authority.find(['/', '?', '#']).unwrap_or(authority.len());
-        if let Some(userinfo_end) = authority[..authority_end].find('@') {
+        if let Some(userinfo_end) = authority[..authority_end].rfind('@') {
             url.replace_range(authority_start..authority_start + userinfo_end, REDACTED);
         }
     }
@@ -219,6 +219,19 @@ pub fn redact_text_patterns(text: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn url_userinfo_with_multiple_at_signs_is_redacted_whole() {
+        let mut url =
+            "https://user:prefix@LEAKED-SECRET@EXAMPLE.com/%2f?Name=a+b&Name=%2F#fragment@visible"
+                .to_string();
+        redact_url(&mut url);
+        assert_eq!(
+            url,
+            "https://[REDACTED]@EXAMPLE.com/%2f?Name=a+b&Name=%2F#fragment@visible"
+        );
+        assert!(!url.contains("LEAKED-SECRET"));
+    }
 
     #[test]
     fn url_userinfo_is_redacted_without_normalizing_other_bytes() {

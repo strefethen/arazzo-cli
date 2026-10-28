@@ -96,6 +96,39 @@ fn verbose_step_line_redacts_sensitive_query_values() {
 }
 
 #[test]
+fn dry_run_redacts_userinfo_with_multiple_at_signs() {
+    const SUFFIX: &str = "LEAKED-SECRET";
+    let dir = std::env::temp_dir().join(format!(
+        "arazzo-multiple-at-redaction-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("creating fixture: {err}"));
+    let spec_path = dir.join("spec.arazzo.yaml");
+    fs::write(
+        &spec_path,
+        spec(&format!("https://user:prefix@{SUFFIX}@example.com")),
+    )
+    .unwrap_or_else(|err| panic!("writing spec: {err}"));
+    let output = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+        .args(["--json", "run"])
+        .arg(&spec_path)
+        .args(["wf", "--dry-run"])
+        .current_dir(&dir)
+        .output()
+        .unwrap_or_else(|err| panic!("running CLI: {err}"));
+    assert!(output.status.success(), "dry-run failed: {output:?}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(SUFFIX));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(SUFFIX));
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("parsing dry-run response: {err}"));
+    assert_eq!(
+        body["requests"][0]["url"],
+        "https://[REDACTED]@example.com/items?access_token=[REDACTED]&page=2"
+    );
+    fs::remove_dir_all(&dir).unwrap_or_else(|err| panic!("removing fixture: {err}"));
+}
+
+#[test]
 fn credentialed_request_trace_and_verbose_output_redact_userinfo() {
     const PASSWORD: &str = "URL-USERINFO-PASSWORD";
     let server = tiny_http::Server::http("127.0.0.1:0")
