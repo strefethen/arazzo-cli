@@ -30,6 +30,7 @@ Current limitations:
 - Directory checks happen before file opens and do not guarantee containment if a symlink changes between the check and the read. Parser errors may include file contents and internal paths.
 - MCP execution does not currently enforce public-only network destinations or validate DNS results and redirects against a destination policy. Local and private services reachable by the process may be contacted.
 - Redaction is best-effort; errors, outputs, logs, and traces may contain sensitive data.
+- AsyncAPI source documents can name Kafka brokers that `serve` connects to with default options (plaintext, no credentials, bundled roots) when a workflow with a receive step runs. `--allowed-dir` now covers AsyncAPI files like OpenAPI files; the same network-destination caveat applies to broker hosts.
 
 Stronger defaults and enforcement are planned. Do not rely on those protections until they are implemented and documented for the version you run. See [README: MCP security](README.md#security) for current configuration guidance.
 

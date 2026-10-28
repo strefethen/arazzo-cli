@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AsyncAPI receive on Kafka** — `run` and `test` execute Arazzo 1.1 `receive`
+  steps whose source is an AsyncAPI 3.0 document and whose server is a Kafka
+  broker: receivers are armed when the run starts, the next JSON record drives
+  `$message.payload` / `$message.header.*`, criteria and typed outputs, and
+  dependent HTTP steps run as usual. New flags `--kafka-username`,
+  `--kafka-tls`, `--kafka-ca-cert`, `--kafka-connect-timeout`,
+  `--asyncapi-server <source>=<key>`; environment `ARAZZO_KAFKA_USERNAME` and
+  `ARAZZO_KAFKA_PASSWORD` (the password has no flag). New codes
+  `RUNTIME_MESSAGE_TRANSPORT_CONFIG`, `RUNTIME_MESSAGE_TRANSPORT`,
+  `RUNTIME_MESSAGE_RECEIVE_TIMEOUT`, `RUNTIME_MESSAGE_MALFORMED`,
+  `RUN_KAFKA_CREDENTIALS`, `RUN_KAFKA_CA_CERT_READ`, `RUN_ASYNCAPI_SERVER_FLAG`
+  (and `TEST_` twins). `--verbose` prints `Kafka receiver armed: …` when a
+  topic is ready and a `[msg] RECEIVE …` step line. See `docs/kafka-receive.md`
+  and `examples/kafka-order-followup.arazzo.yaml`.
+
+### Changed
+
+- `trace.v1` step records gain an optional `message` object for receive steps
+  (transport, host, topic, partition, offset, timestamp, headers, redacted
+  payload preview, `simulated` for dry runs); HTTP records are unchanged.
+- The local-source inventory behind MCP `--allowed-dir` and `--export-run`
+  overwrite protection now covers AsyncAPI source documents as well as
+  OpenAPI ones.
+
 ## [0.9.0] - 2026-10-18
 
 Use standard Arazzo operation targets and make CLI failures predictable for automation.

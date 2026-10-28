@@ -58,6 +58,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
 | **Control flow** | `onSuccess`/`onFailure` actions with goto, delayed retry, and end |
 | **Multiple API sources** | Route steps to different APIs via `sourceDescriptions` |
+| **AsyncAPI receive (Kafka)** | Wait for the next JSON record on a Kafka topic as an Arazzo `receive` step, then feed its outputs to HTTP steps ([docs](docs/kafka-receive.md)) |
 | **SOAP support** | Execute SOAP workflows with XPath-based success criteria |
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec, burst 20; configurable through the Rust API) |
 | **Transport controls** | Scoped TLS exceptions, redirect limits, HTTPS downgrade protection, and structured transport warnings |
@@ -137,6 +138,11 @@ Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.j
 - `--allow-downgrade-redirects` — permit HTTPS → HTTP redirects (refused by default)
 - `--max-redirects <n>` — maximum redirect hops per request (default `10`)
 - `--no-transport-warnings` — silence transport warnings on stderr; structured warnings remain in JSON and traces (also settable with `ARAZZO_NO_TRANSPORT_WARNINGS`)
+- `--kafka-username <user>` — SASL username for AsyncAPI Kafka servers that declare a supported scheme (also `ARAZZO_KAFKA_USERNAME`); the password comes only from `ARAZZO_KAFKA_PASSWORD`, there is no flag
+- `--kafka-tls` — use TLS for a plain `kafka` server (`kafka-secure` servers always use TLS)
+- `--kafka-ca-cert <pem>` — additional CA certificate(s) trusted for Kafka broker verification
+- `--kafka-connect-timeout <duration>` — bound on connecting, authenticating, and snapshotting offsets before the first step (default `30s`)
+- `--asyncapi-server <source>=<server-key>` — pick the server for a source whose channel lists several eligible Kafka servers (repeatable)
 
 Dry-run uses a simulated HTTP 200 response with an empty JSON object. Outputs and later requests that depend on real responses may therefore be unresolved or differ from a live run; it does not validate live success criteria.
 
@@ -146,7 +152,7 @@ Dry-run uses a simulated HTTP 200 response with an empty JSON object. Outputs an
 - `--format <tap|junit|json>` — report format (default `tap`); global `--json` overrides it
 - `--filter <regex>` — select workflow IDs; excluding a required workflow dependency is a suite error
 - `--fail-fast` — stop after the first failed case or suite error
-- Shared execution options: `--input`, `--input-json`, `--header`, `--openapi`, `--http-timeout`, `--execution-timeout`, `--expr-diagnostics`, `--parallel`, `--strict-inputs`, `--max-response-size`, and all transport flags listed above
+- Shared execution options: `--input`, `--input-json`, `--header`, `--openapi`, `--http-timeout`, `--execution-timeout`, `--expr-diagnostics`, `--parallel`, `--strict-inputs`, `--max-response-size`, and all transport and Kafka flags listed above
 
 `test` sends real HTTP requests and exits nonzero for failed criteria, execution errors, or suite errors. It has no `--dry-run` option. Use `run --dry-run` to preview individual workflows first.
 
@@ -436,7 +442,7 @@ Starting with v0.8.0, required-expression fields such as outputs and Selector/Cr
 
 **Not implemented:**
 - `$response.query.<name>` and `$response.path.<name>` are listed by the specification but not resolved by arazzo-cli — they evaluate to `null`. Only `$response.header.<name>` and `$response.body...` are supported on `$response`.
-- `$message.header.<name>` and `$message.payload...` are modeled in the expression evaluator but nothing in the runtime populates them for a real request — arazzo-cli does not execute asynchronous/message-style transports. Against an actual HTTP response, both evaluate to `null`, not the response's own header/body (use `$response.*` for that).
+- `$message.header.<name>` and `$message.payload...` are populated only by AsyncAPI receive steps on Kafka (see [AsyncAPI: Kafka receive](#asyncapi-kafka-receive)); against an HTTP response both evaluate to `null`, not the response's own header/body (use `$response.*` for that).
 
 **String interpolation:** `{$expr}` embeds any expression in a string value (e.g., `"Bearer {$steps.auth.outputs.token}"`)
 
@@ -488,7 +494,7 @@ Bare paths, absolute request URLs, source/path shortcuts, and method prefixes ar
 **Specification features not implemented:**
 
 - `$response.query.<name>` and `$response.path.<name>` — listed by the specification's Runtime Expressions grammar; arazzo-cli resolves only `$response.header.<name>` and `$response.body...`, so both evaluate to `null` rather than the request-matched query/path value.
-- `$message.header.<name>` and `$message.payload...` — modeled in the expression evaluator, but no code path in the runtime populates a message context for a real request (arazzo-cli does not execute asynchronous/message-style transports), so both evaluate to `null` against a real response rather than erroring or falling back to `$response.*`.
+- `$message.header.<name>` and `$message.payload...` — populated by Kafka receive steps only; for an HTTP step no message context exists, so both evaluate to `null` rather than erroring or falling back to `$response.*`.
 - Operation pointers through referenced path items, callbacks, webhooks, or other locations without a directly routable path context. Relative server URLs and missing document-level absolute servers also remain unsupported; both ID and pointer routes report these limits explicitly.
 - Fetching a remote document from `sourceDescriptions[].url` over the network. The runtime uses local or provided documents. Identity-based referencing (§9.6) binds a provided document without fetching its URL. Vendor a local copy, give it a `$self` matching the url, and hand it over:
 
@@ -777,6 +783,40 @@ workflows:
 ```
 
 The child workflow executes with its own input context, and its outputs are available to the parent as `$steps.<stepId>.outputs.<name>`. Sub-workflows can nest up to 10 levels deep. Circular calls are prevented by depth tracking.
+
+## AsyncAPI: Kafka receive
+
+A step can wait for the next record on a Kafka topic described by an AsyncAPI 3.0 source description:
+
+```yaml
+sourceDescriptions:
+  - name: orders
+    url: ./descriptions/orders.asyncapi.yaml
+    type: asyncapi
+workflows:
+  - workflowId: order-followup
+    steps:
+      - stepId: await-order
+        operationId: $sourceDescriptions.orders.receiveOrderPlaced
+        action: receive
+        timeout: 30000
+        successCriteria:
+          - condition: "$message.payload#/status == 'placed'"
+        outputs:
+          orderId: $message.payload#/orderId
+```
+
+Receivers are armed when the run starts, so an event produced after the verbose `Kafka receiver armed` line is the one the step consumes; the first record decides the step's criteria and outputs. Run the shipped example against the pinned broker:
+
+```bash
+scripts/kafka/broker.sh up && scripts/kafka/broker.sh topic orders.placed
+python3 scripts/kafka/order-server.py &
+arazzo-cli run examples/kafka-order-followup.arazzo.yaml order-followup --verbose
+# in another shell, once the armed line appears:
+printf 'source:demo\t{"orderId":42,"status":"placed"}\n' | scripts/kafka/broker.sh produce orders.placed
+```
+
+Sending, `correlationId`, schema validation, and consumer groups are out of scope. [docs/kafka-receive.md](docs/kafka-receive.md) has the full contract: supported document forms, server and credential configuration, timeouts and cancellation, trace fields, error codes, and the complete reproduction.
 
 ## Generating Workflows
 
