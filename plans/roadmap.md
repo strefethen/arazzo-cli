@@ -52,7 +52,7 @@ Staff, not a claim that Steve accepted every future proposal in this document.
   closure. Record push status separately. The roadmap and follow-up captures
   are linked and reviewed. Long-term ambition is not a completion claim.
 
-## Now — cycle 2: CLI catalog ownership
+## Delivered — cycle 2: CLI catalog ownership
 
 Steve renewed execution on 2026-10-28 in the same chat:
 
@@ -103,10 +103,10 @@ direction, rather than treating a smaller file as proof of good architecture.
 These fixes have disjoint source ownership. The shared Git index and full
 workspace gates are coordinated; a passing test of a mixed working tree is
 identified as such. Review uses exact candidate commits. Claude Fable completed
-[ac-dc3f2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-dc3f2) and is now
+[ac-dc3f2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-dc3f2) and was
 implementing [ac-8ec91](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ec91),
-Kafka receive correlation filtering. Those reservations remain outside this
-team's ownership. Fable owns the ongoing
+Kafka receive correlation filtering, at the cycle 1 checkpoint. That historical
+reservation state is not a claim about the current queue. Fable owns the ongoing
 Kafka/AsyncAPI development lane on `main`. Per Steve's updated preference,
 `main` remains the default: run explicitly disjoint scopes concurrently and
 serialize overlapping writes; use isolation only when it offers a concrete
@@ -117,7 +117,7 @@ candidate is held until the existing SDLC push checks pass.
 
 New epic: **Clarify runtime and CLI responsibility ownership**,
 [epic:ac-d0d1d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d).
-Keep the eight existing crates. The CLI capture is selected for cycle 2;
+Keep the eight existing crates. The CLI extraction is delivered in cycle 2;
 the runtime capture still requires grounded Tier 2 refinement.
 
 1. [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05): move
@@ -128,10 +128,9 @@ the runtime capture still requires grounded Tier 2 refinement.
    backward dependency. Preserve routing, server selection, refusal text and
    no-send behavior. Verify through operation ID/path/server tests and drift
    guards before considering the larger HTTP draft.
-2. [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6): selected
-   for cycle 2 above, refreshed against `841aa5c`. Preserve the existing shallow
-   discovery semantics, errors and rendering through focused tests and identical
-   before/after CLI transcripts.
+2. [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6): delivered
+   in cycle 2 above. Focused tests and identical before/after CLI transcripts
+   establish preserved shallow discovery semantics, errors and rendering.
 
 The older **Maintainability** [epic:ac-0c8d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0c8d)
 has a specific RequestBody-field retirement contract and is not repurposed.
@@ -204,12 +203,28 @@ readiness, and future dates are not promised before scope and proof are settled.
   focused discovery/catalog/show tests pass. Workspace verification passed:
   1,491 tests passed, 0 failed, 35 ignored, including all four drift guards;
   formatting, strict Clippy and `cargo check` passed. Hashes of 270 source/input
-  files remained unchanged throughout the gates. Candidate review, closure
-  and push are pending. Evidence lives
+  files remained unchanged throughout the gates. Fresh independent review
+  **PASS**, with no findings or evidence gaps, covers
+  [b68625f](https://github.com/strefethen/arazzo-cli/commit/b68625fa8934c2e6aa6fbb8b253ff7d8bf94c2a1)
+  **(local; not pushed)**. The reviewer independently reran both retained
+  binaries for all 21 scenarios and confirmed equivalent results. Evidence lives
   at `/private/tmp/arazzo-maintainer-20261028/ac-df1d6/` and the ticket retains
   the exact execution contract. The harness has no native per-criterion progress
   tool; `tkt` and the evidence packet remain the durable execution record.
 - The repository intentionally ignores `god-files.md`; its local inventory is
   updated without changing that policy. Remaining replay/generation/validation/
   test/schema responsibilities are still debt, not declared resolved here.
-- Next action: commit the verified candidate and obtain fresh candidate review.
+- Checkpoint **2026-10-28 13:26 PDT / 20:26 UTC**: one source outcome delivered,
+  one of two review rounds used, about 11 minutes consumed from conservative
+  kickoff. `tkt` owns revision-safe closure and the final lifecycle state.
+- Publication is held by the existing SDLC check: Fable's preceding
+  [841aa5c](https://github.com/strefethen/arazzo-cli/commit/841aa5ccb37afc9b84540565b696e2cbb7b67718)
+  and [8e3d5cb](https://github.com/strefethen/arazzo-cli/commit/8e3d5cb8b968315458af8401145415a2679cea11)
+  are still the candidate of active
+  [ac-b0044](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b0044) at this
+  checkpoint. They remain outside this team's review and publication authority.
+  Fable continues its work; no interruption or Steve decision is needed.
+- Next structural increment: refine runtime operation projection ownership
+  ([ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05)) against
+  current code and reservations in the next renewed cycle. The two-child
+  ownership epic remains open; no runtime extraction is claimed here.
