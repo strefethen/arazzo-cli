@@ -18,6 +18,7 @@ mod serve;
 mod test_runner;
 mod trace;
 mod transport;
+mod workflow_catalog;
 
 use std::ffi::OsString;
 use std::fs;

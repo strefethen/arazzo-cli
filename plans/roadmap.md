@@ -1,7 +1,8 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Tracking: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
+Current cycle: [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6).
+Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
 easy to understand and extend. Each delivery cycle should demonstrate a useful
@@ -51,7 +52,47 @@ Staff, not a claim that Steve accepted every future proposal in this document.
   closure. Record push status separately. The roadmap and follow-up captures
   are linked and reviewed. Long-term ambition is not a completion claim.
 
-## Now — cycle 1
+## Now — cycle 2: CLI catalog ownership
+
+Steve renewed execution on 2026-10-28 in the same chat:
+
+> Continue with the next roadmap cycle, starting with CLI catalog separation while Fable works on Kafka. Keep tkt updated and carry the work through review and completion.
+
+He also reinforced the architectural requirement:
+
+> let's ensure the code base is growing using best practices, separation of concerns, logically organized fuctions and features. We're not creating nor growing god modules. Let's do this right like a rust senior architect would
+
+**Cycle 2 v1:** complete [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6)
+under [epic:ac-d0d1d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d).
+This contained outcome stays within `arazzo-cli`: a private `workflow_catalog`
+owner handles catalog discovery and unique-workflow lookup; command dispatch
+delegates, and `output` retains presentation. Only two internal entrypoints are
+exposed. There is no callback into the handler facade, generic discovery layer,
+new crate, or public contract expansion. Review assesses cohesion and dependency
+direction, rather than treating a smaller file as proof of good architecture.
+
+- Authority: Steve's explicit renewal covers refinement, implementation,
+  verification, independent review, completion and the existing SDLC push checks.
+  The first cycle's compatibility, release/deployment and paused-work boundaries
+  continue to apply. No numerical active-plan limit applies.
+- Team: Chief of Staff owns the ticket, roadmap, legacy-owner accounting and
+  integration; a frontier architecture agent validates the boundary; a Sol
+  implementation agent owns the three Rust files; a separate frontier reviewer
+  assesses the exact candidate. At most three agents run alongside the Chief
+  of Staff, with one source implementer in this team.
+- Coordination: Fable retains the Kafka/AsyncAPI lane on `main`. This cycle's
+  source writes are disjoint from Fable's output/docs/examples work. Shared
+  builds and Git are coordinated; reviews identify exact commits.
+- Budget: one source ticket plus its tracking documentation, at most two
+  candidate review rounds, and three elapsed hours from **13:15 PDT / 20:15 UTC**
+  on 2026-10-28 (conservative kickoff). Hard expiry **16:15 PDT / 23:15 UTC**.
+  Stop at completion or a required gate; preserve the checkpoint on expiry.
+- Completion proof: unchanged real CLI behavior, required workspace gates,
+  independent review of the narrow ownership boundary and exact source,
+  revision-safe ticket closure, and a publication checkpoint. The runtime
+  extraction remains a later increment and this cycle does not close the epic.
+
+## Delivered — cycle 1
 
 | Outcome | Epic and ticket | Owner | Observable proof |
 |---|---|---|---|
@@ -76,8 +117,8 @@ candidate is held until the existing SDLC push checks pass.
 
 New epic: **Clarify runtime and CLI responsibility ownership**,
 [epic:ac-d0d1d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d0d1d).
-These are captured proposals awaiting grounded Tier 2 refinement, not ready
-implementation contracts. Keep the eight existing crates.
+Keep the eight existing crates. The CLI capture is selected for cycle 2;
+the runtime capture still requires grounded Tier 2 refinement.
 
 1. [ac-67f05](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-67f05): move
    resolved-operation projection and server-refusal helpers to the runtime's
@@ -87,12 +128,10 @@ implementation contracts. Keep the eight existing crates.
    backward dependency. Preserve routing, server selection, refusal text and
    no-send behavior. Verify through operation ID/path/server tests and drift
    guards before considering the larger HTTP draft.
-2. [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6): separate
-   catalog/show lookup from broad CLI dispatch. At the same baseline,
-   `handlers.rs::catalog_workflows`, `show_workflow` and `find_workflow` own
-   related selection behavior. Give them one cohesive owner inside `arazzo-cli`;
-   retain rendering in `output.rs` and existing shallow discovery semantics.
-   Existing `cli_json_discovery` and output-contract tests provide the proof.
+2. [ac-df1d6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-df1d6): selected
+   for cycle 2 above, refreshed against `841aa5c`. Preserve the existing shallow
+   discovery semantics, errors and rendering through focused tests and identical
+   before/after CLI transcripts.
 
 The older **Maintainability** [epic:ac-0c8d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0c8d)
 has a specific RequestBody-field retirement contract and is not repurposed.
@@ -148,8 +187,29 @@ readiness, and future dates are not promised before scope and proof are settled.
 - Evidence root for this local run:
   `/private/tmp/arazzo-maintainer-20261028/`. Ticket closeout records retain
   exact candidates, evidence pointers, review verdicts, and publication status.
-- Next action: publish this roadmap checkpoint through its tracking ticket;
-  for the next renewed cycle, refine the two structural captures against then-current
-  code and live Fable reservations. No additional source implementation is started.
+- Historical next action: publish this roadmap checkpoint and await renewal.
+  The roadmap landed as `35771c4`; Steve subsequently renewed cycle 2 above.
 - No release, deployment, public API expansion, or paused-ticket resumption is
   authorized by this checkpoint. Unrelated untracked work is preserved.
+
+## Checkpoint — cycle 2
+
+- Started from `841aa5c` with Fable's Kafka candidate present and outside this
+  ticket's mutation scope. Architecture review approved the private feature
+  owner. Ticket lint, grounded readiness, queue eligibility and live reservation
+  checks passed. The extraction removes catalog policy from handlers (758 to 617
+  lines) into a 163-line private owner. These counts describe the move; the
+  responsibility and dependency checks establish its architectural value.
+- All 21 before/after CLI scenarios have identical stdout, stderr and exit status;
+  focused discovery/catalog/show tests pass. Workspace verification passed:
+  1,491 tests passed, 0 failed, 35 ignored, including all four drift guards;
+  formatting, strict Clippy and `cargo check` passed. Hashes of 270 source/input
+  files remained unchanged throughout the gates. Candidate review, closure
+  and push are pending. Evidence lives
+  at `/private/tmp/arazzo-maintainer-20261028/ac-df1d6/` and the ticket retains
+  the exact execution contract. The harness has no native per-criterion progress
+  tool; `tkt` and the evidence packet remain the durable execution record.
+- The repository intentionally ignores `god-files.md`; its local inventory is
+  updated without changing that policy. Remaining replay/generation/validation/
+  test/schema responsibilities are still debt, not declared resolved here.
+- Next action: commit the verified candidate and obtain fresh candidate review.
