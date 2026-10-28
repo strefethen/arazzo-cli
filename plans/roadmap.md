@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-e767c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e767c).
+Latest source cycle: [ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,16 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: strict version syntax and supported feature-set validation
-([ac-e767c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e767c)). Malformed
-versions and unsupported major/minor pairs now fail validation, while patches
-within 1.0 and 1.1 remain compatible. Independent review passed; the source is
-committed locally. Publication is held by Fable’s earlier paused conformance
-candidate. The remaining source-descriptor work needs Steve’s public-output choice
-in [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367);
-independent ready work can continue.
+Latest delivery: bounded regex-result caching with compilation and matching
+outside the map lock
+([ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc)). A private
+per-engine owner retains up to 256 successful or failed compilations. Oversized
+keys still evaluate without retention. Independent review passed; source is
+committed locally and publication remains held by Fable’s earlier paused candidate.
+Next refinement candidate: canonical Step-output reference extraction
+([ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e)). The separate
+source-type decision in
+[ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367) remains open.
 
 ## Direction and initial cycle
 
@@ -212,7 +214,26 @@ testing obligations; the child is a prerequisite, not a replacement. One private
 classification. The validator facade delegates and shrinks; no runtime or public
 output shape changes.
 
-## Next dependency checkpoint — source descriptors and ordinary diagnostics
+## Delivered — cycle 6: bounded regex cache ownership
+
+[ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc) removes cache
+resource and locking policy from Criterion evaluation. The new private sibling
+retains the existing matching signature, error text and per-engine isolation.
+Compile counters, eviction/boundary tests and a real overlapping HTTP workflow
+prove reuse, bounds and serial/parallel semantic equivalence. This is a reliability
+fix and ownership improvement, without a new condition language or throughput claim.
+
+## Next independent candidate — canonical Step-output references
+
+[ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e) is queue-eligible
+under the accepted conformance plan, with its three prerequisites completed. Its
+intended outcome is one syntax-owned API for exact local Step-output occurrences,
+so dependency consumers can use the existing expression parsers. This is a
+refinement candidate, not a new implementation-readiness claim. Recheck its frozen
+surface, current parser ownership, file operations and live reservations before
+starting; no part of it is delivered by the regex-cache change.
+
+## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
 The current dependency chain runs from ordinary Criterion error reporting
 ([ac-1946c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1946c)) through
@@ -258,7 +279,7 @@ readiness, and future dates are not promised before scope and proof are settled.
 |---|---|---|
 | Numerical active-plan limit removed by Steve | Updated [epic:ac-a0648](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a0648) / [ac-690a3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-690a3) to remove the obsolete count/capacity requirement. They retain lifecycle disposition review and acceptance for actual moves. | Plan count does not block new work. No speculative mass archive or re-request for approval of the removed limit. |
 | Old ticket file declarations need migration before reservations | Chief of Staff authorizes exact-ticket, reviewed operation-map migration with recovery evidence. | Mechanical overhead handled by the team; no Steve decision required. |
-| Regex-cache ticket cites a deleted expression implementation | Refresh [ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc) against current runtime code before dispatch. | Investigation/refinement, not a reason to start from stale instructions. |
+| Regex-cache ticket cited a deleted expression implementation | Resolved in cycle 6: [ac-e81bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e81bc) retains the selected policy and original criteria/tests, grounded in current runtime owners. | Exact-ticket migration and bounded refinement completed without a new Steve gate. |
 | Test dry-run contract conflicts with itself | [ac-e27f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e27f8): resolve always-present `dryRun` versus unchanged ordinary JSON. **Ask Steve for the public-output choice with a concrete recommendation.** | Blocks that feature only. |
 | MCP implementation policy has remaining gaps | [ac-950a8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-950a8): prepare bounded platform/dependency, address-exception, backpressure and aggregate-memory decisions. **Ask Steve for remaining security choices**, not decisions already accepted. | Blocks hardening implementation; accepted root and size/time limits are retained. |
 | OpenAPI/schema work is explicitly paused | [ac-6a778](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6a778), [ac-93d90](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-93d90): retain Value-based ingestion and synchronous first-error validation decisions; finish missing contracts/proof, then **ask Steve for resumption**. | No automatic resumption from the broad maintainer request. |
@@ -427,3 +448,44 @@ readiness, and future dates are not promised before scope and proof are settled.
   in [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367); its parent
   is paused with all original acceptance criteria and testing obligations retained.
   No nullable output schema, source-kind inference or fallback is implemented.
+
+## Checkpoint — cycle 6
+
+- Source delivered in
+  [7dc80ba](https://github.com/strefethen/arazzo-cli/commit/7dc80bac8c957c0f8eb5b979b24ef91965fcc608)
+  **(local; not pushed)**. Fresh independent review **PASS**, one of two source
+  review rounds used. The fix bounds retained regex results to 256 per engine,
+  excludes keys over 4,096 bytes from retention while still evaluating them,
+  reuses failures, and compiles/matches outside the map mutex.
+- Nine cache tests pass in debug and release. The new integrated HTTP workflow
+  passes in both modes, proves three overlapping requests, and compares complete
+  serial/parallel trace records with only elapsed duration normalized after an
+  independent bound check. The release parallel-engine and recording suites add
+  41 passing tests. Existing Criterion, helper and typed-interpolation tests pass.
+- Full workspace: **1,530 passed, 0 failed, 35 ignored**. Formatting, compilation,
+  strict all-target/all-feature Clippy and all four drift guards pass unchanged.
+  All 274 tracked source/fixture inputs match the immutable candidate; four
+  vendored specification files remained unchanged during the final gates.
+- Private `regex_cache.rs` owns retention and locking; Criterion evaluation and
+  existing tests are byte-identical after removing its old cache block. The
+  evaluation owner shrinks from 731 to 704 lines. Engine construction keeps the
+  existing compatibility re-export. No dependency, public API, diagnostic,
+  accepted pattern or Fable path changed; no throughput gain is claimed.
+- Decided by recommendation: replace historical references to the deleted
+  expression-cache implementation with the already-selected explicit policy and
+  current consumer paths. Keep every original acceptance/testing item. Compile
+  counts prove sequential reuse; concurrent cold misses may duplicate compilation
+  as the original design permits. Duration-only trace normalization preserves all
+  semantic fields and asserts sequence/order, fixed headers and real overlap.
+- Evidence: `/private/tmp/arazzo-maintainer-20261028/regex-cache-cycle/`.
+  The initial sandbox socket denial was resolved by authorized localhost access;
+  no failing verification was waived. The journal adds before/after behavior,
+  responsibility boundaries and exact proof. Desktop/mobile checks and committed
+  HTML hash binding are retained with the ticket’s final evidence.
+- Publication remains held by Fable’s paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate in
+  main’s unpublished history. The runtime-audit epic retains its other obligations.
+  Next refinement candidate: canonical Step-output reference extraction
+  [ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e). Its three
+  prerequisites are completed, but current source grounding and live clearance
+  must pass before a new start. The source-type decision and other pauses remain.
