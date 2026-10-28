@@ -625,9 +625,10 @@ independently reviewed).** Step `correlationId` is a *literal-or-expression
 value*, the same field mode as a Parameter `value`. This is the best-supported
 reading of the vendored text, not specification wording: the fixed-field table
 types it `string` and says it "has to be in-sync with correlationId defined in
-the AsyncAPI document" (`#stepCorrelationId`); the tool-behavior clause makes
+the AsyncAPI document" (`#stepCorrelationId`); the asynchronous-success clause makes
 it executable ("If correlationId is specified, only messages matching the
-correlation identifier are considered", `#tool-behavior`); and both Step
+correlation identifier are considered", `#defining-success-for-asynchronous-steps`;
+`#tool-behavior` owns the implicit-dependency rule used below); and both Step
 examples write it as `$inputs.correlationId` while the paired `send` step puts
 the same expression into a header. A plain string is therefore a literal
 identifier, a complete Runtime Expression resolves to its typed value, and a
@@ -635,7 +636,7 @@ braced template renders to a string; the canonical expression-string
 classifier owns that split. The row freezes:
 
 - *Field mode:* literal-or-expression, like `#parameterValue`. Not opaque
-  (the tool-behavior clause requires filtering) and not a required Runtime
+  (the asynchronous-success clause requires filtering) and not a required Runtime
   Expression (the field is typed `string` and a fixed identifier is a
   legitimate value).
 - *Parser and evaluator ownership:* the syntax owner
@@ -650,17 +651,39 @@ classifier owns that split. The row freezes:
   lists `correlationId` as an expression site with this mode.
 - *Runtime consumer:* the AsyncAPI receive executor. The expected value is
   the resolved Step value; the actual value is read from each received
-  message at the location named by the AsyncAPI Correlation ID Object of the
-  operation's effective message(s) (`location` is an AsyncAPI runtime
-  expression over `$message.header` / `$message.payload`, vendored AsyncAPI
-  3.0.0 "Correlation ID Object"). Messages whose located value does not equal
-  the expected value are skipped without evaluating criteria; the first match
-  is the step's message; the step `timeout` bounds the whole wait. Comparison
-  is scalar string equality (the expected value rendered as text; a located
-  non-scalar never matches). A receive operation whose effective messages
-  declare no Correlation ID Object cannot honour the field and is a
-  configuration error, because the Step value must be "in-sync" with a
-  document-side definition.
+  message at the location named by the AsyncAPI Correlation ID Object
+  (`location` is an AsyncAPI runtime expression over `$message.header` /
+  `$message.payload`, vendored AsyncAPI 3.0.0 "Correlation ID Object",
+  resolved per message with the Traits Merge Mechanism: the message's own
+  object, else the last declaring trait, one local hop into
+  `components.correlationIds` allowed). Messages whose located value does
+  not equal the expected value are skipped without evaluating criteria; the
+  first match is the step's message; the step `timeout` bounds the whole
+  wait.
+  *Which location applies (repository choice, this release):* the effective
+  message set is every message of the channel, for both target spellings,
+  because the accepted Kafka scope refuses strict `messages` subsets and
+  cannot tell message types apart on the wire. The step can therefore be
+  honoured only when every channel message resolves to the **same**
+  `location` text; that one location is used for every record. Channel
+  messages that resolve to different locations are refused as unsupported
+  (`RUNTIME_UNSUPPORTED_ASYNCAPI_TRANSPORT`); a channel where some but not
+  all messages define one, or none does, is a configuration error
+  (`RUNTIME_MESSAGE_TRANSPORT_CONFIG`), because the Step value must be
+  "in-sync" with a document-side definition that identifies every message.
+  Trying several locations per record is excluded: a value found at another
+  message's location could belong to a different message type.
+  *Comparison (repository choice; neither specification defines it):* both
+  sides are rendered to text and compared for exact equality. Expected:
+  `Value::String` as-is; `Number` and `Bool` as their JSON text; `Null`,
+  arrays, and objects are a configuration error raised before any fetch
+  (the identifier must be a scalar). Located: a missing location, `Null`,
+  arrays, and objects never match; `String` as-is; `Number` and `Bool` as
+  their JSON text. So expected `"42"` matches a located number `42` and a
+  located header string `42`, which is the pairing the Step examples rely on
+  (an input placed in a header by the send step, read back from a header or
+  payload field). Numbers render through serde_json's canonical text, so
+  `42.0` is not `42`; this is documented, not clever.
 - *Direct typed Engine callers:* the model keeps `Step::correlation_id` as
   the authored string; evaluation happens only in the receive executor, so
   typed callers see no behaviour change until that executor accepts the
