@@ -53,7 +53,6 @@ printf '%s\n' "$build_status" > "$evidence/build.exit"
 test "$build_status" -eq 0
 python3 -c 'import json,pathlib,sys; rows=[json.loads(s) for s in pathlib.Path(sys.argv[1]).read_text().splitlines() if s.strip()]; paths={r["executable"] for r in rows if r.get("reason")=="compiler-artifact" and r.get("target",{}).get("name")=="root_load" and "bench" in r.get("target",{}).get("kind",[]) and r.get("executable")}; assert len(paths)==1, paths; p=pathlib.Path(paths.pop()).resolve(); assert p.is_file(),p; print(p)' "$evidence/build.jsonl" > "$evidence/executable.path"
 binary="$(cat "$evidence/executable.path")"
-"$binary" --help > "$evidence/benchmark.help" 2>&1
 ```
 
 Stop if any step fails. Do not guess a hashed filename or choose an older binary
@@ -62,6 +61,9 @@ build output separate from process measurements. `cargo bench` uses the bench
 profile, inheriting release optimization with this workspace's bench debuginfo.
 The command enables default features only, with no explicit target override.
 The benchmark uses Rust's default system allocator; it adds no allocator.
+This package-scoped Criterion 0.5.1 build enables clap's `std` feature without
+its `help` feature. Use the supported `--test` smoke invocation below to verify
+the discovered executable; `--help` exits with an argument error.
 
 ## Record provenance before measuring
 
