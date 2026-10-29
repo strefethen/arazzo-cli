@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-30661](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-30661).
+Latest source cycle: [ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,12 +44,14 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: parse supplied OpenAPI bytes
-([ac-30661](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-30661)). Library
-callers can parse an existing byte buffer without reopening a filename. The
-shared parse/classification path preserves existing file-wrapper messages and
-version behavior. This is a library capability and loader-integration groundwork;
-MCP adapters and security policy remain separate, gated work.
+Latest delivery: caller-owned OpenAPI source loading
+([ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b)). Library
+callers can supply bytes or reject a resolved local-source read through
+`EngineBuilder::source_document_loader`. Resolution and identity matching stay
+in `DocumentSet`; byte acquisition has a focused owner; parsing and indexing
+retain their existing pipeline. Native behavior and exact diagnostics are
+preserved. This is a library capability and MCP-integration groundwork, with
+no policy, adapter or AsyncAPI behavior change.
 
 Terminal-event repair [ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180)
 is paused before implementation. Frontier readiness found incompatible red-test
@@ -73,9 +75,9 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b), an injectable
-runtime source-document loader. The owning plan explicitly exempts this foundation
-from the MCP security-policy gate after exact-ticket frontier readiness review. Runtime inheritance
+[ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5), clearing CLI
+rustdoc placeholder warnings while preserving both command help surfaces.
+Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
@@ -958,5 +960,43 @@ parser owner remains cohesive, with focused `openapi_bytes` integration proof.
   its documentation commit. This cycle uses one implementation and one review
   round within the 08:57–11:57 UTC bound. Both epics remain open. Next independent
   readiness assessment: [ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b).
+- Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
+  candidate without review PASS. No push or release is claimed.
+
+
+## Delivered — cycle 17: caller-owned OpenAPI source loading
+
+[ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b), under
+[epic:ac-852d1](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-852d1), adds
+the public `SourceDocumentLoader` and its builder injection point. The loader
+owns byte acquisition after existing URI resolution and identity matching.
+Its native implementation retains the full read-error message and absent error
+source; an injected error passes through unchanged, without a second read.
+
+- Source [2830758](https://github.com/strefethen/arazzo-cli/commit/28307580d8d8f4839921337a023e927ef713ff0b) **(local; not pushed)** passed fresh-context
+  independent review in round 1. Four native compatibility cases passed before
+  production edits; all 12 focused loader cases pass afterward, including exact
+  arguments/count, injected indexing, denial, identity bypass and external-ref
+  refusal. The runtime crate passes **695 tests, 0 failed, 30 ignored**.
+- Workspace formatting, compilation, strict Clippy, runtime public docs and
+  full tests pass: **1,631 passed, 0 failed, 35 ignored**. The 292 tracked build
+  inputs match the reviewed candidate; four vendored HTML inputs stayed stable.
+- `source_document.rs` is the single new behavior owner; `document_set.rs`
+  delegates its OpenAPI read; the builder wires it; the facade only exports it.
+  No watched God-file growth, dependency or error-code change. Fable's separate
+  AsyncAPI loader is byte-identical, and its constructor remains compatible.
+- Contract revision `555d2b8b7b996c445bafd222df985fec912ca9dc8c867d14fe4e9d82f79b1a7e`
+  and raw proof live in `/private/tmp/arazzo-maintainer-20261029/cycle17-loader/`.
+  Decided by recommendation: scope the stale sole-read claim to OpenAPI, keep
+  the AsyncAPI caller's constructor through a private setter, and correct the
+  read-only anchor. Acceptance and testing requirements were unchanged. The
+  plan §8 foundation exemption passed exact-ticket frontier readiness review.
+- This is a library capability and integration foundation, not completed MCP
+  containment. The security epic stays open; downstream policies retain their
+  gates. Existing runtime decisions and pauses remain unchanged.
+- The single delivery HTML is verified at desktop/mobile widths and bound to
+  its documentation commit. One source slice and one review round fit the
+  09:55–12:55 UTC bound. Next independent readiness assessment:
+  [ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5).
 - Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
   candidate without review PASS. No push or release is claimed.
