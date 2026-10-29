@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b).
+Latest source cycle: [ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,21 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: caller-owned OpenAPI source loading
-([ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b)). Library
-callers can supply bytes or reject a resolved local-source read through
-`EngineBuilder::source_document_loader`. Resolution and identity matching stay
-in `DocumentSet`; byte acquisition has a focused owner; parsing and indexing
-retain their existing pipeline. Native behavior and exact diagnostics are
-preserved. This is a library capability and MCP-integration groundwork, with
-no policy, adapter or AsyncAPI behavior change.
+Latest delivery: literal JSON-input documentation
+([ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5)). Both
+`--input-json` placeholders now render as code, with real run/test help proof.
+This is a documentation repair, with no runtime, parser or schema change.
+The two unrelated AsyncAPI server placeholders still fail strict documentation
+generation; [ac-55819](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-55819)
+owns that pre-existing failure. Fable's text is untouched.
+
+Default-header reporting [ac-f7790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f7790)
+failed next-cycle readiness before implementation. It requires nonexistent
+trace-schema generation and rejects the provenance snapshot field it mandates.
+[ac-e1760](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e1760) asks Steve to
+approve a bounded testing correction. Its private design must also preserve
+existing replay matching, and one shared-type initializer needs Fable lane
+coordination. The contract remains unchanged and the ticket is paused.
 
 Terminal-event repair [ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180)
 is paused before implementation. Frontier readiness found incompatible red-test
@@ -75,8 +82,8 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5), clearing CLI
-rustdoc placeholder warnings while preserving both command help surfaces.
+[ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea), aligning
+generation's relative-server diagnostic with existing runtime URI behavior.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
@@ -998,5 +1005,44 @@ source; an injected error passes through unchanged, without a second read.
   its documentation commit. One source slice and one review round fit the
   09:55–12:55 UTC bound. Next independent readiness assessment:
   [ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5).
+- Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
+  candidate without review PASS. No push or release is claimed.
+
+
+## Delivered — cycle 18: literal JSON-input documentation
+
+[ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5) is a standalone
+documentation repair. The two Run/Test doc comments mark the existing syntax as
+code; a small extension to existing help assertions covers both commands.
+No responsibility, dependency, parser, schema, snapshot or runtime change.
+
+- Source [9b687ae](https://github.com/strefethen/arazzo-cli/commit/9b687ae012117f0479465e08fead866572fea804) **(local; not pushed)** passed fresh independent review
+  in round 1. Three focused help tests pass; real before/after help differs only
+  in backticks; generated HTML contains both escaped literal code spans.
+- Formatting, workspace check, strict Clippy and full tests pass: **1,631
+  passed, 0 failed, 35 ignored**. All 292 tracked build inputs match the reviewed
+  source and four vendored HTML inputs stayed stable.
+- Strict workspace rustdoc was run exactly as required and still exits **101**.
+  Before edits it reported two JSON errors plus two AsyncAPI server-key errors;
+  afterward only the same server-key pair remains. Decided by recommendation
+  under the explicit pre-existing-failure exception: attribute only that pair to
+  open [ac-55819](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-55819).
+  The reviewer assessed original and amended contracts plus both raw logs.
+  Normal CLI docs render successfully with those known warnings. Global
+  warning-free documentation is not claimed; no warnings were suppressed.
+- Contract revision `b089d822c2b4882030b2c16e326767ceaf83e9811b8182c77d4231c1d46aa823`
+  and full evidence are in `/private/tmp/arazzo-maintainer-20261029/cycle18-cli-rustdoc/`.
+  Metadata migration preserves the two explicit Modify paths. The existing
+  mixed test owner received a bounded help repair, with no new concern or
+  changed inventory disposition. Fable's server help and Kafka code are untouched.
+- The frontier assessment for [ac-f7790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f7790)
+  found stale ownership/schema anchors, incomplete file scope and a replay
+  compatibility hazard. Its test correction is gated by
+  [ac-e1760](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e1760); it is paused,
+  with no contract-section changes or implementation. Other pauses remain intact.
+- The single delivery HTML passed desktop/mobile checks and is hash-bound to
+  its documentation commit. One source slice and one review fit the
+  10:55–13:55 UTC bound. No epic membership was invented or widened. Next
+  independent readiness: [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea).
 - Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
   candidate without review PASS. No push or release is claimed.
