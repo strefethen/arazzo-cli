@@ -2,6 +2,7 @@
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
 Latest source cycle: [ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6).
+Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +45,15 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: repeatable release-CLI performance evidence
-([ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6),
-[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)). One build
-identifies the exact executable; three unchanged workloads each run three warmups
-and twenty measured invocations. Raw failures and provenance are retained, while
-successful samples produce median/p95. Eight deterministic scenarios, the real
-release baseline and repository gates pass with independent review. This is
-measurement groundwork, with no speedup, threshold or hosted-CI claim.
+Latest delivery: a reviewed engine workload benchmark contract
+([ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d),
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)). Six
+workload families define bounded fixtures, correctness/failure controls, timing
+boundaries, resource accounting and provenance. Existing CLI/Criterion owners
+remain separate from proposed validate, runtime and OS resource units. Independent
+review passed; no benchmark implementation or new performance measurements were
+delivered. [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12)
+asks Steve to accept the design before unit-scoped implementation planning.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -97,8 +99,10 @@ reserved embedded-expression candidates in literal fallback.
 approve precise wording that retains direct literal text, required-expression
 rejection and every existing test. Source-anchor and manifest-total scope repairs
 are routine; the exact claim remains gated. Next independent readiness target:
-[ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d), a bounded
-engine/resource benchmark assessment, with no implementation authority inferred.
+[ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5), structured
+workflow-output expression warnings in `run --json`, after fresh source grounding
+and start clearance. The completed benchmark design awaits
+[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12).
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
@@ -1203,3 +1207,42 @@ semantics, Kafka transport, dependency or CI workflow changed.
 - Publication remains held by the failed-review ancestor in
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's lane,
   existing pauses and unrelated untracked files remain untouched. No push/release.
+
+## Delivered — cycle 23: realistic engine benchmark design
+
+[ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d) completes the
+assessment in [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62).
+The [proposal](assessments/arazzo-engine-workload-benchmarks.md) establishes
+workload and measurement contracts, with no production, script or CI changes.
+
+- [bc76edd](https://github.com/strefethen/arazzo-cli/commit/bc76edd95668f3006245c4d79b05c06ee9b4cda1)
+  **(local; not pushed)** passed independent fresh-context Astra review, round 1
+  with no findings. A separate frontier architect authored the assessment;
+  Chief of Staff retained ticket, delivery and publication duties.
+- Six families: document loading, expression-heavy execution, wide DAGs, large
+  HTTP bodies, retries and cancelled slow I/O. Each names bounded fixtures,
+  exact correctness controls and measurement boundaries. CPU/maximum RSS cover
+  a whole worker; cancellation ends at API completion, with no task-join claim.
+- The validate/runtime/OS measurement split preserves existing CLI and Criterion
+  owners. Explicit platform limits, raw outcomes and paired same-host comparisons
+  support later evidence. Thresholds require measured baselines and acceptance;
+  failures and unsupported behavior never become performance success.
+- All three testing obligations passed independent design inspection. All **298
+  executable/spec/script inputs** match cycle22 verified content (fmt, workspace
+  check, strict Clippy, 1,638 passing tests and eight shell scenarios). These
+  checks were reused, not rerun; no new measurements or Linux execution claimed.
+  Assessment links, whitespace and candidate hash checked.
+- Decided by recommendation: repair obsolete readiness metadata, legacy file
+  declarations and the removed scheduler anchor. Plain retries are currently
+  parallel-eligible; original AC/testing and future acceptance gate are unchanged.
+  Retained preflight `7afadca2eabcdd641375c15fbd9676c1ce961dcee7003b21ada3b30cdb6683d8`;
+  evidence packet `/private/tmp/arazzo-maintainer-20261029/cycle23-benchmark-design/`.
+- [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12) asks Steve
+  to accept the reviewed contract and authorize unit-scoped planning. The next
+  independent readiness target is [ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5).
+  The single delivery log identifies this as design groundwork and receives
+  desktop/mobile QA. One assessment slice remains within 16:02–19:02 UTC and
+  the two-review limit; existing pauses are preserved.
+- Publication remains held by failed-review ancestor
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's lane,
+  unrelated untracked files and runtime behavior remain untouched. No push/release.
