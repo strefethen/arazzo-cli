@@ -75,7 +75,7 @@ impl Engine {
     /// Resolves an `operationId` to the `(method, path)` it names, discarding
     /// the source description that owns it. Preserved for callers that need
     /// only the pair; the engine itself uses
-    /// [`Self::resolve_operation_target`], because the owning source is what
+    /// `Self::resolve_operation_target`, because the owning source is what
     /// decides which server the request is sent to.
     pub fn resolve_operation_id(
         &self,
