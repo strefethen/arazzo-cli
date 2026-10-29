@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: decomposed
 epic: ac-8ba62
 created: 2026-10-29
 ---
@@ -184,7 +184,10 @@ review, without claiming a threshold or the six-family program complete.
 
 ---
 
-**Disposition:** Accepted — bounded independent review PASS, round 1, for
+**Disposition:** Decomposed into
+[ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a) under
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62).
+Bounded independent review PASS, round 1, for
 [d8f502e](https://github.com/strefethen/arazzo-cli/commit/d8f502ee9a13c6dc08b2f190e061fdf166b60da1)
 (local; not pushed). Review evidence is recorded in
 [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).

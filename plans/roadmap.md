@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26).
+Latest source cycle: [ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -46,36 +46,28 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: debug checkpoint cancellation and client-loss cleanup
-([ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26),
-[epic:ac-abcd5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-abcd5)).
-Cancellation releases the current pause and prevents later checkpoint stops;
-DAP cleanup runs on EOF, reader-channel loss and transport failures while
-preserving the original error. Runtime gates and the existing adapter session
-owner retain their responsibilities. All required gates and 1,677 workspace
-tests pass; independent candidate review passed without findings. The source remains local
-under the existing publication hold. Workflow-output reporting from cycle24
-remains complete; this repair changes no public API or DAP message schema.
+Latest delivery: independently checked root parse/validation measurements
+([ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a),
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)).
+The dedicated Criterion target consumes fixed 10/100/1,000-step fixtures and
+times exactly one existing public parser call. Complete-model and zero-warning
+checks run outside timing on every result. Private benchmark support owns
+fixture expectations; production modules, public APIs and Fable's lane are unchanged.
+Independent source review and two fresh optimized runs passed. Formatting,
+strict Clippy and 1,685 workspace tests pass (0 failed, 35 existing ignores).
+Source publication remains held by the existing failed-review ancestor.
 
-The preceding assessment delivered a reviewed engine workload benchmark contract
-([ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d),
-[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)). Six
-workload families define bounded fixtures, correctness/failure controls, timing
-boundaries, resource accounting and provenance. Existing CLI/Criterion owners
-remain separate from proposed validate, runtime and OS resource units. Independent
-review passed; no benchmark implementation or new performance measurements were
-delivered. Steve explicitly accepted the design and unit-by-unit planning on
-2026-10-29 through [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12),
-now completed. The [root parse/validation plan](current/arazzo-root-load-benchmark.md)
-has passed independent review. Its three bounded fixtures, single-call timing,
-independent model checks and benchmark-only ownership are grounded in current APIs.
-It remains Draft pending the explicit Criterion dev-dependency decision in
-[ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448) and subsequent
-unit-contract acceptance/decomposition. The package warnings and recommendation
-are in the [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md).
-No implementation ticket is labeled ready, and no performance result is claimed.
-Runtime workload ownership, OS measurement and regression thresholds remain
-separate units and decisions.
+Steve accepted the six-family benchmark design and unit-by-unit planning in
+[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
+approved reuse of locked Criterion 0.5.1 in
+[ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448).
+The [root plan](current/arazzo-root-load-benchmark.md) was accepted and decomposed
+under the standing mandate. The [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md)
+retains its policy/review/continuity warnings alongside that approval.
+No dependency version, checksum, feature or production edge changed.
+The other five workload families, OS measurements and regression thresholds
+remain separate units and decisions; this slice does not complete the program.
+The preceding debug cancellation/client-loss repair remains complete.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -1414,3 +1406,49 @@ invalidates the measurement; no benchmark implementation or new timing is delive
   the failed-review ancestor in
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still prevents
   publishing the accumulated range. No push, deployment or release occurred.
+
+## Delivered — cycle 27: measure validated root parsing
+
+[ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a) delivers the
+first benchmark implementation under the accepted six-family design.
+
+- Fresh-context Astra contract refinement, disjoint Sol implementation and
+  independent Astra review kept fixture oracles, timing and production parsing
+  in separate owners. The exact cumulative candidate
+  [968b35a..9edb2a9](https://github.com/strefethen/arazzo-cli/compare/968b35abadb2e17c83b41ed4b7e9efa3dea647bf...9edb2a947e2cb98896a3b08942e3c250e65b61ff)
+  **(local; not pushed)** passed round 1 without blocking findings.
+- Three positive roots (718 / 5,488 / 53,188 bytes), one fixed ten-operation
+  source and two negative controls are independently checked. Eight tests perturb
+  model, diagnostics, source resolution and caps. The first incorrect outcome
+  invalidates an invocation. Per-call timing excludes setup, checks and destruction.
+- Two fresh post-review optimized runs each retained 20 native samples per series,
+  raw iterations, confidence intervals, outliers and full build/host/input provenance.
+  Mean times were 70.0/80.0 µs at 10 steps, 526.6/522.6 µs at 100, and
+  5.077/5.190 ms at 1,000. The smallest case varied 14.4% on this shared M1 Max;
+  the other means varied under 3%. These short observations are not an optimization
+  claim, threshold, CLI p95 or isolated-host baseline. All 12,539 / 8,181 requested
+  calls, including warmup, passed; neither invocation reported a failure.
+- Formatting, strict workspace all-target/all-feature Clippy and 1,685 workspace
+  tests pass (0 failed, 35 existing ignores). All 382 executable/spec gate inputs
+  match the reviewed candidate. The test count uses the last result per Cargo
+  target, avoiding double-counting nested harness summaries. The initial sandbox
+  socket-bind failure was resolved by rerunning the required suite with permission.
+- Steve's explicit Criterion approval cleared the only dependency gate. Decided
+  by recommendation: accept/decompose the reviewed single unit within the standing
+  mandate; retain existing Criterion features and packages. No production API,
+  God module, resource limit, CI or Kafka/AsyncAPI source changed. No new code
+  comments were added. The README's unsupported help invocation was repaired
+  before review and the supported smoke check passes.
+- Evidence: `/private/tmp/arazzo-root-benchmark-implementation/` (contract,
+  gates, review and closeout) and `target/root-load-evidence.GWBg4x/`
+  (`run_01`, `run_02`, native statistics and `final-run-summary.json`). The single
+  delivery log explains the new capability, responsibility boundaries and variability.
+  Desktop 1280px and mobile 390px checks pass without horizontal overflow or
+  console warnings/errors; document structure, local links and historical entries
+  were checked. Screenshots and the QA record are retained with the evidence.
+- One implementation outcome and one review fit the 19:34–22:34 UTC bound.
+  Next independent readiness remains
+  [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f); its current
+  source, scope and ownership need inspection. Existing pauses remain intact.
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still blocks
+  publication of the accumulated range. No push, release or deployment occurred.
