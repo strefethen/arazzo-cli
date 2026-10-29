@@ -3,7 +3,7 @@
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
 Latest source cycle: [ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
-Latest planning cycle: [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
+Latest planning cycle: [ac-9731e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9731e).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -66,8 +66,15 @@ implementation ticket closed and its system success condition was observed.
 Acceptance and decomposition followed the standing mandate. The [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md)
 retains its policy/review/continuity warnings alongside that approval.
 No dependency version, checksum, feature or production edge changed.
-The other five workload families, OS measurements and regression thresholds
-remain separate units and decisions; this slice does not complete the program.
+
+The [runtime workload unit](current/arazzo-runtime-workload-benchmarks.md) is now
+independently reviewed and Accepted under the same direction. Next, decompose
+its fixture/service foundation and worker cases into bounded executable slices;
+no new benchmark implementation is claimed. The unit uses existing public
+runtime APIs and dependencies. OS resources/statistics, CI and thresholds retain
+separate ownership and gates.
+Neither the completed root measurements nor this runtime plan complete the
+six-family program.
 The preceding debug cancellation/client-loss repair remains complete.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
@@ -1506,3 +1513,49 @@ with implementation retained uncommitted. It is not a delivered capability.
   were released by parking; source changes are retained for the approved resumption.
   The existing [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
   publication hold remains. No push, deployment or release occurred.
+
+
+## Delivered — cycle 29: reviewed runtime workload unit plan
+
+[ac-9731e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9731e) delivers planning
+under the already accepted six-family benchmark direction, with no source edits.
+
+- A fresh-context Astra architect grounded the plan in public runtime APIs,
+  current scheduler/cancellation behavior, manifests and vendored fixture syntax.
+  A separate fresh-context Astra reviewer passed the immutable candidate
+  [f78863c](https://github.com/strefethen/arazzo-cli/commit/f78863c22f52e2bf3b766692421cff67225f3451)
+  (local; not pushed) in round 1, with no blocking findings or reserved decision.
+- The development-only Cargo example owns bounded fixtures, a sibling loopback
+  service and one-invocation workers. Private modules separate preparation,
+  service/session control, timing/result checks and raw record encoding. No
+  production API, module responsibility or dependency edge grows.
+- Source build, execution and cancellation have explicit start/stop boundaries;
+  independent output/request/error checks invalidate incorrect outcomes. Source
+  build resource counters include its untimed routing proof. Service causal
+  markers are not client completion times. Cancellation ends at public result
+  completion, not an unavailable task-join primitive.
+- Decided by recommendation within the accepted direction: retain CLI validation
+  in setup to avoid a runtime-to-validator development dependency; workers emit
+  raw invocation records while later tooling owns repeats, statistics and OS
+  counters. Fixed configurations and negative/lifetime controls remain required.
+- The Chief of Staff accepts the reviewed unit and directs scoped decomposition
+  under Steve's existing mandate. The plan is **Accepted**, not implemented or
+  system-verified. The next cycle should ground callable interfaces and disjoint
+  file ownership for the selected fixture/service and worker slices. OS-resource
+  tooling, CI and regression thresholds remain separate.
+- Evidence: `/private/tmp/arazzo-cycle29/`, including retained contract, file
+  checks, isolated review dispatch/report and source-preservation proof. All 385
+  executable/spec hashes from cycle 28 are unchanged; its formatting, compilation,
+  strict Clippy and 1,702-test working-tree result is reused, not newly run. No
+  benchmark run or clean-source candidate verification is claimed by this plan.
+- The single delivery log explains the three clocks and separate fixture,
+  service and worker owners. Desktop 1280px/mobile 390px checks pass with no page
+  overflow or console warnings/errors; the comparison table scrolls within its
+  mobile container. All local links, historical sections and scripts/styles are
+  preserved. Acceptance metadata does not alter the reviewed design.
+- This independent planning slice stays within the 21:00–00:00 UTC bound and
+  consumes one review round. The uncommitted schema walker remains paused on
+  [ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0), with exact
+  source hashes preserved. Existing pauses and Fable's lane remain untouched.
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still holds
+  publication of the accumulated range; no push, release or deployment occurred.

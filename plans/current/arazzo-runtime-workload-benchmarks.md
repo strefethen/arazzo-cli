@@ -1,6 +1,6 @@
 ---
-status: draft
-epic:
+status: accepted
+epic: ac-8ba62
 created: 2026-10-29
 ---
 
@@ -325,10 +325,21 @@ worker/service exits. A caller can launch one prebuilt worker, retain its raw
 record and classify success without importing private Rust support or requiring
 a resource/statistics runner. Existing benchmark series remain distinct.
 
-**Disposition:** Draft for bounded independent review. No material product or
-runtime-contract decision is missing under the accepted six-family direction.
-The proposed example layout, external CLI preflight and raw-record boundary are
-recommended unit decisions for acceptance by the authorized parent. This draft
-adds no dependency and requests none. Acceptance/decomposition remain explicit
-lifecycle acts; OS-resource tooling, statistics, CI and numerical budgets remain
-outside this unit and are not cleared by its review.
+**Disposition:** Accepted for scoped decomposition under
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62), 2026-10-29.
+The Chief of Staff accepts this unit and directs its next bounded decomposition
+under Steve's standing [maintainer mandate](../roadmap.md#standing-delegation-and-continuity)
+and explicit unit-by-unit planning acceptance in
+[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12).
+The private example layout and existing API/dependency use stay within that
+accepted direction; no reserved dependency, production contract or policy
+choice is being made. No implementation ticket is started by this disposition.
+
+Independent fresh-context frontier review passed round 1 for
+[f78863c](https://github.com/strefethen/arazzo-cli/commit/f78863c22f52e2bf3b766692421cff67225f3451)
+(local; not pushed), with no blocking findings or unresolved authority gate.
+[ac-9731e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9731e) retains the
+contract and review evidence. This acceptance changes authority metadata only;
+the reviewed design is unchanged. Next: ground executable ticket interfaces and
+file ownership in the selected slice order before implementation. OS-resource
+tooling, statistics, CI and numerical budgets remain outside this unit.
