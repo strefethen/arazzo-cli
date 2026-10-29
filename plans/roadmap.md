@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp).
+Latest source cycle: [ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,12 +44,14 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: one owner for debugger breakpoint resolution
-([ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp),
-[epic:ac-b6f5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b6f5)). Two unused
-TypeScript mapping stubs are deleted; Rust DAP retains sole ownership. This is
-architecture groundwork with no breakpoint behavior change. All required checks
-and independent review passed. Fable's Kafka/AsyncAPI lane is untouched.
+Latest delivery: real debugger regression proof
+([ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86),
+[epic:ac-b6f5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b6f5)). The trivial
+smoke is replaced by an actual Rust DAP/HTTP session and ten direct provider/factory
+tests. All 43 extension tests and workspace gates passed with independent review.
+CI now provisions the adapter before npm test; its hosted run remains unobserved
+under the existing publication hold. No production behavior or packaged-host
+acceptance changed. Fable's Kafka/AsyncAPI source and CI job remain untouched.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -89,8 +91,9 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86), reconciling
-the debugger test contract with the current extension suite before new work.
+[ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a), checking the
+settled grammar-rule evidence contract against current conformance guards before
+new work. No claim/status change or Fable-lane takeover is implied.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
@@ -1089,3 +1092,44 @@ or Rust ownership modules. No new user capability or release readiness is claime
 - Publication remains held by [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f):
   pushing main would publish its ancestor without review PASS. No push or
   release is claimed. Fable source and reservations remain untouched.
+
+
+## Delivered — cycle 20: real debugger regression proof
+
+[ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86) completes
+accepted plan item 7b and its extension CI testing gap. Three focused test files
+own native protocol, configuration-provider and adapter-factory proof. The fake
+smoke is deleted; only the extension CI job changes outside tests. Existing
+diagnostic tests, production code, packages and Fable's Kafka job remain intact.
+
+- [8167039](https://github.com/strefethen/arazzo-cli/commit/8167039fbb45e0c0427d9045fb48900aa3cabaef) **(local; not pushed)** passed fresh-context Astra review in
+  round 1 without blocking findings or evidence gaps. Astra grounded the handoff;
+  Sol implemented the five reserved paths; the parent verified and closed.
+- **43 extension tests pass, zero skips**, including actual loopback HTTP between
+  entry pause and second-step breakpoint, dynamic stack/scope inspection, natural
+  successful completion and correlated disconnect. Ten actual production-method
+  tests pin defaults, errors, executable/argument/cwd selection and coercion.
+- The isolated missing-binary probe fails promptly with the build instruction
+  and no skip. Lint/build, native adapter build, 33 Rust DAP tests, formatting,
+  workspace check, strict Clippy and **1,631 workspace tests; 0 failed, 35 ignored**
+  pass. All 326 source/setup input hashes are stable and candidate-bound.
+- CI ordering/no-skip proof is source inspection, not a hosted run. The extension
+  job uses the pinned Rust setup and builds before npm test, with a bounded
+  20-minute budget. No installed VS Code activation, packaged VSIX acceptance,
+  preview removal, version bump or release is established by this ticket.
+- Decided by recommendation: correct stale zero-coverage/package-script premises,
+  preserve existing tests, narrow package.json to read-only, and record actual
+  smoke deletion. Original Acceptance Criteria and Testing Obligations remain
+  verbatim. Contract preflight revision
+  `9d021b4c1541148a723b00cb2b93b5a3738f63e0c234d9a02a5d4ea5e840e095`;
+  raw evidence and review are in
+  `/private/tmp/arazzo-maintainer-20261029/cycle20-debugger-proof/`.
+- The Debugger epic remains open for its separate remaining documentation/release
+  acceptance member. The single delivery log is checked on desktop/mobile and
+  hash-bound to its documentation commit. One source slice and one review fit
+  the 12:58–15:58 UTC bound.
+- Next independent readiness is
+  [ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a); existing
+  paused decisions remain intact. Publication remains held by
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)'s failed-review
+  ancestor. No push or release occurred.

@@ -3,7 +3,7 @@
 **Created:** 2026-06-14
 **Reconciled:** 2026-06-24 against `main` @ `d0015f1` (plan baseline was `e5dfede`; `main` is 9 commits ahead)
 **Source:** Full workspace code audit (runtime, expr/spec/validate/generate, CLI/DAP/MCP/extension, project health)
-**Status:** Items 1–6 done (2026-07-27, per the tracker below); item 7a done (2026-10-29), remaining item 7 work open; item 8 replanned — implementation gated on the MCP security-policy decision (ac-950a8). Header reconciled 2026-10-29.
+**Status:** Items 1–6 done (2026-07-27, per the tracker below); items 7a–7b done (2026-10-29), remaining item 7 work open; item 8 replanned — implementation gated on the MCP security-policy decision (ac-950a8). Header reconciled 2026-10-29.
 **Audience:** Future agents and maintainers picking up remediation work
 
 ---
@@ -36,7 +36,7 @@ and consistent with existing conventions (no `unwrap`/`expect`/`todo`; these are
 | 4 | Goto target index skip in filtered execution | Medium (correctness) | **Done (2026-07-27)** — `1375272`, epic ac-83365 / ticket ac-d2719 | — |
 | 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Done (2026-07-27)** — `6048931`, epic ac-83365 / ticket ac-e19d1 | — |
 | 6 | Missing `$ref` cycle guards in generator | Medium (crash/DoS) | **Done (2026-07-27)** — `d4899b3`, epic ac-83365 / ticket ac-53232 | — |
-| 7 | Finish the VS Code extension | Feature completion | **Partial** — 7a complete (2026-10-29, ac-zovp); remaining extension proof/release work stays open | — |
+| 7 | Finish the VS Code extension | Feature completion | **Partial** — 7a/7b complete (2026-10-29, ac-zovp/ac-76a86); remaining release acceptance stays open | — |
 | 8 | MCP security hardening | Security | **Replanned** — stale path, DNS, concurrency, and error premises were removed; implementation is gated by the security-policy decision and the dedicated epic | — |
 
 > Verification baseline (captured at `e5dfede`): `cargo build --workspace
@@ -539,6 +539,8 @@ hand-rolling, and open a separate proposal.
 
 ### 7b. Replace the fake smoke test with real integration tests
 
+**Completed 2026-10-29:** [ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86), [8167039](https://github.com/strefethen/arazzo-cli/commit/8167039fbb45e0c0427d9045fb48900aa3cabaef) (local; not pushed). The native transcript and actual provider/factory tests pass locally; CI builds the adapter before npm test. Existing extension tests are preserved. Independent review passed. Hosted CI and packaged-VSIX acceptance remain unclaimed. The following rationale describes the pre-change gap.
+
 `vscode-arazzo-debug/src/test/smoke.test.ts` is `assert.equal(true, true)` —
 zero coverage. Replace with tests that exercise the actual surface:
 
@@ -766,7 +768,7 @@ misfiled bullets `CHANGELOG.md:24-25`.
 `:24-33`, missing-binary error `:41`. `debugConfigProvider.ts:6`. CI job `ci.yml:156`
 (lint `:173` + build `:177`, no test).
 - [x] 7a delete stubs + imports — ac-zovp, 2026-10-29.
-- [ ] 7b DAP transcript + `debugConfigProvider` / `adapterClient` unit tests; add `npm test` to the CI job **and** provision the Rust binary in that job (see automation gap).
+- [x] 7b DAP transcript + `debugConfigProvider` / `adapterClient` unit tests; add `npm test` to the CI job **and** provision the Rust binary in that job (see automation gap).
 - [ ] 7c per-platform VSIX + checksum. 7d docs, drop `preview`, bump `1.0.0`.
 
 **Item 8 — MCP security:** this appendix entry is superseded by
