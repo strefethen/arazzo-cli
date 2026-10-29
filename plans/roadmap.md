@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6).
+Latest source cycle: [ac-6572e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6572e) (tests only).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,15 +44,15 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: canonical inheritance in validation
-([ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6)). The validator
-uses the shared model overlay, accepts absent/valid workflow-target Step locations
-under Steve’s approved interpretation, and preserves HTTP/action constraints.
-Independent review passed. Runtime adoption remains outstanding; its readiness
-is the next consumer candidate. Expression-site inventory
-[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) now waits for
-shared borrowed Selector admission refinement
-[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855).
+Latest delivery: Selector admission compatibility baseline
+([ac-6572e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6572e)). One focused
+test target pins parsing-entrypoint differences before a shared borrowed owner
+is extracted. Production behavior is unchanged. Independent review passed.
+Shared admission refinement [ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855)
+remains open and expression inventory [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
+remains blocked. Runtime inheritance [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e)
+is paused for Steve’s input-name collision decision
+[ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701).
 Publication remains held by Fable’s earlier paused candidate. The separate
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
@@ -308,26 +308,55 @@ the exact candidate. One source slice, at most two review rounds; kickoff
 **2026-10-29 01:43 UTC** (18:43 PDT Oct 28), hard expiry **04:43 UTC**.
 Fable’s source and reservations remain outside this slice.
 
-## Next consumer candidate — runtime workflow-input inheritance
+## Delivered — cycle 10: Selector admission compatibility baseline
 
-[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) follows the
-completed model and validator adoption. Recheck its accepted contract, current
-runtime anchors and Fable’s live reservations before starting. Validation
-acceptance does not claim runtime inheritance delivery.
+[ac-6572e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6572e), under
+[epic:ac-59b5b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-59b5b), adds one
+focused integration-test file in arazzo-spec (the existing model crate).
+It retains 24 empirically observed fixtures plus missing-context/type siblings,
+and compact OutputValue controls. Exact typed fields, defaults, extension values
+and complete literal trees distinguish wire decoding, Value conversion and
+direct Selector decoding. Tests record current admission, not normative validity.
 
-## Refinement prerequisite — borrowed Selector admission
+Decided by recommendation: make this test-only baseline an independent
+prerequisite to shared admission refinement. The offline probe exposed concrete
+tag, duplicate-key and coercion differences; neither normalizing all YAML into
+Value nor reusing borrowed owned-type decoding is a safe drop-in classifier.
+One test owner adds no production responsibility, dependency or public API.
+Root owns tkt/docs/Git, Sol implements, and a fresh frontier context reviews the
+exact candidate. Cycle kickoff **2026-10-29 02:46 UTC** (19:46 PDT Oct 28),
+hard expiry **05:46 UTC**; one source candidate, at most two review rounds.
 
-Readiness for [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
-found that nested raw YAML values are reclassified as Selectors by existing
-runtime/validator consumers. A naive string walk would enumerate selector
-syntax as expression sites. An owned Selector deserialization would clone
-extension trees; a separate borrowed probe would duplicate the schema.
+## Paused consumer — child-workflow input-name collisions
 
-[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855) captures the
-bounded prerequisite: settle one shared borrowed admission owner and parity
-proof before implementing the inventory. It is an internal refinement task,
-not implementation-ready and not a new Steve approval gate. The inventory
-remains open and blocked on that explicit dependency; no source work started.
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) passed the
+model/validator dependency gate, but frontier readiness found a semantic
+decision explicitly excluded by Steve’s previous location approval. Canonical
+selection retains distinct `(name,in_)` declarations, while child inputs use a
+name-keyed map. An inherited `x/query=A` and Step `x/header=B` select both but
+the current mapper yields `x=B`.
+
+**Ask Steve for** [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701):
+recommend preserving current last-effective-declaration-wins mapping, evaluating
+every selected declaration and documenting the result as a repository choice.
+AGENTS.md’s Scope rule and the accepted plan’s explicit exclusion require Steve
+to settle this policy. Runtime source work has not started; its original AC and
+testing remain intact. Rejection or another representation needs revised scope.
+
+## Next refinement — shared borrowed Selector admission
+
+[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855) remains open
+after the compatibility baseline. Its intended owner is private within the
+model crate; existing ValueSource classification and future borrowed inventory
+must share admission without duplicating shape rules or cloning value trees.
+The wire deserialization envelope has distinct behavior and must remain intact.
+Shared visitor/seed feasibility needs proof before implementation handoff; this
+is not yet implementation-ready. No new Steve gate is inferred while exact
+admission and the accepted public inventory remain unchanged.
+
+[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) stays blocked
+on that refinement. Neither baseline tests nor static ownership decisions claim
+the no-cloning classifier or expression inventory has been delivered.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -681,3 +710,25 @@ source changed, and the existing Fable publication gate remains in force.
   unpublished main history. No push, release or Kafka source mutation occurs.
   Unrelated untracked files are preserved. Next: runtime readiness and bounded
   Selector-admission refinement, subject to live ownership.
+
+## Checkpoint — cycle 10
+
+- Test candidate: [41bdf45](https://github.com/strefethen/arazzo-cli/commit/41bdf45b3319cbe358aff4f8f733172f5f5370bb)
+  **(local; not pushed)**, independent review PASS in round 1. One new focused
+  model integration-test file; production and Fable source unchanged.
+- 26 named compatibility fixtures plus output controls: **29 focused
+  tests passed**. Full workspace: **1,584 passed, 0 failed, 35 ignored**;
+  formatting, compilation, strict Clippy and all four drift guards pass.
+  Negative replacement controls prove duplicate-extension normalization and
+  tagged-context borrowed decoding cannot substitute for current admission.
+- 284 build/fixture/spec inputs stayed identical through gates; 280 tracked
+  inputs bind to the candidate and four vendored specs are unchanged. Frozen
+  contract `ff97d9e6c7675467a22adebe541b61d6a0166b015c8fccdb1459e42e917061ab`
+  and raw evidence live in
+  `/private/tmp/arazzo-maintainer-20261028/selector-compatibility-cycle/`.
+  Desktop/mobile QA and committed delivery HTML hash are bound in final evidence.
+- Runtime inheritance was parked before source work for ac-b9701; shared
+  admission refinement remains open with its review marker, and the inventory
+  remains blocked. The epic stays open. Revision-safe closure releases leases;
+  unrelated untracked files remain untouched. Publication is still held by
+  Fable’s paused ac-18e6f candidate in unpublished main history.
