@@ -6,11 +6,15 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod effective_step;
 mod operation_id;
 mod operation_path;
 mod source_reference;
 mod workflow_dependency;
 
+pub use effective_step::{
+    effective_step_parameters, EffectiveParameterOrigin, EffectiveParameterRef,
+};
 pub use operation_id::{
     classify_operation_id, MalformedOperationId, OperationIdTarget, SUPPORTED_OPERATION_ID_FORMS,
 };
