@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e).
+Latest source cycle: [ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,18 +44,18 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: canonical effective Step parameters
-([ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e)). One borrowed
-model view applies exact overrides to all four target kinds and retains source
-provenance. This is groundwork; validator and runtime adoption remain outstanding.
-Independent review passed. Publication remains held by Fable’s earlier paused
-candidate. Next refinement: non-action expression-site inventory
-([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). Steve approved
-the parameter-location correction in
-[ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0); validator
-adoption returns to the queue for readiness refinement. The separate
+Latest delivery: canonical inheritance in validation
+([ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6)). The validator
+uses the shared model overlay, accepts absent/valid workflow-target Step locations
+under Steve’s approved interpretation, and preserves HTTP/action constraints.
+Independent review passed. Runtime adoption remains outstanding; its readiness
+is the next consumer candidate. Expression-site inventory
+[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) now waits for
+shared borrowed Selector admission refinement
+[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855).
+Publication remains held by Fable’s earlier paused candidate. The separate
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
-also remains open.
+remains open.
 
 ## Direction and initial cycle
 
@@ -281,33 +281,53 @@ exact candidate. One source slice, at most two review rounds; kickoff
 **2026-10-29 00:39 UTC** (17:39 PDT Oct 28), hard expiry **03:39 UTC**.
 Fable’s source and reservations remain outside this slice.
 
-## Next independent candidate — effective expression-site inventory
+## Delivered — cycle 9: validator inheritance and location context
 
-[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) is next for
-bounded readiness refinement. Its prerequisites are the completed model overlay
-and Fable’s completed correlationId disposition
-[ac-dc3f2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-dc3f2). Verify its
-accepted field inventory, current source and live ownership before starting.
-This inventory remains separate from dependency graphs and scheduling.
-
-## Resolved decision — workflow-target parameter locations
+[ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6), under
+[epic:ac-59b5b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-59b5b), replaces
+the validator’s target-gated merge with the canonical model overlay. One local
+adapter translates borrowed origins to existing paths and structural keys.
+The single run-scoped suppression owner remains. The validator root shrinks
+from 2,916 to 2,895 lines; no production module or responsibility is added.
 
 Steve approved [ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0)
-on **2026-10-28 PDT**: permit valid `in` on workflow-target Step parameters and
-retain the explicit Success/Failure Action parameter prohibition. The accepted
-plan and validator ticket
-[ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6) now distinguish
-these contexts. Positive parsed/direct tests replace the unsupported Step
-rejection expectation; action rejection and operation controls remain required.
+on **2026-10-28 PDT**. Valid `in` is now optional on workflow-target Step
+parameters. OpenAPI query/querystring exclusivity applies only to synchronous
+operation targets. Explicit Success/Failure Action prohibitions, existing
+workflow-input name-only duplicate checks, and operation constraints remain.
+The accepted plan’s “Workflow-target Step parameter locations” section owns
+the vendored quotations and approved interpretation. Runtime input delivery,
+input-name collision policy and child schema checks are outside this slice.
 
-The approval pause is cleared. Validator adoption returns to the open queue;
-its legacy operation declarations, current test-file ownership and full start
-readiness still need refinement before implementation. Runtime adoption
-[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still depends
-on the validator delivery. No validator/runtime behavior changed with this
-decision, and same-name/different-location runtime input delivery remains outside
-its scope. Independent expression-site groundwork can continue alongside
-read-only refinement of that consumer.
+Frontier readiness confirmed the current five-file boundary. Decided by
+recommendation: private borrowed selection/provenance assertions supplement
+the unchanged approved public obligations, because clean validation alone
+cannot prove inheritance after the old location prohibition is removed.
+Root owns tkt/docs/Git, Sol implements, and a fresh frontier context reviews
+the exact candidate. One source slice, at most two review rounds; kickoff
+**2026-10-29 01:43 UTC** (18:43 PDT Oct 28), hard expiry **04:43 UTC**.
+Fable’s source and reservations remain outside this slice.
+
+## Next consumer candidate — runtime workflow-input inheritance
+
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) follows the
+completed model and validator adoption. Recheck its accepted contract, current
+runtime anchors and Fable’s live reservations before starting. Validation
+acceptance does not claim runtime inheritance delivery.
+
+## Refinement prerequisite — borrowed Selector admission
+
+Readiness for [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
+found that nested raw YAML values are reclassified as Selectors by existing
+runtime/validator consumers. A naive string walk would enumerate selector
+syntax as expression sites. An owned Selector deserialization would clone
+extension trees; a separate borrowed probe would duplicate the schema.
+
+[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855) captures the
+bounded prerequisite: settle one shared borrowed admission owner and parity
+proof before implementing the inventory. It is an internal refinement task,
+not implementation-ready and not a new Steve approval gate. The inventory
+remains open and blocked on that explicit dependency; no source work started.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -633,3 +653,31 @@ supersedes the pending location-rule decision at the original checkpoint above.
 The plan and validator AC/testing now reflect his choice; independent review
 checks the amended contract before the decision ticket closes. No executable
 source changed, and the existing Fable publication gate remains in force.
+
+## Checkpoint — cycle 9
+
+- Source: [8b65744](https://github.com/strefethen/arazzo-cli/commit/8b65744d1e7724c26cacb1f655ceb1e82327c6bb)
+  **(local; not pushed)**, independent review PASS in round 1. Validator
+  adoption and the approved location correction are delivered; runtime adoption
+  and expression inventory remain outstanding. The effective-Step epic stays open.
+- Original no-inheritance tests pass before edits; two private selection tests
+  and six public behavior cases fail against original production code, then
+  pass against this candidate. The 36-combination location matrix, exact parsed/
+  direct diagnostics, reusable resolution, duplicate retention and operation/
+  action negative controls pass. Validator: **222 passed**; conformance-manifest
+  guard: **13 passed**. Full workspace: **1,555 passed, 0 failed, 35 ignored**;
+  formatting, compilation, strict Clippy and all four drift guards pass.
+- 283 build/fixture/spec inputs stay identical through verification; 279
+  tracked inputs bind to the reviewed commit and four vendored specs remain
+  unchanged. Frozen contract revision
+  `b83e215293f98620797b9c8217af2fca2b0cac699a0a08b35aa71d36752e3464`
+  and raw evidence are retained in
+  `/private/tmp/arazzo-maintainer-20261028/validator-inheritance-cycle/`.
+  The delivery log shows before/after validation and the ownership chain.
+- Desktop/mobile QA and committed HTML hash are bound in final ticket evidence.
+  No Rust source changed after review. Revision-safe closure releases the leases.
+- Publication remains held by Fable’s paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate in
+  unpublished main history. No push, release or Kafka source mutation occurs.
+  Unrelated untracked files are preserved. Next: runtime readiness and bounded
+  Selector-admission refinement, subject to live ownership.
