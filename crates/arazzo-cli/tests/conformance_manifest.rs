@@ -89,6 +89,12 @@ struct ManifestReport {
     full_compliance: bool,
 }
 
+#[derive(Default)]
+struct SpecReferences {
+    anchor_ids: BTreeSet<String>,
+    grammar_rules: BTreeSet<String>,
+}
+
 struct TempWorkspace {
     path: PathBuf,
 }
@@ -222,6 +228,12 @@ fn is_normative_level(value: &str) -> bool {
     )
 }
 
+fn is_grammar_rule(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
 fn is_repository_contract_id(value: &str) -> bool {
     value.strip_prefix("repository.").is_some_and(|suffix| {
         !suffix.is_empty()
@@ -275,7 +287,7 @@ fn is_spec_anchor_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
-fn tracked_spec_anchor_ids(manifest: &Map<String, Value>) -> Result<BTreeSet<String>, String> {
+fn tracked_spec_authority(manifest: &Map<String, Value>) -> Result<SpecReferences, String> {
     let subject = "manifest specAuthority";
     let authority = manifest
         .get("specAuthority")
@@ -283,6 +295,7 @@ fn tracked_spec_anchor_ids(manifest: &Map<String, Value>) -> Result<BTreeSet<Str
     let authority = required_object(authority, subject)?;
     let expected_fields = BTreeSet::from([
         "allowedAnchorIds",
+        "allowedGrammarRules",
         "document",
         "sha256",
         "source",
@@ -323,7 +336,24 @@ fn tracked_spec_anchor_ids(manifest: &Map<String, Value>) -> Result<BTreeSet<Str
             return Err(format!("{subject}: duplicate allowed anchor ID {anchor:?}"));
         }
     }
-    Ok(anchors)
+    let mut grammar_rules = BTreeSet::new();
+    for rule in required_array(authority, "allowedGrammarRules", subject)? {
+        let rule = rule
+            .as_str()
+            .filter(|rule| is_grammar_rule(rule))
+            .ok_or_else(|| {
+                format!("{subject}: allowedGrammarRules must contain exact ABNF production names")
+            })?;
+        if !grammar_rules.insert(rule.to_string()) {
+            return Err(format!(
+                "{subject}: allowedGrammarRules contains duplicate grammar rule {rule:?}"
+            ));
+        }
+    }
+    Ok(SpecReferences {
+        anchor_ids: anchors,
+        grammar_rules,
+    })
 }
 
 fn scrub_non_code(source: &str, origin: &str) -> String {
@@ -853,10 +883,83 @@ fn validate_optional_evidence(
     Ok(())
 }
 
+fn optional_basis<'a>(
+    entry: &'a Map<String, Value>,
+    field: &str,
+    claim_id: &str,
+) -> Result<Option<&'a Vec<Value>>, String> {
+    let Some(value) = entry.get(field) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| claim_error(claim_id, &format!("{field} must be an array")))?;
+    if values.is_empty() {
+        return Err(claim_error(claim_id, &format!("{field} must not be empty")));
+    }
+    Ok(Some(values))
+}
+
+fn validate_spec_basis(
+    allowed: &SpecReferences,
+    used: &mut SpecReferences,
+    entry: &Map<String, Value>,
+    claim_id: &str,
+) -> Result<(), String> {
+    let levels = optional_basis(entry, "normativeLevels", claim_id)?;
+    let rules = optional_basis(entry, "grammarRules", claim_id)?;
+    if levels.is_none() && rules.is_none() {
+        return Err(claim_error(
+            claim_id,
+            "arazzoSpec authority requires normativeLevels or grammarRules",
+        ));
+    }
+    if let Some(levels) = levels {
+        for level in levels {
+            if !level.as_str().is_some_and(is_normative_level) {
+                return Err(claim_error(
+                    claim_id,
+                    "normativeLevels contains an unknown level",
+                ));
+            }
+        }
+    }
+    if let Some(rules) = rules {
+        let mut claim_rules = BTreeSet::new();
+        for rule in rules {
+            let rule = rule
+                .as_str()
+                .filter(|rule| is_grammar_rule(rule))
+                .ok_or_else(|| {
+                    claim_error(
+                        claim_id,
+                        "grammarRules must contain exact ABNF production names",
+                    )
+                })?;
+            if !claim_rules.insert(rule) {
+                return Err(claim_error(
+                    claim_id,
+                    &format!("grammarRules contains duplicate grammar rule {rule:?}"),
+                ));
+            }
+            if !allowed.grammar_rules.contains(rule) {
+                return Err(claim_error(
+                    claim_id,
+                    &format!(
+                        "grammarRules rule {rule:?} is not in the tracked specAuthority allowedGrammarRules allowlist"
+                    ),
+                ));
+            }
+            used.grammar_rules.insert(rule.to_string());
+        }
+    }
+    Ok(())
+}
+
 fn validate_authority(
     workspace: &Path,
-    allowed_spec_anchor_ids: &BTreeSet<String>,
-    used_spec_anchor_ids: &mut BTreeSet<String>,
+    allowed: &SpecReferences,
+    used: &mut SpecReferences,
     entry: &Map<String, Value>,
     claim_id: &str,
 ) -> Result<Authority, String> {
@@ -884,7 +987,7 @@ fn validate_authority(
                     ));
                 }
                 let fragment = &anchor[SPEC_PREFIX.len()..];
-                if !allowed_spec_anchor_ids.contains(fragment) {
+                if !allowed.anchor_ids.contains(fragment) {
                     return Err(claim_error(
                         claim_id,
                         &format!(
@@ -892,25 +995,16 @@ fn validate_authority(
                         ),
                     ));
                 }
-                used_spec_anchor_ids.insert(fragment.to_string());
+                used.anchor_ids.insert(fragment.to_string());
             }
-            let levels = required_array(entry, "normativeLevels", &format!("claim {claim_id}"))?;
-            if levels.is_empty() {
-                return Err(claim_error(claim_id, "normativeLevels must not be empty"));
-            }
-            for level in levels {
-                let level = level
-                    .as_str()
-                    .filter(|level| is_normative_level(level))
-                    .ok_or_else(|| {
-                        claim_error(claim_id, "normativeLevels contains an unknown level")
-                    })?;
-                let _ = level;
-            }
+            validate_spec_basis(allowed, used, entry, claim_id)?;
             Ok(Authority::ArazzoSpec)
         }
         "repositoryContract" => {
-            if entry.contains_key("specAnchors") || entry.contains_key("normativeLevels") {
+            if ["specAnchors", "normativeLevels", "grammarRules"]
+                .iter()
+                .any(|field| entry.contains_key(*field))
+            {
                 return Err(claim_error(
                     claim_id,
                     "repositoryContract authority cannot include Arazzo-spec fields",
@@ -938,8 +1032,8 @@ fn validate_authority(
 
 fn validate_claim(
     workspace: &Path,
-    allowed_spec_anchor_ids: &BTreeSet<String>,
-    used_spec_anchor_ids: &mut BTreeSet<String>,
+    allowed: &SpecReferences,
+    used: &mut SpecReferences,
     inventory_area: &str,
     fragment_area: &str,
     entry: &Value,
@@ -966,13 +1060,7 @@ fn validate_claim(
         ));
     }
     let _ = required_text(entry, "claim", &format!("claim {claim_id}"))?;
-    let authority = validate_authority(
-        workspace,
-        allowed_spec_anchor_ids,
-        used_spec_anchor_ids,
-        entry,
-        claim_id,
-    )?;
+    let authority = validate_authority(workspace, allowed, used, entry, claim_id)?;
     let status = Status::parse(
         required_text(entry, "status", &format!("claim {claim_id}"))?,
         claim_id,
@@ -1030,7 +1118,7 @@ fn validate_manifest(
     if manifest.get("formatVersion").and_then(Value::as_u64) != Some(1) {
         return Err("manifest: formatVersion must be 1".to_string());
     }
-    let allowed_spec_anchor_ids = tracked_spec_anchor_ids(manifest)?;
+    let allowed = tracked_spec_authority(manifest)?;
     let full_compliance = manifest
         .get("fullCompliance")
         .and_then(Value::as_bool)
@@ -1074,7 +1162,7 @@ fn validate_manifest(
         ));
     }
 
-    let mut used_spec_anchor_ids = BTreeSet::new();
+    let mut used = SpecReferences::default();
     let mut observed_ids = BTreeSet::new();
     let mut report = ManifestReport {
         full_compliance,
@@ -1105,14 +1193,8 @@ fn validate_manifest(
             let expected_area = inventory_by_id.get(entry_id).ok_or_else(|| {
                 claim_error(entry_id, "is not declared by the canonical inventory")
             })?;
-            let (claim_id, authority, status) = validate_claim(
-                workspace,
-                &allowed_spec_anchor_ids,
-                &mut used_spec_anchor_ids,
-                expected_area,
-                area,
-                entry,
-            )?;
+            let (claim_id, authority, status) =
+                validate_claim(workspace, &allowed, &mut used, expected_area, area, entry)?;
             match authority {
                 Authority::ArazzoSpec => report.arazzo.add(status),
                 Authority::RepositoryContract => report.repository.add(status),
@@ -1134,13 +1216,23 @@ fn validate_manifest(
             ));
         }
     }
-    if used_spec_anchor_ids != allowed_spec_anchor_ids {
-        let unused = allowed_spec_anchor_ids
-            .difference(&used_spec_anchor_ids)
+    if used.anchor_ids != allowed.anchor_ids {
+        let unused = allowed
+            .anchor_ids
+            .difference(&used.anchor_ids)
             .cloned()
             .collect::<Vec<_>>();
         return Err(format!(
             "manifest specAuthority contains allowed anchor IDs not used by any Arazzo claim: {unused:?}"
+        ));
+    }
+    if used.grammar_rules != allowed.grammar_rules {
+        let unused = allowed
+            .grammar_rules
+            .difference(&used.grammar_rules)
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "manifest specAuthority: allowedGrammarRules contains grammar rules not used by any Arazzo claim: {unused:?}"
         ));
     }
     if full_compliance && !report.arazzo.all_covered() {
@@ -1208,7 +1300,8 @@ fn test_spec_authority(allowed_anchor_ids: Vec<&str>) -> Value {
         "version": SPEC_VERSION,
         "source": SPEC_SOURCE,
         "sha256": SPEC_SHA256,
-        "allowedAnchorIds": allowed_anchor_ids
+        "allowedAnchorIds": allowed_anchor_ids,
+        "allowedGrammarRules": []
     })
 }
 
@@ -1248,6 +1341,27 @@ fn documents_with_claim(claim: Value, full_compliance: bool) -> (Value, Fragment
         }),
         fragments,
     )
+}
+
+fn documents_with_grammar_claim(id: &str) -> (Value, Fragments) {
+    let mut claim = non_covered_claim(id, "unsupported");
+    let entry = claim
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("claim object"));
+    entry.remove("normativeLevels");
+    entry.insert(
+        "specAnchors".to_string(),
+        json!(["spec/arazzo/v1.1.0.html#runtime-expressions"]),
+    );
+    entry.insert("grammarRules".to_string(), json!(["expression"]));
+    entry.insert(
+        "claim".to_string(),
+        json!("Runtime expressions follow the expression ABNF production."),
+    );
+    let (mut manifest, fragments) = documents_with_claim(claim, false);
+    manifest["specAuthority"]["allowedAnchorIds"] = json!(["runtime-expressions"]);
+    manifest["specAuthority"]["allowedGrammarRules"] = json!(["expression"]);
+    (manifest, fragments)
 }
 
 fn claim_mut<'a>(fragments: &'a mut Fragments, area: &str, id: &str) -> &'a mut Map<String, Value> {
@@ -2052,4 +2166,357 @@ fn full_compliance_marker_rejects_non_covered_arazzo_claims() {
         "unqualified full compliance must fail",
     );
     assert!(error.contains("fullCompliance"), "{error}");
+}
+
+#[test]
+fn grammar_basis_accepts_grammar_only_normative_only_and_combined_claims() {
+    let temp = TempWorkspace::new();
+    for (normative, grammar) in [(true, false), (false, true), (true, true)] {
+        let (mut manifest, mut fragments) = documents_with_claim(
+            non_covered_claim("model.grammar-basis", "unsupported"),
+            false,
+        );
+        let claim = claim_mut(&mut fragments, "model", "model.grammar-basis");
+        claim.insert(
+            "claim".to_string(),
+            json!(match (normative, grammar) {
+                (true, true) => "Arazzo version strings follow the version clause; runtime expressions follow ABNF.",
+                (true, false) => "Arazzo version strings follow the version clause.",
+                _ => "Runtime expressions follow the expression and core character ABNF productions.",
+            }),
+        );
+        if !normative {
+            claim.remove("normativeLevels");
+        }
+        if grammar {
+            claim.insert("grammarRules".to_string(), json!(["expression", "ALPHA"]));
+            claim.insert(
+                "specAnchors".to_string(),
+                if normative {
+                    json!([
+                        "spec/arazzo/v1.1.0.html#versions",
+                        "spec/arazzo/v1.1.0.html#runtime-expressions"
+                    ])
+                } else {
+                    json!(["spec/arazzo/v1.1.0.html#runtime-expressions"])
+                },
+            );
+            manifest["specAuthority"]["allowedAnchorIds"] = if normative {
+                json!(["versions", "runtime-expressions"])
+            } else {
+                json!(["runtime-expressions"])
+            };
+        }
+        manifest["specAuthority"]["allowedGrammarRules"] = if grammar {
+            json!(["expression", "ALPHA"])
+        } else {
+            json!([])
+        };
+        let report = validate_manifest(temp.path(), &manifest, &fragments)
+            .unwrap_or_else(|err| panic!("normative={normative}, grammar={grammar}: {err}"));
+        assert_eq!(report.arazzo.unsupported, 1);
+        assert_eq!(report.repository, StatusTotals::default());
+    }
+    assert!(!temp.path().join("spec").exists());
+}
+
+#[test]
+fn specification_basis_fields_are_optional_only_when_absent() {
+    let temp = TempWorkspace::new();
+    let (manifest, mut fragments) = documents_with_grammar_claim("model.basis-presence");
+    claim_mut(&mut fragments, "model", "model.basis-presence").remove("grammarRules");
+    assert_eq!(
+        expected_error(
+            validate_manifest(temp.path(), &manifest, &fragments),
+            "omitting both bases must fail",
+        ),
+        "claim model.basis-presence: arazzoSpec authority requires normativeLevels or grammarRules"
+    );
+
+    for field in ["normativeLevels", "grammarRules"] {
+        let other = if field == "normativeLevels" {
+            "grammarRules"
+        } else {
+            "normativeLevels"
+        };
+        for other_present in [false, true] {
+            for value in [
+                json!([]),
+                Value::Null,
+                json!(0),
+                json!(true),
+                json!("value"),
+                json!({}),
+                json!([null]),
+                json!([0]),
+                json!(["unknown"]),
+            ] {
+                let (manifest, mut fragments) =
+                    documents_with_grammar_claim("model.basis-presence");
+                let claim = claim_mut(&mut fragments, "model", "model.basis-presence");
+                claim.insert("normativeLevels".to_string(), json!(["SHALL"]));
+                if !other_present {
+                    claim.remove(other);
+                }
+                claim.insert(field.to_string(), value.clone());
+                let error = expected_error(
+                    validate_manifest(temp.path(), &manifest, &fragments),
+                    "a present malformed basis must fail even alongside another valid basis",
+                );
+                assert!(
+                    error.starts_with("claim model.basis-presence:") && error.contains(field),
+                    "{field}={value}, other_present={other_present}: {error}"
+                );
+            }
+        }
+    }
+    let (manifest, mut fragments) = documents_with_grammar_claim("model.basis-presence");
+    let claim = claim_mut(&mut fragments, "model", "model.basis-presence");
+    claim.insert("normativeLevels".to_string(), json!([]));
+    claim.insert("grammarRules".to_string(), json!([]));
+    let error = expected_error(
+        validate_manifest(temp.path(), &manifest, &fragments),
+        "both empty bases must fail",
+    );
+    assert_eq!(
+        error,
+        "claim model.basis-presence: normativeLevels must not be empty"
+    );
+}
+
+#[test]
+fn grammar_rule_labels_are_exact_and_case_sensitive() {
+    let temp = TempWorkspace::new();
+    for rule in [
+        "expression",
+        "ALPHA",
+        "HEXDIG",
+        "identifier-strict",
+        "rule2",
+    ] {
+        assert!(is_grammar_rule(rule), "{rule:?}");
+    }
+    for rule in [
+        "",
+        " ",
+        " expression",
+        "expression ",
+        "expr_rule",
+        "expr.rule",
+        "2expression",
+        "-expression",
+        "expr/rule",
+        "éxpression",
+    ] {
+        assert!(!is_grammar_rule(rule), "{rule:?}");
+        let (manifest, mut fragments) = documents_with_grammar_claim("model.grammar-label");
+        claim_mut(&mut fragments, "model", "model.grammar-label")
+            .insert("grammarRules".to_string(), json!([rule]));
+        assert_eq!(
+            expected_error(
+                validate_manifest(temp.path(), &manifest, &fragments),
+                "malformed grammar label must fail",
+            ),
+            "claim model.grammar-label: grammarRules must contain exact ABNF production names"
+        );
+    }
+    for (allowed, unknown) in [("expression", "Expression"), ("ALPHA", "alpha")] {
+        let (mut manifest, mut fragments) = documents_with_grammar_claim("model.grammar-label");
+        manifest["specAuthority"]["allowedGrammarRules"] = json!([allowed]);
+        claim_mut(&mut fragments, "model", "model.grammar-label")
+            .insert("grammarRules".to_string(), json!([unknown]));
+        assert_eq!(
+            expected_error(
+                validate_manifest(temp.path(), &manifest, &fragments),
+                "differently cased grammar label must remain unknown",
+            ),
+            format!("claim model.grammar-label: grammarRules rule {unknown:?} is not in the tracked specAuthority allowedGrammarRules allowlist")
+        );
+    }
+}
+
+#[test]
+fn grammar_allowlist_rejects_missing_malformed_duplicate_and_unused_rules() {
+    let temp = TempWorkspace::new();
+    let (manifest, fragments) = documents_with_grammar_claim("model.grammar-allowlist");
+    let mut missing = manifest.clone();
+    missing["specAuthority"]
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("authority object"))
+        .remove("allowedGrammarRules");
+    let error = expected_error(
+        validate_manifest(temp.path(), &missing, &fragments),
+        "missing grammar allowlist must fail",
+    );
+    assert!(
+        error.starts_with("manifest specAuthority") && error.contains("allowedGrammarRules"),
+        "{error}"
+    );
+
+    for value in [
+        Value::Null,
+        json!(0),
+        json!(true),
+        json!("expression"),
+        json!({}),
+        json!([null]),
+        json!([0]),
+        json!([""]),
+        json!([" "]),
+        json!([" expression"]),
+        json!(["expression "]),
+        json!(["expr_rule"]),
+        json!(["expr.rule"]),
+        json!(["2expression"]),
+        json!(["-expression"]),
+        json!(["expr/rule"]),
+        json!(["éxpression"]),
+    ] {
+        let mut malformed = manifest.clone();
+        malformed["specAuthority"]["allowedGrammarRules"] = value.clone();
+        let error = expected_error(
+            validate_manifest(temp.path(), &malformed, &fragments),
+            "malformed grammar allowlist must fail",
+        );
+        assert!(
+            error.starts_with("manifest specAuthority:") && error.contains("allowedGrammarRules"),
+            "{value}: {error}"
+        );
+    }
+
+    let mut duplicate = manifest.clone();
+    duplicate["specAuthority"]["allowedGrammarRules"] = json!(["expression", "expression"]);
+    assert_eq!(
+        expected_error(
+            validate_manifest(temp.path(), &duplicate, &fragments),
+            "duplicate grammar declaration must fail",
+        ),
+        "manifest specAuthority: allowedGrammarRules contains duplicate grammar rule \"expression\""
+    );
+
+    let mut unused = manifest;
+    unused["specAuthority"]["allowedGrammarRules"] = json!(["source", "expression", "ALPHA"]);
+    assert_eq!(
+        expected_error(
+            validate_manifest(temp.path(), &unused, &fragments),
+            "every unused grammar rule must be reported in sorted order",
+        ),
+        "manifest specAuthority: allowedGrammarRules contains grammar rules not used by any Arazzo claim: [\"ALPHA\", \"source\"]"
+    );
+}
+
+#[test]
+fn grammar_duplicates_fail_within_a_claim_but_reuse_across_claims_is_valid() {
+    let temp = TempWorkspace::new();
+    let (mut manifest, mut fragments) = documents_with_grammar_claim("model.grammar-reuse");
+    claim_mut(&mut fragments, "model", "model.grammar-reuse").insert(
+        "grammarRules".to_string(),
+        json!(["expression", "expression"]),
+    );
+    assert_eq!(
+        expected_error(
+            validate_manifest(temp.path(), &manifest, &fragments),
+            "a duplicate grammar rule within a claim must fail",
+        ),
+        "claim model.grammar-reuse: grammarRules contains duplicate grammar rule \"expression\""
+    );
+
+    claim_mut(&mut fragments, "model", "model.grammar-reuse")
+        .insert("grammarRules".to_string(), json!(["expression"]));
+    let (_, additional) = documents_with_grammar_claim("model.grammar-reuse-second");
+    fragments
+        .get_mut("model")
+        .and_then(|fragment| fragment.get_mut("claims"))
+        .and_then(Value::as_array_mut)
+        .unwrap_or_else(|| panic!("claims array"))
+        .push(additional["model"]["claims"][0].clone());
+    manifest["inventory"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("inventory array"))
+        .push(json!({"id": "model.grammar-reuse-second", "area": "model"}));
+    let report = validate_manifest(temp.path(), &manifest, &fragments)
+        .unwrap_or_else(|err| panic!("a grammar rule may ground separate claims: {err}"));
+    assert_eq!(report.arazzo.unsupported, 2);
+}
+
+#[test]
+fn grammar_basis_preserves_required_anchors_and_covered_evidence() {
+    let temp = TempWorkspace::new();
+    write_source(temp.path(), "tests/evidence.rs", "#[test]\nfn good() {}\n");
+    let (mut manifest, mut fragments) = documents_with_grammar_claim("model.grammar-evidence");
+    let claim = claim_mut(&mut fragments, "model", "model.grammar-evidence");
+    claim.insert("status".to_string(), json!("covered"));
+    claim.insert(
+        "evidence".to_string(),
+        json!({
+            "positive": ["tests/evidence.rs#good"],
+            "negative": ["tests/evidence.rs#good"]
+        }),
+    );
+    manifest["fullCompliance"] = json!(true);
+    let report = validate_manifest(temp.path(), &manifest, &fragments).unwrap_or_else(|err| {
+        panic!("covered grammar claim with executable evidence must pass: {err}")
+    });
+    assert_eq!(report.arazzo.covered, 1);
+    assert!(report.full_compliance);
+
+    for value in [
+        None,
+        Some(json!([])),
+        Some(Value::Null),
+        Some(json!(["spec/arazzo/v1.1.0.html#unknown"])),
+    ] {
+        let mut invalid = fragments.clone();
+        let claim = claim_mut(&mut invalid, "model", "model.grammar-evidence");
+        if let Some(value) = value {
+            claim.insert("specAnchors".to_string(), value);
+        } else {
+            claim.remove("specAnchors");
+        }
+        let error = expected_error(
+            validate_manifest(temp.path(), &manifest, &invalid),
+            "grammar-only claims must still have valid nonempty allowlisted anchors",
+        );
+        assert!(
+            error.starts_with("claim model.grammar-evidence:") && error.contains("spec"),
+            "{error}"
+        );
+    }
+    for field in ["positive", "negative"] {
+        let mut invalid = fragments.clone();
+        claim_mut(&mut invalid, "model", "model.grammar-evidence")["evidence"]
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("evidence object"))
+            .remove(field);
+        assert_eq!(
+            expected_error(
+                validate_manifest(temp.path(), &manifest, &invalid),
+                "grammar-only claims must retain both covered evidence obligations",
+            ),
+            format!("claim model.grammar-evidence: missing {field} evidence")
+        );
+    }
+}
+
+#[test]
+fn repository_claims_reject_each_spec_metadata_field_by_presence() {
+    let temp = TempWorkspace::new();
+    write_source(temp.path(), "tests/evidence.rs", "#[test]\nfn good() {}\n");
+    for field in ["specAnchors", "normativeLevels", "grammarRules"] {
+        for value in [json!([]), Value::Null, json!("metadata")] {
+            let (manifest, mut fragments) =
+                documents_with_claim(repository_claim("surfaces.metadata", "deviation"), false);
+            claim_mut(&mut fragments, "surfaces", "surfaces.metadata")
+                .insert(field.to_string(), value);
+            let error = expected_error(
+                validate_manifest(temp.path(), &manifest, &fragments),
+                "repository specification metadata must fail even when empty or null",
+            );
+            assert_eq!(
+                error,
+                "claim surfaces.metadata: repositoryContract authority cannot include Arazzo-spec fields",
+                "field {field}"
+            );
+        }
+    }
 }

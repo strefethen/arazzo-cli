@@ -42,7 +42,8 @@
       "stepAction",
       "stepOutputs",
       "stepCorrelationId"
-    ]
+    ],
+    "allowedGrammarRules": []
   },
   "inventory": [
     { "id": "model.version-grammar-feature-set", "area": "model" },
