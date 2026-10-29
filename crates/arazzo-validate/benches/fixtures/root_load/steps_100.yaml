@@ -1,0 +1,211 @@
+arazzo: 1.1.0
+info:
+  title: Root load benchmark
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: root_load
+    steps:
+      - stepId: step_0000
+        operationId: op_00
+      - stepId: step_0001
+        operationId: op_01
+      - stepId: step_0002
+        operationId: op_02
+      - stepId: step_0003
+        operationId: op_03
+      - stepId: step_0004
+        operationId: op_04
+      - stepId: step_0005
+        operationId: op_05
+      - stepId: step_0006
+        operationId: op_06
+      - stepId: step_0007
+        operationId: op_07
+      - stepId: step_0008
+        operationId: op_08
+      - stepId: step_0009
+        operationId: op_09
+      - stepId: step_0010
+        operationId: op_00
+      - stepId: step_0011
+        operationId: op_01
+      - stepId: step_0012
+        operationId: op_02
+      - stepId: step_0013
+        operationId: op_03
+      - stepId: step_0014
+        operationId: op_04
+      - stepId: step_0015
+        operationId: op_05
+      - stepId: step_0016
+        operationId: op_06
+      - stepId: step_0017
+        operationId: op_07
+      - stepId: step_0018
+        operationId: op_08
+      - stepId: step_0019
+        operationId: op_09
+      - stepId: step_0020
+        operationId: op_00
+      - stepId: step_0021
+        operationId: op_01
+      - stepId: step_0022
+        operationId: op_02
+      - stepId: step_0023
+        operationId: op_03
+      - stepId: step_0024
+        operationId: op_04
+      - stepId: step_0025
+        operationId: op_05
+      - stepId: step_0026
+        operationId: op_06
+      - stepId: step_0027
+        operationId: op_07
+      - stepId: step_0028
+        operationId: op_08
+      - stepId: step_0029
+        operationId: op_09
+      - stepId: step_0030
+        operationId: op_00
+      - stepId: step_0031
+        operationId: op_01
+      - stepId: step_0032
+        operationId: op_02
+      - stepId: step_0033
+        operationId: op_03
+      - stepId: step_0034
+        operationId: op_04
+      - stepId: step_0035
+        operationId: op_05
+      - stepId: step_0036
+        operationId: op_06
+      - stepId: step_0037
+        operationId: op_07
+      - stepId: step_0038
+        operationId: op_08
+      - stepId: step_0039
+        operationId: op_09
+      - stepId: step_0040
+        operationId: op_00
+      - stepId: step_0041
+        operationId: op_01
+      - stepId: step_0042
+        operationId: op_02
+      - stepId: step_0043
+        operationId: op_03
+      - stepId: step_0044
+        operationId: op_04
+      - stepId: step_0045
+        operationId: op_05
+      - stepId: step_0046
+        operationId: op_06
+      - stepId: step_0047
+        operationId: op_07
+      - stepId: step_0048
+        operationId: op_08
+      - stepId: step_0049
+        operationId: op_09
+      - stepId: step_0050
+        operationId: op_00
+      - stepId: step_0051
+        operationId: op_01
+      - stepId: step_0052
+        operationId: op_02
+      - stepId: step_0053
+        operationId: op_03
+      - stepId: step_0054
+        operationId: op_04
+      - stepId: step_0055
+        operationId: op_05
+      - stepId: step_0056
+        operationId: op_06
+      - stepId: step_0057
+        operationId: op_07
+      - stepId: step_0058
+        operationId: op_08
+      - stepId: step_0059
+        operationId: op_09
+      - stepId: step_0060
+        operationId: op_00
+      - stepId: step_0061
+        operationId: op_01
+      - stepId: step_0062
+        operationId: op_02
+      - stepId: step_0063
+        operationId: op_03
+      - stepId: step_0064
+        operationId: op_04
+      - stepId: step_0065
+        operationId: op_05
+      - stepId: step_0066
+        operationId: op_06
+      - stepId: step_0067
+        operationId: op_07
+      - stepId: step_0068
+        operationId: op_08
+      - stepId: step_0069
+        operationId: op_09
+      - stepId: step_0070
+        operationId: op_00
+      - stepId: step_0071
+        operationId: op_01
+      - stepId: step_0072
+        operationId: op_02
+      - stepId: step_0073
+        operationId: op_03
+      - stepId: step_0074
+        operationId: op_04
+      - stepId: step_0075
+        operationId: op_05
+      - stepId: step_0076
+        operationId: op_06
+      - stepId: step_0077
+        operationId: op_07
+      - stepId: step_0078
+        operationId: op_08
+      - stepId: step_0079
+        operationId: op_09
+      - stepId: step_0080
+        operationId: op_00
+      - stepId: step_0081
+        operationId: op_01
+      - stepId: step_0082
+        operationId: op_02
+      - stepId: step_0083
+        operationId: op_03
+      - stepId: step_0084
+        operationId: op_04
+      - stepId: step_0085
+        operationId: op_05
+      - stepId: step_0086
+        operationId: op_06
+      - stepId: step_0087
+        operationId: op_07
+      - stepId: step_0088
+        operationId: op_08
+      - stepId: step_0089
+        operationId: op_09
+      - stepId: step_0090
+        operationId: op_00
+      - stepId: step_0091
+        operationId: op_01
+      - stepId: step_0092
+        operationId: op_02
+      - stepId: step_0093
+        operationId: op_03
+      - stepId: step_0094
+        operationId: op_04
+      - stepId: step_0095
+        operationId: op_05
+      - stepId: step_0096
+        operationId: op_06
+      - stepId: step_0097
+        operationId: op_07
+      - stepId: step_0098
+        operationId: op_08
+      - stepId: step_0099
+        operationId: op_09

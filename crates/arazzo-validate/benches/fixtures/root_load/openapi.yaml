@@ -1,0 +1,65 @@
+openapi: 3.2.0
+info:
+  title: Root load API
+  version: 1.0.0
+paths:
+  /op_00:
+    get:
+      operationId: op_00
+      responses:
+        "200":
+          description: OK
+  /op_01:
+    get:
+      operationId: op_01
+      responses:
+        "200":
+          description: OK
+  /op_02:
+    get:
+      operationId: op_02
+      responses:
+        "200":
+          description: OK
+  /op_03:
+    get:
+      operationId: op_03
+      responses:
+        "200":
+          description: OK
+  /op_04:
+    get:
+      operationId: op_04
+      responses:
+        "200":
+          description: OK
+  /op_05:
+    get:
+      operationId: op_05
+      responses:
+        "200":
+          description: OK
+  /op_06:
+    get:
+      operationId: op_06
+      responses:
+        "200":
+          description: OK
+  /op_07:
+    get:
+      operationId: op_07
+      responses:
+        "200":
+          description: OK
+  /op_08:
+    get:
+      operationId: op_08
+      responses:
+        "200":
+          description: OK
+  /op_09:
+    get:
+      operationId: op_09
+      responses:
+        "200":
+          description: OK

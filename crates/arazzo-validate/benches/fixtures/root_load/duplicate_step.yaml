@@ -1,0 +1,15 @@
+arazzo: 1.1.0
+info:
+  title: Root load benchmark
+  version: 1.0.0
+sourceDescriptions:
+  - name: api
+    url: openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: root_load
+    steps:
+      - stepId: step_0000
+        operationId: op_00
+      - stepId: step_0000
+        operationId: op_01
