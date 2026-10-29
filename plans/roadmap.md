@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86).
+Latest source cycle: [ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,13 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: real debugger regression proof
-([ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86),
-[epic:ac-b6f5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b6f5)). The trivial
-smoke is replaced by an actual Rust DAP/HTTP session and ten direct provider/factory
-tests. All 43 extension tests and workspace gates passed with independent review.
-CI now provisions the adapter before npm test; its hosted run remains unobserved
-under the existing publication hold. No production behavior or packaged-host
-acceptance changed. Fable's Kafka/AsyncAPI source and CI job remain untouched.
+Latest delivery: grammar-backed conformance evidence
+([ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a),
+[epic:ac-33d48](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-33d48)). The private
+manifest guard accepts grammar-only, normative-only and combined evidence while
+rejecting malformed/unused metadata. All 20 manifest tests and workspace
+gates pass with independent review. The live manifest adds only an empty rule
+allowlist; no claim/status, runtime behavior, or Fable-owned evidence changes.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -91,9 +90,10 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a), checking the
-settled grammar-rule evidence contract against current conformance guards before
-new work. No claim/status change or Fable-lane takeover is implied.
+[ac-f6b83](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f6b83), grounding
+CLI namespace evidence and explicit input guidance against current ownership and
+diagnostics before implementation. Its dependency is now satisfied; readiness
+and new reservations still need assessment.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
@@ -1133,3 +1133,35 @@ diagnostic tests, production code, packages and Fable's Kafka job remain intact.
   paused decisions remain intact. Publication remains held by
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)'s failed-review
   ancestor. No push or release occurred.
+
+
+## Delivered — cycle 21: grammar-backed conformance evidence
+
+[ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a) completes the
+accepted plan's grammar-evidence contract. The private manifest target validates
+declared/used grammar names alongside existing anchors; grammar-only claims no
+longer need a fabricated RFC 2119 level. The live JSON gains only an empty
+allowedGrammarRules field. No new coverage, inventory item, status or runtime
+behavior is claimed.
+
+- [2283f19](https://github.com/strefethen/arazzo-cli/commit/2283f1903d4380e823acf33249cfb20565fdb087) **(local; not pushed)** passed fresh-context Astra review.
+  Frontier readiness grounded the handoff; Sol implemented two reserved paths.
+- **20 manifest tests**, all four drift guards, formatting, workspace check,
+  strict Clippy and **1,638 workspace tests; 0 failed, 35 ignored** pass.
+  Test inputs are stable and bound to the reviewed candidate.
+- Every present basis must be nonempty and valid. Grammar labels are exact,
+  duplicate/unknown references fail, and unused declarations report sorted rule
+  names. Repository-contract metadata remains separate. Scanner, evidence,
+  status, owner, pinned identity and full-compliance guards remain intact.
+- Decided by recommendation: correct the stale authority-validator anchor and
+  clarify field presence plus manifest-owned diagnostics for unused entries.
+  This preserves error specificity without inventing claim IDs. Original AC and
+  Testing remain verbatim. Adopted preflight revision `e880eaffd3a790205921fc96557492281e2db0e917cf4cd0e3714279f1a98812`;
+  evidence and independent review: `/private/tmp/arazzo-maintainer-20261029/cycle21-grammar-evidence/`.
+- The single delivery log distinguishes groundwork from capabilities and is
+  checked on desktop/mobile. The epic remains open; the next independent
+  readiness target is [ac-f6b83](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f6b83).
+  One source slice stays within the 13:59–16:59 UTC bound and two-review limit.
+- Publication remains held by the unresolved failed-review ancestor in
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). All existing
+  pauses and Fable's Kafka/AsyncAPI lane remain intact. No push or release.
