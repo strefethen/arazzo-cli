@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac).
+Latest source cycle: [ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,13 +44,20 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: success-only workflow-Step outputs
-([ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac)). A rejected
-attempt records empty outputs and preserves the last successful Step result;
-a successful rerun replaces its exact output map. The completed child remains
-available through `$workflows.<id>`. Independent review and all automated checks
-passed. This repairs runtime behavior; declared Step-output evaluation remains
-the next separate slice.
+Latest delivery: public runtime documentation repair
+([ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359)). The exact
+runtime documentation command now builds without warnings. A private helper’s
+name remains explanatory code text; no signature, visibility or behavior changed.
+The prior success-only output repair remains delivered in cycle 14.
+
+Declared workflow-Step output evaluation
+[ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3) is paused
+before implementation. Its accepted criterion promises exactly the declared
+names, but the model collapses explicit `outputs: {}` and omission. The new
+[ac-db6c4](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-db6c4) asks Steve
+to preserve that distinction (recommended), approving the necessary model
+scope, or explicitly approve treating both alike and correcting the criterion.
+No accepted requirement was narrowed and no output implementation was made.
 
 The Action-order assessment is complete:
 [ac-908bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-908bc) is paused for
@@ -58,8 +65,8 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3), evaluating
-a workflow Step’s declared output map against the child’s results. Runtime inheritance
+[ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180), ensuring
+failed admitted invocations emit their terminal event. Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
@@ -872,3 +879,40 @@ new key set replaces the old one.
   paused status or manual QA alone is not the reason. No push or release occurs.
   Existing Action-order, input-collision and source-type decisions remain with
   Steve. One coherent source slice under the 06:50–09:50 UTC cycle budget.
+
+## Delivered — cycle 15: public documentation repair and output-model checkpoint
+
+[ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359), under
+[epic:ac-1fae2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1fae2), removes
+only the intra-doc link brackets around a private helper name. Public
+`Engine::resolve_operation_id` documentation still explains why the owning
+source determines the request’s server. No executable code, API, dependency or
+runtime capability changes; the known HTTP module gains no responsibility.
+
+- The exact `cargo doc -p arazzo-runtime --no-deps` command reproduces the
+  private-link warning before the edit and reports zero warnings afterward.
+  Source candidate [b654d06](https://github.com/strefethen/arazzo-cli/commit/b654d06fda781833e4b2be111c621c21c7e335c4)
+  **(local; not pushed)** passed independent fresh-context review in round 1.
+- Full workspace: **1,614 passed, 0 failed, 35 ignored**; formatting,
+  compilation, strict Clippy and four drift guards pass. All 293 build/spec
+  inputs stayed stable; 289 tracked inputs match the candidate and four fetched
+  specifications are unchanged. No regression test was added for a comment edit.
+- Contract revision `c94f1f98ebd55af5d4ed7027016ae70d6459fdd550d8f3515ae37766e24bbee4`
+  and exact source, raw command and review evidence live under
+  `/private/tmp/arazzo-maintainer-20261029/rustdoc-cycle/`. The delivery HTML
+  receives desktop/mobile verification and a committed-content hash binding.
+- The intended declared-output feature failed frontier readiness on one
+  load-bearing contract conflict: explicit empty maps and omission are not
+  distinguishable in the current model. [ac-db6c4](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-db6c4)
+  is the decision dependency of paused [ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3).
+  Its validated file-metadata migration preserved Goal, Design, criteria and tests;
+  no source was edited. Grounding and options are retained under
+  `/private/tmp/arazzo-maintainer-20261029/declared-workflow-output-cycle/`.
+- Frontier readiness, a Sol documentation implementer and an independent
+  frontier reviewer worked within disjoint scopes. The cycle delivered one
+  source-documentation repair within the 07:54–10:54 UTC bound; the runtime
+  correctness epic remains open. Next independent readiness assessment is
+  [ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180).
+- Publication remains held by Fable’s earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
+  blocked review. Existing Action-order, child-input collision and source-type
+  decisions remain unchanged. No Fable source/reservations, push or release.
