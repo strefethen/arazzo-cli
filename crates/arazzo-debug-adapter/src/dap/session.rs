@@ -442,7 +442,6 @@ pub(super) fn cleanup_runtime(state: &mut SessionState) {
         if let Some(token) = &runtime.cancel_token {
             token.cancel();
         }
-        // force_resume still needed — unblocks spawn_blocking debug gates after cancel.
         if runtime.controller.force_resume().is_err() {
             // Controller unavailable during teardown; continue cleanup.
         }
@@ -486,6 +485,54 @@ fn stop_reason_name(reason: DebugStopReason) -> &'static str {
 #[cfg(test)]
 mod completion_tests {
     use super::*;
+
+    #[test]
+    fn cleanup_cancels_then_joins_and_is_idempotent() {
+        let token = CancellationToken::new();
+        let worker_token = token.clone();
+        let (joined_tx, joined_rx) = mpsc::channel();
+        let engine = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !worker_token.is_cancelled() && std::time::Instant::now() < deadline {
+                thread::park_timeout(Duration::from_millis(5));
+            }
+        });
+        let monitor = thread::spawn(move || {
+            engine
+                .join()
+                .unwrap_or_else(|err| panic!("engine joined: {err:?}"));
+            joined_tx
+                .send(())
+                .unwrap_or_else(|err| panic!("join proof receiver: {err:?}"));
+        });
+        let mut state = SessionState {
+            runtime: Some(RuntimeSession {
+                outputs: BTreeMap::new(),
+                controller: Arc::new(DebugController::new()),
+                cancel_token: Some(token.clone()),
+                monitor_handle: Some(monitor),
+                last_stop: None,
+                terminated: false,
+                variable_store: VariableStore::default(),
+            }),
+            ..SessionState::default()
+        };
+        cleanup_runtime(&mut state);
+        assert!(token.is_cancelled());
+        joined_rx
+            .try_recv()
+            .unwrap_or_else(|err| panic!("engine join completed before cleanup returned: {err:?}"));
+        let runtime = state.runtime.as_ref().unwrap_or_else(|| panic!("runtime"));
+        assert!(runtime.monitor_handle.is_none());
+        assert!(runtime.terminated);
+        cleanup_runtime(&mut state);
+        assert!(state
+            .runtime
+            .as_ref()
+            .unwrap_or_else(|| panic!("runtime"))
+            .monitor_handle
+            .is_none());
+    }
 
     #[test]
     fn unresolved_output_is_sent_as_a_diagnostic_before_completion() {

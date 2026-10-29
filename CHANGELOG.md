@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Debugger teardown** — cancelling an invocation releases its paused debug
+  checkpoint and prevents later checkpoints from pausing it again. The DAP
+  adapter cancels and joins its active runtime on stdin EOF or transport failure,
+  preserving the original failure and cancellation-versus-timeout identity.
 - Structural validation now rejects `action` and `correlationId` on operation IDs
   qualified to non-AsyncAPI sources, and `channelPath` references to those sources.
   Errors identify the field, source name, and declared source type.

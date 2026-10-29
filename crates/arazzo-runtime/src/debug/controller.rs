@@ -380,6 +380,7 @@ impl DebugController {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gate_step(
         &self,
         workflow_id: &str,
@@ -388,11 +389,15 @@ impl DebugController {
         depth: usize,
         eval_ctx: &EvalContext,
         scopes: DebugScopes,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(), String> {
         let mut guard = self
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         if let StepCheckpoint::Output { name } = &checkpoint {
             if let Some(expression) = scopes.locals.get("outputExpression") {
                 let output: OutputValue = serde_json::from_value(expression.clone())
@@ -439,6 +444,9 @@ impl DebugController {
         let Some((reason, breakpoint_condition)) = stop_info else {
             return Ok(());
         };
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
 
         guard.next_seq = candidate_seq;
         guard.stop_events.push(DebugStopEvent {
@@ -455,10 +463,10 @@ impl DebugController {
         guard.waiting = true;
         self.condvar.notify_all();
 
-        while !guard.continue_permit {
-            guard = self
+        while !guard.continue_permit && !cancel.is_cancelled() {
+            (guard, _) = self
                 .condvar
-                .wait(guard)
+                .wait_timeout(guard, Duration::from_millis(25))
                 .map_err(|_| "debug controller lock poisoned".to_string())?;
         }
         guard.continue_permit = false;
@@ -644,6 +652,34 @@ mod output_diagnostic_tests {
     use serde_json::json;
 
     #[test]
+    fn canceled_gate_preserves_poisoned_controller_error() {
+        let controller = std::sync::Arc::new(DebugController::new());
+        let worker_controller = std::sync::Arc::clone(&controller);
+        let poisoner = std::thread::spawn(move || {
+            let _guard = worker_controller
+                .state
+                .lock()
+                .unwrap_or_else(|err| panic!("controller lock: {err}"));
+            panic!("poison the controller for the error-precedence regression");
+        });
+        assert!(poisoner.join().is_err());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        assert_eq!(
+            controller.gate_step(
+                "wf",
+                "step",
+                StepCheckpoint::Step,
+                0,
+                &EvalContext::default(),
+                DebugScopes::default(),
+                &cancel,
+            ),
+            Err("debug controller lock poisoned".into())
+        );
+    }
+
+    #[test]
     fn diagnostic_is_available_while_paused_at_output() {
         let controller = std::sync::Arc::new(DebugController::new());
         controller
@@ -669,6 +705,7 @@ mod output_diagnostic_tests {
                 0,
                 &context,
                 scopes,
+                &tokio_util::sync::CancellationToken::new(),
             )
         });
         let stopped = controller
@@ -711,6 +748,7 @@ mod output_diagnostic_tests {
                 0,
                 &context,
                 scopes.clone(),
+                &tokio_util::sync::CancellationToken::new(),
             )
             .unwrap_or_else(|err| panic!("output gate failed: {err}"));
         let diagnostics = controller
@@ -744,6 +782,7 @@ mod output_diagnostic_tests {
                     0,
                     &context,
                     scopes.clone(),
+                    &tokio_util::sync::CancellationToken::new(),
                 )
                 .unwrap_or_else(|err| panic!("output gate failed: {err}"));
             assert!(controller

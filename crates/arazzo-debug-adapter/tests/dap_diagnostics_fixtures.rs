@@ -31,11 +31,16 @@ fn run(mut requests: Vec<Value>) -> Vec<Value> {
         request["seq"] = json!(index + 1);
     }
     let mut output = Vec::new();
-    run_dap_stdio(
-        Cursor::new(dap_test_support::encode_dap_stream(&requests)),
-        &mut output,
-    )
-    .unwrap_or_else(|err| panic!("DAP session: {err}"));
+    let input = dap_test_support::encode_dap_stream(&requests);
+    let result = if requests
+        .last()
+        .is_some_and(|request| request["command"] == "disconnect")
+    {
+        run_dap_stdio(Cursor::new(input), &mut output)
+    } else {
+        dap_test_support::run_until_terminated(input, &mut output)
+    };
+    result.unwrap_or_else(|err| panic!("DAP session: {err}"));
     dap_test_support::decode_dap_stream(&output)
 }
 

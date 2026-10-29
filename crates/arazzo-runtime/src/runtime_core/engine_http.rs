@@ -406,7 +406,7 @@ impl Engine {
             )
             .await;
             return self
-                .execute_dry_run_step(workflow_id, step, vars, depth, prep)
+                .execute_dry_run_step(exec_ctx, workflow_id, step, vars, depth, prep)
                 .await;
         }
 
@@ -458,8 +458,10 @@ impl Engine {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_dry_run_step(
         &self,
+        exec_ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
@@ -494,6 +496,8 @@ impl Engine {
                 message: None,
                 current_outputs: &outputs,
                 depth,
+                cancel: &exec_ctx.cancel,
+                is_timeout: &exec_ctx.is_timeout,
             };
             self.debug_gate_output(&gate, name, expr).await?;
         }
@@ -591,6 +595,8 @@ impl Engine {
                 message: None,
                 current_outputs: &checkpoint_outputs,
                 depth,
+                cancel: &exec_ctx.cancel,
+                is_timeout: &exec_ctx.is_timeout,
             };
             self.debug_gate_success_criterion(&gate, index, &evaluation)
                 .await?;
@@ -635,6 +641,8 @@ impl Engine {
                 message: None,
                 current_outputs: &checkpoint_outputs,
                 depth,
+                cancel: &exec_ctx.cancel,
+                is_timeout: &exec_ctx.is_timeout,
             };
             self.debug_gate_output(&gate, name, expr).await?;
         }

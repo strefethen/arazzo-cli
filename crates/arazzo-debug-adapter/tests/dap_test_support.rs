@@ -108,3 +108,77 @@ fn parse_content_length(header: &str) -> usize {
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|w| w == b"\r\n\r\n")
 }
+
+#[allow(dead_code)]
+pub fn run_until_terminated(input: Vec<u8>, output: &mut Vec<u8>) -> Result<(), String> {
+    use std::io::{BufRead, Cursor, Read, Write};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    type Completion = Arc<(Mutex<bool>, Condvar)>;
+    struct Reader {
+        input: Cursor<Vec<u8>>,
+        completion: Completion,
+    }
+    impl Read for Reader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            let available = self.fill_buf()?;
+            let count = available.len().min(bytes.len());
+            bytes[..count].copy_from_slice(&available[..count]);
+            self.consume(count);
+            Ok(count)
+        }
+    }
+    impl BufRead for Reader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.input.position() as usize == self.input.get_ref().len() {
+                let (lock, wake) = &*self.completion;
+                let done = lock
+                    .lock()
+                    .unwrap_or_else(|err| panic!("completion lock: {err:?}"));
+                let (done, _) = wake
+                    .wait_timeout_while(done, Duration::from_secs(5), |done| !*done)
+                    .unwrap_or_else(|err| panic!("completion wait: {err:?}"));
+                if !*done {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "missing DAP completion handshake",
+                    ));
+                }
+            }
+            self.input.fill_buf()
+        }
+        fn consume(&mut self, amount: usize) {
+            self.input.consume(amount);
+        }
+    }
+    struct Writer<'a> {
+        output: &'a mut Vec<u8>,
+        completion: Completion,
+    }
+    impl Write for Writer<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.output.write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if decode_dap_stream(self.output)
+                .iter()
+                .any(|message| message["event"] == "terminated")
+            {
+                let (lock, wake) = &*self.completion;
+                *lock
+                    .lock()
+                    .unwrap_or_else(|err| panic!("completion lock: {err:?}")) = true;
+                wake.notify_all();
+            }
+            Ok(())
+        }
+    }
+    let completion = Arc::new((Mutex::new(false), Condvar::new()));
+    let reader = Reader {
+        input: Cursor::new(input),
+        completion: Arc::clone(&completion),
+    };
+    let mut writer = Writer { output, completion };
+    arazzo_debug_adapter::run_dap_stdio(reader, &mut writer)
+}

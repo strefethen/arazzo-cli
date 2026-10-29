@@ -41,7 +41,7 @@ impl Engine {
 
     pub(super) async fn debug_gate_step(
         &self,
-        _ctx: &ExecutionContext,
+        ctx: &ExecutionContext,
         workflow_id: &str,
         step: &Step,
         vars: &VarStore,
@@ -57,6 +57,8 @@ impl Engine {
             message: None,
             current_outputs: &empty_outputs,
             depth,
+            cancel: &ctx.cancel,
+            is_timeout: &ctx.is_timeout,
         };
         self.debug_gate_checkpoint(&gate, StepCheckpoint::Step, BTreeMap::new())
             .await
@@ -236,6 +238,8 @@ impl Engine {
             message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
+            cancel: debug.cancel,
+            is_timeout: debug.is_timeout,
         };
         self.debug_gate_checkpoint(
             &gate,
@@ -279,6 +283,8 @@ impl Engine {
             message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
+            cancel: debug.cancel,
+            is_timeout: debug.is_timeout,
         };
         self.debug_gate_checkpoint(
             &gate,
@@ -324,11 +330,19 @@ impl Engine {
         let workflow_id = gate.workflow_id.to_string();
         let step_id = gate.step_id.to_string();
         let depth = gate.depth;
+        let cancel = gate.cancel.clone();
 
-        // DebugController uses Condvar::wait(), so we bridge via spawn_blocking
         tokio::task::spawn_blocking(move || {
             controller
-                .gate_step(&workflow_id, &step_id, checkpoint, depth, &eval_ctx, scopes)
+                .gate_step(
+                    &workflow_id,
+                    &step_id,
+                    checkpoint,
+                    depth,
+                    &eval_ctx,
+                    scopes,
+                    &cancel,
+                )
                 .map_err(|err| {
                     RuntimeError::new(
                         RuntimeErrorKind::DebugController,
@@ -342,7 +356,11 @@ impl Engine {
                 RuntimeErrorKind::DebugController,
                 "debug controller task panicked",
             ))
-        })
+        })?;
+        if gate.cancel.is_cancelled() {
+            return Err(control::cancellation_error(gate.is_timeout));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -505,6 +523,8 @@ pub(super) struct DebugGateContext<'a> {
     pub message: Option<&'a super::step_context::MessageSnapshot>,
     pub current_outputs: &'a BTreeMap<String, Value>,
     pub depth: usize,
+    pub cancel: &'a CancellationToken,
+    pub is_timeout: &'a AtomicBool,
 }
 
 pub(super) fn duration_ms_u64(duration: Duration) -> u64 {
@@ -685,6 +705,96 @@ mod output_metadata_tests {
     use super::*;
 
     #[tokio::test]
+    async fn canceled_gate_does_not_publish_a_later_breakpoint() {
+        let controller = Arc::new(DebugController::new());
+        controller
+            .set_breakpoints(vec![
+                crate::StepBreakpoint::new("wf", "fetch").at_output("later")
+            ])
+            .unwrap_or_else(|err| panic!("breakpoints: {err}"));
+        let engine = EngineBuilder::new(ArazzoSpec::default())
+            .debug_controller(Arc::clone(&controller))
+            .build()
+            .unwrap_or_else(|err| panic!("engine: {err}"));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let gate = DebugGateContext {
+            workflow_id: "wf",
+            step_id: "fetch",
+            vars: &VarStore::default(),
+            response: None,
+            request: None,
+            message: None,
+            current_outputs: &BTreeMap::new(),
+            depth: 0,
+            cancel: &cancel,
+            is_timeout: &AtomicBool::new(false),
+        };
+        let output = OutputValue::RuntimeExpression("$inputs.value".into());
+        let mut waiting = Box::pin(engine.debug_gate_output(&gate, "later", &output));
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut waiting).await;
+        let returned_without_rescue = result.is_ok();
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                controller
+                    .set_breakpoints(Vec::new())
+                    .unwrap_or_else(|err| panic!("rescue clear: {err}"));
+                controller
+                    .force_resume()
+                    .unwrap_or_else(|err| panic!("rescue resume: {err}"));
+                waiting.await
+            }
+        };
+        assert!(returned_without_rescue, "pre-canceled gate paused");
+        let error = result
+            .err()
+            .unwrap_or_else(|| panic!("pre-canceled gate must report cancellation"));
+        assert_eq!(error.kind, RuntimeErrorKind::ExecutionCancelled);
+        assert!(controller
+            .stop_events()
+            .unwrap_or_else(|err| panic!("stops: {err}"))
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_breakpoint_keeps_controller_error_identity() {
+        let controller = Arc::new(DebugController::new());
+        controller
+            .set_breakpoints(vec![crate::StepBreakpoint::new("wf", "fetch")
+                .at_output("later")
+                .with_condition("$statusCode ==")])
+            .unwrap_or_else(|err| panic!("breakpoints: {err}"));
+        let engine = EngineBuilder::new(ArazzoSpec::default())
+            .debug_controller(controller)
+            .build()
+            .unwrap_or_else(|err| panic!("engine: {err}"));
+        let gate = DebugGateContext {
+            workflow_id: "wf",
+            step_id: "fetch",
+            vars: &VarStore::default(),
+            response: None,
+            request: None,
+            message: None,
+            current_outputs: &BTreeMap::new(),
+            depth: 0,
+            cancel: &CancellationToken::new(),
+            is_timeout: &AtomicBool::new(false),
+        };
+        let error = engine
+            .debug_gate_output(
+                &gate,
+                "later",
+                &OutputValue::RuntimeExpression("$inputs.value".into()),
+            )
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("malformed breakpoint must fail"));
+        assert_eq!(error.kind, RuntimeErrorKind::DebugController);
+        assert!(error.message.contains("invalid breakpoint condition"));
+    }
+
+    #[tokio::test]
     async fn user_outputs_cannot_replace_diagnostic_metadata() {
         let controller = Arc::new(DebugController::new());
         let engine = EngineBuilder::new(ArazzoSpec::default())
@@ -705,6 +815,8 @@ mod output_metadata_tests {
             message: None,
             current_outputs: &outputs,
             depth: 0,
+            cancel: &CancellationToken::new(),
+            is_timeout: &AtomicBool::new(false),
         };
         let expression = "$response.body#/features/0/properties/event";
         engine

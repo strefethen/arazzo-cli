@@ -59,6 +59,8 @@ impl Engine {
                             depth: ctx.depth,
                             branch: ActionBranch::Success,
                             action_index: action.index,
+                            cancel: ctx.cancel,
+                            is_timeout: ctx.is_timeout,
                         }),
                     )
                     .await;
@@ -145,6 +147,8 @@ impl Engine {
                         depth: ctx.depth,
                         branch: ActionBranch::Failure,
                         action_index: action.index,
+                        cancel: ctx.cancel,
+                        is_timeout: ctx.is_timeout,
                     }),
                 )
                 .await;
@@ -238,6 +242,8 @@ impl Engine {
             message: ctx.message,
             current_outputs: &current_outputs,
             depth: ctx.depth,
+            cancel: ctx.cancel,
+            is_timeout: ctx.is_timeout,
         };
 
         for (action_index, action) in actions.iter().enumerate().skip(start_index) {
@@ -707,6 +713,8 @@ pub(super) struct SelectedActionDebugContext<'a> {
     pub depth: usize,
     pub branch: ActionBranch,
     pub action_index: usize,
+    pub cancel: &'a CancellationToken,
+    pub is_timeout: &'a AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy)]

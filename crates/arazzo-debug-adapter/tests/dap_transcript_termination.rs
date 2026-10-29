@@ -53,10 +53,9 @@ fn stepping_off_last_checkpoint_emits_terminated() {
         // NO disconnect — the terminated event must arrive on its own.
     ]);
 
-    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
 
-    let run = run_dap_stdio(reader, &mut output);
+    let run = dap_test_support::run_until_terminated(input, &mut output);
     assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
 
     let messages = dap_test_support::decode_dap_stream(&output);

@@ -47,73 +47,51 @@ where
     // Thread A: reads DAP commands from stdin and sends them to the coordinator.
     spawn_reader_thread(reader, cmd_tx);
 
-    let mut stdin_closed = false;
+    let result = (|| {
+        // Coordinator loop (Thread B / main thread): multiplexes commands and engine
+        // events. Neither channel blocks the other—engine events arrive via Thread C
+        // regardless of whether stdin is readable.
+        loop {
+            // Drain any pending engine events first.
+            while let Ok(event) = event_rx.try_recv() {
+                handle_engine_event(event, &mut state, writer, &mut outbound)?;
+            }
 
-    // Coordinator loop (Thread B / main thread): multiplexes commands and engine
-    // events. Neither channel blocks the other—engine events arrive via Thread C
-    // regardless of whether stdin is readable.
-    loop {
-        // Drain any pending engine events first.
-        while let Ok(event) = event_rx.try_recv() {
-            handle_engine_event(event, &mut state, writer, &mut outbound)?;
-        }
-
-        // Check for the next command.
-        let cmd = if stdin_closed {
-            None
-        } else {
-            match cmd_rx.try_recv() {
+            // Check for the next command.
+            let cmd = match cmd_rx.try_recv() {
                 Ok(cmd) => Some(cmd),
                 Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    stdin_closed = true;
-                    None
-                }
-            }
-        };
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            };
 
-        let Some(cmd) = cmd else {
-            // No command available — check exit conditions.
-            if stdin_closed {
-                let engine_done = state
-                    .runtime
-                    .as_ref()
-                    .is_none_or(|runtime| runtime.terminated);
-                if engine_done {
-                    break;
-                }
-            }
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        };
+            let Some(cmd) = cmd else {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            };
 
-        match cmd {
-            DapCommand::Eof => {
-                stdin_closed = true;
-                let engine_done = state
-                    .runtime
-                    .as_ref()
-                    .is_none_or(|runtime| runtime.terminated);
-                if engine_done {
-                    break;
+            match cmd {
+                DapCommand::Eof => break,
+                DapCommand::ReadError(err) => {
+                    return Err(err);
                 }
+                DapCommand::Request(request) => match dispatch_request(
+                    request,
+                    &mut state,
+                    writer,
+                    &mut outbound,
+                    &event_tx,
+                    &event_rx,
+                )? {
+                    DispatchOutcome::Continue => {}
+                    DispatchOutcome::Break => break,
+                },
             }
-            DapCommand::ReadError(err) => {
-                return Err(err);
-            }
-            DapCommand::Request(request) => match dispatch_request(
-                request,
-                &mut state,
-                writer,
-                &mut outbound,
-                &event_tx,
-                &event_rx,
-            )? {
-                DispatchOutcome::Continue => {}
-                DispatchOutcome::Break => break,
-            },
         }
-    }
 
-    Ok(())
+        Ok(())
+    })();
+
+    session::cleanup_runtime(&mut state);
+    drop(event_rx);
+    result
 }

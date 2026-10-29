@@ -3,11 +3,9 @@
 mod dap_test_support;
 
 use std::fs;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arazzo_debug_adapter::run_dap_stdio;
 use serde_json::json;
 
 /// A workflow that fails at runtime (here: an operationId that no loaded
@@ -38,10 +36,9 @@ fn engine_failure_emits_error_output_exited_and_terminated() {
         // NO disconnect — failure events must arrive on their own.
     ]);
 
-    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
 
-    let run = run_dap_stdio(reader, &mut output);
+    let run = dap_test_support::run_until_terminated(input, &mut output);
     assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
 
     let messages = dap_test_support::decode_dap_stream(&output);
@@ -117,9 +114,8 @@ fn nested_dependency_failure_exposes_stable_runtime_code() {
         }),
         json!({ "seq": 3, "type": "request", "command": "configurationDone", "arguments": {} }),
     ]);
-    let reader = Cursor::new(input);
     let mut output = Vec::<u8>::new();
-    let run = run_dap_stdio(reader, &mut output);
+    let run = dap_test_support::run_until_terminated(input, &mut output);
     assert!(run.is_ok(), "DAP loop should exit cleanly: {run:?}");
     let messages = dap_test_support::decode_dap_stream(&output);
     let text = messages

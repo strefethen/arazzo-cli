@@ -439,6 +439,8 @@ impl Engine {
             )
             .await;
             let gate = DebugGateContext {
+                cancel: &exec_ctx.cancel,
+                is_timeout: &exec_ctx.is_timeout,
                 workflow_id,
                 step_id: &step.step_id,
                 vars,
@@ -481,6 +483,8 @@ impl Engine {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
             let gate = DebugGateContext {
+                cancel: &exec_ctx.cancel,
+                is_timeout: &exec_ctx.is_timeout,
                 workflow_id,
                 step_id: &step.step_id,
                 vars,
