@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-6572e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6572e) (tests only).
+Latest source cycle: [ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,14 +44,14 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: Selector admission compatibility baseline
-([ac-6572e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6572e)). One focused
-test target pins parsing-entrypoint differences before a shared borrowed owner
-is extracted. Production behavior is unchanged. Independent review passed.
-Shared admission refinement [ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855)
-remains open and expression inventory [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
-remains blocked. Runtime inheritance [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e)
-is paused for Steve’s input-name collision decision
+Latest delivery: shared owned/borrowed Selector admission
+([ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855)). One private
+model owner supplies both decoding and a borrowed context check, preserving wire
+behavior and diagnostics. Independent review passed. This is architectural
+groundwork; expression inventory [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
+still needs current-source readiness and implementation. Runtime inheritance
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) remains paused
+for Steve's input-name collision decision
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701).
 Publication remains held by Fable’s earlier paused candidate. The separate
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
@@ -343,20 +343,35 @@ AGENTS.md’s Scope rule and the accepted plan’s explicit exclusion require St
 to settle this policy. Runtime source work has not started; its original AC and
 testing remain intact. Rejection or another representation needs revised scope.
 
-## Next refinement — shared borrowed Selector admission
+## Delivered — cycle 11: shared Selector admission owner
 
-[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855) remains open
-after the compatibility baseline. Its intended owner is private within the
-model crate; existing ValueSource classification and future borrowed inventory
-must share admission without duplicating shape rules or cloning value trees.
-The wire deserialization envelope has distinct behavior and must remain intact.
-Shared visitor/seed feasibility needs proof before implementation handoff; this
-is not yet implementation-ready. No new Steve gate is inferred while exact
-admission and the accepted public inventory remain unchanged.
+[ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855) extracts owned
+decoding and borrowed admission into the model crate's private
+`selector_admission` module. Its visitors own required/default fields, duplicate
+handling and type dispatch once. The borrowed path returns the original context
+string without copying extension value trees. `ValueSource::from` uses that
+path before existing admitted-value materialization. Wire parsing envelopes,
+public models and serialization stay unchanged.
 
-[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) stays blocked
-on that refinement. Neither baseline tests nor static ownership decisions claim
-the no-cloning classifier or expression inventory has been delivered.
+Decided by recommendation: use shared visitors after an executed prototype
+showed that derived flattening copies extension trees. Focused capture preserves
+malformed-extension diagnostics and their priority, including invalid byte-key
+cases. The frozen original model and independent tests establish compatibility;
+no speed claim or normative validity change is made.
+
+Root owns tracker, Git and delivery documentation; Sol implements the settled
+four-file slice after frontier readiness; a fresh frontier reviewer checks the
+exact candidate. Kickoff **2026-10-29 03:42 UTC** (20:42 PDT Oct 28), hard expiry
+**06:42 UTC**, one source slice and at most two review rounds.
+
+## Next consumer — effective expression-site inventory
+
+[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) now has its
+shared-admission prerequisite. Recheck its accepted contract, current source and
+reservations before starting; graph eligibility alone is not implementation
+readiness. Its frozen syntax-neutral API, provenance, ordering and no-value-tree-
+cloning obligations remain intact. No inventory, graph or scheduling change is
+delivered by the shared owner.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -732,3 +747,22 @@ source changed, and the existing Fable publication gate remains in force.
   remains blocked. The epic stays open. Revision-safe closure releases leases;
   unrelated untracked files remain untouched. Publication is still held by
   Fable’s paused ac-18e6f candidate in unpublished main history.
+
+## Checkpoint — cycle 11
+
+- Source: [048a130](https://github.com/strefethen/arazzo-cli/commit/048a1305b1153cf5a05b34a7b21b4386365b40fc) **(local; not pushed)**, independent review PASS.
+  One private model owner and focused tests; public wire behavior and Fable's
+  source are unchanged. The epic remains open for its consumers.
+- The original 29-test admission baseline remains byte-identical. Six private
+  borrowing tests and seven public diagnostic tests pass; the model package has
+  94 passing tests. The frozen-original differential proof passes 423 exact
+  value/error comparisons, including JSON and byte inputs, plus serialization.
+- Full workspace: **1,597 passed, 0 failed, 35 ignored**. Formatting,
+  workspace check, strict all-target/all-feature Clippy and all four drift guards
+  pass. All 287 build/fixture/spec inputs remained unchanged through final gates.
+- Evidence, contract and candidate bindings are retained under
+  `/private/tmp/arazzo-maintainer-20261029/selector-shared-cycle/`. The delivery
+  HTML receives desktop/mobile QA and a committed-blob hash binding.
+- Inventory readiness is the next independent slice. Runtime collision and
+  source-type decisions remain with Steve. Publication remains held by Fable's
+  paused ac-18e6f candidate in unpublished main history; no push/release occurs.
