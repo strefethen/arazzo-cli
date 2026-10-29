@@ -33,9 +33,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arazzo_spec::{ArazzoSpec, SourceDescription, SourceType};
 
+use super::source_document::{NativeSourceDocumentLoader, SourceDocumentLoader};
 use super::url_crate::{ParseError, Url};
 use super::{RuntimeError, RuntimeErrorKind};
 
@@ -99,6 +101,7 @@ pub(super) struct DocumentSet {
     declared_self: Option<String>,
     had_retrieval_base: bool,
     members: Vec<SetMember>,
+    source_document_loader: Option<Arc<dyn SourceDocumentLoader>>,
 }
 
 impl DocumentSet {
@@ -129,7 +132,15 @@ impl DocumentSet {
             base: base_uri(spec.self_uri.as_deref(), retrieval_base),
             declared_self: spec.self_uri.clone(),
             members,
+            source_document_loader: None,
         })
+    }
+
+    pub(super) fn set_source_document_loader(
+        &mut self,
+        loader: Option<Arc<dyn SourceDocumentLoader>>,
+    ) {
+        self.source_document_loader = loader;
     }
 
     /// Phase 3: resolve one Source Description's url and bind it to a document.
@@ -195,19 +206,15 @@ impl DocumentSet {
                 ),
             ));
         };
-        let data = fs::read(&path).map_err(|err| {
-            RuntimeError::new(
-                RuntimeErrorKind::SourceDescriptionLoad,
-                format!(
-                    "sourceDescription \"{name}\": url \"{url}\" resolved against base URI \
-                     \"{base}\" to \"{resolved}\"; reading OpenAPI document \"{path}\": {err}",
-                    name = sd.name,
-                    url = sd.url,
-                    base = self.base_display(),
-                    path = path.display(),
-                ),
-            )
-        })?;
+        let data = match &self.source_document_loader {
+            Some(loader) => loader.load(&sd.name, &path)?,
+            None => NativeSourceDocumentLoader {
+                authored_url: &sd.url,
+                base_uri: self.base_display(),
+                resolved_uri: resolved.as_str(),
+            }
+            .load(&sd.name, &path)?,
+        };
         Ok(Some(BoundDocument {
             data,
             label: path.display().to_string(),

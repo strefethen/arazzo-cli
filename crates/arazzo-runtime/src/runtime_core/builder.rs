@@ -21,6 +21,7 @@ pub struct EngineBuilder {
     debug_controller: Option<Arc<DebugController>>,
     openapi_specs: Vec<ProvidedDocument>,
     source_base_dir: Option<PathBuf>,
+    source_document_loader: Option<Arc<dyn SourceDocumentLoader>>,
     message_transport: MessageTransportOptions,
 }
 
@@ -45,6 +46,7 @@ impl EngineBuilder {
             debug_controller: None,
             openapi_specs: Vec::new(),
             source_base_dir: None,
+            source_document_loader: None,
         }
     }
 
@@ -56,6 +58,17 @@ impl EngineBuilder {
     /// without either fails for such sources.
     pub fn source_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.source_base_dir = Some(dir.into());
+        self
+    }
+
+    /// Sets byte acquisition for OpenAPI sources resolved to local file paths.
+    ///
+    /// Omitted loaders use native filesystem reads. Provided document identities
+    /// bypass this loader, and non-file references remain refused. Loader errors
+    /// propagate unchanged without a native retry. This does not affect AsyncAPI
+    /// sources or load external `$ref` documents.
+    pub fn source_document_loader(mut self, loader: Arc<dyn SourceDocumentLoader>) -> Self {
+        self.source_document_loader = Some(loader);
         self
     }
 
@@ -180,6 +193,7 @@ impl EngineBuilder {
             self.source_base_dir.as_deref(),
             self.openapi_specs,
         )?;
+        documents.set_source_document_loader(self.source_document_loader);
 
         let mut source_bases = BTreeMap::new();
         let mut source_ops = OperationIndex::default();

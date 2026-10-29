@@ -70,6 +70,7 @@ mod redaction;
 mod regex_cache;
 mod replay;
 mod run_record;
+mod source_document;
 mod state;
 mod step_attempt;
 mod step_context;
@@ -116,6 +117,7 @@ use payload::{
 use regex_cache::RegexCache;
 use replay::{validate_replay_request, ReplayKey, ReplayState};
 pub use run_record::{RunRequestMetadata, RunResponseMetadata, RunStepOutcome, RunStepRecord};
+pub use source_document::SourceDocumentLoader;
 pub use state::Engine;
 use state::ExecutionContext;
 pub(crate) use state::VarStore;
