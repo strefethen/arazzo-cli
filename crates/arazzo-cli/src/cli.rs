@@ -56,7 +56,7 @@ pub enum Commands {
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
-        /// JSON-typed input as key=<json-value>, preserving numbers, booleans, arrays, and objects.
+        /// JSON-typed input as `key=<json-value>`, preserving numbers, booleans, arrays, and objects.
         #[arg(long = "input-json")]
         input_json: Vec<String>,
 
@@ -293,7 +293,7 @@ pub enum Commands {
         #[arg(short = 'i', long = "input")]
         input: Vec<String>,
 
-        /// JSON-typed inputs (key=<json-value>)
+        /// JSON-typed inputs (`key=<json-value>`)
         #[arg(long = "input-json")]
         input_json: Vec<String>,
 

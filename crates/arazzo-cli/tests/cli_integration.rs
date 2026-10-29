@@ -3063,6 +3063,14 @@ fn run_help_surfaces_agent_safe_execution_notes() {
     assert!(help.contains("For agents:"));
     assert!(help.contains("Use --dry-run --json to preview requests without sending HTTP traffic"));
     assert!(help.contains("Use schema run to inspect the JSON output contract"));
+
+    for command in ["run", "test"] {
+        let output = run(&[command, "--help"], None);
+        assert!(output.status.success());
+        let help = stdout_text(&output);
+        assert!(help.contains("--input-json <INPUT_JSON>"));
+        assert!(help.contains("key=<json-value>"));
+    }
 }
 
 #[test]
