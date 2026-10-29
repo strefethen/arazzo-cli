@@ -61,8 +61,9 @@ Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
 approved reuse of locked Criterion 0.5.1 in
 [ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448).
-The [root plan](current/arazzo-root-load-benchmark.md) was accepted and decomposed
-under the standing mandate. The [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md)
+The [root plan](completed/arazzo-root-load-benchmark.md) is completed: its sole
+implementation ticket closed and its system success condition was observed.
+Acceptance and decomposition followed the standing mandate. The [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md)
 retains its policy/review/continuity warnings alongside that approval.
 No dependency version, checksum, feature or production edge changed.
 The other five workload families, OS measurements and regression thresholds

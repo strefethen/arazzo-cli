@@ -13,7 +13,7 @@ lockfile_delta: proposed validate dev-dependency edge only; retain package versi
 
 Recommend inheriting the existing workspace `criterion` dependency in
 `arazzo-validate`'s dev-dependencies for the proposed
-[root-load benchmark](../../current/arazzo-root-load-benchmark.md). The workspace
+[root-load benchmark](../../completed/arazzo-root-load-benchmark.md). The workspace
 declares version `0.5` with `html_reports`; the lockfile resolves 0.5.1. Expression
 and runtime benchmarks already use that same declaration. Preserve its current
 features, package set, versions and checksums. No production dependency, package

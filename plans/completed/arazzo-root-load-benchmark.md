@@ -182,6 +182,18 @@ No source-indexing, workflow, CLI-process or resource metric is relabelled as
 root parsing performance. The completion record links that bundle and its
 review, without claiming a threshold or the six-family program complete.
 
+**Observed 2026-10-29:**
+[ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a) is completed.
+The independently reviewed candidate
+[9edb2a9](https://github.com/strefethen/arazzo-cli/commit/9edb2a947e2cb98896a3b08942e3c250e65b61ff)
+(local; not pushed) produced both fresh optimized runs in
+`target/root-load-evidence.GWBg4x/run_01` and `run_02`, with all three native
+series, independent controls and every result check passing. Full provenance,
+raw samples and the noise assessment are retained in that evidence bundle;
+contract, gates and review are in `/private/tmp/arazzo-root-benchmark-implementation/`.
+[Delivery cycle 27](../delivery-log.html#cycle-27) records the measurements and
+limits. This completes only the root unit; the six-family epic remains open.
+
 ---
 
 **Disposition:** Decomposed into
