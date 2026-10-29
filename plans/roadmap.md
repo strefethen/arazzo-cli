@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a).
+Latest source cycle: [ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,13 +44,14 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: grammar-backed conformance evidence
-([ac-b8d9a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b8d9a),
-[epic:ac-33d48](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-33d48)). The private
-manifest guard accepts grammar-only, normative-only and combined evidence while
-rejecting malformed/unused metadata. All 20 manifest tests and workspace
-gates pass with independent review. The live manifest adds only an empty rule
-allowlist; no claim/status, runtime behavior, or Fable-owned evidence changes.
+Latest delivery: repeatable release-CLI performance evidence
+([ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6),
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)). One build
+identifies the exact executable; three unchanged workloads each run three warmups
+and twenty measured invocations. Raw failures and provenance are retained, while
+successful samples produce median/p95. Eight deterministic scenarios, the real
+release baseline and repository gates pass with independent review. This is
+measurement groundwork, with no speedup, threshold or hosted-CI claim.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -89,11 +90,16 @@ The Action-order assessment is complete:
 Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
-Next independent readiness assessment:
-[ac-f6b83](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f6b83), grounding
-CLI namespace evidence and explicit input guidance against current ownership and
-diagnostics before implementation. Its dependency is now satisfied; readiness
-and new reservations still need assessment.
+CLI namespace evidence [ac-f6b83](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f6b83)
+is paused before implementation. Its frozen claim incorrectly includes malformed
+reserved embedded-expression candidates in literal fallback.
+[ac-9a367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9a367) asks Steve to
+approve precise wording that retains direct literal text, required-expression
+rejection and every existing test. Source-anchor and manifest-total scope repairs
+are routine; the exact claim remains gated. Next independent readiness target:
+[ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d), a bounded
+engine/resource benchmark assessment, with no implementation authority inferred.
+Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
@@ -1165,3 +1171,35 @@ behavior is claimed.
 - Publication remains held by the unresolved failed-review ancestor in
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). All existing
   pauses and Fable's Kafka/AsyncAPI lane remain intact. No push or release.
+
+
+## Delivered — cycle 22: repeatable release-CLI baseline
+
+[ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6) completes the
+contained measurement repair in [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62).
+The existing script owns build/artifact identification, sampling and summaries;
+an isolated shell harness proves the two-file change. No Rust module, workload
+semantics, Kafka transport, dependency or CI workflow changed.
+
+- [249b19e](https://github.com/strefethen/arazzo-cli/commit/249b19e6312c1754aa9414a9f9ff962ba50d191a) **(local; not pushed)** passed fresh-context Astra review.
+  Astra assessed readiness and Sol implemented the two reserved script paths.
+- Three untimed warmups and twenty measured invocations for each unchanged
+  validate/list/dry-run workload; real release run **60 samples, 9 warmups**, all
+  successful. Build, warmup, measured-command and provenance failures remain
+  explicit. Median/p95 use successful measured samples, with no threshold.
+- **Eight deterministic scenarios**, syntax and real release baseline pass.
+  Formatting, workspace check, strict Clippy and **1,638 workspace tests;
+  0 failed, 35 ignored** pass. Evidence binds unchanged Rust/spec and script
+  inputs to the exact source candidate; CI artifact consumers are unchanged.
+- Decided by recommendation: current policy permits `plan: investigation`, so
+  stale lint-mismatch prose and legacy declarations were repaired. Original
+  Design, Acceptance Criteria and Testing Obligations are byte-identical.
+  Adopted preflight `6aeb691a230fbd0589356e22fe68fe77d931dd4ceb8d973859e10bab62a34375`; packet `/private/tmp/arazzo-maintainer-20261029/cycle22-perf-baseline/`.
+- The single delivery log distinguishes measurement groundwork from engine
+  performance and is checked on desktop/mobile. The evidence epic stays open.
+  Namespace evidence is paused for [ac-9a367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9a367);
+  the next independent assessment is [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
+  One source slice remains within 15:01–18:01 UTC and the two-review limit.
+- Publication remains held by the failed-review ancestor in
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's lane,
+  existing pauses and unrelated untracked files remain untouched. No push/release.
