@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5).
+Latest source cycle: [ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
@@ -45,15 +45,16 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: structured workflow-output warnings
-([ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5),
-[epic:ac-d4e65](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d4e65)).
-Typed runtime events carry unresolved-output diagnostics into `run --json` in
-every mode, including dry runs and later failures. CLI presentation owns the
-shared formatter and command policy. Independent review, all required gates
-and 1,652 workspace tests pass; the source commit remains local under the
-existing publication hold. Test/replay retain their report schemas and visible
-warnings. MCP/DAP presentation and trace persistence remain separate work.
+Latest delivery: debug checkpoint cancellation and client-loss cleanup
+([ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26),
+[epic:ac-abcd5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-abcd5)).
+Cancellation releases the current pause and prevents later checkpoint stops;
+DAP cleanup runs on EOF, reader-channel loss and transport failures while
+preserving the original error. Runtime gates and the existing adapter session
+owner retain their responsibilities. All required gates and 1,677 workspace
+tests pass; independent candidate review passed without findings. The source remains local
+under the existing publication hold. Workflow-output reporting from cycle24
+remains complete; this repair changes no public API or DAP message schema.
 
 The preceding assessment delivered a reviewed engine workload benchmark contract
 ([ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d),
@@ -62,8 +63,12 @@ workload families define bounded fixtures, correctness/failure controls, timing
 boundaries, resource accounting and provenance. Existing CLI/Criterion owners
 remain separate from proposed validate, runtime and OS resource units. Independent
 review passed; no benchmark implementation or new performance measurements were
-delivered. [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12)
-asks Steve to accept the design before unit-scoped implementation planning.
+delivered. Steve explicitly accepted the design and unit-by-unit planning on
+2026-10-29 through [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12),
+now completed. The next planning cycle grounds the root parse/validation unit,
+then runtime workload ownership and OS resource measurement. Dependencies and
+regression thresholds remain separate decisions; implementation still requires
+grounded unit contracts. No performance improvement or new measurement is claimed.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -109,11 +114,9 @@ reserved embedded-expression candidates in literal fallback.
 approve precise wording that retains direct literal text, required-expression
 rejection and every existing test. Source-anchor and manifest-total scope repairs
 are routine; the exact claim remains gated. Structured workflow-output warnings
-are complete. Next independent readiness target:
-[ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26), debug checkpoint
-cancellation and DAP cleanup after client loss, after fresh source grounding and
-start clearance. The completed benchmark design awaits
-[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12).
+are complete. Debug checkpoint cancellation and cleanup after client loss are
+reviewed and complete. The next cycle follows Steve's accepted benchmark
+planning direction under [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62).
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
@@ -125,7 +128,9 @@ Publication was reassessed under the updated policy: ticket pause or manual QA
 alone is not a push blocker. Fable's earlier candidate still lacks review PASS
 and has unresolved remediation in
 [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), so the hold
-remains. No Fable source or reservation was changed.
+remains. No Fable reservation was taken; the debugger repair only adds four
+existing-context field assignments in the message runtime after ownership
+clearance, with no Kafka/AsyncAPI transport behavior change.
 
 ## Direction and initial cycle
 
@@ -1304,3 +1309,57 @@ replay, keeping command policy out of the engine.
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's
   Kafka/AsyncAPI lane and unrelated untracked files are untouched. No push,
   deployment or release occurred.
+
+## Delivered — cycle 25: cancellation through every debug checkpoint
+
+[ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26) repairs
+disconnect hangs with successive criterion/output breakpoints and paused EOF.
+Its completion also completes the six-member release-triage follow-up
+[epic:ac-abcd5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-abcd5).
+That tracking outcome leaves release approval and fresh release preflight separate.
+
+- [53fa38a](https://github.com/strefethen/arazzo-cli/commit/53fa38ac2952ab2d5cc2e8a14444fab04fd6fc90)
+  **(local; not pushed)** passed fresh-context Astra review in round 1, with no
+  findings or evidence gaps. Frontier readiness preceded disjoint Sol runtime
+  and adapter implementation; the parent owned integrated verification and closure.
+- The existing private checkpoint owner receives the invocation token and timeout
+  marker. Cancellation releases a paused wait and prevents a later stop. Genuine
+  controller errors and cancellation-versus-timeout identity stay intact.
+  DAP's coordinator always invokes existing session cleanup on ordinary exits,
+  including EOF and reader/dispatch/event-writer errors, preserving the original
+  error and joining the runtime before returning. No public API, schema or code
+  identity changed, and no detached worker or repeated-resume workaround was added.
+- **14 runtime scenarios, four real-adapter scenarios and four injected
+  client/transport exits pass in debug and release.** Red proof reproduced all
+  runtime cases and both adapter defects; the two adapter positive controls
+  already passed. Existing stepping, checkpoint and diagnostic assertions pass.
+  The private cleanup test proves cancel-before-join and idempotence.
+- Formatting, workspace check, strict all-target/all-feature Clippy and **1,677
+  workspace tests; 0 failed, 35 existing ignores** pass, with all four drift
+  guards unchanged. Independent review verified all 14 source and 373 gate
+  input hashes against the candidate. Initial test-only Clippy errors were fixed
+  before final verification. Newly authored comments were removed under Steve's
+  updated rule; unchanged existing comments were preserved.
+- Decided by recommendation: two existing message debug contexts receive four
+  invocation-context fields after ownership clearance; the dry-run helper passes
+  its existing invocation context; completion tests use a bounded handshake
+  before EOF with every original assertion retained. The missing scratch fixture
+  was reconstructed from dated evidence without claiming byte identity. Original
+  Goal, AC and full Testing Obligations are unchanged. Adopted preflight revision
+  `1c41285b9dc4c7f7009a8f8fdf525065eca24e490f04932a2207d7a8526415b8`;
+  raw proof and review: `/private/tmp/arazzo-maintainer-20261029/cycle25-debug-cancellation/`.
+- The single delivery log explains the before/after session lifecycle and
+  responsibility boundaries, with desktop/mobile checks. No packaged VSIX,
+  Windows or native VS Code UI verification is claimed. Kafka/AsyncAPI transport
+  behavior and unrelated work are preserved; no other agent's lease was taken.
+- Steve explicitly accepted the benchmark design and unit-by-unit planning in
+  [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), now closed.
+  Its accepted disposition is recorded in the existing assessment. Next cycle:
+  ground root parse/validation benchmark planning under
+  [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62), then
+  runtime workload and OS measurement units. Dependencies and thresholds retain
+  separate decision gates; no benchmark implementation was bundled here.
+- One source slice and one review fit the 18:00–21:00 UTC bound. Publication
+  remains held by the unresolved failed-review ancestor in
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), not manual
+  QA or paused status alone. No push, release or deployment occurred.

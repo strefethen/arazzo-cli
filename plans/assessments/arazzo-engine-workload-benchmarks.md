@@ -1,6 +1,13 @@
 # Engine workload benchmark assessment
 
-**Disposition: proposed contract, awaiting acceptance.** Prepared 2026-10-29 for
+**Disposition: accepted for unit-by-unit planning, 2026-10-29.** Steve accepted
+the reviewed design and authorized its proposed planning in
+[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), replying
+“Accept design and planning” in the maintainer chat. This accepts the six workload
+families and measurement ownership. Dependencies and regression thresholds
+remain separate decisions; implementation still requires grounded unit contracts.
+
+Prepared 2026-10-29 for
 [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d), against
 `2bd383f086e9f7eb56551b488019bb538f1621af`. This assessment selects a measurement
 approach for review; it neither authorizes implementation nor establishes a
