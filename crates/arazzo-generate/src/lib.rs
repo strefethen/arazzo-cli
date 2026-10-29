@@ -11,9 +11,33 @@ pub mod standalone_example;
 pub fn parse_openapi_file(path: &str) -> Result<openapiv3::OpenAPI, String> {
     let bytes =
         std::fs::read(path).map_err(|err| format!("reading OpenAPI spec \"{path}\": {err}"))?;
-    ensure_supported_openapi_version(&bytes)?;
-    serde_yaml_ng::from_slice(&bytes)
-        .map_err(|err| format!("parsing OpenAPI spec \"{path}\": {err}"))
+    parse_openapi(&bytes).map_err(|err| match err {
+        OpenApiParseError::UnsupportedVersion(message) => message,
+        OpenApiParseError::InvalidDocument(err) => {
+            format!("parsing OpenAPI spec \"{path}\": {err}")
+        }
+    })
+}
+
+/// Parse an already-read OpenAPI spec (YAML or JSON) without filesystem or network I/O.
+///
+/// The caller owns reading and authorizing the input, including any size limits.
+/// External references are not loaded. Parse errors have no input pathname context.
+pub fn parse_openapi_bytes(bytes: &[u8]) -> Result<openapiv3::OpenAPI, String> {
+    parse_openapi(bytes).map_err(|err| match err {
+        OpenApiParseError::UnsupportedVersion(message) => message,
+        OpenApiParseError::InvalidDocument(err) => format!("parsing OpenAPI spec: {err}"),
+    })
+}
+
+enum OpenApiParseError {
+    UnsupportedVersion(String),
+    InvalidDocument(serde_yaml_ng::Error),
+}
+
+fn parse_openapi(bytes: &[u8]) -> Result<openapiv3::OpenAPI, OpenApiParseError> {
+    ensure_supported_openapi_version(bytes).map_err(OpenApiParseError::UnsupportedVersion)?;
+    serde_yaml_ng::from_slice(bytes).map_err(OpenApiParseError::InvalidDocument)
 }
 
 /// Rejects OpenAPI 3.1 and newer with an actionable message.
