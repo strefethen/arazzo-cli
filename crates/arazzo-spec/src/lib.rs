@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 mod effective_step;
 mod operation_id;
 mod operation_path;
+mod selector_admission;
 mod source_reference;
 mod workflow_dependency;
 
@@ -663,7 +664,7 @@ pub struct SuccessCriterion {
 }
 
 /// Selector or criterion expression type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum SelectorType {
     Name(String),
@@ -671,7 +672,7 @@ pub enum SelectorType {
 }
 
 /// Object form of a selector or criterion expression type.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpressionType {
     #[serde(rename = "type", default)]
@@ -682,14 +683,13 @@ pub struct ExpressionType {
         flatten,
         default,
         skip_serializing_if = "vendor_extensions_is_empty",
-        serialize_with = "serialize_vendor_extensions",
-        deserialize_with = "deserialize_vendor_extensions"
+        serialize_with = "serialize_vendor_extensions"
     )]
     pub extensions: VendorExtensions,
 }
 
 /// Arazzo Selector Object.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectorObject {
     pub context: String,
@@ -700,8 +700,7 @@ pub struct SelectorObject {
         flatten,
         default,
         skip_serializing_if = "vendor_extensions_is_empty",
-        serialize_with = "serialize_vendor_extensions",
-        deserialize_with = "deserialize_vendor_extensions"
+        serialize_with = "serialize_vendor_extensions"
     )]
     pub extensions: VendorExtensions,
 }
@@ -786,6 +785,9 @@ impl Default for ValueSource {
 
 impl From<serde_yaml_ng::Value> for ValueSource {
     fn from(value: serde_yaml_ng::Value) -> Self {
+        if selector_admission::borrowed_selector_context(&value).is_none() {
+            return Self::Literal(value);
+        }
         match serde_yaml_ng::from_value::<Self>(value.clone()) {
             Ok(Self::Selector(selector)) => Self::Selector(selector),
             _ => Self::Literal(value),
