@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e).
+Latest source cycle: [ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,15 +44,17 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: canonical local Step-output reference extraction
-([ac-2f84e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2f84e)). Four field
-modes reuse the existing syntax owners and preserve exact names, duplicates and
-source order. This is library groundwork; runtime dependency scheduling is not
-changed. Independent review passed; publication remains held by Fable’s earlier
-paused candidate. Next refinement candidate: canonical effective Step parameters
-([ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e)). The separate
-source-type decision in
-[ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367) remains open.
+Latest delivery: canonical effective Step parameters
+([ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e)). One borrowed
+model view applies exact overrides to all four target kinds and retains source
+provenance. This is groundwork; validator and runtime adoption remain outstanding.
+Independent review passed. Publication remains held by Fable’s earlier paused
+candidate. Next refinement: non-action expression-site inventory
+([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). The validator
+consumer is paused for the parameter-location contract correction in
+[ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0); the separate
+source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
+also remains open.
 
 ## Direction and initial cycle
 
@@ -249,14 +251,61 @@ integration; Sol implements; a fresh frontier agent reviews the exact candidate.
 One source slice, at most two review rounds; kickoff 23:37 UTC, three-hour ceiling.
 Fable's source paths and paused decisions remain outside this cycle.
 
-## Next independent candidate — canonical effective Step parameters
+## Delivered — cycle 8: canonical effective Step parameters
 
-[ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e) is the next
-refinement candidate. Its model-only helper preserves Workflow/Step parameter
-provenance and exact overrides without parsing expressions. It is prerequisite
-to effective expression-site inventory
-[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176).
-Current source, accepted API and live ownership must be rechecked before start.
+[ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e), under
+[epic:ac-59b5b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-59b5b), adds the
+accepted borrowed Parameter overlay to a focused model module. Its exact
+`(name, in_)` identity, source order, duplicate visibility and declaration
+provenance apply uniformly to operationId, operationPath, channelPath and
+workflowId Steps. The root adds four wiring/export lines only. Parsing,
+validation, resolution and runtime behavior remain separate responsibilities.
+
+The vendored [Workflow parameters](../spec/arazzo/v1.1.0.html#workflowParameters)
+text says: “A list of parameters that are applicable for all steps described
+under this workflow.” [Step parameters](../spec/arazzo/v1.1.0.html#stepParameters)
+says: “If a parameter is already defined at the Workflow, the new definition
+will override it but can never remove it.” The
+[Parameter Object](../spec/arazzo/v1.1.0.html#parameter-object) says: “A unique
+parameter is defined by the combination of a `name` and `in` fields.” Output
+ordering and duplicate retention are the accepted repository choices, enabling
+later validators to report the original declarations.
+
+Frontier readiness confirmed the frozen API and three-file boundary. Decided by
+recommendation: refresh owning helper anchors and prove location-case behavior
+through negative deserialization, because `ParamLocation` has typed lowercase
+variants. Original Goal, acceptance criteria and testing obligations are unchanged.
+Root owns tkt/docs/Git, Sol implements, and a fresh frontier context reviews the
+exact candidate. One source slice, at most two review rounds; kickoff
+**2026-10-29 00:39 UTC** (17:39 PDT Oct 28), hard expiry **03:39 UTC**.
+Fable’s source and reservations remain outside this slice.
+
+## Next independent candidate — effective expression-site inventory
+
+[ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176) is next for
+bounded readiness refinement. Its prerequisites are the completed model overlay
+and Fable’s completed correlationId disposition
+[ac-dc3f2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-dc3f2). Verify its
+accepted field inventory, current source and live ownership before starting.
+This inventory remains separate from dependency graphs and scheduling.
+
+## Paused consumer checkpoint — workflow-target parameter locations
+
+The validator adoption ticket
+[ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6) requires an
+unsupported rejection: any `in` on a workflow-target Step parameter. Vendored
+[Parameter.in](../spec/arazzo/v1.1.0.html#parameterIn) does not prohibit it there;
+[success-action parameters](../spec/arazzo/v1.1.0.html#successParameters) and
+[failure-action parameters](../spec/arazzo/v1.1.0.html#failureParameters) explicitly
+do. The accepted plan’s broad prohibition also needs correction if Steve agrees.
+
+**Ask Steve for** [ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0):
+recommend allowing valid locations on workflow-target Step parameters while
+retaining the explicit action-parameter prohibition. Removing an accepted
+rejection criterion/test needs Steve’s approval under AGENTS.md. The consumer
+is paused, its existing AC/testing retained, and runtime adoption
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) remains blocked
+behind it. The neutral model helper and expression-site inventory are independent.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -546,3 +595,31 @@ readiness, and future dates are not promised before scope and proof are settled.
 - Next refinement: [ac-0149e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0149e),
   then the effective expression-site inventory after its prerequisites pass.
   The source-type decision and all existing pauses remain with their owners.
+
+## Checkpoint — cycle 8
+
+- Source: [6a07fba](https://github.com/strefethen/arazzo-cli/commit/6a07fba8b57c2b10fc2192807f804bb3f6f744e6)
+  **(local; not pushed)**, independent review PASS in round 1. The model now
+  supplies the accepted common view; current runtime/validator inheritance
+  behavior is not changed. The effective-Step epic stays open for its consumers.
+- A 40-case four-target matrix plus focused public/unit cases prove inheritance,
+  exact overrides, duplicates, order, provenance, borrowing, invalid indexes and
+  rejection of nonconformant location spellings. Model crate: 25 unit + 4 new
+  integration + 23 serde integration tests. Full workspace: **1,545 passed,
+  0 failed, 35 ignored**; formatting, compilation, strict all-target/all-feature
+  Clippy, public docs and all four drift guards pass.
+- 282 build/fixture/spec inputs stayed identical through verification; 278
+  tracked inputs match the reviewed commit and four vendored specs are unchanged.
+  Contract revision `4c799b1f42e322e12f9e4dd72553f5c3e585211840493c11920c190c7cfdf032`
+  and raw evidence are retained in
+  `/private/tmp/arazzo-maintainer-20261028/effective-parameters-cycle/`.
+  The delivery log explains the model-only benefit, before/after declaration
+  example, future consumer work and the explicit Steve decision.
+- Static HTML behavior remains unchanged; desktop/mobile browser QA and the
+  committed HTML hash are bound in the final ticket evidence. No Rust source
+  changed after review. Revision-safe ticket closure releases this cycle’s leases.
+- Publication remains held by Fable’s paused
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate in
+  unpublished main history. No push, release or Kafka source mutation occurs.
+  Unrelated untracked files are preserved. The next independent refinement is
+  expression-site inventory; the location-rule decision remains with Steve.
