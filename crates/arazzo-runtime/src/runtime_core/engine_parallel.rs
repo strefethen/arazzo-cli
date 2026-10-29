@@ -132,18 +132,27 @@ impl Engine {
                             terminal = Some(self.build_outputs(workflow, vars));
                         }
                     }
-                    FlowDecision::Error(err) => terminal = Some(Err(err)),
+                    FlowDecision::Error(err) => terminal = Some((Err(err), Vec::new())),
                     FlowDecision::Retry { .. } | FlowDecision::GotoWorkflow { .. } => {
                         // execute_parallel_step consumes plain retries and turns
                         // anything else into an error before it returns.
-                        terminal = Some(Err(RuntimeError::new(
-                            RuntimeErrorKind::InternalError,
-                            "parallel execution does not support Retry/GotoWorkflow flow decisions",
-                        )));
+                        terminal = Some((
+                            Err(RuntimeError::new(
+                                RuntimeErrorKind::InternalError,
+                                "parallel execution does not support Retry/GotoWorkflow flow decisions",
+                            )),
+                            Vec::new(),
+                        ));
                     }
                 }
             }
-            if let Some(outcome) = terminal {
+            if let Some((outcome, warnings)) = terminal {
+                for warning in warnings {
+                    let _ = exec_ctx
+                        .event_tx
+                        .send(EngineEvent::WorkflowOutputWarning(warning))
+                        .await;
+                }
                 // A cancelled invocation did not complete, whatever its
                 // level's steps settled.
                 exec_ctx.check_cancelled()?;
@@ -165,7 +174,14 @@ impl Engine {
             }
         }
         exec_ctx.check_cancelled()?;
-        let workflow_outputs = self.build_outputs(workflow, vars)?;
+        let (workflow_outputs, warnings) = self.build_outputs(workflow, vars);
+        for warning in warnings {
+            let _ = exec_ctx
+                .event_tx
+                .send(EngineEvent::WorkflowOutputWarning(warning))
+                .await;
+        }
+        let workflow_outputs = workflow_outputs?;
         self.emit_observer_event(
             exec_ctx,
             ObserverEvent::WorkflowCompleted {

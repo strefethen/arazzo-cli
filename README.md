@@ -131,7 +131,7 @@ Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.j
 - `--parallel` — execute independent steps concurrently
 - `--dry-run` — resolve requests without sending
 - `--openapi <path>` — provide an OpenAPI document for operation ID or pointer resolution (repeatable)
-- `--expr-diagnostics <off|warn|error>` — expression warning level (default `off`)
+- `--expr-diagnostics <off|warn|error>` — step expression warning level (default `off`); workflow-output warnings are always reported, and `error` fails on them
 - `--trace <path>` — write a trace.v1 execution artifact
 - `--export-run <path>` — write a versioned JSON run artifact with declared outputs and step history
 - `--trace-max-body-bytes <n>` — response body/preview truncation threshold in the trace (default `2048`, maximum `1048576`); declared outputs and request bodies are not capped by this flag

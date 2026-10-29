@@ -86,6 +86,7 @@ pub enum Commands {
         openapi: Vec<String>,
 
         /// Expression evaluation diagnostics: off, warn, or error.
+        /// Workflow-output warnings are always reported; error fails on them.
         #[arg(
             long = "expr-diagnostics",
             value_enum,
@@ -323,6 +324,7 @@ pub enum Commands {
         openapi: Vec<String>,
 
         /// Expression evaluation diagnostics
+        /// Workflow-output warnings are always reported; error fails on them.
         #[arg(
             long = "expr-diagnostics",
             value_enum,

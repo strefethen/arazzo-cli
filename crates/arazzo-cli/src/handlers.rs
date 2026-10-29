@@ -82,6 +82,13 @@ pub async fn replay_trace(
         .collect();
     let actual_request_count = replay_steps.iter().filter(|s| s.request.is_some()).count();
 
+    for warning in exec_result.workflow_output_warnings() {
+        eprintln!(
+            "warning: {}",
+            output::format_workflow_output_warning(warning)
+        );
+    }
+
     let outputs = exec_result
         .outputs
         .map_err(|err| CliError::new(err.kind.code(), err.to_string()))?;

@@ -282,11 +282,18 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         })
         .collect();
 
-    let expression_warnings = if run.expr_diagnostics == ExpressionDiagnosticsMode::Off {
+    let mut expression_warnings = if run.expr_diagnostics == ExpressionDiagnosticsMode::Off {
         Vec::new()
     } else {
         collect_expression_warnings(&trace_steps)
     };
+    let step_warning_count = expression_warnings.len();
+    let workflow_output_warnings: Vec<String> = exec_result
+        .workflow_output_warnings()
+        .into_iter()
+        .map(output::format_workflow_output_warning)
+        .collect();
+    expression_warnings.extend(workflow_output_warnings);
     let mut trace_write_error: Option<String> = None;
 
     if let Some(trace_path) = &run.trace {
@@ -337,6 +344,19 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         }
     }
 
+    if !global.json {
+        // Step diagnostics retain their successful Warn-only presentation.
+        // Workflow-output diagnostics are unconditional, even on failure.
+        if run.expr_diagnostics == ExpressionDiagnosticsMode::Warn
+            && run_error_text.is_none()
+            && trace_write_error.is_none()
+            && export_write_error.is_none()
+        {
+            emit_expression_warnings(&expression_warnings[..step_warning_count]);
+        }
+        emit_expression_warnings(&expression_warnings[step_warning_count..]);
+    }
+
     if let Some(export_error) = export_write_error {
         let mut causes = Vec::new();
         if let Some(run_error) = &run_error_text {
@@ -376,26 +396,16 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         ));
     }
 
-    if !expression_warnings.is_empty() {
-        match run.expr_diagnostics {
-            ExpressionDiagnosticsMode::Off => {}
-            ExpressionDiagnosticsMode::Warn => {
-                if !global.json {
-                    emit_expression_warnings(&expression_warnings);
-                }
-            }
-            ExpressionDiagnosticsMode::Error => {
-                return Err(output::run_error(
-                    "RUNTIME_EXPRESSION_DIAGNOSTICS",
-                    format!(
-                        "expression diagnostics reported {} warning(s)",
-                        expression_warnings.len()
-                    ),
-                    &expression_warnings,
-                    &transport_warnings,
-                ));
-            }
-        }
+    if !expression_warnings.is_empty() && run.expr_diagnostics == ExpressionDiagnosticsMode::Error {
+        return Err(output::run_error(
+            "RUNTIME_EXPRESSION_DIAGNOSTICS",
+            format!(
+                "expression diagnostics reported {} warning(s)",
+                expression_warnings.len()
+            ),
+            &expression_warnings,
+            &transport_warnings,
+        ));
     }
 
     if run.dry_run {

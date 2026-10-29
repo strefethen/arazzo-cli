@@ -17,6 +17,8 @@ pub enum EngineEvent {
     /// Parallel mode was requested, but a workflow invocation runs its steps
     /// one at a time.
     SequentialFallback(SequentialFallback),
+    /// An expression warning from evaluating a workflow invocation's outputs.
+    WorkflowOutputWarning(WorkflowOutputWarning),
     /// A receive step's topic was armed at invocation start.
     ReceiverArmed(ReceiverArmed),
 }
@@ -168,6 +170,47 @@ impl ExecutionResult {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Filter workflow-output warnings in emission order, including child invocations.
+    pub fn workflow_output_warnings(&self) -> Vec<&WorkflowOutputWarning> {
+        self.events
+            .iter()
+            .filter_map(|event| match event {
+                EngineEvent::WorkflowOutputWarning(warning) => Some(warning),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// An evaluator warning produced while resolving a workflow output.
+/// Emitted once per warning before the invocation completes, regardless of tracing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowOutputWarning {
+    /// Workflow invocation whose output was evaluated.
+    pub workflow_id: String,
+    /// Name of the workflow output being evaluated.
+    pub output: String,
+    /// Expression that produced the warning.
+    pub expression: String,
+    /// Evaluator's explanation of the unresolved value.
+    pub message: String,
+}
+
+impl WorkflowOutputWarning {
+    pub(crate) fn new(
+        workflow_id: &str,
+        output: &str,
+        warning: &arazzo_expr::ExpressionWarning,
+    ) -> Self {
+        Self {
+            workflow_id: workflow_id.to_string(),
+            output: output.to_string(),
+            expression: warning.expression.clone(),
+            message: warning.message.clone(),
+        }
     }
 }
 

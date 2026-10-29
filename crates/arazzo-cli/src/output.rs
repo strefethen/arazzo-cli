@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use arazzo_runtime::{
     redact_dry_run_request, redact_url, DryRunRequest, TraceStepRecord, TransportWarning,
+    WorkflowOutputWarning,
 };
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use arazzo_validate::{Diagnostic, Error as ValidateError};
@@ -10,6 +11,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli_error::{CliError, CLI_OUTPUT_WRITE};
+
+pub fn format_workflow_output_warning(warning: &WorkflowOutputWarning) -> String {
+    format!(
+        "workflow \"{}\" output \"{}\": {}: {}",
+        warning.workflow_id, warning.output, warning.expression, warning.message
+    )
+}
 
 // ── Test command output types ────────────────────────────────────
 
@@ -315,6 +323,7 @@ pub enum StepsOutput {
 pub enum RunOutput {
     Success {
         outputs: BTreeMap<String, Value>,
+        /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -325,6 +334,7 @@ pub enum RunOutput {
     Error {
         error: String,
         code: String,
+        /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -333,6 +343,7 @@ pub enum RunOutput {
     },
     DryRun {
         requests: Vec<DryRunRequest>,
+        /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

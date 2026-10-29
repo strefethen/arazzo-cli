@@ -639,7 +639,14 @@ impl Engine {
             }
 
             exec_ctx.check_cancelled()?;
-            let workflow_outputs = self.build_outputs(&workflow, &vars)?;
+            let (workflow_outputs, warnings) = self.build_outputs(&workflow, &vars);
+            for warning in warnings {
+                let _ = exec_ctx
+                    .event_tx
+                    .send(EngineEvent::WorkflowOutputWarning(warning))
+                    .await;
+            }
+            let workflow_outputs = workflow_outputs?;
             self.emit_observer_event(
                 exec_ctx,
                 ObserverEvent::WorkflowCompleted {
@@ -1015,18 +1022,25 @@ impl Engine {
         &self,
         workflow: &Workflow,
         vars: &VarStore,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+    ) -> (
+        Result<BTreeMap<String, Value>, RuntimeError>,
+        Vec<WorkflowOutputWarning>,
+    ) {
         let mut ctx = self.make_eval_context(vars, None);
+        let mut output_warnings = Vec::new();
         for (name, output) in &workflow.outputs {
             if let Some(controller) = &self.inner.debug_controller {
-                controller
+                if let Err(err) = controller
                     .report_workflow_output(&workflow.workflow_id, name, output, &ctx)
                     .map_err(|err| {
                         RuntimeError::new(
                             RuntimeErrorKind::DebugController,
                             format!("reporting workflow output {name:?}: {err}"),
                         )
-                    })?;
+                    })
+                {
+                    return (Err(err), output_warnings);
+                }
             }
             let eval = ExpressionEvaluator::new(ctx.clone());
             let (value, warnings) = match output {
@@ -1035,12 +1049,14 @@ impl Engine {
                 }
                 OutputValue::Selector(selector) => resolve_selector(selector, &eval),
             };
-            for warning in warnings {
-                eprintln!("warning: workflow output {name:?}: {warning}");
-            }
+            output_warnings.extend(
+                warnings.iter().map(|warning| {
+                    WorkflowOutputWarning::new(&workflow.workflow_id, name, warning)
+                }),
+            );
             ctx.outputs.insert(name.clone(), value);
         }
-        Ok(ctx.outputs)
+        (Ok(ctx.outputs), output_warnings)
     }
 }
 

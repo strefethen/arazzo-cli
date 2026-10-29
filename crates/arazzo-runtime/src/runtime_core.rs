@@ -105,7 +105,7 @@ pub use events::{
     ExecutionObserver, ExecutionResult, ObserverEvent, ReceiverArmed, SequentialFallback,
     SequentialFallbackReason, StepEvent, TraceCriterionResult, TraceDecision, TraceDecisionPath,
     TraceHook, TraceMessage, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord,
-    TransportWarning, TransportWarningKind,
+    TransportWarning, TransportWarningKind, WorkflowOutputWarning,
 };
 use input_validation::{validate_inputs, InputIssueSeverity};
 use jsonpath::jsonpath_condition_holds;

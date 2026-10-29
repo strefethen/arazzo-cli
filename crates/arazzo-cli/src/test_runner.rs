@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::cli_error::CliError;
 use crate::output::{
-    TestCaseResult, TestOutput, TestStatus, TestStepResult, TestSuiteResult, TestSummary,
+    self, TestCaseResult, TestOutput, TestStatus, TestStepResult, TestSuiteResult, TestSummary,
 };
 use crate::transport::{self, TransportFlags};
 
@@ -271,6 +271,13 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                 .collect();
 
             // Check for expression diagnostic warnings.
+            let workflow_output_warnings = exec_result.workflow_output_warnings();
+            for warning in &workflow_output_warnings {
+                eprintln!(
+                    "warning: {}",
+                    output::format_workflow_output_warning(warning)
+                );
+            }
             let expr_warning_count: usize = exec_result
                 .events
                 .iter()
@@ -281,7 +288,8 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
                         None
                     }
                 })
-                .sum();
+                .sum::<usize>()
+                + workflow_output_warnings.len();
 
             // Determine workflow-level status.
             let (status, error, error_code) = match &exec_result.outputs {
