@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855).
+Latest source cycle: [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,16 +44,18 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: shared owned/borrowed Selector admission
-([ac-8d855](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8d855)). One private
-model owner supplies both decoding and a borrowed context check, preserving wire
-behavior and diagnostics. Independent review passed. This is architectural
-groundwork; expression inventory [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)
-still needs current-source readiness and implementation. Runtime inheritance
-[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) remains paused
-for Steve's input-name collision decision
+Latest delivery: effective non-action Step expression inventory
+([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). One focused model owner supplies borrowed text,
+declaration provenance, nested paths and field modes, reusing canonical
+parameter inheritance and Selector admission. Independent review passed.
+This is model groundwork; Action inventory and dependency consumers remain
+outstanding. Next readiness assessment: the Action ordering decision
+[ac-908bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-908bc), which gates
+the Action overlay and [ac-70691](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-70691).
+Runtime inheritance [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e)
+remains paused for Steve's input-name collision decision
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701).
-Publication remains held by Fable’s earlier paused candidate. The separate
+Publication remains held by Fable's earlier paused candidate. The separate
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
 
@@ -766,3 +768,26 @@ source changed, and the existing Fable publication gate remains in force.
 - Inventory readiness is the next independent slice. Runtime collision and
   source-type decisions remain with Steve. Publication remains held by Fable's
   paused ac-18e6f candidate in unpublished main history; no push/release occurs.
+
+## Checkpoint — cycle 12
+
+- Source: [a5b4704](https://github.com/strefethen/arazzo-cli/commit/a5b4704207f14163a5493ea9bbe7950ddb0b41e1) **(local; not pushed)**; independent exact-candidate
+  review PASS. One focused model inventory module plus public contract tests;
+  the crate root gains declaration/export wiring only. Fable source is untouched.
+- The public borrowed API preserves effective Parameter provenance and exact
+  overrides, nested sequence/mapping locations, Selector contexts, Criterion
+  modes, output order and correlation IDs. No expression grammar, validation,
+  graph construction or scheduling was added to the model.
+- Decided by recommendation: ground root-versus-child Selector traversal,
+  opaque tags and normalized Criterion dispatch in existing owners. The frozen
+  public API, Goal, Acceptance Criteria and Testing Obligations remain intact.
+- Full workspace: **1,608 passed, 0 failed, 35 ignored**. Focused/model tests,
+  formatting, workspace check, strict Clippy, public docs and four drift guards
+  passed. Evidence and exact source/contract bindings:
+  `/private/tmp/arazzo-maintainer-20261029/expression-inventory-cycle/`.
+- The single delivery log explains the before/after benefit and remaining
+  consumer work; desktop/mobile QA and committed HTML hashes bind its proof.
+  The Step inheritance/dependency epic remains open. Next: bounded Action-order
+  readiness assessment, with no policy decision inferred from this delivery.
+- One coherent source slice under the 04:50–07:50 UTC cycle budget. Existing
+  Steve decisions and Fable's publication gate remain unchanged. No push/release.
