@@ -115,13 +115,20 @@ approve precise wording that retains direct literal text, required-expression
 rejection and every existing test. Source-anchor and manifest-total scope repairs
 are routine; the exact claim remains gated. Structured workflow-output warnings
 are complete. Debug checkpoint cancellation and cleanup after client loss are
-reviewed and complete. Root benchmark planning under
-[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62) has passed
-review; implementation waits for the dependency decision above. The next independent
-source candidate is [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f),
-the shared, bounded schema example walker. Its prior Option C direction must be
-checked against current scope, owners and code in fresh readiness before starting;
-this checkpoint does not resume the paused ingestion plan or certify implementation readiness.
+reviewed and complete. Root parsing measurements under
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62) are delivered
+and its root unit plan is completed. The current source cycle is
+[ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f), the shared,
+bounded schema example walker under
+[epic:ac-31ca2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-31ca2).
+Its Option C synthesis direction passed fresh readiness after a private typed
+compatibility refinement; original criteria and expected values remain intact.
+Implementation is uncommitted and paused for
+[ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0): approve explicit
+generation errors when a strict numeric bound has no satisfying value in the
+configured JSON number representation. Existing outputs and size limits pass
+verification; the extreme bound remains unsatisfied, so no delivery or source
+review PASS is claimed. The wider ingestion plan and ac-6a778 stay paused.
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
@@ -1453,3 +1460,49 @@ first benchmark implementation under the accepted six-family design.
   source, scope and ownership need inspection. Existing pauses remain intact.
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still blocks
   publication of the accumulated range. No push, release or deployment occurred.
+
+
+## Checkpoint — cycle 28: bounded examples await numeric error policy
+
+[ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f) is **paused**,
+with implementation retained uncommitted. It is not a delivered capability.
+
+- Fresh-context Astra readiness and Sol implementation split typed compatibility,
+  raw synthesis and resource accounting into separate owners. A second Sol agent
+  independently replayed all 21 cached OpenAPI fixtures: 11 generated YAML outputs
+  are byte-identical and all 10 generation errors are unchanged. No allowed
+  password/byte exception was needed. Existing tests and goldens were preserved.
+- Decided by recommendation: the private typed adapter retains distinctions that
+  plain serialization loses, including typed Any variants and legacy reference
+  behavior. CRUD only prepares inputs and propagates warnings; MCP delegates.
+  The broader ingestion pause is unchanged, and Fable's transport files are untouched.
+- Formatting, workspace compilation, strict all-target/all-feature Clippy and
+  **1,702 workspace tests pass** (0 failed, 35 existing ignores, 123 Cargo targets).
+  All 385 recorded executable/spec inputs match the verified working tree.
+  The required tests ran with localhost permission for hermetic servers.
+- A pre-candidate numeric check found a boundary the successful-value-only API
+  cannot represent honestly: strict bounds outside finite JSON number storage
+  return a value that violates the bound. Representable integer/float neighbors
+  are repaired and tested. Extreme bounds remain unresolved; passing automated
+  checks do not satisfy that acceptance criterion.
+- [ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0) asks Steve to
+  approve explicit errors through existing CRUD/MCP paths and a
+  `Result<Example, String>` walker result. No silent null, saturated number or
+  size-trim substitute is authorized. After approval, reconcile the contract,
+  acquire fresh clearance, implement rejection and propagation tests, then obtain
+  exact-candidate independent review. No source review round has been consumed.
+- Evidence: `/private/tmp/arazzo-cycle28-schema-walker/` (contract, current source
+  hashes, numeric probe, gates and paused lifecycle) and
+  `/private/tmp/arazzo-cycle28-fixture-comparison/after-numeric/` (independent
+  compatibility replay). Implementation base is `464d5ea`; the adopted contract
+  before execution is revision `06bf28e8cf649392d128ce31ec913b1aa5a19f0227b92f0b7c334a35b6fcc9f2`.
+  The single delivery log shows the intended benefit, boundaries and decision.
+- Desktop 1280px and mobile 390px browser checks show the paused status without
+  horizontal overflow or console warnings/errors. Local links, HTML structure,
+  historical sections and unchanged scripts/styles pass inspection. The checkpoint
+  commit contains only roadmap/log prose; its no-behavior documentation is exempt
+  from source review under SDLC. This exemption does not cover the pending code.
+- This checkpoint remains within the 20:00–23:00 UTC bound. Source reservations
+  were released by parking; source changes are retained for the approved resumption.
+  The existing [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
+  publication hold remains. No push, deployment or release occurred.
