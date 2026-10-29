@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176).
+Latest source cycle: [ac-51241](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-51241).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,20 +44,31 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: effective non-action Step expression inventory
-([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). One focused model owner supplies borrowed text,
-declaration provenance, nested paths and field modes, reusing canonical
-parameter inheritance and Selector admission. Independent review passed.
-This is model groundwork; Action inventory and dependency consumers remain
-outstanding. Next readiness assessment: the Action ordering decision
-[ac-908bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-908bc), which gates
-the Action overlay and [ac-70691](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-70691).
-Runtime inheritance [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e)
-remains paused for Steve's input-name collision decision
-[ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701).
-Publication remains held by Fable's earlier paused candidate. The separate
+Latest delivery: HTTP timeout conversion repair
+([ac-51241](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-51241)). The public
+reqwest conversion now reports `HttpRequest` while preserving the message and
+source; per-request timeouts no longer masquerade as execution cancellation.
+Independent review and all automated checks passed. Normal engine HTTP handling
+already used the correct category; this is a library-boundary repair.
+
+The Action-order assessment is complete:
+[ac-908bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-908bc) is paused for
+Steve to accept the independently reviewed Step-first recommendation and its
+provenance/invalid-model disposition. It records the member-contract changes
+needed before implementation; the accepted plan and dependencies remain gated.
+Next independent readiness assessment:
+[ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac), success-only
+workflow-Step output publication. Runtime inheritance
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
+[ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
+
+Publication was reassessed under the updated policy: ticket pause or manual QA
+alone is not a push blocker. Fable's earlier candidate still lacks review PASS
+and has unresolved remediation in
+[ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), so the hold
+remains. No Fable source or reservation was changed.
 
 ## Direction and initial cycle
 
@@ -791,3 +802,29 @@ source changed, and the existing Fable publication gate remains in force.
   readiness assessment, with no policy decision inferred from this delivery.
 - One coherent source slice under the 04:50–07:50 UTC cycle budget. Existing
   Steve decisions and Fable's publication gate remain unchanged. No push/release.
+
+## Delivered — cycle 13: distinguish HTTP timeouts from execution cancellation
+
+[ac-51241](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-51241), under
+[epic:ac-1fae2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1fae2), changes
+only the existing `From<reqwest::Error>` owner in `runtime_core/error.rs`.
+The real-timeout regression failed with `ExecutionTimeout` before the fix and
+passes with `HttpRequest`; a non-timeout control preserves message/source
+behavior. No dependency, enum variant, code spelling, or engine client change.
+
+Reviewed source: [8448945](https://github.com/strefethen/arazzo-cli/commit/8448945b80114428dc1d97287c77c712428bfdb2)
+(local; not pushed). Fresh frontier review passed on the exact candidate;
+1,610 workspace tests passed, 0 failed, 35 ignored. Formatting, strict Clippy,
+workspace compilation, 26 focused HTTP controls, and public documentation passed.
+The existing private rustdoc-link warning remains owned by
+[ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359).
+Evidence: `/private/tmp/arazzo-maintainer-20261029/action-order-cycle/`;
+tkt holds contract snapshots, command results, review and closure references.
+
+The read-only frontier Action assessment and independent proposal review ran
+alongside the isolated error-module writer. It recommends Step actions first,
+then non-overridden Workflow actions. The existing decision ticket was renamed
+“ask Steve for…” instead of duplicating it; its written matrix and discovered
+contract conflicts remain there. Acceptance is pending, with no plan amendment
+or Action implementation. One source slice and one source review round consumed;
+no failed review loop. Cycle checkpoint is within the three-hour bound.
