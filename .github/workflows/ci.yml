@@ -220,9 +220,24 @@ jobs:
   vscode-extension:
     name: VSCode Extension
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+
+      - name: Fetch vendored spec
+        shell: bash
+        run: ./spec/fetch.sh && git diff --exit-code -- spec/SHA256SUMS
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Build native debug adapter
+        run: cargo build -p arazzo-debug-adapter --locked
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -239,4 +254,8 @@ jobs:
 
       - name: Build extension
         run: npm run build
+        working-directory: vscode-arazzo-debug
+
+      - name: Test extension and native DAP transcript
+        run: npm test
         working-directory: vscode-arazzo-debug
