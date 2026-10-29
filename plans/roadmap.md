@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-d85e6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d85e6).
+Latest source cycle: [ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
@@ -45,7 +45,17 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: a reviewed engine workload benchmark contract
+Latest delivery: structured workflow-output warnings
+([ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5),
+[epic:ac-d4e65](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d4e65)).
+Typed runtime events carry unresolved-output diagnostics into `run --json` in
+every mode, including dry runs and later failures. CLI presentation owns the
+shared formatter and command policy. Independent review, all required gates
+and 1,652 workspace tests pass; the source commit remains local under the
+existing publication hold. Test/replay retain their report schemas and visible
+warnings. MCP/DAP presentation and trace persistence remain separate work.
+
+The preceding assessment delivered a reviewed engine workload benchmark contract
 ([ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d),
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)). Six
 workload families define bounded fixtures, correctness/failure controls, timing
@@ -98,10 +108,11 @@ reserved embedded-expression candidates in literal fallback.
 [ac-9a367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9a367) asks Steve to
 approve precise wording that retains direct literal text, required-expression
 rejection and every existing test. Source-anchor and manifest-total scope repairs
-are routine; the exact claim remains gated. Next independent readiness target:
-[ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5), structured
-workflow-output expression warnings in `run --json`, after fresh source grounding
-and start clearance. The completed benchmark design awaits
+are routine; the exact claim remains gated. Structured workflow-output warnings
+are complete. Next independent readiness target:
+[ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26), debug checkpoint
+cancellation and DAP cleanup after client loss, after fresh source grounding and
+start clearance. The completed benchmark design awaits
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12).
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
@@ -1246,3 +1257,50 @@ workload and measurement contracts, with no production, script or CI changes.
 - Publication remains held by failed-review ancestor
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's lane,
   unrelated untracked files and runtime behavior remain untouched. No push/release.
+
+## Delivered — cycle 24: workflow-output warnings in structured results
+
+[ac-3a2c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3a2c5) delivers the
+workflow-output member of [epic:ac-d4e65](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-d4e65).
+An unresolved output still evaluates to null, but a program reading `run --json`
+now receives its workflow, output, expression and cause in `warnings`. The
+runtime carries typed events; one CLI presentation helper serves run, test and
+replay, keeping command policy out of the engine.
+
+- [4714017](https://github.com/strefethen/arazzo-cli/commit/47140170e37d48a0c8697b0972ee448126168f0c)
+  **(local; not pushed)** passed fresh-context Astra review in round 1, without
+  findings or evidence gaps. Astra assessed readiness; two Sol implementers
+  owned disjoint runtime and CLI paths; the parent verified and coordinated.
+- Workflow-output warnings appear in every diagnostics mode, with or without
+  tracing, including dry runs and child invocations. Step warnings retain their
+  mode policy and precede workflow warnings. Repeated child warnings remain
+  distinct. Existing native failures retain their original codes; otherwise
+  successful runs and tests escalate under `--expr-diagnostics error`.
+- **9 runtime tests in debug and release, 5 CLI matrix tests, 1,652 workspace
+  tests; 0 failed, 35 ignored.** Formatting, workspace check, strict Clippy,
+  public API docs and all four drift guards pass. The literal required dry-run
+  probe reports its handler warning in JSON and escalates only in error mode.
+  All 371 verification inputs remained stable through candidate creation.
+- Added focused integration targets avoid growing the existing large test files.
+  Existing output evaluation, map order and debugger callbacks remain intact;
+  an earlier warning survives a later callback failure. Human run, test and
+  replay preserve exactly-once workflow warning visibility. Existing test/replay
+  schemas and runtime codes are unchanged; the run schema gains descriptions.
+- Decided by recommendation: repair stale handler/source anchors and declarations,
+  use the existing CLI output owner, preserve actual map iteration order and
+  retain warnings alongside a possible output-build error. Original Goal,
+  Acceptance Criteria and full Testing Obligations are byte-identical. Adopted
+  preflight revision `0f0adc6e370f1190fa58c5bd0c1b7bae8272b6c908e9f80b0139e00f7ade8ac8`;
+  contract, raw proof and review: `/private/tmp/arazzo-maintainer-20261029/cycle24-output-warnings/`.
+- The single delivery log shows before/after JSON, mode behavior and responsibility
+  boundaries, with desktop/mobile QA. This is diagnostic capability, not new
+  expression syntax. MCP/DAP presentation, trace persistence and other runtime
+  stderr sites remain separate work; no all-warning completion is claimed.
+- Next independent readiness is
+  [ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26), debug
+  cancellation and client-loss cleanup. Existing pauses and benchmark acceptance
+  remain intact. One source slice and one review fit the 17:01–20:01 UTC bound.
+- Publication remains held by the failed-review ancestor tracked in
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f). Fable's
+  Kafka/AsyncAPI lane and unrelated untracked files are untouched. No push,
+  deployment or release occurred.
