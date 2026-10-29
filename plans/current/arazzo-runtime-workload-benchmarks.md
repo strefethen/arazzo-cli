@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: decomposed
 epic: ac-8ba62
 created: 2026-10-29
 ---
@@ -325,7 +325,7 @@ worker/service exits. A caller can launch one prebuilt worker, retain its raw
 record and classify success without importing private Rust support or requiring
 a resource/statistics runner. Existing benchmark series remain distinct.
 
-**Disposition:** Accepted for scoped decomposition under
+**Disposition:** Decomposed under
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62), 2026-10-29.
 The Chief of Staff accepts this unit and directs its next bounded decomposition
 under Steve's standing [maintainer mandate](../roadmap.md#standing-delegation-and-continuity)
@@ -340,6 +340,24 @@ Independent fresh-context frontier review passed round 1 for
 (local; not pushed), with no blocking findings or unresolved authority gate.
 [ac-9731e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9731e) retains the
 contract and review evidence. This acceptance changes authority metadata only;
-the reviewed design is unchanged. Next: ground executable ticket interfaces and
-file ownership in the selected slice order before implementation. OS-resource
-tooling, statistics, CI and numerical budgets remain outside this unit.
+the reviewed design is unchanged.
+
+[ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6) transfers the
+accepted design into four serial implementation tickets:
+
+1. [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8): fixtures,
+   preparation and bounded sibling service.
+2. [ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221): worker/raw
+   records and source, expression and DAG workloads.
+3. [ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5): body, retry
+   and cancellation workloads and adverse lifetime controls.
+4. [ac-0d779](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0d779): integrated
+   prebuilt-executable proof and maintainer instructions.
+
+Fresh-context frontier transfer audit passed round 1 with no material gaps.
+The epic retains bidirectional coverage and exact reviewed ticket revisions.
+Lint and implementation readiness pass for all four; only the foundation is
+queue-eligible. Source start clearance remains a kickoff check. No source ticket
+has started, and system verification remains unobserved. The design above is
+frozen; OS-resource tooling, statistics, CI and numerical budgets remain outside
+this unit.

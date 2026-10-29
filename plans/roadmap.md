@@ -3,7 +3,7 @@
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
 Latest source cycle: [ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
-Latest planning cycle: [ac-9731e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9731e).
+Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -68,11 +68,13 @@ retains its policy/review/continuity warnings alongside that approval.
 No dependency version, checksum, feature or production edge changed.
 
 The [runtime workload unit](current/arazzo-runtime-workload-benchmarks.md) is now
-independently reviewed and Accepted under the same direction. Next, decompose
-its fixture/service foundation and worker cases into bounded executable slices;
-no new benchmark implementation is claimed. The unit uses existing public
-runtime APIs and dependencies. OS resources/statistics, CI and thresholds retain
-separate ownership and gates.
+Decomposed into four serial implementation tickets after independent coverage
+review. Next is [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8),
+the fixture/service foundation, followed by worker records and core cases,
+body/retry/cancellation cases, then complete executable proof. No new benchmark
+implementation is claimed. The unit uses existing public runtime APIs and
+dependencies. OS resources/statistics, CI and thresholds retain separate
+ownership and gates.
 Neither the completed root measurements nor this runtime plan complete the
 six-family program.
 The preceding debug cancellation/client-loss repair remains complete.
@@ -1559,3 +1561,45 @@ under the already accepted six-family benchmark direction, with no source edits.
   source hashes preserved. Existing pauses and Fable's lane remain untouched.
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still holds
   publication of the accumulated range; no push, release or deployment occurred.
+
+## Delivered — cycle 30: runtime benchmark implementation queue
+
+[ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6) delivers the
+accepted runtime unit's decomposition. This is implementation groundwork, with
+no new runtime capability or measurement result.
+
+- Fresh-context Astra architecture grounded private interfaces and file owners
+  in current runtime APIs. A separate fresh-context Astra transfer audit passed
+  round 1: complete plan-to-ticket and ticket-to-plan coverage, no dropped controls,
+  no duplicate Creates, no competing open owner and no material correction.
+- The serial chain is
+  [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8) (fixtures/service),
+  [ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221) (core workers),
+  [ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5) (body/retry/cancel),
+  then [ac-0d779](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0d779)
+  (integrated executable proof). All belong to the existing evidence epic.
+  The plan is Decomposed; its reviewed design remains unchanged and frozen.
+- Lint and implementation readiness pass for all four. Only the foundation is
+  queue-eligible; its local file expectations pass. Source start clearance is
+  NOT ASSESSED and must be checked at kickoff. No source ticket has started.
+  Runtime source, APIs, dependencies, existing benchmarks and Fable's lane remain
+  outside these implementation write scopes.
+- Decided by recommendation: conventional Cargo example discovery without a
+  manifest edit, versioned private JSON handoffs, bounded control framing,
+  explicit numeric fault-control settings and two finite positive verification
+  passes in the local proof caller. Independent review confirmed these fit the
+  accepted unit. OS resource collection/statistics, CI and thresholds stay separate.
+- Exact ticket revisions, source grounding, graph/file checks and the independent
+  coverage report are retained in `/private/tmp/arazzo-cycle30/` and summarized
+  in the epic. The single delivery log explains the four outcomes and handoffs;
+  desktop/mobile QA and structural/history/link checks cover the new entry.
+- All 385 executable/spec hashes and nine paused source hashes are unchanged.
+  Prior formatting, compilation, strict Clippy and 1,702-test working-tree proof
+  is reused for this doc-only cycle; no new test run or clean source-candidate
+  proof is claimed. No-behavior bookkeeping is exempt from source review under
+  SDLC; that exemption does not cover future implementations.
+- This one-outcome cycle remains within the 22:04–01:04 UTC bound and consumes
+  one transfer-audit round. The schema walker remains paused on
+  [ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0).
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still holds
+  publication of the accumulated range. No push, release or deployment occurred.
