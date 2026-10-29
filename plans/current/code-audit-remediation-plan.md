@@ -3,7 +3,7 @@
 **Created:** 2026-06-14
 **Reconciled:** 2026-06-24 against `main` @ `d0015f1` (plan baseline was `e5dfede`; `main` is 9 commits ahead)
 **Source:** Full workspace code audit (runtime, expr/spec/validate/generate, CLI/DAP/MCP/extension, project health)
-**Status:** Items 1–6 done (2026-07-27, per the tracker below); item 7 outstanding; item 8 replanned — implementation gated on the MCP security-policy decision (ac-950a8). Header reconciled 2026-08-25.
+**Status:** Items 1–6 done (2026-07-27, per the tracker below); item 7a done (2026-10-29), remaining item 7 work open; item 8 replanned — implementation gated on the MCP security-policy decision (ac-950a8). Header reconciled 2026-10-29.
 **Audience:** Future agents and maintainers picking up remediation work
 
 ---
@@ -36,7 +36,7 @@ and consistent with existing conventions (no `unwrap`/`expect`/`todo`; these are
 | 4 | Goto target index skip in filtered execution | Medium (correctness) | **Done (2026-07-27)** — `1375272`, epic ac-83365 / ticket ac-d2719 | — |
 | 5 | JSONPath silently returns `false` on unsupported syntax | Medium (UX/foot-gun) | **Done (2026-07-27)** — `6048931`, epic ac-83365 / ticket ac-e19d1 | — |
 | 6 | Missing `$ref` cycle guards in generator | Medium (crash/DoS) | **Done (2026-07-27)** — `d4899b3`, epic ac-83365 / ticket ac-53232 | — |
-| 7 | Finish the VS Code extension | Feature completion | **Outstanding** — stubs + trivial smoke test unchanged; DAP backend split, so 7a `dap.rs` line refs are stale (see §7 note) | — |
+| 7 | Finish the VS Code extension | Feature completion | **Partial** — 7a complete (2026-10-29, ac-zovp); remaining extension proof/release work stays open | — |
 | 8 | MCP security hardening | Security | **Replanned** — stale path, DNS, concurrency, and error premises were removed; implementation is gated by the security-policy decision and the dedicated epic | — |
 
 > Verification baseline (captured at `e5dfede`): `cargo build --workspace
@@ -515,6 +515,8 @@ stub that should be removed, not implemented.
 
 ### 7a. Delete the dead client-side breakpoint-mapping stubs
 
+**Completed 2026-10-29:** [ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp), [b625240](https://github.com/strefethen/arazzo-cli/commit/b6252409fb2fd86b4dfb5366715980282550c0ad) (local; not pushed). Both unused files are deleted. Rust `dap/source_index.rs::resolve_source_breakpoints`, called from `handlers.rs` and `session.rs`, remains the sole mapping owner. All required checks and independent review passed. The following rationale describes the pre-change state.
+
 **Key finding:** the DAP server already owns YAML→step line mapping. It parses the
 spec with `yaml_rust2` (`crates/arazzo-debug-adapter/src/dap.rs:15-16`), builds a
 line index, and resolves breakpoints server-side in `resolve_source_breakpoints`
@@ -763,7 +765,7 @@ misfiled bullets `CHANGELOG.md:24-25`.
 `src/test/smoke.test.ts:5`. `adapterClient.ts`: `getBundledBinaryPath:6`, override
 `:24-33`, missing-binary error `:41`. `debugConfigProvider.ts:6`. CI job `ci.yml:156`
 (lint `:173` + build `:177`, no test).
-- [ ] 7a delete stubs + imports.
+- [x] 7a delete stubs + imports — ac-zovp, 2026-10-29.
 - [ ] 7b DAP transcript + `debugConfigProvider` / `adapterClient` unit tests; add `npm test` to the CI job **and** provision the Rust binary in that job (see automation gap).
 - [ ] 7c per-platform VSIX + checksum. 7d docs, drop `preview`, bump `1.0.0`.
 

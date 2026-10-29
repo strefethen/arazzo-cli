@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5).
+Latest source cycle: [ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,13 +44,20 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: literal JSON-input documentation
-([ac-236c5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-236c5)). Both
-`--input-json` placeholders now render as code, with real run/test help proof.
-This is a documentation repair, with no runtime, parser or schema change.
-The two unrelated AsyncAPI server placeholders still fail strict documentation
-generation; [ac-55819](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-55819)
-owns that pre-existing failure. Fable's text is untouched.
+Latest delivery: one owner for debugger breakpoint resolution
+([ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp),
+[epic:ac-b6f5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b6f5)). Two unused
+TypeScript mapping stubs are deleted; Rust DAP retains sole ownership. This is
+architecture groundwork with no breakpoint behavior change. All required checks
+and independent review passed. Fable's Kafka/AsyncAPI lane is untouched.
+
+Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
+has a concrete, frontier-refined contract and is paused before implementation.
+[ac-72e07](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-72e07) asks Steve to
+approve a direct dependency on the existing locked `url` parser. Missing package
+policy/review evidence requires approval under `add-package`; no dependency
+or source mutation occurred. The [decision proposal](security/decisions/2026-10-29-url-generator-add.md)
+records artifact evidence, boundaries and remaining warnings.
 
 Default-header reporting [ac-f7790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-f7790)
 failed next-cycle readiness before implementation. It requires nonexistent
@@ -82,8 +89,8 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea), aligning
-generation's relative-server diagnostic with existing runtime URI behavior.
+[ac-76a86](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-76a86), reconciling
+the debugger test contract with the current extension suite before new work.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
@@ -1046,3 +1053,39 @@ No responsibility, dependency, parser, schema, snapshot or runtime change.
   independent readiness: [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea).
 - Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
   candidate without review PASS. No push or release is claimed.
+
+
+## Delivered — cycle 19: one debugger breakpoint owner
+
+[ac-zovp](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-zovp) completes plan
+item 7a in the [Debugger epic](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b6f5).
+Only the unused `yamlStepIndex.ts` and `breakpointMapper.ts` files were deleted:
+32 lines removed, no replacement parser, no growth in the extension entrypoint
+or Rust ownership modules. No new user capability or release readiness is claimed.
+
+- [b625240](https://github.com/strefethen/arazzo-cli/commit/b6252409fb2fd86b4dfb5366715980282550c0ad) **(local; not pushed)** passed fresh-context Astra review in
+  round 1 with no findings. Sol implemented only the two reserved deletions;
+  the parent retained tracker, verification and candidate ownership.
+- All accepted proof passed: source consumer audit, extension lint/build,
+  **33 extension tests**, **33 DAP tests**, formatting, workspace check, strict
+  Clippy and **1,631 workspace tests; 0 failed, 35 ignored**. The 323 recorded
+  build input hashes were stable and checked against the committed candidate.
+- Original acceptance and testing text remains unchanged. Decided by
+  recommendation: correct stale Modify-to-delete labels and narrow the unused
+  extension.ts write declaration to read-only. Both Delete operations passed
+  preflight and exact-candidate operation review.
+- Contract preflight revision `94dec0b84a31ba0fcb37eca4859c9361a9c13f81545d2edde4e92c4e84968819`;
+  evidence, raw logs, source binding and review:
+  `/private/tmp/arazzo-maintainer-20261029/cycle19-breakpoint-owner/`.
+- Frontier refinement settled [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
+  around the existing runtime URL classifier. It remains paused for
+  [ac-72e07](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-72e07); the proposal
+  neither installs a package nor changes generator behavior. Existing pauses
+  and package safeguards remain intact.
+- The single delivery log adds a before/after ownership diagram and distinguishes
+  this groundwork from capabilities. Desktop/mobile checks bind the HTML to
+  the bookkeeping commit. This cycle used one source slice and one review within
+  the 11:55–14:55 UTC bound; next readiness is ac-76a86, not automatic execution.
+- Publication remains held by [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f):
+  pushing main would publish its ancestor without review PASS. No push or
+  release is claimed. Fable source and reservations remain untouched.
