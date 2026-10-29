@@ -158,7 +158,7 @@ sourceDescriptions:
         );
         assert!(
             !paths.iter().any(|path| path.contains("step \"child\"")),
-            "workflow targets must not inherit the invalid global parameter: {:?}",
+            "workflow inputs accept inherited parameters without `in`: {:?}",
             report.errors
         );
 
@@ -182,8 +182,8 @@ sourceDescriptions:
             "    steps: []\n",
         );
         let report = parameter_context_report(&workflow_and_channel);
-        assert!(report.errors.iter().any(|error| {
-            error.path == "workflow \"parent\" > step \"child\".parameters[0].in"
+        assert!(!report.errors.iter().any(|error| {
+            error.path.contains("step \"child\"")
                 && error.kind == ValidationErrorKind::InvalidParameterLocation
         }));
         assert!(report.errors.iter().any(|error| {
@@ -345,7 +345,7 @@ sourceDescriptions:
         );
 
         unused_component_actions_enforce_parameter_contract();
-        workflow_input_duplicates_use_name_only_and_report_every_in();
+        workflow_input_duplicates_use_name_only_and_accept_valid_in();
         async_operation_parameters_fail_closed();
         direct_validation_component_reference_negative_matrix();
         inherited_parameter_context_diagnostics_have_stable_cardinality();
@@ -428,7 +428,7 @@ sourceDescriptions:
     }
 
     #[test]
-    fn workflow_input_duplicates_use_name_only_and_report_every_in() {
+    fn workflow_input_duplicates_use_name_only_and_accept_valid_in() {
         let yaml = parameter_context_document(
             "",
             r#"    steps:
@@ -452,8 +452,8 @@ sourceDescriptions:
                 .filter(|error| error.path.ends_with(".parameters[0].in")
                     || error.path.ends_with(".parameters[1].in"))
                 .count(),
-            2,
-            "every prohibited location must be reported: {:?}",
+            0,
+            "valid workflow-input locations must be accepted: {:?}",
             report.errors
         );
         let duplicate = report
@@ -639,7 +639,6 @@ sourceDescriptions:
         for path in [
             "workflow \"parent\" > step \"operation\".parameters[0].in",
             "workflow \"parent\" > step \"operation\".onSuccess[0].parameters[0].in",
-            "workflow \"parent\" > step \"workflow\".parameters[0].in",
         ] {
             assert!(
                 diagnostic_errors.iter().any(|error| {
@@ -649,6 +648,11 @@ sourceDescriptions:
                 "missing direct API diagnostic {path}: {diagnostic_errors:?}"
             );
         }
+        assert_eq!(diagnostic_errors.len(), 7, "{diagnostic_errors:?}");
+        assert!(!diagnostic_errors.iter().any(|error| {
+            error.kind == ValidationErrorKind::InvalidParameterLocation
+                && error.path.contains("step \"workflow\"")
+        }));
         for path in [
             "workflow \"parent\" > step \"operation\".parameters[1].name",
             "workflow \"parent\" > step \"operation\".onSuccess[0].parameters[1].name",
@@ -663,3 +667,174 @@ sourceDescriptions:
         }
     }
 
+    /// The validator adapter must borrow the canonical selection for every target,
+    /// retaining declaration order and structural identity independently of paths.
+    #[test]
+    fn effective_parameter_adapter_preserves_selection_paths_and_keys_for_all_targets() {
+        use super::{effective_parameters, DeclarationScope, StepParameterContext};
+        let mut workflow: Workflow = serde_yaml_ng::from_str(
+            r#"
+workflowId: parent
+parameters:
+  - {name: exact, in: header, value: inherited-exact}
+  - {name: Case, in: header, value: inherited-case}
+  - {name: same, value: inherited-none}
+  - {name: duplicate, in: query, value: first}
+  - {name: duplicate, in: query, value: second}
+  - {name: absent, value: inherited-absent}
+steps:
+  - stepId: invoke
+    workflowId: child
+    parameters:
+      - {name: exact, in: header, value: local-exact}
+      - {name: case, in: header, value: local-case}
+      - {name: same, in: query, value: local-query}
+      - {name: absent, value: local-absent}
+      - {name: local, in: cookie, value: local-first}
+      - {name: local, in: cookie, value: local-second}
+"#,
+        )
+        .unwrap_or_else(|error| panic!("typed adapter fixture: {error}"));
+        workflow.steps.insert(0, Step::default());
+        for (target, action) in [
+            (Some(StepTarget::WorkflowId("child".into())), None),
+            (Some(StepTarget::OperationId("invoke".into())), None),
+            (
+                Some(StepTarget::OperationPath(
+                    "https://example.com/api#/paths/~1item/get".into(),
+                )),
+                None,
+            ),
+            (
+                Some(StepTarget::OperationId("publish".into())),
+                Some(StepAction::Send),
+            ),
+            (
+                Some(StepTarget::ChannelPath("/events".into())),
+                Some(StepAction::Receive),
+            ),
+            (None, None),
+        ] {
+            workflow.steps[1].target = target;
+            workflow.steps[1].action = action;
+            let context = StepParameterContext {
+                workflow_path: "same rendered path",
+                workflow_index: 7,
+                workflow: &workflow,
+                step_path: "same rendered path",
+                step_index: 1,
+                step: &workflow.steps[1],
+            };
+            let selected = effective_parameters(&context);
+            let expected = [
+                (false, 1),
+                (false, 2),
+                (false, 3),
+                (false, 4),
+                (true, 0),
+                (true, 1),
+                (true, 2),
+                (true, 3),
+                (true, 4),
+                (true, 5),
+            ];
+            assert_eq!(
+                selected.len(),
+                expected.len(),
+                "target={:?}",
+                context.step.target
+            );
+            for (parameter, (local, index)) in selected.iter().zip(expected) {
+                let (declaration, scope) = if local {
+                    (
+                        &workflow.steps[1].parameters[index],
+                        DeclarationScope::StepParameters {
+                            workflow_index: 7,
+                            step_index: 1,
+                        },
+                    )
+                } else {
+                    (
+                        &workflow.parameters[index],
+                        DeclarationScope::WorkflowParameters { workflow_index: 7 },
+                    )
+                };
+                assert!(std::ptr::eq(parameter.parameter, declaration));
+                assert_eq!(
+                    parameter.path,
+                    format!("same rendered path.parameters[{index}]")
+                );
+                assert_eq!(parameter.declaration, scope.declaration(index));
+            }
+            // Even equal rendered paths must not collapse Workflow and Step origins.
+            assert_eq!(selected[0].path, selected[5].path);
+            assert_ne!(selected[0].declaration, selected[5].declaration);
+        }
+    }
+
+    #[test]
+    fn effective_parameter_adapter_uses_resolved_reusable_identity_and_destination() {
+        use super::{
+            effective_parameters, resolve_components, DeclarationScope, StepParameterContext,
+        };
+        let yaml = parameter_context_document(
+            r#"components:
+  parameters:
+    shared: {name: shared, in: header, value: component}
+    kept: {name: kept, in: cookie, value: inherited}
+"#,
+            r#"    parameters:
+      - reference: $components.parameters.shared
+      - reference: $components.parameters.kept
+    steps:
+      - stepId: child
+        workflowId: child
+        parameters:
+          - reference: $components.parameters.shared
+            value: local
+"#,
+            "    steps: []\n",
+        );
+        let mut spec = parse_unvalidated(&yaml);
+        resolve_components(&mut spec, None)
+            .unwrap_or_else(|error| panic!("resolve reusable fixture: {error}"));
+        let workflow = &spec.workflows[0];
+        let selected = effective_parameters(&StepParameterContext {
+            workflow_path: "workflow path",
+            workflow_index: 0,
+            workflow,
+            step_path: "step path",
+            step_index: 0,
+            step: &workflow.steps[0],
+        });
+        assert_eq!(selected.len(), 2);
+        for (parameter, source, path, key) in [
+            (
+                &selected[0],
+                &workflow.parameters[1],
+                "workflow path.parameters[1]",
+                DeclarationScope::WorkflowParameters { workflow_index: 0 }.declaration(1),
+            ),
+            (
+                &selected[1],
+                &workflow.steps[0].parameters[0],
+                "step path.parameters[0]",
+                DeclarationScope::StepParameters {
+                    workflow_index: 0,
+                    step_index: 0,
+                }
+                .declaration(0),
+            ),
+        ] {
+            assert!(std::ptr::eq(parameter.parameter, source));
+            assert!(source.reference.is_empty());
+            assert_eq!(parameter.path, path);
+            assert_eq!(parameter.declaration, key);
+        }
+        assert_eq!(selected[0].parameter.name, "kept");
+        assert_eq!(selected[1].parameter.name, "shared");
+        assert_eq!(
+            selected[1].parameter.value,
+            arazzo_spec::ValueSource::Literal("local".into())
+        );
+    }

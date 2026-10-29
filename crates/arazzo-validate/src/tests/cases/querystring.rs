@@ -82,10 +82,10 @@ workflows:
             .any(|item| item.kind == ValidationErrorKind::InvalidParameterLocation));
     }
 
-    /// A step targeting another workflow does not inherit workflow parameters,
-    /// so there is no operation for the two locations to collide in.
+    /// Workflow inputs inherit both locations without an OpenAPI operation
+    /// conflict: the locations do not constrain child-workflow input mapping.
     #[test]
-    fn workflow_target_step_does_not_inherit_the_conflict() {
+    fn workflow_target_inherits_query_and_querystring_without_operation_conflict() {
         let yaml = format!(
             r#"arazzo: "1.1.0"
 info:
@@ -103,6 +103,7 @@ workflows:
         workflowId: wf2
         parameters:
           - name: workflow-input
+            in: querystring
             value: accepted
   - workflowId: wf2
     steps:
@@ -202,10 +203,10 @@ workflows:
         }
     }
 
-    /// A step targeting another workflow does not inherit workflow parameters,
-    /// so the workflow-level `querystring` never joins the step-level one.
+    /// Both querystring declarations reach workflow inputs; OpenAPI's one-per-
+    /// operation restriction does not apply to a workflow target.
     #[test]
-    fn workflow_target_step_does_not_inherit_the_duplicate() {
+    fn workflow_target_inherits_multiple_querystrings_as_inputs() {
         let yaml = format!(
             r#"arazzo: "1.1.0"
 info:
@@ -223,6 +224,7 @@ workflows:
         workflowId: wf2
         parameters:
           - name: workflow-input
+            in: querystring
             value: accepted
   - workflowId: wf2
     steps:
@@ -367,4 +369,3 @@ workflows:
         assert!(!declares_pre_1_1("1.10.0"));
         assert!(!declares_pre_1_1("2.0.0"));
     }
-

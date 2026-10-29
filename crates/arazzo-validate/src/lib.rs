@@ -1863,54 +1863,44 @@ struct StepParameterContext<'a> {
     step: &'a Step,
 }
 
-/// Mirrors `merge_workflow_params` in `arazzo-runtime`: workflow-level
-/// parameters are inherited only by non-workflow targets, and a Step replaces
-/// the same `(name, in)` identity instead of being a duplicate across lists.
+/// Adapts canonical borrowed selection and origins to validator paths and keys.
 fn effective_parameters<'a>(context: &StepParameterContext<'a>) -> Vec<EffectiveParameter<'a>> {
-    let step_keys: HashSet<(&str, Option<ParamLocation>)> = context
-        .step
-        .parameters
-        .iter()
-        .map(|parameter| (parameter.name.as_str(), parameter.in_))
-        .collect();
-    let mut params = Vec::new();
-    if !matches!(&context.step.target, Some(StepTarget::WorkflowId(_))) {
-        params.extend(
-            context
-                .workflow
-                .parameters
-                .iter()
-                .enumerate()
-                .filter(|(_, parameter)| {
-                    !step_keys.contains(&(parameter.name.as_str(), parameter.in_))
-                })
-                .map(|(index, parameter)| EffectiveParameter {
-                    parameter,
-                    path: format!("{}.parameters[{index}]", context.workflow_path),
-                    declaration: DeclarationScope::WorkflowParameters {
+    let Some(parameters) =
+        arazzo_spec::effective_step_parameters(context.workflow, context.step_index)
+    else {
+        // Contexts are constructed while enumerating this Workflow's Steps.
+        unreachable!("StepParameterContext must identify an existing Step");
+    };
+    parameters
+        .into_iter()
+        .map(|effective| {
+            let (index, path, scope) = match effective.origin {
+                arazzo_spec::EffectiveParameterOrigin::Workflow { parameter_index } => (
+                    parameter_index,
+                    context.workflow_path,
+                    DeclarationScope::WorkflowParameters {
                         workflow_index: context.workflow_index,
-                    }
-                    .declaration(index),
-                }),
-        );
-    }
-    params.extend(
-        context
-            .step
-            .parameters
-            .iter()
-            .enumerate()
-            .map(|(index, parameter)| EffectiveParameter {
-                parameter,
-                path: format!("{}.parameters[{index}]", context.step_path),
-                declaration: DeclarationScope::StepParameters {
-                    workflow_index: context.workflow_index,
-                    step_index: context.step_index,
-                }
-                .declaration(index),
-            }),
-    );
-    params
+                    },
+                ),
+                arazzo_spec::EffectiveParameterOrigin::Step {
+                    step_index,
+                    parameter_index,
+                } => (
+                    parameter_index,
+                    context.step_path,
+                    DeclarationScope::StepParameters {
+                        workflow_index: context.workflow_index,
+                        step_index,
+                    },
+                ),
+            };
+            EffectiveParameter {
+                parameter: effective.parameter,
+                path: format!("{path}.parameters[{index}]"),
+                declaration: scope.declaration(index),
+            }
+        })
+        .collect()
 }
 
 /// The distinct context constraints that can apply to one structural
@@ -1921,7 +1911,6 @@ fn effective_parameters<'a>(context: &StepParameterContext<'a>) -> Vec<Effective
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ParameterContextConstraint {
     OperationRequiresIn,
-    WorkflowProhibitsIn,
     AsyncOperationUnsupported,
     ChannelPathUnsupported,
 }
@@ -1946,7 +1935,7 @@ fn push_parameter_context_diagnostic(
 
 /// Parameter Object §5.8.6.1 is context-sensitive: HTTP operation targets
 /// require `in`, while a `workflowId` target maps every parameter to workflow
-/// inputs and therefore prohibits it. An `action: send|receive` marks an
+/// inputs and accepts absent or valid `in`. An `action: send|receive` marks an
 /// AsyncAPI operation target, and `channelPath` is also AsyncAPI; parameter
 /// transport for both fails closed because this executor does not implement it.
 fn validate_effective_parameter_context(
@@ -1998,24 +1987,7 @@ fn validate_effective_parameter_context(
                 }
             }
         }
-        StepTarget::WorkflowId(_) => {
-            for parameter in parameters {
-                if parameter.parameter.in_.is_some() {
-                    push_parameter_context_diagnostic(
-                        parameter.declaration,
-                        format!("{}.in", parameter.path),
-                        ParameterContextConstraint::WorkflowProhibitsIn,
-                        format!(
-                            "{}.in must not be set when the Step targets a workflow: \
-                             parameters map to workflow inputs",
-                            parameter.path
-                        ),
-                        seen,
-                        diagnostics,
-                    );
-                }
-            }
-        }
+        StepTarget::WorkflowId(_) => {}
         StepTarget::ChannelPath(_) => {
             for parameter in parameters {
                 push_parameter_context_diagnostic(
@@ -2048,6 +2020,13 @@ fn validate_querystring_exclusivity(
     context: &StepParameterContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    if !matches!(
+        context.step.target,
+        Some(StepTarget::OperationId(_) | StepTarget::OperationPath(_))
+    ) || context.step.action.is_some()
+    {
+        return;
+    }
     let params = effective_parameters(context);
     let named = |location: ParamLocation| {
         params
@@ -2060,7 +2039,7 @@ fn validate_querystring_exclusivity(
     if querystring.is_empty() {
         return;
     }
-    // `merge_workflow_params` dedups on `(name, in)`, so a workflow-level and a
+    // Canonical selection overrides on `(name, in)`, so a workflow-level and a
     // step-level `querystring` sharing a name collapse into one parameter —
     // the documented override path, not a duplicate. Distinct names do not
     // collapse, and every one of them reaches the same operation.
@@ -2183,8 +2162,8 @@ fn validate_parameters(
 enum ParameterIdentityMode {
     /// Operation-context Parameters use the specification identity `(name, in)`.
     NameAndLocation,
-    /// Workflow-input and action Parameters prohibit `in`, so identity is the
-    /// case-sensitive name even when two invalid entries carry different `in`s.
+    /// Workflow-input and action declarations retain case-sensitive name-only
+    /// duplicate checks; locations do not distinguish input names.
     NameOnly,
 }
 
