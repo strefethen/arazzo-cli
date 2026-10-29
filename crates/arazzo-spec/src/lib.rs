@@ -11,6 +11,7 @@ mod operation_id;
 mod operation_path;
 mod selector_admission;
 mod source_reference;
+mod step_expression;
 mod workflow_dependency;
 
 pub use effective_step::{
@@ -22,6 +23,10 @@ pub use operation_id::{
 pub use operation_path::{
     classify_operation_path, presented_method_and_target, MalformedOperationPath,
     OperationPathTarget, SUPPORTED_OPERATION_PATH_FORMS,
+};
+pub use step_expression::{
+    step_expression_sites, StepExpressionDeclaration, StepExpressionSite, StepExpressionSiteMode,
+    StepValuePathSegment,
 };
 pub use workflow_dependency::{classify_workflow_dependency, WorkflowDependency};
 
