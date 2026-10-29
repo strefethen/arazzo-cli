@@ -712,15 +712,9 @@ impl Engine {
                 },
             )
             .await;
-            let result = self
+            return self
                 .execute_subworkflow_step(exec_ctx, step, vars, depth)
-                .await?;
-            return Ok(StepExecution {
-                result,
-                outputs: vars.step_outputs(&step.step_id),
-                dry_run_request: None,
-                trace: StepTraceData::default(),
-            });
+                .await;
         }
 
         #[cfg(test)]
@@ -885,7 +879,7 @@ impl Engine {
         step: &Step,
         vars: &mut VarStore,
         depth: usize,
-    ) -> Result<StepResult, RuntimeError> {
+    ) -> Result<StepExecution, RuntimeError> {
         exec_ctx.check_cancelled()?;
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
@@ -918,6 +912,8 @@ impl Engine {
             }
             sub_inputs.insert(param.name.clone(), value);
         }
+        // Release the shared steps snapshot before tentative publication.
+        drop(eval);
 
         let wf_id = match &step.target {
             Some(StepTarget::WorkflowId(id)) => id.as_str(),
@@ -941,29 +937,29 @@ impl Engine {
         // Register completed sub-workflow state for $workflows.<id>.* expressions.
         vars.register_workflow_state(wf_id, sub_inputs, outputs.clone());
 
-        for (name, value) in outputs {
-            vars.set_step_output(&step.step_id, &name, value);
+        let previous = vars.replace_step_outputs(&step.step_id, outputs.clone());
+        let success = {
+            let eval_post = ExpressionEvaluator::new(self.make_eval_context(vars, None));
+            step.success_criteria.iter().all(|criterion| {
+                evaluate_criterion(criterion, &eval_post, None, &self.inner.regex_cache)
+            })
+        };
+        // The post evaluator must release its snapshot before a restore, too.
+        if !success {
+            vars.restore_step_outputs(&step.step_id, previous);
         }
 
-        let eval_post = ExpressionEvaluator::new(self.make_eval_context(vars, None));
-        for criterion in &step.success_criteria {
-            if !evaluate_criterion(criterion, &eval_post, None, &self.inner.regex_cache) {
-                return Ok(StepResult {
-                    success: false,
-                    response: None,
-                    message: None,
-                    err: None,
-                    err_kind: None,
-                });
-            }
-        }
-
-        Ok(StepResult {
-            success: true,
-            response: None,
-            message: None,
-            err: None,
-            err_kind: None,
+        Ok(StepExecution {
+            result: StepResult {
+                success,
+                response: None,
+                message: None,
+                err: None,
+                err_kind: None,
+            },
+            outputs: if success { outputs } else { BTreeMap::new() },
+            dry_run_request: None,
+            trace: StepTraceData::default(),
         })
     }
 

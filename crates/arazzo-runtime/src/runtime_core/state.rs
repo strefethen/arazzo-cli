@@ -288,6 +288,31 @@ impl VarStore {
             .insert(name.to_string(), value);
     }
 
+    /// Installs one run's exact outputs, retaining absence for rollback.
+    pub(crate) fn replace_step_outputs(
+        &mut self,
+        step_id: &str,
+        outputs: BTreeMap<String, Value>,
+    ) -> Option<BTreeMap<String, Value>> {
+        Arc::make_mut(&mut self.steps).insert(step_id.to_string(), outputs)
+    }
+
+    pub(crate) fn restore_step_outputs(
+        &mut self,
+        step_id: &str,
+        previous: Option<BTreeMap<String, Value>>,
+    ) {
+        let steps = Arc::make_mut(&mut self.steps);
+        match previous {
+            Some(outputs) => {
+                steps.insert(step_id.to_string(), outputs);
+            }
+            None => {
+                steps.remove(step_id);
+            }
+        }
+    }
+
     pub(crate) fn step_outputs(&self, step_id: &str) -> BTreeMap<String, Value> {
         self.steps.get(step_id).cloned().unwrap_or_default()
     }
