@@ -41,7 +41,9 @@ The clauses that directly constrain this initiative include:
 - Section 5.8.3: each source location *"MUST be in the form of a
   URI-reference"*.
 - Section 5.8.6: Parameter `value` is REQUIRED; `in` MUST be present for
-  operation targets and MUST NOT be used for workflow-input parameters.
+  non-workflowId contexts. For workflow-target Step parameters, valid `in` is
+  optional; the explicit prohibition belongs to Success/Failure Action
+  parameter lists (Sections 5.8.7 and 5.8.8).
 - Sections 5.8.7 and 5.8.8: action `name` and `type` are REQUIRED, Success
   Actions allow only `end`/`goto`, and Failure Actions add `retry`.
 - Section 5.8.8: omitted `retryLimit` means one retry, and the limit *"MUST be
@@ -93,6 +95,25 @@ not approval.
   duplicate normative parsing or runtime enforcement.
 - The broad golden sweep remains intentionally narrow. Focused tests own exact
   semantics, and one final integration member composes the corrected paths.
+
+### Workflow-target Step parameter locations
+
+Steve approved this interpretation on **2026-10-28**, resolving
+[ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0): valid `in`
+values are optional on workflow-target Step parameters. Vendored
+[Parameter.in](../../spec/arazzo/v1.1.0.html#parameterIn) says: “When the step,
+success action, or failure action in context specifies a `workflowId`, then all
+parameters map to workflow inputs.” It requires `in` in all other scenarios,
+but does not prohibit it on workflow-target Steps. In contrast, both
+[Success Action parameters](../../spec/arazzo/v1.1.0.html#successParameters) and
+[Failure Action parameters](../../spec/arazzo/v1.1.0.html#failureParameters)
+state: “The `in` field MUST NOT be used.” Preserve those action prohibitions.
+
+Validator adoption must demonstrate parsed/direct acceptance without a Step
+location-prohibition or OpenAPI-only query/querystring-exclusivity diagnostic,
+with operation and action negative controls. Exact `(name, in_)` overlay identity
+is unchanged. This decision does not settle runtime input-name collisions,
+change child-input schemas, or waive any other Parameter constraint.
 
 ### Effective Step views are target-neutral model ownership
 

@@ -50,9 +50,10 @@ model view applies exact overrides to all four target kinds and retains source
 provenance. This is groundwork; validator and runtime adoption remain outstanding.
 Independent review passed. Publication remains held by Fable’s earlier paused
 candidate. Next refinement: non-action expression-site inventory
-([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). The validator
-consumer is paused for the parameter-location contract correction in
-[ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0); the separate
+([ac-89176](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-89176)). Steve approved
+the parameter-location correction in
+[ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0); validator
+adoption returns to the queue for readiness refinement. The separate
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 also remains open.
 
@@ -289,23 +290,24 @@ and Fable’s completed correlationId disposition
 accepted field inventory, current source and live ownership before starting.
 This inventory remains separate from dependency graphs and scheduling.
 
-## Paused consumer checkpoint — workflow-target parameter locations
+## Resolved decision — workflow-target parameter locations
 
-The validator adoption ticket
-[ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6) requires an
-unsupported rejection: any `in` on a workflow-target Step parameter. Vendored
-[Parameter.in](../spec/arazzo/v1.1.0.html#parameterIn) does not prohibit it there;
-[success-action parameters](../spec/arazzo/v1.1.0.html#successParameters) and
-[failure-action parameters](../spec/arazzo/v1.1.0.html#failureParameters) explicitly
-do. The accepted plan’s broad prohibition also needs correction if Steve agrees.
+Steve approved [ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0)
+on **2026-10-28 PDT**: permit valid `in` on workflow-target Step parameters and
+retain the explicit Success/Failure Action parameter prohibition. The accepted
+plan and validator ticket
+[ac-475c6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-475c6) now distinguish
+these contexts. Positive parsed/direct tests replace the unsupported Step
+rejection expectation; action rejection and operation controls remain required.
 
-**Ask Steve for** [ac-1e1d0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1e1d0):
-recommend allowing valid locations on workflow-target Step parameters while
-retaining the explicit action-parameter prohibition. Removing an accepted
-rejection criterion/test needs Steve’s approval under AGENTS.md. The consumer
-is paused, its existing AC/testing retained, and runtime adoption
-[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) remains blocked
-behind it. The neutral model helper and expression-site inventory are independent.
+The approval pause is cleared. Validator adoption returns to the open queue;
+its legacy operation declarations, current test-file ownership and full start
+readiness still need refinement before implementation. Runtime adoption
+[ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still depends
+on the validator delivery. No validator/runtime behavior changed with this
+decision, and same-name/different-location runtime input delivery remains outside
+its scope. Independent expression-site groundwork can continue alongside
+read-only refinement of that consumer.
 
 ## Paused dependency checkpoint — source descriptors and ordinary diagnostics
 
@@ -623,3 +625,11 @@ readiness, and future dates are not promised before scope and proof are settled.
   unpublished main history. No push, release or Kafka source mutation occurs.
   Unrelated untracked files are preserved. The next independent refinement is
   expression-site inventory; the location-rule decision remains with Steve.
+
+### Cycle 8 follow-up — approved parameter-location correction
+
+Steve answered “Approve the correction (Recommended)” on 2026-10-28 PDT. This
+supersedes the pending location-rule decision at the original checkpoint above.
+The plan and validator AC/testing now reflect his choice; independent review
+checks the amended contract before the decision ticket closes. No executable
+source changed, and the existing Fable publication gate remains in force.
