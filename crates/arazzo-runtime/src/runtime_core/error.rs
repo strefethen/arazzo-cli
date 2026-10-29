@@ -196,12 +196,7 @@ impl std::error::Error for RuntimeError {
 
 impl From<reqwest::Error> for RuntimeError {
     fn from(err: reqwest::Error) -> Self {
-        let kind = if err.is_timeout() {
-            RuntimeErrorKind::ExecutionTimeout
-        } else {
-            RuntimeErrorKind::HttpRequest
-        };
-        Self::with_source(kind, err.to_string(), err)
+        Self::with_source(RuntimeErrorKind::HttpRequest, err.to_string(), err)
     }
 }
 
@@ -212,5 +207,74 @@ impl From<serde_json::Error> for RuntimeError {
             format!("JSON parse error: {err}"),
             err,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)] // Fixture construction and expected failures use labeled assertions.
+
+    use super::{RuntimeError, RuntimeErrorKind};
+    use std::error::Error;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn reqwest_timeout_is_http_request_with_original_source() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind timeout fixture");
+        let url = format!("http://{}/timeout", server.server_addr());
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .expect("build timeout client");
+        // Keep the listener alive without receiving or responding. No fixture
+        // worker needs to be released or joined when the request times out.
+        let error = tokio::time::timeout(Duration::from_secs(2), client.get(&url).send())
+            .await
+            .expect("request deadline must finish within the fixture bound")
+            .expect_err("unanswered request must time out");
+        assert!(error.is_timeout(), "fixture must produce a real timeout");
+        let message = error.to_string();
+
+        let converted = RuntimeError::from(error);
+
+        assert_eq!(converted.kind, RuntimeErrorKind::HttpRequest);
+        assert_eq!(converted.code(), "RUNTIME_HTTP_REQUEST");
+        assert!(!converted.kind.is_cancellation());
+        assert_eq!(converted.message, message);
+        assert_eq!(converted.to_string(), message);
+        let source = converted
+            .source()
+            .and_then(|source| source.downcast_ref::<reqwest::Error>())
+            .expect("preserve the reqwest source error");
+        assert!(source.is_timeout());
+        assert_eq!(source.to_string(), message);
+        assert_eq!(source.url().map(reqwest::Url::as_str), Some(url.as_str()));
+    }
+
+    #[test]
+    fn reqwest_non_timeout_remains_http_request_with_original_source() {
+        let error = reqwest::Client::new()
+            .get("://invalid")
+            .build()
+            .expect_err("invalid URL must produce a builder error");
+        assert!(error.is_builder());
+        assert!(!error.is_timeout());
+        let message = error.to_string();
+
+        let converted = RuntimeError::from(error);
+
+        assert_eq!(converted.kind, RuntimeErrorKind::HttpRequest);
+        assert_eq!(converted.code(), "RUNTIME_HTTP_REQUEST");
+        assert!(!converted.kind.is_cancellation());
+        assert_eq!(converted.message, message);
+        assert_eq!(converted.to_string(), message);
+        let source = converted
+            .source()
+            .and_then(|source| source.downcast_ref::<reqwest::Error>())
+            .expect("preserve the reqwest source error");
+        assert!(source.is_builder());
+        assert!(!source.is_timeout());
+        assert_eq!(source.to_string(), message);
     }
 }
