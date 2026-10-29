@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359).
+Latest source cycle: [ac-30661](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-30661).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,11 +44,19 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: public runtime documentation repair
-([ac-b9359](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9359)). The exact
-runtime documentation command now builds without warnings. A private helper’s
-name remains explanatory code text; no signature, visibility or behavior changed.
-The prior success-only output repair remains delivered in cycle 14.
+Latest delivery: parse supplied OpenAPI bytes
+([ac-30661](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-30661)). Library
+callers can parse an existing byte buffer without reopening a filename. The
+shared parse/classification path preserves existing file-wrapper messages and
+version behavior. This is a library capability and loader-integration groundwork;
+MCP adapters and security policy remain separate, gated work.
+
+Terminal-event repair [ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180)
+is paused before implementation. Frontier readiness found incompatible red-test
+wording and a universal Goal that exceeds the permitted scheduler edits.
+[ac-7feb7](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7feb7) asks Steve to
+approve the bounded named-exit repair and red/green regression correction,
+while preserving passing controls and separately refining other lifecycle paths.
 
 Declared workflow-Step output evaluation
 [ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3) is paused
@@ -65,8 +73,9 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180), ensuring
-failed admitted invocations emit their terminal event. Runtime inheritance
+[ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b), an injectable
+runtime source-document loader. The owning plan explicitly exempts this foundation
+from the MCP security-policy gate after exact-ticket frontier readiness review. Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
@@ -916,3 +925,38 @@ runtime capability changes; the known HTTP module gains no responsibility.
 - Publication remains held by Fable’s earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
   blocked review. Existing Action-order, child-input collision and source-type
   decisions remain unchanged. No Fable source/reservations, push or release.
+
+
+## Delivered — cycle 16: OpenAPI parsing separated from file access
+
+[ac-30661](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-30661), under
+[epic:ac-852d1](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-852d1), adds
+`parse_openapi_bytes` and one private parse/failure-classification path shared
+with the existing file wrapper. Parsing owns no filesystem or network access;
+the wrapper preserves its read, version and parse messages. The small existing
+parser owner remains cohesive, with focused `openapi_bytes` integration proof.
+
+- Source [464a8fe](https://github.com/strefethen/arazzo-cli/commit/464a8fe769e552bb8c8447f122fd324bc34fc809) **(local; not pushed)** passed fresh-context independent
+  review in round 1. Valid YAML/JSON models agree; malformed/missing-version and
+  3.1/3.2 cases preserve the established classification and exact wrapper text.
+- Focused tests, the generator crate, workspace check, strict Clippy, formatting,
+  public documentation and full workspace pass: **1,619 passed, 0 failed,
+  35 ignored**. No new dependency, adapter, policy, version support or God-file
+  responsibility. All build inputs are bound to the reviewed source candidate.
+- Contract revision `67319e6d6a8a3381b7ef297083e1e719b7367c748b695730fed6ab269825304e`
+  and raw proof live in `/private/tmp/arazzo-maintainer-20261029/cycle16-readiness/`.
+  The metadata migration preserved requirements; decided by recommendation,
+  caller wording was corrected from CLI to existing callers with current MCP
+  anchors, without changing acceptance or testing. The plan §8 foundation
+  exemption received exact-ticket frontier review before Sol implementation.
+- The intended terminal-event repair failed readiness before implementation.
+  [ac-7feb7](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7feb7) is the decision
+  dependency of paused [ac-0f180](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0f180).
+  Existing output-map, Action-order, input-collision and source-type decisions
+  remain unchanged. Neither runtime nor Fable's Kafka files were edited.
+- The single delivery HTML is verified at desktop/mobile widths and bound to
+  its documentation commit. This cycle uses one implementation and one review
+  round within the 08:57–11:57 UTC bound. Both epics remain open. Next independent
+  readiness assessment: [ac-6f63b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-6f63b).
+- Publication remains held by the earlier [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f)
+  candidate without review PASS. No push or release is claimed.
