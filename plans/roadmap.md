@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
-Updated: 2026-10-28. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-51241](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-51241).
+Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
+Latest source cycle: [ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -44,12 +44,13 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: HTTP timeout conversion repair
-([ac-51241](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-51241)). The public
-reqwest conversion now reports `HttpRequest` while preserving the message and
-source; per-request timeouts no longer masquerade as execution cancellation.
-Independent review and all automated checks passed. Normal engine HTTP handling
-already used the correct category; this is a library-boundary repair.
+Latest delivery: success-only workflow-Step outputs
+([ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac)). A rejected
+attempt records empty outputs and preserves the last successful Step result;
+a successful rerun replaces its exact output map. The completed child remains
+available through `$workflows.<id>`. Independent review and all automated checks
+passed. This repairs runtime behavior; declared Step-output evaluation remains
+the next separate slice.
 
 The Action-order assessment is complete:
 [ac-908bc](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-908bc) is paused for
@@ -57,8 +58,8 @@ Steve to accept the independently reviewed Step-first recommendation and its
 provenance/invalid-model disposition. It records the member-contract changes
 needed before implementation; the accepted plan and dependencies remain gated.
 Next independent readiness assessment:
-[ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac), success-only
-workflow-Step output publication. Runtime inheritance
+[ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3), evaluating
+a workflow Step’s declared output map against the child’s results. Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
 [ac-b9701](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b9701), and the
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
@@ -828,3 +829,46 @@ then non-overridden Workflow actions. The existing decision ticket was renamed
 contract conflicts remain there. Acceptance is pending, with no plan amendment
 or Action implementation. One source slice and one source review round consumed;
 no failed review loop. Cycle checkpoint is within the three-hour bound.
+
+## Delivered — cycle 14: publish only successful workflow-Step outputs
+
+[ac-7d4ac](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-7d4ac), under
+[epic:ac-1fae2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1fae2), fixes
+both rejected-output publication and stale keys after successful reruns. A
+criterion sees the child’s fresh values tentatively. On rejection, the Step’s
+previous map or true absence is restored and its attempt records `{}`; the
+completed child remains registered for failure handling. On success, the exact
+new key set replaces the old one.
+
+- The existing workflow-Step owner returns the existing `StepExecution` carrier.
+  The variable store owns two private operations on one Step map. Both evaluator
+  snapshots drop before mutation; no whole-store clone, new recording owner,
+  public API, schema, error code or Fable source change.
+- Frontier readiness confirmed the accepted semantics and responsibility boundary;
+  Sol implemented the three-file slice; a fresh frontier reviewer passed the
+  immutable candidate in round 1. No contract or test requirement was weakened.
+  Strict Clippy caught four fixture `expect` calls; explicit error handling fixed
+  them before final verification and review.
+- Four focused regressions exercise both execution entrypoints, first rejection,
+  and changing output names through a child goto. Every one of the 17 behavioral
+  comparisons failed on unchanged production, then passed. The 137 required
+  existing workflow/recording tests passed without edits.
+- Workspace: **1,614 passed, 0 failed, 35 ignored**. Formatting, compilation,
+  strict all-target/all-feature Clippy and four drift guards passed. All 293
+  build/spec inputs remained stable; 289 tracked inputs match the source commit
+  and four fetched specification documents stayed unchanged.
+- Reviewed source: [c8f33e7](https://github.com/strefethen/arazzo-cli/commit/c8f33e77b00fd3fbfa0b9fefd50f76dab44d7534)
+  **(local; not pushed)**. Frozen contract revision
+  `ad904bf467a134e50da8365860a6b325a6ad79d2999ae148054ae8ecf09e74df`;
+  evidence `/private/tmp/arazzo-maintainer-20261029/workflow-output-cycle/`.
+  The single delivery log shows the rejected-attempt and key-replacement examples;
+  its desktop/mobile checks and committed hash are retained with ticket evidence.
+- The runtime-correctness epic stays open. Next independent readiness assessment:
+  [ac-bb1c3](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bb1c3), declared
+  workflow-Step output evaluation. This ticket supplies the success-only
+  foundation, without claiming that follow-up capability is implemented.
+- Publication remains held by the blocked review of Fable’s earlier
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) candidate;
+  paused status or manual QA alone is not the reason. No push or release occurs.
+  Existing Action-order, input-collision and source-type decisions remain with
+  Steve. One coherent source slice under the 06:50–09:50 UTC cycle budget.
