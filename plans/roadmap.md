@@ -3,6 +3,7 @@
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
 Latest source cycle: [ac-5eb26](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5eb26).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
+Latest planning cycle: [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
 
 The aim is a dependable, spec-faithful workflow engine whose internals remain
@@ -65,10 +66,16 @@ remain separate from proposed validate, runtime and OS resource units. Independe
 review passed; no benchmark implementation or new performance measurements were
 delivered. Steve explicitly accepted the design and unit-by-unit planning on
 2026-10-29 through [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12),
-now completed. The next planning cycle grounds the root parse/validation unit,
-then runtime workload ownership and OS resource measurement. Dependencies and
-regression thresholds remain separate decisions; implementation still requires
-grounded unit contracts. No performance improvement or new measurement is claimed.
+now completed. The [root parse/validation plan](current/arazzo-root-load-benchmark.md)
+has passed independent review. Its three bounded fixtures, single-call timing,
+independent model checks and benchmark-only ownership are grounded in current APIs.
+It remains Draft pending the explicit Criterion dev-dependency decision in
+[ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448) and subsequent
+unit-contract acceptance/decomposition. The package warnings and recommendation
+are in the [dependency proposal](security/decisions/2026-10-29-criterion-validate-bench.md).
+No implementation ticket is labeled ready, and no performance result is claimed.
+Runtime workload ownership, OS measurement and regression thresholds remain
+separate units and decisions.
 
 Generator diagnostic repair [ac-923ea](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-923ea)
 has a concrete, frontier-refined contract and is paused before implementation.
@@ -115,8 +122,13 @@ approve precise wording that retains direct literal text, required-expression
 rejection and every existing test. Source-anchor and manifest-total scope repairs
 are routine; the exact claim remains gated. Structured workflow-output warnings
 are complete. Debug checkpoint cancellation and cleanup after client loss are
-reviewed and complete. The next cycle follows Steve's accepted benchmark
-planning direction under [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62).
+reviewed and complete. Root benchmark planning under
+[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62) has passed
+review; implementation waits for the dependency decision above. The next independent
+source candidate is [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f),
+the shared, bounded schema example walker. Its prior Option C direction must be
+checked against current scope, owners and code in fresh readiness before starting;
+this checkpoint does not resume the paused ingestion plan or certify implementation readiness.
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
@@ -1363,3 +1375,42 @@ That tracking outcome leaves release approval and fresh release preflight separa
   remains held by the unresolved failed-review ancestor in
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), not manual
   QA or paused status alone. No push, release or deployment occurred.
+
+## Delivered — cycle 26: a bounded root benchmark plan
+
+[ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790) delivers the
+first grounded unit plan under the accepted benchmark direction. It specifies
+what future root parse/validation timings mean and how an incorrect result
+invalidates the measurement; no benchmark implementation or new timing is delivered.
+
+- [d8f502e](https://github.com/strefethen/arazzo-cli/commit/d8f502ee9a13c6dc08b2f190e061fdf166b60da1)
+  **(local; not pushed)** passed fresh-context Astra planning review in round 1
+  without findings. A separate frontier architect grounded the design; the parent
+  owns tracker disposition and this documentation checkpoint.
+- The proposed `root_load` target measures exactly one existing public parser call
+  over prepared bytes for 10/100/1,000-step fixtures. Independent complete-model,
+  zero-warning and fixed-source checks run outside timing. Invalid YAML and
+  duplicate-step controls must fail with the expected errors. Criterion owns its
+  sampling and native statistics; this is not a CLI p95 or OS-resource measurement.
+- Private benchmark support and a focused fixture test own all new responsibilities.
+  The validator God module gains no code, coupling or exports. No production,
+  manifest, lockfile, script, CI or Fable Kafka/AsyncAPI path changed.
+- The reviewed plan remains **Draft**, pending
+  [ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448): approve reuse
+  of the existing locked Criterion package as a validator dev-dependency despite
+  recorded package-policy, review-brief and maintainer-continuity warnings.
+  No package was installed and no unresolved implementation ticket was marked ready.
+  Subsequent unit acceptance/decomposition stays within the standing planning mandate.
+- All 373 prior verified executable/spec input hashes match. The existing
+  formatting, check, strict Clippy and 1,677-test workspace result is reused;
+  no tests or benchmarks are represented as newly run. Local links, HTML structure,
+  unchanged scripts/styles and historical entries pass inspection. Desktop 1280px
+  and mobile 390px checks show no horizontal overflow or console warnings/errors.
+  Evidence: `/private/tmp/arazzo-maintainer-20261029/cycle26-root-benchmark/`.
+- Next independent source readiness is
+  [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f), the bounded
+  schema example walker, subject to current authority, source and ownership checks.
+  This cycle fits its 18:58–21:58 UTC planning bound. Existing pauses remain intact;
+  the failed-review ancestor in
+  [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still prevents
+  publishing the accumulated range. No push, deployment or release occurred.

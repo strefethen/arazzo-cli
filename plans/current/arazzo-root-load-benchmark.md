@@ -183,8 +183,11 @@ review, without claiming a threshold or the six-family program complete.
 
 ---
 
-**Disposition:** Draft — bounded independent review pending. The existing
-six-family design remains accepted. The concrete prerequisite is Steve's
+**Disposition:** Draft — bounded independent review PASS, round 1, for
+[d8f502e](https://github.com/strefethen/arazzo-cli/commit/d8f502ee9a13c6dc08b2f190e061fdf166b60da1)
+(local; not pushed). Review evidence is recorded in
+[ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
+The existing six-family design remains accepted. The concrete prerequisite is Steve's
 approval to inherit workspace Criterion into `arazzo-validate` as a dev-dependency;
 no package installation, implementation, or numerical budget is authorized by
 this draft. Once that decision and the unit contract are accepted under the
