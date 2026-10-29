@@ -3,9 +3,9 @@ type: add
 ecosystem: cargo
 package: criterion
 version_proposed: 0.5.1
-decision: pending-user-approval
+decision: approved
 decision_at: 2026-10-29
-decision_by: codex
+decision_by: Steve
 lockfile_delta: proposed validate dev-dependency edge only; retain package versions and checksums
 ---
 
@@ -23,8 +23,9 @@ upgrade, general benchmark framework or runtime API change is proposed.
 explicit dependency decision. Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), explicitly
 leaving dependencies and thresholds as separate decisions. This proposal is
-that narrow dependency decision. No manifest, lockfile or benchmark code has
-been changed. The planning task is
+that narrow dependency decision. Steve explicitly answered “Approve Criterion
+reuse (Recommended)” on 2026-10-29, acknowledging the recorded warnings.
+Approval retains the exact package and feature bounds below. The planning task is
 [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
 
 ## Install-time evidence
@@ -55,7 +56,8 @@ Criterion0.5.1 manifests and archive, and the historical lockfile. The packet is
 The `add-package` skill requires: “Any warn or fail: do not install.” Missing
 policy, missing review brief and unverified maintainer continuity therefore
 require Steve's explicit approval. The benchmark-design acceptance separately
-reserved this decision, so the standing maintainer delegation does not clear it.
+reserved this decision. Steve's explicit approval now clears this narrow gate;
+the warnings remain recorded rather than being represented as passing checks.
 
 Approval covers only the validator dev-dependency on the already-locked version
 and existing feature set. The implementation must demonstrate that all package

@@ -1,6 +1,6 @@
 ---
-status: draft
-epic:
+status: accepted
+epic: ac-8ba62
 created: 2026-10-29
 ---
 
@@ -58,8 +58,9 @@ benches. The lockfile resolves Criterion 0.5.1.
 [`arazzo-validate/Cargo.toml`](../../crates/arazzo-validate/Cargo.toml) currently has
 neither a dev-dependency section nor a benchmark target. Recommend inheriting
 that exact workspace declaration, without a version/feature change. This is a
-new crate-local development dependency edge and remains reserved for Steve's
-approval under the accepted assessment; existing installation is not approval.
+new crate-local development dependency edge. Steve explicitly approved this
+bounded reuse on 2026-10-29 despite the recorded package-evidence warnings;
+existing installation alone was not approval.
 [ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448) tracks the
 decision, with bounded package evidence in the
 [dependency proposal](../security/decisions/2026-10-29-criterion-validate-bench.md).
@@ -183,12 +184,17 @@ review, without claiming a threshold or the six-family program complete.
 
 ---
 
-**Disposition:** Draft — bounded independent review PASS, round 1, for
+**Disposition:** Accepted — bounded independent review PASS, round 1, for
 [d8f502e](https://github.com/strefethen/arazzo-cli/commit/d8f502ee9a13c6dc08b2f190e061fdf166b60da1)
 (local; not pushed). Review evidence is recorded in
 [ac-9f790](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9f790).
-The existing six-family design remains accepted. The concrete prerequisite is Steve's
-approval to inherit workspace Criterion into `arazzo-validate` as a dev-dependency;
-no package installation, implementation, or numerical budget is authorized by
-this draft. Once that decision and the unit contract are accepted under the
-existing planning/decomposition authority, author the single settled Tier 2 slice.
+Steve's explicit approval in
+[ac-8b448](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8b448) clears the
+reserved dependency decision. The Chief of Staff enacts acceptance and directs
+one-slice decomposition under the standing maintainer mandate in
+[the roadmap](../roadmap.md#standing-delegation-and-continuity) and the accepted
+unit-by-unit planning direction in
+[ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12).
+The reviewed unit is within that direction, uses only existing public APIs and
+does not enlarge production ownership. Numerical budgets, other workload families
+and any dependency resolution beyond the approved edge remain separate.
