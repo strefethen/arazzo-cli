@@ -142,6 +142,7 @@ pub(crate) fn decode_frame<T: DeserializeOwned>(
         .map_err(|e| HarnessError::new("protocol", "json", e))
 }
 
+#[derive(Clone)]
 pub(crate) struct ControlClient {
     endpoint: SocketAddr,
 }

@@ -121,6 +121,10 @@ pub(crate) fn classify_exit(record: &RawRecord) -> i32 {
                 && record.metric
                     == if case.family == super::catalog::Family::Sources {
                         "source_build"
+                    } else if case.control == Some(super::catalog::ControlKind::Watchdog) {
+                        "watchdog_completion"
+                    } else if case.family == super::catalog::Family::Cancellation {
+                        "cancel_to_api_completion"
                     } else {
                         "workflow_completion"
                     }

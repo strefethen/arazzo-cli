@@ -1,4 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "../examples/runtime_workload/cancellation.rs"]
+#[allow(dead_code)]
+mod cancellation;
 #[path = "../examples/runtime_workload/catalog.rs"]
 #[allow(dead_code)]
 mod catalog;
@@ -14,6 +17,9 @@ mod protocol;
 #[path = "../examples/runtime_workload/records.rs"]
 #[allow(dead_code)]
 mod records;
+#[path = "../examples/runtime_workload/response_oracle.rs"]
+#[allow(dead_code)]
+mod response_oracle;
 #[path = "../examples/runtime_workload/source_check.rs"]
 #[allow(dead_code)]
 mod source_check;

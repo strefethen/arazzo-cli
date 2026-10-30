@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod cancellation;
 #[allow(dead_code)]
 mod catalog;
 mod execution_oracle;
@@ -8,6 +9,7 @@ mod fixtures;
 #[allow(dead_code)]
 mod protocol;
 mod records;
+mod response_oracle;
 mod service;
 mod source_check;
 mod worker;

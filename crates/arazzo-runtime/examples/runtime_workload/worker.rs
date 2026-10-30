@@ -1,4 +1,4 @@
-use super::catalog::{self, CaseSpec, Family, HandleMode, HarnessError, Settings};
+use super::catalog::{self, CaseSpec, ControlKind, Family, HandleMode, HarnessError, Settings};
 use super::execution_oracle::{self, OracleReport};
 use super::fixtures::{self, PreparedCase};
 use super::protocol::{ControlClient, Identity};
@@ -174,10 +174,16 @@ fn elapsed(start: Instant) -> Result<u64, HarnessError> {
 pub(crate) async fn execute_case(
     engine: &Engine,
     case: &CaseSpec,
-    _control: &ControlClient,
-    _identity: &Identity,
+    control: &ControlClient,
+    identity: &Identity,
 ) -> Result<TimedExecution, HarnessError> {
-    execute_with_budget(engine, case, EXECUTION_BUDGET).await
+    if case.control == Some(ControlKind::Watchdog) {
+        super::cancellation::execute_watchdog(engine, case, control, identity).await
+    } else if case.family == Family::Cancellation {
+        super::cancellation::execute_cancelled(engine, case, control, identity).await
+    } else {
+        execute_with_budget(engine, case, EXECUTION_BUDGET).await
+    }
 }
 
 pub(crate) async fn execute_with_budget(
@@ -295,18 +301,12 @@ pub(crate) fn run_worker_with_watchdog(
     let result = (|| -> Result<(), HarnessError> {
         validate_invocation(&options.invocation_id)?;
         let case = catalog::case(&options.case_id)?;
-        if !matches!(
-            case.family,
-            Family::Sources | Family::Expressions | Family::Dag
-        ) {
-            return Err(HarnessError::new(
-                "setup",
-                "unimplemented_slice",
-                &case.case_id,
-            ));
-        }
         record.metric = if case.family == Family::Sources {
             "source_build"
+        } else if case.control == Some(ControlKind::Watchdog) {
+            "watchdog_completion"
+        } else if case.family == Family::Cancellation {
+            "cancel_to_api_completion"
         } else {
             "workflow_completion"
         }
@@ -364,7 +364,10 @@ pub(crate) fn run_worker_with_watchdog(
         session = true;
         control.begin(id, Duration::from_secs(70))?;
         let ready = control.readiness(id)?;
-        if !ready.ready || !ready.arrived_paths.is_empty() || !ready.stalled_paths.is_empty() {
+        if ready.ready != (case.response_policy.stall == catalog::Stall::None)
+            || !ready.arrived_paths.is_empty()
+            || !ready.stalled_paths.is_empty()
+        {
             return Err(HarnessError::new("setup", "readiness", json!(ready)));
         }
         rt = Some(runtime()?);
@@ -419,7 +422,18 @@ pub(crate) fn run_worker_with_watchdog(
             record.elapsed_ns = Some(timed.elapsed_ns);
             record_actual(&mut record, &dir, &timed.actual)?;
             let snapshot = control.snapshot(id)?;
-            record.oracle = execution_oracle::check_execution(&case, &timed.actual, &snapshot);
+            record.oracle = match case.family {
+                Family::Bodies => {
+                    super::response_oracle::check_body(&case, &timed.actual, &snapshot)
+                }
+                Family::Retries => {
+                    super::response_oracle::check_retry(&case, &timed.actual, &snapshot)
+                }
+                Family::Cancellation => {
+                    super::cancellation::check_cancelled(&case, &timed, &snapshot)
+                }
+                _ => execution_oracle::check_execution(&case, &timed.actual, &snapshot),
+            };
             record.service = Some(snapshot);
         }
         if !record.oracle.passed {
