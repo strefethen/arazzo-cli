@@ -890,33 +890,14 @@ impl Engine {
         exec_ctx.check_cancelled()?;
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut sub_inputs = BTreeMap::new();
-        for param in &step.parameters {
-            let (value, warnings) = match &param.value {
-                ValueSource::Selector(_) => resolve_value_source(&param.value, &eval),
-                ValueSource::Literal(_) => {
-                    let value_str = param.value_as_str();
-                    let value = if let Some(inner) = value_str
-                        .strip_prefix('{')
-                        .and_then(|s| s.strip_suffix('}'))
-                        .filter(|s| s.starts_with('$') && !s.contains('{'))
-                    {
-                        // Single expression like {$inputs.count} — preserve type
-                        eval.evaluate(inner)
-                    } else if value_str.contains("{$") {
-                        // Mixed text + expressions — must stringify
-                        Value::String(eval.interpolate_string(&value_str))
-                    } else {
-                        resolve_value_source(&param.value, &eval).0
-                    };
-                    (value, Vec::new())
-                }
-            };
-            for warning in warnings {
-                eprintln!(
-                    "warning: sub-workflow parameter {:?}: {warning}",
-                    param.name
-                );
-            }
+        let mut parameter_warnings = Vec::new();
+        for (index, param) in step.parameters.iter().enumerate() {
+            let (value, warnings) = resolve_value_source(&param.value, &eval);
+            parameter_warnings.extend(
+                warnings
+                    .into_iter()
+                    .map(|warning| format!("parameters[{index}].value: {warning}")),
+            );
             sub_inputs.insert(param.name.clone(), value);
         }
         // Release the shared steps snapshot before tentative publication.
@@ -966,7 +947,10 @@ impl Engine {
             },
             outputs: if success { outputs } else { BTreeMap::new() },
             dry_run_request: None,
-            trace: StepTraceData::default(),
+            trace: StepTraceData {
+                warnings: parameter_warnings,
+                ..StepTraceData::default()
+            },
         })
     }
 

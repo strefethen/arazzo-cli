@@ -4947,16 +4947,12 @@ async fn execute_path_param_with_special_chars_is_percent_encoded() {
     );
 }
 
-// ── Bug #10: sub-workflow param interpolation preserves types ─────
-
 #[tokio::test]
-async fn sub_workflow_interpolated_param_preserves_number_type() {
+async fn sub_workflow_interpolated_param_renders_number_as_string() {
     let server = start_server(|_method, _url, _headers, _body| {
         MockHttpResponse::json(200, r#"{"ok":true}"#)
     });
 
-    // Parent passes {$inputs.count} to child — the braces trigger interpolation.
-    // Child exposes the received input as a workflow output.
     let spec = make_spec(vec![
         Workflow {
             workflow_id: "parent".to_string(),
@@ -4998,11 +4994,10 @@ async fn sub_workflow_interpolated_param_preserves_number_type() {
         Err(err) => panic!("expected success, got: {err}"),
     };
 
-    // The value should be a number, not a string
     assert_eq!(
         outputs.get("result"),
-        Some(&json!(42)),
-        "interpolated param should preserve numeric type, got: {:?}",
+        Some(&json!("42")),
+        "interpolated param should render a string, got: {:?}",
         outputs.get("result")
     );
 }
