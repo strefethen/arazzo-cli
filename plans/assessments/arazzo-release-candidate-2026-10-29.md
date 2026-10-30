@@ -115,10 +115,16 @@ before release. No tag, publication or hourly resumption is authorized.
   The earlier dry-run ticket has been reconciled with shared provenance; the
   system success condition has not yet been demonstrated. Expression provenance
   [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58) is reviewed
-  and closed at local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b); runtime propagation and refusal remain pending.
-- Tokio package/source review supports a precise 1.51.6 / macros 2.7.1 remedy
-  in [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f).
-  It does not yet constitute a verified dependency update or advisory clearance.
+  and closed at local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b); recursive-value provenance is also reviewed and closed in
+  [ac-b3093](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b3093), local
+  [56cd5f1](https://github.com/strefethen/arazzo-cli/commit/56cd5f18eab70d33bebeaa803af4b4fc16f5b5b9).
+  Shared runtime propagation and refusal remain pending.
+- Tokio 1.51.6 / macros 2.7.1 is reviewed and closed in
+  [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
+  [5d91f2b](https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5).
+  Canonical readiness and Rust 1.88 locked build passed; fresh audit no longer
+  reports RUSTSEC-2026-0386. The two unrelated warnings remain. This proof does
+  not refresh the retained VSIX or establish a final release candidate.
 
 ## Artifact verification — PASS for native preparation
 

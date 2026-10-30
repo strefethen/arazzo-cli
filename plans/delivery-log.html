@@ -198,6 +198,8 @@
     <a href="#overview" class="mb-7 block text-lg font-semibold tracking-tight no-underline max-lg:hidden">arazzo<span class="text-muted-foreground">/</span>cli</a>
     <p class="eyebrow mb-3 px-3 max-lg:hidden">Delivery log</p>
     <a href="#overview" class="toc-link active" aria-current="location">At a glance</a>
+    <a href="#cycle-38" class="toc-link">38 · Nested-value foundation</a>
+    <a href="#cycle-37" class="toc-link">37 · Tokio advisory</a>
     <a href="#cycle-36" class="toc-link">36 · Missing-value foundation</a>
     <a href="#cycle-35" class="toc-link">35 · Credential names</a>
     <a href="#cycle-34" class="toc-link">34 · Windows CI restored</a>
@@ -250,6 +252,32 @@
       </div>
       <p class="mt-5 text-sm text-muted-foreground">Publication correction: reviewed main pushes run CI and deploy GitHub Pages. Steve approved the existing Pages deployment. Earlier entries retain their historical statements; “CI only” and “no deployment” claims were incomplete. Hourly maintainer runs are paused. This journal is not a tagged release.</p>
     </header>
+
+    <section id="cycle-38" class="section" aria-labelledby="cycle-38-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 38 · 29 Oct 2026</span><span class="badge done">Foundation · local, reviewed</span></div>
+      <h2 id="cycle-38-title" class="cycle-title">Missing-value information survives nested payloads.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">The runtime now carries expression references and located failures through recursive values and Selector Objects. One resolution pass produces both existing results and internal provenance. No request is refused by this foundation alone.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Before</p><p class="mt-2 text-muted-foreground">Nested resolution projected values and warnings before downstream code could reliably distinguish a missing dependency from an intentional null.</p></div>
+        <div class="panel min-w-0"><p class="example-label">Now</p><p class="mt-2 text-muted-foreground">A nested missing expression retains its authored source and value location, such as <code>/items/0/id</code>. Repeated references remain ordered; typed aliases remain available to the later admission layer.</p></div>
+      </div>
+      <p class="mt-5 text-muted-foreground">Zero selector matches still return the accepted null result. Unresolved contexts and hard selector errors are recorded separately. Existing values, warning order and replacement skipping remain unchanged.</p>
+      <p class="mt-4 text-sm text-muted-foreground">Proof: 11 new focused tests plus existing payload, JSONPath, XPath and explicit-null controls; required checks and 1,785 workspace tests passed with 35 existing ignores. All 598 tracked verification inputs match the candidate. Independent review passed. The final format check passed after candidate creation; that timing is disclosed in the evidence.</p>
+      <p class="mt-4 text-sm text-muted-foreground"><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b3093">Contract and evidence</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/56cd5f18eab70d33bebeaa803af4b4fc16f5b5b9">reviewed source 56cd5f1</a> (local; not pushed). Shared runtime propagation and the HTTP admission boundary remain pending.</p>
+    </section>
+
+    <section id="cycle-37" class="section" aria-labelledby="cycle-37-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 37 · 29 Oct 2026</span><span class="badge done">Dependency repair · local, reviewed</span></div>
+      <h2 id="cycle-37-title" class="cycle-title">The locked Tokio advisory is removed.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">The release candidate now selects the earliest patched Tokio version for the AsyncFd advisory. Only two package records changed; application code, dependency features and unrelated lock entries remain unchanged.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Before</p><p class="mt-2 text-muted-foreground"><code>tokio 1.50.0</code> + <code>tokio-macros 2.6.1</code><br>Audit reported <code>RUSTSEC-2026-0386</code>.</p></div>
+        <div class="panel min-w-0"><p class="example-label">Now</p><p class="mt-2 text-muted-foreground"><code>tokio 1.51.6</code> + <code>tokio-macros 2.7.1</code><br>Fresh audit no longer reports that advisory.</p></div>
+      </div>
+      <p class="mt-5 text-muted-foreground">Official archive checksums and upstream source provenance were checked. Canonical release-readiness checks passed, including workspace tests, schema drift, extension build and release CLI smoke. The Rust 1.88 locked workspace build passed with debug symbols and incremental artifacts disabled; this is local proof, not a new cross-platform Actions run.</p>
+      <p class="mt-4 text-sm text-muted-foreground">Existing <code>unsafe-libyaml</code> unmaintained and <code>chacha20</code> yanked warnings remain visible. This repair does not accept their release risk or clear the separate redaction and request-admission gates.</p>
+      <p class="mt-4 text-sm text-muted-foreground"><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f">Contract, source review and verification</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5">reviewed source 5d91f2b</a> (local; not pushed). No tag or release publication.</p>
+    </section>
 
     <section id="cycle-36" class="section" aria-labelledby="cycle-36-title">
       <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 36 · 29 Oct 2026</span><span class="badge done">Foundation · local, reviewed</span></div>
