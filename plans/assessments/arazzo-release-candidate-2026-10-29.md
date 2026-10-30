@@ -23,7 +23,7 @@ implementation authority.
 | L3: form mapping sent as JSON | `runtime_core/engine_http.rs::prepare_http_request` still passes only non-JSON strings through; mappings reach `serde_json::to_vec`. [ac-9394b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-9394b) closed as an accepted assessment, not implementation. | Remains. Implement the accepted encoding contract or obtain explicit known-defect release deferral. |
 | L4: unresolved live values alter request targets | `arazzo-expr/src/resolution.rs::into_public` still projects missing values to null; `runtime_core/payload.rs::value_to_string` maps null to empty text; HTTP path/query construction substitutes that text or omits null queries. [ac-704a6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-704a6) closed as an accepted assessment. | Remains a CLI/runtime safety blocker. No delivered live-request admission mechanism was found. |
 | L5: credential-name gaps | [ac-b4a51](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b4a51), closed at ancestor `8768a20`, supplies separator normalization and schema-declared input secrets. Committed `redaction.rs` still lacks the approved additional exact names and matches raw query names without percent-decoding. [ac-2406c](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2406c) closed as an accepted assessment. | Partly resolved. `api_key`/schema-secret coverage is delivered; `X-Auth-Key` and the accepted vocabulary/encoded-name extension remain outstanding. |
-| L6: MCP file errors expose content | `arazzo-mcp/src/state.rs::check_path_allowed` still permits reads when roots are absent; `describe_openapi` returns downstream parser text through `tool_err`. [ac-950a8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-950a8) remains an unaccepted policy decision. [ac-452ce](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-452ce), [ac-79d9f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-79d9f) and [ac-62191](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-62191) remain blocked. | Remains an MCP distribution blocker and Steve-owned policy decision. |
+| L6: MCP file errors expose content | `arazzo-mcp/src/state.rs::check_path_allowed` still permits reads when roots are absent; `describe_openapi` returns downstream parser text through `tool_err`. [ac-950a8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-950a8) records accepted policy decisions but remains open for detailed design, plan completion and dependent-ticket reconciliation. [ac-452ce](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-452ce), [ac-79d9f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-79d9f) and [ac-62191](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-62191) remain blocked. | Remains an MCP distribution blocker; accepted policy is not implemented. Remaining detailed contract and implementation gates stay open. |
 | L7: example-generation resource exhaustion | Committed `arazzo-generate/src/examples.rs` still expands required properties without a shared output budget and pads strings with repeated `chars().count()`. [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f) is paused; its incomplete walker is dirty work, not a delivery. | Remains in CLI generation and unrestricted MCP generation. Completing the approved bounded walker requires authorized resumption and verification. |
 | L8: templated child containers become strings | `runtime_core/engine_impl.rs::execute_subworkflow_step` still serializes a Parameter container before interpolation and returns a string. [ac-681d4](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-681d4) remains blocked on [ac-cd36b](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-cd36b). | Remains. Explicit known-defect disposition is needed if deferred. |
 
@@ -58,9 +58,13 @@ These decisions need not be requested again:
 
 Recommend resolving L4 and the undelivered accepted L5 rules before CLI/runtime
 release, and completing the bounded walker before claiming safe untrusted
-generation. L3/L8 need explicit deferral if shipping unfixed. The MCP trust
-policy, any broader release-risk acceptance, and eventual tag/publication
-remain Steve's decisions. Candidate preparation alone clears none of them.
+generation. L3/L8 need explicit deferral if shipping unfixed. MCP failure projection, allowed-root composition (including absent-root denial),
+race-free opening, public-only network direction, timeout bounds and final
+256 KiB request / 4 MiB document / 64 KiB response ceilings are already accepted.
+Exact filesystem APIs/dependency selection, network classifications and matching,
+remaining resource details, plan completion and dependent-ticket reconciliation
+remain outstanding in ac-950a8. Any new policy choice, broader release-risk
+acceptance, and eventual tag/publication remain Steve's decisions. Candidate preparation alone clears none of them.
 
 [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still records
 unresolved conformance-evidence remediation and the live-broker evidence
