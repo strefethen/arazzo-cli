@@ -497,12 +497,17 @@ fn settings_admission_rejects_unknown_fields_large_files_and_directories() {
         worker::read_settings(&dir).unwrap_err().code,
         "settings_file"
     );
-    let link = dir.join("settings-link.json");
-    std::os::unix::fs::symlink(&path, &link).unwrap();
-    assert_eq!(
-        worker::read_settings(&link).unwrap_err().code,
-        "settings_file"
-    );
+    #[cfg(unix)]
+    {
+        std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(worker::read_settings(&path).unwrap(), settings);
+        let link = dir.join("settings-link.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(
+            worker::read_settings(&link).unwrap_err().code,
+            "settings_file"
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
