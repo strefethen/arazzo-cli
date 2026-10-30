@@ -198,6 +198,7 @@
     <a href="#overview" class="mb-7 block text-lg font-semibold tracking-tight no-underline max-lg:hidden">arazzo<span class="text-muted-foreground">/</span>cli</a>
     <p class="eyebrow mb-3 px-3 max-lg:hidden">Delivery log</p>
     <a href="#overview" class="toc-link active" aria-current="location">At a glance</a>
+    <a href="#cycle-39" class="toc-link">39 · Child parameters</a>
     <a href="#cycle-38" class="toc-link">38 · Nested-value foundation</a>
     <a href="#cycle-37" class="toc-link">37 · Tokio advisory</a>
     <a href="#cycle-36" class="toc-link">36 · Missing-value foundation</a>
@@ -252,6 +253,21 @@
       </div>
       <p class="mt-5 text-sm text-muted-foreground">Publication correction: reviewed main pushes run CI and deploy GitHub Pages. Steve approved the existing Pages deployment. Earlier entries retain their historical statements; “CI only” and “no deployment” claims were incomplete. Hourly maintainer runs are paused. This journal is not a tagged release.</p>
     </header>
+
+    <section id="cycle-39" class="section" aria-labelledby="cycle-39-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 39 · 29 Oct 2026</span><span class="badge done">Behavior correction · local, reviewed</span></div>
+      <h2 id="cycle-39-title" class="cycle-title">Child workflows receive consistently resolved parameters.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">Every child-workflow parameter now goes through the canonical ValueSource resolver once. Nested values and selectors follow the same rules as other consumers, and parameter warnings appear once on the invoking step’s trace with their parameter index.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Exact expression · type retained</p><pre class="overflow-x-auto"><code>value: $inputs.count
+child receives: 42</code></pre></div>
+        <div class="panel min-w-0"><p class="example-label">Braced template · string rendered</p><pre class="overflow-x-auto"><code>value: "{$inputs.count}"
+child receives: "42"</code></pre></div>
+      </div>
+      <p class="mt-5 text-muted-foreground">The old single-braced special case returned a number. This correction follows the accepted canonical contract. Exact arrays and objects retain JSON types; templates render compact strings. Existing child-error handling, criteria, action routing and output rollback remain unchanged.</p>
+      <p class="mt-4 text-sm text-muted-foreground">Proof: 6 new focused tests, 38 compatibility controls, required checks and 1,793 passing workspace tests with 35 existing ignores. Independent review passed, including the bounded correction to the old contradictory type assertion.</p>
+      <p class="mt-4 text-sm text-muted-foreground"><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2">Contract and evidence</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/3664ac6c46fce4661b1eb35ac41913dfae2c8c8b">reviewed source 3664ac6</a> (local; not pushed). The broader action-warning work and request-admission release blocker remain separate.</p>
+    </section>
 
     <section id="cycle-38" class="section" aria-labelledby="cycle-38-title">
       <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 38 · 29 Oct 2026</span><span class="badge done">Foundation · local, reviewed</span></div>

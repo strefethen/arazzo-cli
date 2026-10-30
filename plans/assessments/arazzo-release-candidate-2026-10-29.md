@@ -118,6 +118,9 @@ before release. No tag, publication or hourly resumption is authorized.
   and closed at local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b); recursive-value provenance is also reviewed and closed in
   [ac-b3093](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b3093), local
   [56cd5f1](https://github.com/strefethen/arazzo-cli/commit/56cd5f18eab70d33bebeaa803af4b4fc16f5b5b9).
+  Child parameter unification is reviewed and closed in
+  [ac-0b8c2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2), local
+  [3664ac6](https://github.com/strefethen/arazzo-cli/commit/3664ac6c46fce4661b1eb35ac41913dfae2c8c8b).
   Shared runtime propagation and refusal remain pending.
 - Tokio 1.51.6 / macros 2.7.1 is reviewed and closed in
   [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
