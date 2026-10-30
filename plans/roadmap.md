@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8).
+Latest source cycle: [ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -46,18 +46,18 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: executable runtime fixtures and bounded sibling service
-([ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8),
+Latest delivery: checked body, retry and cancellation workers
+([ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5),
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)).
-The private example prepares 92 positive cases and 33 separate fault controls,
-retains actual strict CLI/source-check receipts and serves deterministic responses
-with responsive session control and bounded cleanup. Catalog, fixtures, source
-checks, protocol and service have separate owners; production modules do not grow.
+The private example now measures all six accepted families. This slice adds
+64 positive cases and 28 controls, with exact body values, retry attempt/capture
+history, proven cancellation stalls and bounded cleanup. Response oracles and
+cancellation timing have separate Rust owners; production modules do not grow.
 Fresh source review and independent executable QA passed for
-[d2418fa](https://github.com/strefethen/arazzo-cli/commit/d2418fabf0cde1ffbeac861b681c655447583ab1),
-now pushed. Formatting, strict Clippy and 1,725 workspace tests pass (0 failed,
-35 existing ignores), as do 22 optimized focused tests. Runtime timing workers
-and whole-unit performance proof remain future slices.
+[eb11c0d](https://github.com/strefethen/arazzo-cli/commit/eb11c0dc0f3d94d86dabbb17f04ccf1133bab6de), now pushed. Formatting, strict Clippy and 1,738 top-level
+workspace tests pass (0 failed, 35 existing ignores), alongside 31 affected debug and
+release tests after the deadline correction. Full-unit tooling, OS resources and performance
+thresholds remain separate work; no speedup is claimed.
 
 Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
@@ -70,12 +70,12 @@ retains its policy/review/continuity warnings alongside that approval.
 No dependency version, checksum, feature or production edge changed.
 
 The [runtime workload unit](current/arazzo-runtime-workload-benchmarks.md) remains
-Decomposed into four serial implementation tickets. Its fixture/service foundation
-is delivered. Next is [ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221),
-worker records and source/expression/DAG cases, followed by body/retry/cancellation
-cases and complete executable proof. The unit uses existing public runtime APIs
-and dependencies. OS resources/statistics, CI and thresholds retain separate
-ownership and gates.
+Decomposed into four serial implementation tickets. Fixtures, service and all
+six worker families are delivered. The remaining ticket is
+[ac-0d779](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0d779), the reusable
+full executable proof runner. It retains the unit’s system success condition.
+The unit uses existing public runtime APIs and dependencies. OS resources,
+statistics, CI and thresholds retain separate ownership and gates.
 Neither the completed root measurements nor this runtime plan complete the
 six-family program.
 The preceding debug cancellation/client-loss repair remains complete.
@@ -133,12 +133,15 @@ bounded schema example walker under
 [epic:ac-31ca2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-31ca2).
 Its Option C synthesis direction passed fresh readiness after a private typed
 compatibility refinement; original criteria and expected values remain intact.
-Implementation is uncommitted and paused for
-[ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0): approve explicit
-generation errors when a strict numeric bound has no satisfying value in the
-configured JSON number representation. Existing outputs and size limits pass
-verification; the extreme bound remains unsatisfied, so no delivery or source
-review PASS is claimed. The wider ingestion plan and ac-6a778 stay paused.
+Implementation is uncommitted. Steve approved
+[ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0) on 2026-10-30 UTC:
+return explicit errors when numeric bounds cannot be represented, using
+`Result<Example, String>` and the existing CRUD/MCP error paths. That decision
+ticket is closed and the implementation contract is reconciled without weakening
+ordinary-output or size-budget obligations. Resume this source next after fresh
+clearance/reservations, then add rejection/propagation proof and complete cumulative
+independent review. No completed implementation is claimed. The wider ingestion
+plan and ac-6a778 stay paused.
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
 [ac-4074e](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4074e) still awaits
@@ -146,13 +149,13 @@ Runtime inheritance
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
 
-Publication was reassessed against a fresh origin/main fetch: the preceding
-accumulated range through cycle 30 is now upstream. Only the reviewed foundation
-candidate was newly published in cycle 31. The remaining decision and remediation
-in [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) stay paused;
-their publication does not imply review or completion. Main pushes trigger CI;
+Publication is checked against a fresh origin/main fetch for every candidate.
+The preceding range and reviewed cycles 31–33 are now upstream. The remaining
+decision and remediation in
+[ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) stay paused;
+publication does not imply review or completion. Main pushes trigger CI;
 release workflows require tags or manual dispatch. No release or deployment was
-performed. Fable's lane and paused generator/MCP source remain untouched.
+performed. Fable’s lane and the uncommitted generator/MCP source remain untouched.
 
 ## Direction and initial cycle
 
@@ -1685,3 +1688,44 @@ or regression-threshold claim.
 - This single outcome stayed within the 01:05–04:05 UTC bound and used one of two
   allowed review rounds. Fresh upstream inspection permits the new reviewed range;
   existing pauses remain intact. No release or deployment occurred.
+
+
+## Delivered — cycle 33: checked response and cancellation workloads
+
+[ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5) adds the remaining
+three runtime measurement families. Reviewed source: [eb11c0d](https://github.com/strefethen/arazzo-cli/commit/eb11c0dc0f3d94d86dabbb17f04ccf1133bab6de) (pushed).
+This is development measurement capability; it makes no performance improvement,
+OS-resource, private task-join or threshold claim.
+
+- A separate response oracle owns exact body/retry expectations; cancellation
+  owns offloaded readiness, concurrent completion polling and the signal-to-API
+  clock. Worker changes are dispatch and lifetime integration. Ten private
+  example/test paths changed; production, dependencies and Fable’s lane did not.
+- All 92 new variants passed optimized executable QA: 32 body positives,
+  24 retry positives, eight cancellation positives and 28 controls. Independent
+  proof checked 534 requests and 406 capture records, full outputs/events,
+  fresh-reset/role behavior and adverse boundaries. All 201 owned QA processes
+  were reaped and listeners closed. Thirteen audit perturbations were rejected.
+- Clean-base fmt/check/strict Clippy and workspace gates passed: 1,738 top-level
+  tests, zero failures, 35 existing ignores across 127 Cargo targets. All 31 affected
+  tests passed in debug and release after correction; earlier unchanged regression proof is retained. The original S2 assertions
+  and all goldens remain intact. Nine paused schema-source hashes are unchanged.
+- Fresh-context Astra cumulative source review passed round 2 after correcting a readiness deadline overrun. The new regression distinguishes readiness ending at five seconds from owned cleanup finishing within its separate five-second budget. A QA adapter initially
+  required a JSON record from a permitted hard-watchdog exit; the original
+  attempt is retained, the documented invalid-run contract was applied, and
+  the final candidate reran all 92 cases and adverse controls. No source criterion or failure rule was weakened.
+- Decided by recommendation at readiness: allow the existing record classifier,
+  endpoint-wrapper Clone and thin test-root module declarations needed by the
+  accepted helpers. Goal, acceptance and testing requirements stayed identical.
+- Evidence and immutable candidate/contract binding: `/private/tmp/arazzo-cycle33/`.
+  The single delivery log explains capabilities, exact clock boundaries and
+  responsibility placement. No-behavior documentation is source-review exempt;
+  desktop/mobile, links/history and script/style preservation are checked.
+- Steve’s numeric-error approval is recorded and decision ac-4c7b0 is closed.
+  The schema walker is next for fresh scoped resumption; no source was changed
+  by that approval. Runtime unit ticket
+  [ac-0d779](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0d779) still owns
+  the full proof runner and system success; the accepted plan remains Decomposed.
+- One source slice stayed within the 02:08–05:08 UTC bound and used both permitted
+  review rounds. The reviewed range passed existing publication gates; no
+  release or deployment occurred and unrelated pauses remain intact.
