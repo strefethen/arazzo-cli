@@ -356,19 +356,25 @@ pub(super) fn apply_replacements(
     eval: &ExpressionEvaluator,
     admission: &request_admission::RequestAdmission<'_>,
 ) -> Result<(Value, Vec<String>), RuntimeError> {
-    apply_replacements_resolved(body, content_type, replacements, |index, replacement| {
-        let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
-        admission.check(
-            &resolution,
-            &format!("requestBody.replacements[{index}].value"),
-        )?;
-        let warnings = resolution
-            .warnings
-            .iter()
-            .map(|warning| replacement_warning(index, &warning.to_string()))
-            .collect();
-        Ok((resolution.value, warnings))
-    })
+    apply_replacements_resolved(
+        body,
+        content_type,
+        replacements,
+        JsonPathTargets::Select,
+        |index, replacement| {
+            let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
+            admission.check(
+                &resolution,
+                &format!("requestBody.replacements[{index}].value"),
+            )?;
+            let warnings = resolution
+                .warnings
+                .iter()
+                .map(|warning| replacement_warning(index, &warning.to_string()))
+                .collect();
+            Ok((resolution.value, warnings))
+        },
+    )
 }
 
 pub(super) fn apply_replacements_projected(
@@ -380,8 +386,13 @@ pub(super) fn apply_replacements_projected(
     admission: &request_admission::RequestAdmission<'_>,
 ) -> Result<(Value, Value, Vec<String>), RuntimeError> {
     let mut projected = BTreeMap::new();
-    let (body, warnings) =
-        apply_replacements_resolved(body, content_type, replacements, |index, replacement| {
+    let mut targets = vec![None; replacements.len()];
+    let (body, warnings) = apply_replacements_resolved(
+        body,
+        content_type,
+        replacements,
+        JsonPathTargets::Record(&mut targets),
+        |index, replacement| {
             let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
             let location = format!("requestBody.replacements[{index}].value");
             let value = admission.project(&resolution, &location)?;
@@ -392,9 +403,14 @@ pub(super) fn apply_replacements_projected(
                 .map(|warning| replacement_warning(index, &warning.to_string()))
                 .collect();
             Ok((resolution.value, warnings))
-        })?;
-    let (projection, _) =
-        apply_replacements_resolved(projection, content_type, replacements, |index, _| {
+        },
+    )?;
+    let (projection, _) = apply_replacements_resolved(
+        projection,
+        content_type,
+        replacements,
+        JsonPathTargets::Replay(&targets),
+        |index, _| {
             Ok((
                 projected.remove(&index).ok_or_else(|| {
                     RuntimeError::new(
@@ -404,14 +420,30 @@ pub(super) fn apply_replacements_projected(
                 })?,
                 Vec::new(),
             ))
-        })?;
+        },
+    )?;
     Ok((body, projection, warnings))
+}
+
+enum JsonPathTargets<'a> {
+    Select,
+    Record(&'a mut [Option<String>]),
+    Replay(&'a [Option<String>]),
+}
+
+impl JsonPathTargets<'_> {
+    fn record(&mut self, index: usize, pointer: &str) {
+        if let Self::Record(targets) = self {
+            targets[index] = Some(pointer.to_owned());
+        }
+    }
 }
 
 fn apply_replacements_resolved(
     mut body: Value,
     content_type: &str,
     replacements: &[arazzo_spec::Replacement],
+    mut targets: JsonPathTargets<'_>,
     mut resolve: impl FnMut(
         usize,
         &arazzo_spec::Replacement,
@@ -468,22 +500,30 @@ fn apply_replacements_resolved(
                 // The shared owner admits the declared version, the resource
                 // budget and the complete syntax before the current body is
                 // queried; the pointers come from that one located query.
-                let query = match JsonPathQuery::parse(target, version) {
-                    Ok(query) => query,
-                    Err(error) => {
-                        warnings.push(replacement_warning(index, &error.to_string()));
-                        continue;
+                let pointers = if let JsonPathTargets::Replay(targets) = &targets {
+                    match &targets[index] {
+                        Some(pointer) => vec![pointer.clone()],
+                        None => continue,
                     }
-                };
-                let pointers = match query.query(&body) {
-                    Ok(matches) => matches
-                        .into_iter()
-                        .map(|found| found.pointer)
-                        .collect::<Vec<_>>(),
-                    Err(error) => {
-                        warnings.push(replacement_warning(index, &error.to_string()));
-                        continue;
-                    }
+                } else {
+                    let query = match JsonPathQuery::parse(target, version) {
+                        Ok(query) => query,
+                        Err(error) => {
+                            warnings.push(replacement_warning(index, &error.to_string()));
+                            continue;
+                        }
+                    };
+                    let pointers = match query.query(&body) {
+                        Ok(matches) => matches
+                            .into_iter()
+                            .map(|found| found.pointer)
+                            .collect::<Vec<_>>(),
+                        Err(error) => {
+                            warnings.push(replacement_warning(index, &error.to_string()));
+                            continue;
+                        }
+                    };
+                    pointers
                 };
                 // Decision 2 (ac-bd441, project rule): a replacement applies
                 // iff its target resolves to exactly one location; zero and
@@ -497,12 +537,17 @@ fn apply_replacements_resolved(
                     // The root selector `$` resolves to the empty RFC 6901
                     // pointer — one location, the whole document — which
                     // the segment-walking applier cannot express.
-                    [pointer] if pointer.is_empty() => body = resolved,
+                    [pointer] if pointer.is_empty() => {
+                        body = resolved;
+                        targets.record(index, pointer);
+                    }
                     [pointer] => {
                         if let Err(message) =
                             apply_json_pointer_replacement(&mut body, pointer, resolved)
                         {
                             warnings.push(replacement_warning(index, &message));
+                        } else {
+                            targets.record(index, pointer);
                         }
                     }
                     many => warnings.push(replacement_warning(

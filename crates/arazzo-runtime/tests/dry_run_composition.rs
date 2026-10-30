@@ -361,3 +361,52 @@ async fn legacy_response_output_uses_recorded_origin_without_restoring_dotted_gr
         .any(|warning| warning.starts_with("dry-run unresolved output")
             && warning.contains(".dotted:")));
 }
+
+#[tokio::test]
+async fn replacement_filters_follow_the_evolving_ordinary_body_for_both_projections() {
+    let engine = builder("https://api.invalid", json!([{"workflowId":"main","steps":[
+        {"stepId":"fetch","operationId":"produce","outputs":{"audio":SOURCE}},
+        {"stepId":"play","operationId":"consume","parameters":[{"name":"id","in":"path","value":"fixed"}],
+         "requestBody":{"contentType":"application/json","payload":[{"gate":"$steps.fetch.outputs.audio","target":"old","next":"old"}],"replacements":[
+            {"target":"$[?(@.gate == null)].target","targetSelectorType":"jsonpath","value":"$steps.fetch.outputs.audio"},
+            {"target":"$[?(@.target == null)].next","targetSelectorType":"jsonpath","value":"$steps.fetch.outputs.audio"},
+            {"target":"$[?(@.gate != null)].target","targetSelectorType":"jsonpath","value":"must-not-apply"}
+         ]},"outputs":{"body":"$request.body"}}
+    ],"outputs":{"body":"$steps.play.outputs.body"}}])).dry_run(true).build().unwrap_or_else(|error| panic!("engine: {error}"));
+    let result = engine.execute_collect("main", BTreeMap::new()).await;
+    successful(&result);
+    let requests = result.dry_run_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].body,
+        Some(json!([{"gate":MARKER,"target":MARKER,"next":MARKER}]))
+    );
+    assert_eq!(
+        requests[1].warnings,
+        vec![
+            "requestBody.replacements[2]: JSONPath target matched no locations; body unchanged"
+                .to_string(),
+            consumer("main", "requestBody.payload/0/gate", SOURCE),
+            consumer("main", "requestBody.replacements[0].value", SOURCE),
+            consumer("main", "requestBody.replacements[1].value", SOURCE)
+        ]
+    );
+    let ordinary = json!([{"gate":null,"target":null,"next":null}]);
+    let outputs = result
+        .outputs
+        .as_ref()
+        .unwrap_or_else(|error| panic!("outputs: {error}"));
+    assert_eq!(outputs["body"], ordinary);
+    let traces = result.trace_steps();
+    let trace = traces
+        .iter()
+        .find(|trace| trace.step_id == "play")
+        .unwrap_or_else(|| panic!("play trace"));
+    assert_eq!(
+        trace
+            .request
+            .as_ref()
+            .and_then(|request| request.body.clone()),
+        Some(ordinary)
+    );
+}
