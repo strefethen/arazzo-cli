@@ -432,88 +432,68 @@ async fn quoted_hash_literals_and_rfc_9535_queries_keep_their_results() {
 async fn gjson_replacement_targets_and_values_leave_the_body_unchanged() {
     let target_form = r#"$.items.#(sku=="A").q"#;
     let value_form = r#"$.items.#(sku=="A")#.q"#;
-    let payload = json!({
-        "keep": "old",
-        "items": [{"sku": "A", "q": "old"}, {"sku": "B", "q": "old"}],
-        "value": "old",
-        "last": "old"
-    });
-    let replacements = vec![
-        jsonpath_replacement("$.keep", literal(json!("new"))),
-        jsonpath_replacement(target_form, literal(json!("new"))),
-        jsonpath_replacement(
-            "$.value",
-            ValueSource::Selector(selector("$inputs.document", value_form)),
-        ),
-        jsonpath_replacement(
-            "$.last",
-            literal(json!({"nested": selector_yaml("$inputs.document", value_form)})),
-        ),
-    ];
-    // Only the two sound replacements move; every `q` a GJSON write would have
-    // reached keeps its original value.
-    let expected = json!({
-        "keep": "new",
-        "items": [{"sku": "A", "q": "old"}, {"sku": "B", "q": "old"}],
-        "value": "old",
-        "last": "old"
-    });
+    let payload = json!({"keep":"old","items":[{"sku":"A","q":"old"},{"sku":"B","q":"old"}],"value":"old","last":"old"});
     let inputs = BTreeMap::from([(
         "document".to_string(),
-        json!({"items": [{"sku": "A", "q": 1}, {"sku": "A", "q": 2}]}),
+        json!({"items":[{"sku":"A","q":1},{"sku":"A","q":2}]}),
     )]);
-    let steps = vec![body_step("replace", payload, replacements)];
-
+    let steps = vec![body_step(
+        "replace",
+        payload.clone(),
+        vec![
+            jsonpath_replacement("$.keep", literal(json!("new"))),
+            jsonpath_replacement(target_form, literal(json!("new"))),
+            jsonpath_replacement("$.last", literal(json!("new"))),
+        ],
+    )];
+    let expected = json!({"keep":"new","items":[{"sku":"A","q":"old"},{"sku":"B","q":"old"}],"value":"old","last":"new"});
     let (result, requests) = execute(workflow(steps.clone()), inputs.clone()).await;
     outputs(&result);
     assert_eq!(requests.len(), 1);
-    let sent: Value = match serde_json::from_str(&requests[0].body) {
-        Ok(value) => value,
-        Err(error) => panic!(
-            "captured body is not JSON: {error}; body={}",
-            requests[0].body
-        ),
-    };
-    assert_eq!(sent, expected);
-
-    let dry = dry_run(workflow(steps), inputs).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&requests[0].body)
+            .unwrap_or_else(|error| panic!("wire JSON: {error}")),
+        expected
+    );
+    let dry = dry_run(workflow(steps), inputs.clone()).await;
     outputs(&dry);
     let request = dry.dry_run_requests()[0];
     assert_eq!(request.body, Some(expected));
-    let warnings = &request.warnings;
-
-    // [0] and [3] wrote nothing invalid; [3]'s nested selector is the hard
-    // failure, so it reports and is skipped like [2].
-    assert!(
-        warnings_for(warnings, "requestBody.replacements[0]:").is_empty(),
-        "{warnings:?}"
-    );
-
-    // A rejected target is one warning: the value already resolved.
-    let target_warnings = warnings_for(warnings, "requestBody.replacements[1]:");
-    assert_eq!(target_warnings.len(), 1, "{warnings:?}");
-    assert!(
-        target_warnings[0].contains(SYNTAX_ERROR),
-        "{}",
-        target_warnings[0]
-    );
-
-    // A rejected value is two: the selector diagnostic and the skip notice
-    // that says the body was left alone.
-    for index in [2, 3] {
-        let value_warnings = warnings_for(warnings, &format!("requestBody.replacements[{index}]:"));
-        assert_eq!(value_warnings.len(), 2, "[{index}] {warnings:?}");
-        assert!(
-            value_warnings[0].contains(value_form) && value_warnings[0].contains(SYNTAX_ERROR),
-            "[{index}] {}",
-            value_warnings[0]
+    assert_eq!(request.warnings.len(), 1, "{:?}", request.warnings);
+    assert!(request.warnings[0].starts_with("requestBody.replacements[1]:"));
+    assert!(request.warnings[0].contains(SYNTAX_ERROR));
+    for value in [
+        ValueSource::Selector(selector("$inputs.document", value_form)),
+        literal(json!({"nested":selector_yaml("$inputs.document",value_form)})),
+    ] {
+        let steps = vec![body_step(
+            "replace",
+            payload.clone(),
+            vec![jsonpath_replacement("$.value", value)],
+        )];
+        let (result, requests) = execute(workflow(steps.clone()), inputs.clone()).await;
+        assert_eq!(
+            result
+                .outputs
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("invalid value"))
+                .code(),
+            "RUNTIME_UNRESOLVED_REQUEST_VALUE"
         );
+        assert!(requests.is_empty());
+        let dry = dry_run(workflow(steps), inputs.clone()).await;
+        let error = dry
+            .outputs
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("invalid dry value"));
+        assert_eq!(error.code(), "RUNTIME_UNRESOLVED_REQUEST_VALUE");
         assert!(
-            value_warnings[1]
-                .contains("value did not resolve; replacement skipped and body unchanged"),
-            "[{index}] {}",
-            value_warnings[1]
+            error.message.contains("requestBody.replacements[0].value"),
+            "{error}"
         );
+        assert!(dry.dry_run_requests().is_empty());
     }
 }
 

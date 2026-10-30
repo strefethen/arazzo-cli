@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.
 
-**Upgrade if** you need Kafka receive steps, typed success criteria, reliable debugger
-teardown, or consistent CLI JSON errors. Review the breaking changes below.
+**Upgrade if** you chain HTTP requests through workflow values, need Kafka receive
+steps, typed success criteria, reliable debugger teardown, or consistent CLI JSON
+errors. Review the breaking changes below.
 
 - **Kafka receive workflows** — receive JSON messages, filter correlation IDs, and validate AsyncAPI targets offline.
 - **Spec fidelity** — standard operation targets, explicit reusable actions, and typed Criterion interpolation.
@@ -81,6 +82,16 @@ teardown, or consistent CLI JSON errors. Review the breaking changes below.
   `SERVE_TASK_PANIC`, or `SERVE_MCP` for `serve`.
 
 ### Fixed
+
+- **Unresolved request values** — HTTP steps refuse unresolved parameters,
+  payloads and replacement values, including hard Selector failures, before
+  sending a request, with
+  `RUNTIME_UNRESOLVED_REQUEST_VALUE` and the source location. This also applies
+  through nested workflows and parallel execution; retry actions do not repeat
+  the invalid request. Intentional nulls, empty values, omitted optional inputs
+  and dry-run transport dependencies retain their distinct behavior. A valid
+  Selector with zero matches still resolves to null under the existing policy,
+  so this guard does not reject every empty path value.
 
 - Criterion interpolation preserves typed values for regex, JSONPath and XPath 1.0 evaluation.
 - Workflow output-resolution warnings are included in CLI results.

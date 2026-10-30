@@ -803,34 +803,8 @@
       },
       "workflows": {
         "soap-crud": {
-          "outcome": "dryRun",
-          "steps": [
-            {
-              "method": "POST",
-              "stepId": "list-customers",
-              "url": "http://localhost:4010/api/soap-mock/service"
-            },
-            {
-              "method": "POST",
-              "stepId": "get-customer",
-              "url": "http://localhost:4010/api/soap-mock/service"
-            },
-            {
-              "method": "POST",
-              "stepId": "create-customer",
-              "url": "http://localhost:4010/api/soap-mock/service"
-            },
-            {
-              "method": "POST",
-              "stepId": "update-customer",
-              "url": "http://localhost:4010/api/soap-mock/service"
-            },
-            {
-              "method": "POST",
-              "stepId": "delete-customer",
-              "url": "http://localhost:4010/api/soap-mock/service"
-            }
-          ]
+          "outcome": "notDryRunnable",
+          "reason": "step get-customer: step \"get-customer\": requestBody.payload: $steps.list-customers.outputs.first_id did not resolve; request not sent"
         }
       }
     },

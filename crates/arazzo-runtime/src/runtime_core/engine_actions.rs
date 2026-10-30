@@ -106,6 +106,7 @@ impl Engine {
                     },
                     failure_actions,
                     next_action_index,
+                    ctx.result.err_kind == Some(RuntimeErrorKind::UnresolvedRequestValue),
                 )
                 .await
             {
@@ -215,7 +216,7 @@ impl Engine {
         ctx: ActionSelectionContext<'_>,
         actions: &'a [OnAction],
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
-        self.find_matching_action_with_debug_from(ctx, actions, 0)
+        self.find_matching_action_with_debug_from(ctx, actions, 0, false)
             .await
     }
 
@@ -224,6 +225,7 @@ impl Engine {
         ctx: ActionSelectionContext<'_>,
         actions: &'a [OnAction],
         start_index: usize,
+        skip_retry: bool,
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
         if ctx.cancel.is_cancelled() {
             return Err(control::cancellation_error(ctx.is_timeout));
@@ -247,6 +249,9 @@ impl Engine {
         };
 
         for (action_index, action) in actions.iter().enumerate().skip(start_index) {
+            if skip_retry && action.type_ == Some(ActionType::Retry) {
+                continue;
+            }
             if ctx.cancel.is_cancelled() {
                 return Err(control::cancellation_error(ctx.is_timeout));
             }
@@ -381,13 +386,18 @@ impl Engine {
                         action,
                         &parameter_eval,
                         ctx.vars,
-                        (self.inner.dry_run_mode && ctx.response.is_some()).then_some(
-                            ValueProducer {
-                                workflow_id: &ctx.workflow.workflow_id,
-                                step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
-                                site: ValueProducerSite::ActionParameter(""),
+                        (self.inner.dry_run_mode
+                            && (ctx.response.is_some() || ctx.message.is_some()))
+                        .then_some(ValueProducer {
+                            workflow_id: &ctx.workflow.workflow_id,
+                            step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
+                            site: ValueProducerSite::ActionParameter(""),
+                            transport: if ctx.message.is_some() {
+                                ValueProducerTransport::Message
+                            } else {
+                                ValueProducerTransport::Http
                             },
-                        ),
+                        }),
                     );
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow {
@@ -439,13 +449,18 @@ impl Engine {
                             action,
                             &parameter_eval,
                             ctx.vars,
-                            (self.inner.dry_run_mode && ctx.response.is_some()).then_some(
-                                ValueProducer {
-                                    workflow_id: &ctx.workflow.workflow_id,
-                                    step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
-                                    site: ValueProducerSite::ActionParameter(""),
+                            (self.inner.dry_run_mode
+                                && (ctx.response.is_some() || ctx.message.is_some()))
+                            .then_some(ValueProducer {
+                                workflow_id: &ctx.workflow.workflow_id,
+                                step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
+                                site: ValueProducerSite::ActionParameter(""),
+                                transport: if ctx.message.is_some() {
+                                    ValueProducerTransport::Message
+                                } else {
+                                    ValueProducerTransport::Http
                                 },
-                            ),
+                            }),
                         ),
                     })
                 } else {

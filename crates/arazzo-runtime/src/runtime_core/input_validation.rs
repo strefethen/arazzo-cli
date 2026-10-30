@@ -29,6 +29,7 @@ impl std::fmt::Display for InputIssue {
 /// 3. Type check — error if a provided value doesn't match the declared type
 /// 4. Enum check — error if a provided value is not a declared property enum member
 /// 5. Extra input warnings — warn about inputs not declared in properties
+#[cfg(test)]
 pub fn validate_inputs(
     schema: &SchemaObject,
     inputs: &mut BTreeMap<String, Value>,
@@ -36,7 +37,6 @@ pub fn validate_inputs(
     validate_inputs_inner(schema, inputs, &Default::default())
 }
 
-#[allow(dead_code)]
 pub(super) fn validate_provenanced_inputs(
     schema: &SchemaObject,
     inputs: &mut super::ProvenancedValues,

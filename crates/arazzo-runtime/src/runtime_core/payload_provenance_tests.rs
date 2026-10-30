@@ -543,56 +543,80 @@ fn mappings_missing_selector_discriminators_remain_literal() {
 }
 
 #[test]
-fn replacements_preserve_legacy_skip_predicate_and_warning_order() {
+fn replacements_refuse_failed_values_and_preserve_admitted_warning_order() {
     let eval = evaluator();
-    let entries = [
+    let vars = VarStore::default();
+    let admission = request_admission::RequestAdmission::new("test", &vars);
+    for (value, descriptor) in [
+        (
+            json!({"context":"$inputs.absent","selector":"$","type":"jsonpath"}),
+            "$inputs.absent",
+        ),
+        (
+            json!({"context":"$response.body#/absent","selector":"$","type":"jsonpath"}),
+            "$response.body#/absent",
+        ),
+        (
+            json!({"context":"$inputs.document","selector":"invalid","type":"jsonpointer"}),
+            "Selector value",
+        ),
+        (json!("$inputs.absent"), "$inputs.absent"),
+        (json!("{$inputs.nil"), "invalid expression syntax"),
+    ] {
+        let replacements = vec![
+            Replacement {
+                target: "/first".into(),
+                value: source(json!("new")),
+                ..Replacement::default()
+            },
+            Replacement {
+                target: "/value".into(),
+                value: source(value),
+                ..Replacement::default()
+            },
+        ];
+        let error = apply_replacements(
+            json!({"first":"old","value":"old"}),
+            "application/json",
+            &replacements,
+            &eval,
+            &admission,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("unresolved value"));
+        assert_eq!(error.code(), "RUNTIME_UNRESOLVED_REQUEST_VALUE");
+        assert_eq!(error.message, format!("step \"test\": requestBody.replacements[1].value: {descriptor} did not resolve; request not sent"));
+    }
+    let replacements = [
         ("/first", json!("new")),
-        (
-            "/noisy",
-            json!({"context": "$inputs.absent", "selector": "$", "type": "jsonpath"}),
-        ),
-        (
-            "/silent",
-            json!({"context": "$response.body#/absent", "selector": "$", "type": "jsonpath"}),
-        ),
-        (
-            "/pointer",
-            json!({"context": "$inputs.document", "selector": "invalid", "type": "jsonpointer"}),
-        ),
-        ("/direct", json!("$inputs.absent")),
-        ("/malformed", json!("{$inputs.nil")),
+        ("/null", json!(null)),
         (
             "/zero",
-            json!({"context": "$response.body#/absent", "selector": "$.id", "type": "jsonpath"}),
+            json!({"context":"$inputs.document","selector":"$.absent","type":"jsonpath"}),
         ),
         ("/last", json!("new")),
-    ];
-    let replacements = entries
-        .into_iter()
-        .map(|(target, value)| Replacement {
-            target: target.into(),
-            value: source(value),
-            ..Replacement::default()
-        })
-        .collect::<Vec<_>>();
+    ]
+    .into_iter()
+    .map(|(target, value)| Replacement {
+        target: target.into(),
+        value: source(value),
+        ..Replacement::default()
+    })
+    .collect::<Vec<_>>();
     let (body, warnings) = apply_replacements(
-        json!({"first": "old", "noisy": "old", "silent": "old", "pointer": "old", "direct": "old", "malformed": "old", "zero": "old", "last": "old"}),
+        json!({"first":"old","null":"old","zero":"old","last":"old"}),
         "application/json",
         &replacements,
         &eval,
-    );
+        &admission,
+    )
+    .unwrap_or_else(|error| panic!("admitted values: {error}"));
     assert_eq!(
         body,
-        json!({"first": "new", "noisy": "old", "silent": null, "pointer": null, "direct": null, "malformed": "{$inputs.nil", "zero": null, "last": "new"})
+        json!({"first":"new","null":null,"zero":null,"last":"new"})
     );
-    assert_eq!(warnings.len(), 6, "{warnings:?}");
-    assert!(warnings[0].starts_with("requestBody.replacements[1]: $inputs.absent:"));
-    assert_eq!(warnings[1], "requestBody.replacements[1]: value did not resolve; replacement skipped and body unchanged");
-    assert!(warnings[2].starts_with("requestBody.replacements[3]: invalid:"));
-    assert!(warnings[3].starts_with("requestBody.replacements[4]: $inputs.absent:"));
-    assert!(warnings[4].starts_with("requestBody.replacements[5]: {$inputs.nil:"));
     assert_eq!(
-        warnings[5],
-        "requestBody.replacements[6]: $.id: selector matched no values"
+        warnings,
+        vec!["requestBody.replacements[2]: $.absent: selector matched no values"]
     );
 }

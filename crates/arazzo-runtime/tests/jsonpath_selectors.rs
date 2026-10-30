@@ -638,108 +638,80 @@ async fn sequential_replacements_evaluate_against_the_current_body() {
 /// before and after it apply, a legitimately selected null is written, and a
 /// zero-match selection keeps its normalization and warning.
 #[tokio::test]
-async fn hard_jsonpath_failures_skip_only_the_failed_replacement() {
+async fn hard_jsonpath_values_refuse_and_targets_keep_skip_behavior() {
     let oversized = format!("${}", ".a".repeat(129));
-    let payload = json!({
-        "first": "old",
-        "resource": "old",
-        "version": "old",
-        "context": "old",
-        "target": "old",
-        "null": "old",
-        "zero": "old",
-        "last": "old"
-    });
-    let replacements = vec![
-        // [0] succeeds before any failure.
-        jsonpath_replacement("$.first", literal(json!("new"))),
-        // [1] resource failure nested in an array inside a map.
-        jsonpath_replacement(
-            "$.resource",
-            literal(json!([{"inner": selector_yaml("$inputs.document", &oversized)}])),
-        ),
-        // [2] unsupported version whose context is also missing: the version
-        // is reported, the context is never resolved.
-        jsonpath_replacement(
-            "$.version",
-            ValueSource::Selector(selector(
-                "$inputs.absent",
-                "$.n",
-                jsonpath_version(GOESSNER),
-            )),
-        ),
-        // [3] valid query over a missing context.
-        jsonpath_replacement("$.context", select("$inputs.absent", "$.n")),
-        // [4] malformed target syntax.
-        jsonpath_replacement("$.target[", literal(json!("new"))),
-        // [5] legitimately selected null: one match, written, no warning.
-        jsonpath_replacement("$.null", select("$inputs.document", "$.value")),
-        // [6] zero matches: null plus the no-match warning, still written.
-        jsonpath_replacement("$.zero", select("$inputs.document", "$.absent")),
-        // [7] succeeds after the failures.
-        jsonpath_replacement("$.last", literal(json!("new"))),
+    let failures = [
+        literal(json!([{"inner": selector_yaml("$inputs.document", &oversized)}])),
+        ValueSource::Selector(selector(
+            "$inputs.absent",
+            "$.n",
+            jsonpath_version(GOESSNER),
+        )),
+        select("$inputs.absent", "$.n"),
     ];
-    let expected = json!({
-        "first": "new",
-        "resource": "old",
-        "version": "old",
-        "context": "old",
-        "target": "old",
-        "null": null,
-        "zero": null,
-        "last": "new"
-    });
-    let steps = vec![body_step("failures", payload, replacements)];
-
+    for failure in failures {
+        let steps = vec![body_step(
+            "failures",
+            json!({"first":"old","value":"old","last":"old"}),
+            vec![
+                jsonpath_replacement("$.first", literal(json!("new"))),
+                jsonpath_replacement("$.value", failure),
+                jsonpath_replacement("$.last", literal(json!("new"))),
+            ],
+        )];
+        let (result, requests) = execute(vec![workflow(steps.clone())], document()).await;
+        assert_eq!(
+            result
+                .outputs
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("value must refuse"))
+                .code(),
+            "RUNTIME_UNRESOLVED_REQUEST_VALUE"
+        );
+        assert!(requests.is_empty());
+        let dry = dry_run(vec![workflow(steps)], document()).await;
+        let error = dry
+            .outputs
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("dry value must refuse"));
+        assert_eq!(error.code(), "RUNTIME_UNRESOLVED_REQUEST_VALUE");
+        assert!(
+            error.message.contains("requestBody.replacements[1].value"),
+            "{error}"
+        );
+        assert!(dry.dry_run_requests().is_empty());
+    }
+    let steps = vec![body_step(
+        "controls",
+        json!({"first":"old","target":"old","null":"old","zero":"old","last":"old"}),
+        vec![
+            jsonpath_replacement("$.first", literal(json!("new"))),
+            jsonpath_replacement("$.target[", literal(json!("new"))),
+            jsonpath_replacement("$.null", select("$inputs.document", "$.value")),
+            jsonpath_replacement("$.zero", select("$inputs.document", "$.absent")),
+            jsonpath_replacement("$.last", literal(json!("new"))),
+        ],
+    )];
+    let expected = json!({"first":"new","target":"old","null":null,"zero":null,"last":"new"});
     let (result, requests) = execute(vec![workflow(steps.clone())], document()).await;
     outputs(&result);
     assert_eq!(wire_body(&requests, 0), expected);
-
     let dry = dry_run(vec![workflow(steps)], document()).await;
     outputs(&dry);
     let request = dry.dry_run_requests()[0];
     assert_eq!(request.body, Some(expected));
-    let warnings = &request.warnings;
-
-    let skipped: Vec<&String> = warnings
-        .iter()
-        .filter(|warning| warning.contains("replacement skipped"))
-        .collect();
-    assert_eq!(skipped.len(), 3, "{warnings:?}");
-    for (skip, index) in skipped.iter().zip([1, 2, 3]) {
-        assert!(
-            skip.starts_with(&format!("requestBody.replacements[{index}]:")),
-            "{skip}"
-        );
-    }
-    assert_warning(warnings, "requestBody.replacements[1]: ");
+    assert_eq!(request.warnings.len(), 2, "{:?}", request.warnings);
     assert_warning(
-        warnings,
-        "JSONPath query structural characters limit of 128 exceeded",
+        &request.warnings,
+        "requestBody.replacements[1]: invalid JSONPath syntax",
     );
     assert_warning(
-        warnings,
-        &format!("requestBody.replacements[2]: $.n: unsupported JSONPath version \"{GOESSNER}\""),
+        &request.warnings,
+        "requestBody.replacements[3]: $.absent: selector matched no values",
     );
-    assert!(
-        warnings.iter().all(|warning| {
-            !(warning.starts_with("requestBody.replacements[2]:") && warning.contains("not found"))
-        }),
-        "the version is rejected before the context is resolved: {warnings:?}"
-    );
-    assert_warning(
-        warnings,
-        "requestBody.replacements[3]: $inputs.absent: input \"absent\" not found in context",
-    );
-    assert_warning(
-        warnings,
-        "requestBody.replacements[4]: invalid JSONPath syntax",
-    );
-    assert_warning(
-        warnings,
-        "requestBody.replacements[6]: $.absent: selector matched no values",
-    );
-    for index in [0, 5, 7] {
-        assert_no_warning_for(warnings, index);
+    for index in [0, 2, 4] {
+        assert_no_warning_for(&request.warnings, index);
     }
 }

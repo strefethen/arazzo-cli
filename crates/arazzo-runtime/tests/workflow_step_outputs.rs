@@ -179,8 +179,12 @@ async fn run_criteria(rerun: bool, single_step: bool) -> Run {
         engine.execute("parent", BTreeMap::new())
     };
     let result = handle.collect().await;
-    if let Err(err) = &result.outputs {
-        panic!("probe must complete workflow-output fixture: {err}");
+    if rerun {
+        assert!(
+            result.outputs.is_ok(),
+            "probe must complete workflow-output fixture: {:?}",
+            result.outputs
+        );
     }
     Run {
         result,
@@ -266,22 +270,35 @@ async fn first_rejected_run_restores_absence() {
     let mut checks = Comparisons::default();
     compare_call_recordings(&mut checks, &run, 0, Outputs::new());
     checks.equal(
-        "probe omits unpublished step value",
+        "probe refuses unpublished step value",
         probe_urls(&run),
-        vec!["/check?child=fail".to_string()],
+        Vec::<String>::new(),
     );
-    let missing_step_warning = run
+    let error = match &run.result.outputs {
+        Err(error) => error,
+        Ok(outputs) => panic!("missing output must refuse: {outputs:?}"),
+    };
+    checks.equal(
+        "unpublished output refusal code",
+        error.code(),
+        "RUNTIME_UNRESOLVED_REQUEST_VALUE",
+    );
+    checks.equal(
+        "unpublished output refusal source",
+        error
+            .message
+            .contains("parameters[0](query:step): $steps.call.outputs.v"),
+        true,
+    );
+    let refused_probe = run
         .result
         .trace_steps()
         .into_iter()
         .filter(|record| record.workflow_id == "parent" && record.step_id == "probe")
-        .flat_map(|record| &record.warnings)
-        .any(|warning| warning.contains("step \"call\" not found"));
-    checks.equal(
-        "unpublished step remains absent",
-        missing_step_warning,
-        true,
-    );
+        .all(|record| {
+            record.request.is_none() && record.response.is_none() && record.criteria.is_empty()
+        });
+    checks.equal("unpublished step remains absent", refused_probe, true);
     checks.finish();
 }
 
@@ -330,9 +347,12 @@ async fn successful_goto_rerun_replaces_output_key_set() {
         query("old", "$steps.call.outputs.old"),
         query("fresh", "$steps.call.outputs.fresh"),
     ];
+    probe.on_failure = vec![goto_step("fresh-probe")];
+    let mut fresh_probe = http_step("fresh-probe", "check");
+    fresh_probe.parameters = vec![query("fresh", "$steps.call.outputs.fresh")];
     let parent = Workflow {
         workflow_id: "parent".to_string(),
-        steps: vec![call, router, probe],
+        steps: vec![call, router, probe, fresh_probe],
         ..Workflow::default()
     };
     let mut child = child_workflow();
@@ -382,6 +402,29 @@ async fn successful_goto_rerun_replaces_output_key_set() {
         &run,
         1,
         BTreeMap::from([("fresh".to_string(), json!("second"))]),
+    );
+    let probes = run
+        .result
+        .trace_steps()
+        .into_iter()
+        .filter(|record| record.step_id == "probe")
+        .collect::<Vec<_>>();
+    checks.equal("old-output probe attempts", probes.len(), 1);
+    checks.equal(
+        "old-output probe has no transport",
+        probes
+            .iter()
+            .all(|record| record.request.is_none() && record.response.is_none()),
+        true,
+    );
+    checks.equal(
+        "old-output probe reports removed name",
+        probes.iter().all(|record| {
+            record.error.as_ref().is_some_and(|message| {
+                message.contains("parameters[0](query:old): $steps.call.outputs.old")
+            })
+        }),
+        true,
     );
     checks.equal(
         "probe sees only the rerun's output names",

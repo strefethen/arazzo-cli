@@ -476,8 +476,14 @@ impl Engine {
 
         let mut outputs = ProvenancedValues::default();
         for (name, expr) in &step.outputs {
+            let producer = trace_message.simulated.then_some(super::ValueProducer {
+                workflow_id,
+                step_id: &step.step_id,
+                site: super::ValueProducerSite::Output(name),
+                transport: super::ValueProducerTransport::Message,
+            });
             let (value, expr_warnings, metadata) =
-                evaluate_provenanced_output(expr, &eval, None, vars, None);
+                evaluate_provenanced_output(expr, &eval, None, vars, producer);
             outputs.insert(name.clone(), value.clone(), metadata);
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {

@@ -1,6 +1,5 @@
 use super::*;
 
-#[allow(dead_code)]
 pub(super) fn request_context(
     vars: &VarStore,
     mut context: EvalContext,
@@ -43,4 +42,97 @@ pub(super) fn request_context(
     }
     context.method = Some(method.to_owned());
     context
+}
+
+pub(super) struct RequestAdmission<'a> {
+    step_id: &'a str,
+    vars: &'a VarStore,
+}
+
+impl<'a> RequestAdmission<'a> {
+    pub(super) fn new(step_id: &'a str, vars: &'a VarStore) -> Self {
+        Self { step_id, vars }
+    }
+
+    pub(super) fn parameter_location(index: usize, parameter: &Parameter) -> String {
+        let location = match parameter.in_ {
+            Some(ParamLocation::Path) => "path",
+            Some(ParamLocation::Query) => "query",
+            Some(ParamLocation::Querystring) => "querystring",
+            Some(ParamLocation::Header) => "header",
+            Some(ParamLocation::Cookie) => "cookie",
+            None => "unspecified",
+        };
+        format!("parameters[{index}]({location}:{})", parameter.name)
+    }
+
+    pub(super) fn check(
+        &self,
+        result: &payload::ResolvedValueSource,
+        location: &str,
+    ) -> Result<(), RuntimeError> {
+        use payload::ValueResolutionFailureReason;
+        let outputs = ProvenancedValues::default();
+        if !self
+            .vars
+            .value_provenance(result, &outputs, None)
+            .unresolved
+        {
+            return Ok(());
+        }
+        for failure in &result.failures {
+            let occurrence = result.expressions.iter().find(|occurrence| {
+                occurrence.pointer == failure.pointer
+                    && occurrence.resolution.expression == failure.source
+            });
+            let source = match failure.reason {
+                ValueResolutionFailureReason::ExpressionSyntax => "invalid expression syntax",
+                ValueResolutionFailureReason::SelectorHardFailure => "Selector value",
+                ValueResolutionFailureReason::ExpressionMissing
+                | ValueResolutionFailureReason::SelectorContextUnresolved => {
+                    if let Some(occurrence) = occurrence {
+                        if !self.occurrence_unresolved(&occurrence.resolution) {
+                            continue;
+                        }
+                        occurrence.resolution.expression.as_str()
+                    } else {
+                        "Selector context"
+                    }
+                }
+            };
+            return Err(self.refusal(location, &failure.pointer, source));
+        }
+        for occurrence in &result.expressions {
+            if self.occurrence_unresolved(&occurrence.resolution) {
+                return Err(self.refusal(
+                    location,
+                    &occurrence.pointer,
+                    &occurrence.resolution.expression,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn occurrence_unresolved(&self, occurrence: &arazzo_expr::ExpressionResolution) -> bool {
+        let value = arazzo_expr::ValueResolution {
+            value: Value::Null,
+            warnings: Vec::new(),
+            expressions: vec![occurrence.clone()],
+            syntax_error: false,
+        };
+        self.vars
+            .expression_provenance(&value, &ProvenancedValues::default(), None)
+            .unresolved
+    }
+
+    fn refusal(&self, location: &str, pointer: &str, source: &str) -> RuntimeError {
+        RuntimeError::new(
+            RuntimeErrorKind::UnresolvedRequestValue,
+            format!(
+                "step {:?}: {location}{pointer}: {source} did not resolve; request not sent",
+                self.step_id
+            ),
+        )
+    }
 }

@@ -86,10 +86,29 @@ impl ValueProducerSite<'_> {
 }
 
 #[derive(Clone, Copy)]
+pub(super) enum ValueProducerTransport {
+    Http,
+    Message,
+}
+
+impl ValueProducerTransport {
+    fn includes(self, namespace: RuntimeExpressionNamespace) -> bool {
+        match self {
+            Self::Http => matches!(
+                namespace,
+                RuntimeExpressionNamespace::Response | RuntimeExpressionNamespace::StatusCode
+            ),
+            Self::Message => namespace == RuntimeExpressionNamespace::Message,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct ValueProducer<'a> {
     pub(super) workflow_id: &'a str,
     pub(super) step_id: &'a str,
     pub(super) site: ValueProducerSite<'a>,
+    pub(super) transport: ValueProducerTransport,
 }
 
 impl ValueProvenance {
@@ -162,10 +181,7 @@ impl VarStore {
                 .cloned()
                 .unwrap_or_default();
             if let Some(producer) = producer {
-                if matches!(
-                    occurrence.namespace,
-                    RuntimeExpressionNamespace::Response | RuntimeExpressionNamespace::StatusCode
-                ) {
+                if producer.transport.includes(occurrence.namespace) {
                     metadata.skipped.push(SkippedOrigin {
                         workflow_id: producer.workflow_id.to_owned(),
                         step_id: producer.step_id.to_owned(),

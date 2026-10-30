@@ -13,10 +13,9 @@ pub(super) use super::criteria::{
 pub(super) use super::deps::{
     build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker,
 };
-pub(super) use super::payload::{
-    apply_replacements, resolve_payload_detailed, resolve_value_source, to_json_path,
-    value_to_string,
-};
+pub(super) use super::payload::{apply_replacements, to_json_path, value_to_string};
+#[cfg(test)]
+pub(super) use super::payload::{resolve_payload_detailed, resolve_value_source};
 pub(super) use super::regex_cache::RegexCache;
 pub(super) use super::url::{encode_cookie_value, replace_path_params, UrlBuildResult};
 #[cfg(test)]

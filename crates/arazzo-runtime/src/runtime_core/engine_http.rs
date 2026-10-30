@@ -258,16 +258,23 @@ impl Engine {
                 ))
             }
         };
-        let url_result = self.build_url_from_path(&resolved.path, &resolved.base, step, vars)?;
         let method = resolved.method;
+        let eval = ExpressionEvaluator::new(request_admission::request_context(
+            vars,
+            self.make_eval_context(vars, None),
+            &method,
+        ));
+        let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
+        let url_result =
+            self.build_url_with_evaluator(&resolved.path, &resolved.base, step, &eval, &admission)?;
 
         let mut prep_warnings = url_result.warnings.clone();
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
-                let mut ctx = self.make_eval_context(vars, None);
-                ctx.method = Some(method.clone());
-                let eval = ExpressionEvaluator::new(ctx);
-                let (mut body, payload_warnings) = resolve_payload_detailed(payload, &eval);
+                let resolution = payload::resolve_value_source_with_provenance(payload, &eval);
+                admission.check(&resolution, "requestBody.payload")?;
+                let mut body = resolution.value;
+                let payload_warnings = resolution.warnings;
                 prep_warnings.extend(
                     payload_warnings
                         .into_iter()
@@ -279,7 +286,8 @@ impl Engine {
                         req_body.content_type.as_str(),
                         &req_body.replacements,
                         &eval,
-                    );
+                        &admission,
+                    )?;
                     body = mutated;
                     prep_warnings.extend(warnings);
                 }
@@ -316,13 +324,16 @@ impl Engine {
                 .unwrap_or_else(|| "application/json".to_string());
             headers.insert("Content-Type".to_string(), content_type);
         }
-        let mut hdr_ctx = self.make_eval_context(vars, None);
-        hdr_ctx.method = Some(method.clone());
-        let eval = ExpressionEvaluator::new(hdr_ctx);
         let mut cookie_parts = Vec::new();
-        for param in &step.parameters {
+        for (index, param) in step.parameters.iter().enumerate() {
             if param.in_ == Some(ParamLocation::Header) {
-                let (value, warnings) = resolve_value_source(&param.value, &eval);
+                let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
+                admission.check(
+                    &resolution,
+                    &request_admission::RequestAdmission::parameter_location(index, param),
+                )?;
+                let value = resolution.value;
+                let warnings = resolution.warnings;
                 prep_warnings.extend(
                     warnings
                         .into_iter()
@@ -331,7 +342,13 @@ impl Engine {
                 let resolved = value_to_string(&value);
                 headers.insert(param.name.clone(), resolved);
             } else if param.in_ == Some(ParamLocation::Cookie) {
-                let (value, warnings) = resolve_value_source(&param.value, &eval);
+                let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
+                admission.check(
+                    &resolution,
+                    &request_admission::RequestAdmission::parameter_location(index, param),
+                )?;
+                let value = resolution.value;
+                let warnings = resolution.warnings;
                 prep_warnings.extend(
                     warnings
                         .into_iter()
@@ -490,6 +507,7 @@ impl Engine {
                     workflow_id,
                     step_id: &step.step_id,
                     site: ValueProducerSite::Output(name),
+                    transport: ValueProducerTransport::Http,
                 }),
             );
             outputs.insert(name.clone(), value, metadata);
@@ -680,6 +698,7 @@ impl Engine {
     /// Builds the request URL for a step's already-resolved target.
     ///
     /// Both target forms have already selected an actual bound operation.
+    #[cfg(test)]
     pub(crate) fn build_url_from_path(
         &self,
         op_path: &str,
@@ -687,9 +706,25 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
     ) -> Result<UrlBuildResult, RuntimeError> {
+        let eval = ExpressionEvaluator::new(request_admission::request_context(
+            vars,
+            self.make_eval_context(vars, None),
+            "",
+        ));
+        let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
+        self.build_url_with_evaluator(op_path, source_base, step, &eval, &admission)
+    }
+
+    fn build_url_with_evaluator(
+        &self,
+        op_path: &str,
+        source_base: &str,
+        step: &Step,
+        eval: &ExpressionEvaluator,
+        admission: &request_admission::RequestAdmission<'_>,
+    ) -> Result<UrlBuildResult, RuntimeError> {
         let mut target = format!("{}{}", source_base.trim_end_matches('/'), op_path);
 
-        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
         let mut path_params = BTreeMap::<String, String>::new();
         let mut query_params_vec = Vec::<(String, String)>::new();
         // The whole query component, supplied by an `in: querystring` parameter.
@@ -704,27 +739,35 @@ impl Engine {
         // their value-source warnings twice: `prepare_http_request` seeds its
         // own warning list from this result and then resolves those two
         // locations again.
-        let resolve = |param: &Parameter| {
-            let (value, param_warnings) = resolve_value_source(&param.value, &eval);
+        let resolve = |index: usize, param: &Parameter| -> Result<_, RuntimeError> {
+            let resolution = payload::resolve_value_source_with_provenance(&param.value, eval);
+            if param.in_.is_some() {
+                admission.check(
+                    &resolution,
+                    &request_admission::RequestAdmission::parameter_location(index, param),
+                )?;
+            }
+            let value = resolution.value;
+            let param_warnings = resolution.warnings;
             let named: Vec<String> = param_warnings
                 .into_iter()
                 .map(|warning| format!("parameter {:?}: {warning}", param.name))
                 .collect();
-            (value, named)
+            Ok((value, named))
         };
 
-        for param in &step.parameters {
+        for (index, param) in step.parameters.iter().enumerate() {
             // No catch-all, and no guarded arm: a new `ParamLocation` variant
             // must be a compile error here, not a parameter this runtime
             // silently drops out of the request it sends.
             match param.in_ {
                 Some(ParamLocation::Path) => {
-                    let (value, named) = resolve(param);
+                    let (value, named) = resolve(index, param)?;
                     warnings.extend(named);
                     path_params.insert(param.name.clone(), value_to_string(&value));
                 }
                 Some(ParamLocation::Query) => {
-                    let (value, named) = resolve(param);
+                    let (value, named) = resolve(index, param)?;
                     warnings.extend(named);
                     if !value.is_null() {
                         match &value {
@@ -750,7 +793,7 @@ impl Engine {
                     }
                 }
                 Some(ParamLocation::Querystring) => {
-                    let (value, named) = resolve(param);
+                    let (value, named) = resolve(index, param)?;
                     warnings.extend(named);
                     match &value {
                         // Null is skipped in silence, exactly as an unset `query`
@@ -803,7 +846,7 @@ impl Engine {
                 // to bind. The value is still resolved so that an unresolvable
                 // one is reported: `arazzo-validate` only advises on a missing
                 // `in`, so such a parameter does reach this loop.
-                None => warnings.extend(resolve(param).1),
+                None => warnings.extend(resolve(index, param)?.1),
             }
         }
 

@@ -10,19 +10,6 @@
 //! only `rfc9535` and `draft-goessner-dispatch-jsonpath-00` as JSONPath
 //! version tokens. GJSON's `#` forms are syntax in neither.
 //!
-//! Two surfaces, because they see different halves of the run:
-//!
-//! * a dry run resolves parameters, payloads and replacement targets but never
-//!   evaluates success criteria, so it is where selector and replacement
-//!   rejection becomes observable — as `--json` warnings plus an unchanged
-//!   resolved body;
-//! * a live run against a hermetic `tiny_http` server is where criterion
-//!   rejection becomes observable — as the ordinary criteria failure, the
-//!   `--json` error warning list, and the `--trace` file's criterion record.
-//!
-//! Neither asserts that no request is issued: the settled policy is warn and
-//! continue, not a hard runtime error with zero HTTP.
-//!
 //! Engine-level routing for the same forms is owned by
 //! `crates/arazzo-runtime/tests/jsonpath_gjson_rejection.rs`.
 
@@ -181,18 +168,13 @@ fn start_echo_server(body: String) -> EchoServer {
     }
 }
 
-/// A dry run resolves the request without sending it, so a GJSON replacement
-/// target and a GJSON Selector Object used as a replacement value both surface
-/// as `--json` warnings with the resolved body left untouched. The run still
-/// succeeds: the settled policy is warn and continue, so this deliberately
-/// does not assert a hard error or a zero-request outcome.
 #[test]
 fn run_dry_run_reports_gjson_selector_and_replacement_rejection() {
     let temp = TempDir::new("arazzo-cli-jsonpath-gjson-dry-run");
     let spec_path = temp.path().join("gjson-dry-run.arazzo.yaml");
-    write_file(
-        &spec_path,
-        r#"arazzo: 1.1.0
+    let fixture = |value_replacement: &str| {
+        format!(
+            r#"arazzo: 1.1.0
 info:
   title: GJSON typed-surface rejection
   version: 1.0.0
@@ -227,21 +209,17 @@ workflows:
             - target: '$.items.#(sku=="A").q'
               targetSelectorType: jsonpath
               value: new
-            - target: $.picked
-              targetSelectorType: jsonpath
-              value:
-                context: $inputs.document
-                selector: '$.items.#(sku=="A")#.q'
-                type: jsonpath
-"#,
-    );
+{value_replacement}"#
+        )
+    };
+    write_file(&spec_path, &fixture(""));
 
     let spec = spec_path.to_string_lossy().to_string();
     let document = r#"document={"items":[{"sku":"A","q":1},{"sku":"A","q":2}]}"#;
     let output = run(&["--json", "run", &spec, "wf", "--dry-run", "-i", document]);
     assert!(
         output.status.success(),
-        "a rejected selector warns and continues; stderr={}",
+        "a rejected target warns and continues; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -252,8 +230,6 @@ workflows:
     };
     assert_eq!(requests.len(), 1, "{body}");
 
-    // Only the sound replacement moved. Every `q` a GJSON write would have
-    // reached, and the value target whose selector failed, keep their input.
     assert_eq!(
         requests[0].get("body"),
         Some(&json!({
@@ -274,25 +250,42 @@ workflows:
         .collect();
     assert_eq!(target_warnings.len(), 1, "{warnings:?}");
     assert!(target_warnings[0].contains(SYNTAX_ERROR), "{warnings:?}");
-
-    // A failed replacement *value* reports twice: the selector diagnostic and
-    // the notice that the replacement was skipped and the body left alone.
-    let value_warnings: Vec<&String> = warnings
-        .iter()
-        .filter(|warning| warning.starts_with("requestBody.replacements[2]:"))
-        .collect();
-    assert_eq!(value_warnings.len(), 2, "{warnings:?}");
-    assert!(value_warnings[0].contains(SYNTAX_ERROR), "{warnings:?}");
-    assert!(
-        value_warnings[1].contains("value did not resolve; replacement skipped and body unchanged"),
-        "{warnings:?}"
-    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
         warnings
             .iter()
             .all(|warning| !warning.starts_with("requestBody.replacements[0]:")),
         "the sound replacement must not warn: {warnings:?}"
     );
+
+    write_file(
+        &spec_path,
+        &fixture(
+            r#"            - target: $.picked
+              targetSelectorType: jsonpath
+              value:
+                context: $inputs.document
+                selector: '$.items.#(sku=="A")#.q'
+                type: jsonpath
+"#,
+        ),
+    );
+    let output = run(&["--json", "run", &spec, "wf", "--dry-run", "-i", document]);
+    assert!(!output.status.success(), "{output:?}");
+    let body = stdout_json(&output);
+    assert_eq!(body["kind"], "error", "{body}");
+    assert_eq!(body["code"], "RUNTIME_UNRESOLVED_REQUEST_VALUE", "{body}");
+    let message = body["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected error message: {body}"));
+    assert!(message.contains("step \"update\""), "{body}");
+    assert!(
+        message.contains("requestBody.replacements[2].value"),
+        "{body}"
+    );
+    assert!(message.contains("Selector value"), "{body}");
+    assert!(message.contains("request not sent"), "{body}");
+    assert!(body.get("requests").is_none(), "{body}");
 }
 
 /// A dry run never evaluates success criteria, so criterion rejection is

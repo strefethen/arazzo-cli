@@ -475,23 +475,13 @@ workflows:
     );
 }
 
-/// Negative control on the resolution half of the run. A dry run resolves
-/// parameters, payloads and replacement targets without sending anything, so
-/// it is where an unsupported declared version and an admission-limit
-/// rejection become observable — as `--json` warnings with the resolved body
-/// untouched. The sound control replacement in the same list still applies,
-/// which is what proves the rejections were targeted rather than a blanket
-/// bail-out.
 #[test]
 fn dry_run_rejects_goessner_and_over_budget_targets_without_writing() {
     let temp = TempDir::new("arazzo-cli-jsonpath-migration-dry-run");
     let spec_path = temp.path().join("rejected.arazzo.yaml");
-    // 200 `.` bytes: over the 128 structural-character admission budget, and
-    // rejected before the upstream parser ever sees the expression.
     let over_budget = format!("${}", ".a".repeat(200));
-    write_file(
-        &spec_path,
-        &format!(
+    let fixture = |value_replacement: &str| {
+        format!(
             r#"arazzo: 1.1.0
 info:
   title: Rejected typed JSONPath surfaces
@@ -529,19 +519,12 @@ workflows:
             - target: '{over_budget}'
               targetSelectorType: jsonpath
               value: new
-            - target: $.valued
-              targetSelectorType: jsonpath
-              value:
-                context: $inputs.document
-                selector: '$.items[?match(@.sku, "A-101")].sku'
-                type:
-                  type: jsonpath
-                  version: {goessner}
-"#,
+{value_replacement}"#,
             goessner = GOESSNER,
             over_budget = over_budget
-        ),
-    );
+        )
+    };
+    write_file(&spec_path, &fixture(""));
 
     let spec = spec_path.to_string_lossy().to_string();
     let document = r#"document={"items":[{"sku":"A-101"}]}"#;
@@ -594,18 +577,36 @@ workflows:
         "{warnings:?}"
     );
 
-    // A rejected replacement *value* reports twice: the selector diagnostic
-    // and the notice that nothing was written.
-    let value_warnings = indexed("requestBody.replacements[3]:");
-    assert_eq!(value_warnings.len(), 2, "{warnings:?}");
-    assert!(
-        value_warnings[0].contains(UNSUPPORTED_VERSION) && value_warnings[0].contains(GOESSNER),
-        "{warnings:?}"
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+
+    let value_replacement = format!(
+        r#"            - target: $.valued
+              targetSelectorType: jsonpath
+              value:
+                context: $inputs.document
+                selector: '$.items[?match(@.sku, "A-101")].sku'
+                type:
+                  type: jsonpath
+                  version: {GOESSNER}
+"#
     );
+    write_file(&spec_path, &fixture(&value_replacement));
+    let output = run(&["--json", "run", &spec, "wf", "--dry-run", "-i", document]);
+    assert!(!output.status.success(), "{output:?}");
+    let body = stdout_json(&output);
+    assert_eq!(body["kind"], "error", "{body}");
+    assert_eq!(body["code"], "RUNTIME_UNRESOLVED_REQUEST_VALUE", "{body}");
+    let message = body["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected error message: {body}"));
+    assert!(message.contains("step \"update\""), "{body}");
     assert!(
-        value_warnings[1].contains("value did not resolve; replacement skipped and body unchanged"),
-        "{warnings:?}"
+        message.contains("requestBody.replacements[3].value"),
+        "{body}"
     );
+    assert!(message.contains("Selector value"), "{body}");
+    assert!(message.contains("request not sent"), "{body}");
+    assert!(body.get("requests").is_none(), "{body}");
 }
 
 /// Negative control on the criterion half of the run. A dry run never

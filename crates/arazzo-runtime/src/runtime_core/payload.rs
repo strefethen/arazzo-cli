@@ -12,6 +12,7 @@ pub(super) fn value_to_string(value: &Value) -> String {
     }
 }
 
+#[cfg(test)]
 pub(super) fn resolve_payload_detailed(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
@@ -20,6 +21,7 @@ pub(super) fn resolve_payload_detailed(
 }
 
 /// Resolve a value for ordinary readers: the projected value and warnings.
+#[cfg(test)]
 pub(super) fn resolve_value_source(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
@@ -33,7 +35,6 @@ pub(crate) struct ResolvedValueSource {
     pub(crate) warnings: Vec<arazzo_expr::ExpressionWarning>,
     pub(crate) expressions: Vec<LocatedExpressionResolution>,
     pub(crate) failures: Vec<ValueResolutionFailure>,
-    jsonpath_failed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,7 +65,6 @@ impl ResolvedValueSource {
             warnings,
             expressions: Vec::new(),
             failures: Vec::new(),
-            jsonpath_failed: false,
         }
     }
 
@@ -99,7 +99,6 @@ impl ResolvedValueSource {
             warnings: resolution.warnings,
             expressions,
             failures,
-            jsonpath_failed: false,
         }
     }
 
@@ -107,7 +106,6 @@ impl ResolvedValueSource {
         self.warnings.extend(child.warnings);
         self.expressions.extend(child.expressions);
         self.failures.extend(child.failures);
-        self.jsonpath_failed |= child.jsonpath_failed;
         child.value
     }
 
@@ -232,7 +230,6 @@ fn resolve_selector_checked(
             Err(error) => {
                 let mut result = ResolvedValueSource::sound(Value::Null, Vec::new());
                 result.fail_selector(selector, pointer, &error.to_string());
-                result.jsonpath_failed = true;
                 return result;
             }
         },
@@ -253,7 +250,6 @@ fn resolve_selector_checked(
     }
     if !result.warnings.is_empty() {
         result.value = Value::Null;
-        result.jsonpath_failed = jsonpath.is_some();
         return result;
     }
 
@@ -262,7 +258,6 @@ fn resolve_selector_checked(
             Ok(selection) => Ok((selection.value, selection.match_count)),
             Err(error) => {
                 result.fail_selector(selector, pointer, &error.to_string());
-                result.jsonpath_failed = true;
                 return result;
             }
         }
@@ -354,7 +349,8 @@ pub(super) fn apply_replacements(
     content_type: &str,
     replacements: &[arazzo_spec::Replacement],
     eval: &ExpressionEvaluator,
-) -> (Value, Vec<String>) {
+    admission: &request_admission::RequestAdmission<'_>,
+) -> Result<(Value, Vec<String>), RuntimeError> {
     let mut warnings = Vec::<String>::new();
 
     for (index, replacement) in replacements.iter().enumerate() {
@@ -364,23 +360,17 @@ pub(super) fn apply_replacements(
             continue;
         }
 
-        // Value first: a hard JSONPath failure anywhere inside the value
-        // projected `Null`, which is not a selected value. Nothing is written
-        // and the target is not evaluated; later replacements continue.
         let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
+        admission.check(
+            &resolution,
+            &format!("requestBody.replacements[{index}].value"),
+        )?;
         warnings.extend(
             resolution
                 .warnings
                 .iter()
                 .map(|warning| replacement_warning(index, &warning.to_string())),
         );
-        if resolution.jsonpath_failed {
-            warnings.push(replacement_warning(
-                index,
-                "value did not resolve; replacement skipped and body unchanged",
-            ));
-            continue;
-        }
         let resolved = resolution.value;
 
         let declared = replacement.target_selector_type.as_ref();
@@ -507,7 +497,7 @@ pub(super) fn apply_replacements(
         }
     }
 
-    (body, warnings)
+    Ok((body, warnings))
 }
 
 /// §5.8.15.1 inference for an omitted `targetSelectorType`: a JSON media type
@@ -693,6 +683,22 @@ mod tests {
             .iter()
             .filter(|warning| warning.contains("XPath 1.0 engine"))
             .count()
+    }
+
+    fn apply_replacements(
+        body: Value,
+        content_type: &str,
+        replacements: &[Replacement],
+        eval: &ExpressionEvaluator,
+    ) -> (Value, Vec<String>) {
+        super::apply_replacements(
+            body,
+            content_type,
+            replacements,
+            eval,
+            &request_admission::RequestAdmission::new("test", &VarStore::default()),
+        )
+        .unwrap_or_else(|error| panic!("replacement refused: {error}"))
     }
 
     fn apply(
@@ -1252,41 +1258,44 @@ mod tests {
     }
 
     #[test]
-    fn hard_jsonpath_failure_in_a_nested_replacement_value_skips_only_that_replacement() {
+    fn hard_jsonpath_failure_in_a_nested_replacement_value_refuses() {
         let eval = evaluator_with_inputs(BTreeMap::from([(
             "document".to_string(),
-            json!({"value": null, "n": 7}),
+            json!({"value":null,"n":7}),
         )]));
         let oversized = format!("${}", ".a".repeat(129));
+        for value in [
+            yaml(json!([{"inner": jsonpath_selector_yaml("$inputs.document", &oversized)}])),
+            jsonpath_selector_yaml("$inputs.absent", "$.n"),
+        ] {
+            let replacements = vec![
+                replacement("/first", yaml(json!("new"))),
+                replacement("/nested", value),
+            ];
+            let error = super::apply_replacements(
+                json!({"first":"old","nested":"old"}),
+                "application/json",
+                &replacements,
+                &eval,
+                &request_admission::RequestAdmission::new("test", &VarStore::default()),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("value must refuse"));
+            assert_eq!(error.code(), "RUNTIME_UNRESOLVED_REQUEST_VALUE");
+            assert!(
+                error.message.contains("requestBody.replacements[1].value"),
+                "{error}"
+            );
+        }
         let (body, warnings) = apply(
-            json!({
-                "first": "old",
-                "nested": "old",
-                "context": "old",
-                "null": "old",
-                "zero": "old",
-                "last": "old"
-            }),
+            json!({"first":"old","target":"old","null":"old","zero":"old","last":"old"}),
             vec![
                 replacement("/first", yaml(json!("new"))),
-                // A resource failure inside a map inside an array: the value
-                // is a hard failure, so nothing is written at /nested.
-                replacement(
-                    "/nested",
-                    yaml(
-                        json!([{"inner": jsonpath_selector_yaml("$inputs.document", &oversized)}]),
-                    ),
-                ),
-                // A valid query whose context is missing is failed resolution
-                // for replacement use.
-                replacement("/context", jsonpath_selector_yaml("$inputs.absent", "$.n")),
-                // A legitimately selected null is one match and is written.
+                replacement("/target", yaml(json!("new"))),
                 replacement(
                     "/null",
                     jsonpath_selector_yaml("$inputs.document", "$.value"),
                 ),
-                // Zero matches keep their normalization: null plus the
-                // existing no-match warning, still written.
                 replacement(
                     "/zero",
                     jsonpath_selector_yaml("$inputs.document", "$.absent"),
@@ -1295,48 +1304,13 @@ mod tests {
             ],
             &eval,
         );
-
         assert_eq!(
             body,
-            json!({
-                "first": "new",
-                "nested": "old",
-                "context": "old",
-                "null": null,
-                "zero": null,
-                "last": "new"
-            })
+            json!({"first":"new","target":"new","null":null,"zero":null,"last":"new"})
         );
-        let skipped: Vec<&String> = warnings
-            .iter()
-            .filter(|warning| warning.contains("replacement skipped"))
-            .collect();
-        assert_eq!(skipped.len(), 2, "{warnings:?}");
-        assert!(
-            skipped[0].starts_with("requestBody.replacements[1]:"),
-            "{skipped:?}"
-        );
-        assert!(
-            skipped[1].starts_with("requestBody.replacements[2]:"),
-            "{skipped:?}"
-        );
-        assert_warning_contains(
-            &warnings,
-            "JSONPath query structural characters limit of 128 exceeded",
-        );
-        assert_warning_contains(
-            &warnings,
-            "requestBody.replacements[2]: $inputs.absent: input \"absent\" not found in context",
-        );
-        assert_warning_contains(
-            &warnings,
-            "requestBody.replacements[4]: $.absent: selector matched no values",
-        );
-        assert!(
-            warnings
-                .iter()
-                .all(|warning| !warning.starts_with("requestBody.replacements[3]:")),
-            "a selected null is not a failure: {warnings:?}"
+        assert_eq!(
+            warnings,
+            vec!["requestBody.replacements[3]: $.absent: selector matched no values"]
         );
     }
 

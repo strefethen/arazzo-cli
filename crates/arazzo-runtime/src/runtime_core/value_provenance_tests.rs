@@ -71,6 +71,7 @@ fn dry_producer_mixed_failures_and_outgoing_response() {
         workflow_id: "w",
         step_id: "s",
         site: ValueProducerSite::Output("o"),
+        transport: ValueProducerTransport::Http,
     };
     for source in ["$statusCode", "$response.body", "$response.body#/absent"] {
         let result = resolve_value_source_with_provenance(&ValueSource::from(source), &eval);
@@ -382,29 +383,96 @@ async fn retry_workflow_and_live_http_outputs_keep_metadata() {
 }
 
 #[tokio::test]
-async fn production_strict_child_still_rejects_before_request() {
-    let engine = engine(
-        json!([
-            {"workflowId":"main", "steps":[{"stepId":"child", "workflowId":"child", "parameters":[{"name":"x", "value":"$inputs.missing"}]}]},
-            {"workflowId":"child", "inputs":{"type":"object", "required":["x"], "properties":{"x":{"type":"string", "enum":["ok"]}}},
-                "steps":[{"stepId":"http", "operationId":"get"}]}
-        ]),
-        true,
-        false,
-        true,
-        "http://api.invalid",
-    );
-    let (ctx, mut rx) = context();
-    let result = engine
-        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
-        .await;
-    let error = result
-        .err()
-        .unwrap_or_else(|| panic!("strict child should fail"));
-    assert!(error.message.contains("input validation failed"));
-    assert!(error.message.contains("required input is missing"));
-    while let Ok(event) = rx.try_recv() {
-        assert!(!matches!(event, EngineEvent::DryRunRequest(_)));
+async fn production_strict_child_defers_unknown_validation_to_request_consumption() {
+    for consumed in [true, false] {
+        let parameters = if consumed {
+            json!([{"name":"x","in":"query","value":"$inputs.x"}])
+        } else {
+            json!([])
+        };
+        let engine = engine(
+            json!([
+                {"workflowId":"main","steps":[{"stepId":"child","workflowId":"child","parameters":[{"name":"x","value":"$inputs.missing"}]}]},
+                {"workflowId":"child","inputs":{"type":"object","required":["x"],"properties":{"x":{"type":"string","enum":["ok"]}}},"steps":[{"stepId":"http","operationId":"get","parameters":parameters}]}
+            ]),
+            true,
+            false,
+            true,
+            "http://api.invalid",
+        );
+        let (ctx, mut rx) = context();
+        let result = engine
+            .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
+            .await;
+        if consumed {
+            assert_eq!(
+                result
+                    .err()
+                    .unwrap_or_else(|| panic!("consumed unknown"))
+                    .code(),
+                "RUNTIME_UNRESOLVED_REQUEST_VALUE"
+            );
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+        let mut requests = 0;
+        while let Ok(event) = rx.try_recv() {
+            if let EngineEvent::DryRunRequest(_) = event {
+                requests += 1;
+            }
+        }
+        assert_eq!(requests, usize::from(!consumed));
+    }
+}
+
+#[test]
+fn skipped_producers_classify_only_their_transport_and_preserve_live_misses() {
+    let vars = VarStore::default();
+    let eval = ExpressionEvaluator::new(EvalContext {
+        response_body: Some(json!({})),
+        message_payload: Some(json!({})),
+        ..EvalContext::default()
+    });
+    for transport in [
+        ValueProducerTransport::Http,
+        ValueProducerTransport::Message,
+    ] {
+        let producer = ValueProducer {
+            workflow_id: "w",
+            step_id: "s",
+            site: ValueProducerSite::Output("o"),
+            transport,
+        };
+        for source in [
+            "$response.body#/missing",
+            "$statusCode",
+            "$message.payload#/missing",
+            "$message.header.missing",
+            "$inputs.missing",
+        ] {
+            let result = resolve_value_source_with_provenance(&ValueSource::from(source), &eval);
+            let metadata =
+                vars.value_provenance(&result, &ProvenancedValues::default(), Some(producer));
+            let skipped = match transport {
+                ValueProducerTransport::Http => {
+                    source.starts_with("$response") || source == "$statusCode"
+                }
+                ValueProducerTransport::Message => source.starts_with("$message"),
+            };
+            assert_eq!(metadata.unresolved, !skipped, "{source}");
+            assert_eq!(metadata.skipped.len(), usize::from(skipped), "{source}");
+            let live = vars.value_provenance(&result, &ProvenancedValues::default(), None);
+            assert!(live.unresolved, "{source}");
+            assert!(live.skipped.is_empty(), "{source}");
+        }
+        let mixed = resolve_value_source_with_provenance(
+            &ValueSource::from("{$message.payload#/missing}-{$inputs.missing}"),
+            &eval,
+        );
+        assert!(
+            vars.value_provenance(&mixed, &ProvenancedValues::default(), Some(producer))
+                .unresolved
+        );
     }
 }
 
@@ -763,6 +831,7 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
             workflow_id: "w",
             step_id: "s",
             site: ValueProducerSite::Output("out"),
+            transport: ValueProducerTransport::Http,
         }),
     );
     assert!(metadata.unresolved);

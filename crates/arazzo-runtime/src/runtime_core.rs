@@ -114,12 +114,15 @@ pub use events::{
     TraceHook, TraceMessage, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord,
     TransportWarning, TransportWarningKind, WorkflowOutputWarning,
 };
-use input_validation::{validate_inputs, InputIssueSeverity};
+#[cfg(test)]
+use input_validation::validate_inputs;
+use input_validation::InputIssueSeverity;
 use jsonpath::jsonpath_condition_holds;
 pub use kafka::{MessageTransportOptions, Secret, DEFAULT_CONNECT_TIMEOUT};
+#[cfg(test)]
+use payload::resolve_payload_detailed;
 use payload::{
-    apply_replacements, json_type_name, resolve_payload_detailed, resolve_selector,
-    resolve_value_source, to_json_path, value_to_string,
+    apply_replacements, json_type_name, resolve_selector, to_json_path, value_to_string,
 };
 use regex_cache::RegexCache;
 use replay::{validate_replay_request, ReplayKey, ReplayState};
@@ -134,7 +137,9 @@ use state::{
     UnusableServer, WorkflowIndex,
 };
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
-use value_provenance::{ProvenancedValues, ValueProducer, ValueProducerSite, ValueProvenance};
+use value_provenance::{
+    ProvenancedValues, ValueProducer, ValueProducerSite, ValueProducerTransport, ValueProvenance,
+};
 pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{

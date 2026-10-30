@@ -923,7 +923,11 @@ impl Engine {
             return Err(exec_ctx.cancelled_error());
         }
         let outputs = output_result.map_err(|err| {
-            if err.kind == RuntimeErrorKind::WorkflowDependencyUnsatisfied {
+            if matches!(
+                err.kind,
+                RuntimeErrorKind::WorkflowDependencyUnsatisfied
+                    | RuntimeErrorKind::UnresolvedRequestValue
+            ) {
                 err
             } else {
                 let msg = format!("sub-workflow {wf_id}: {}", err.message);
@@ -978,7 +982,7 @@ impl Engine {
         mut inputs: ProvenancedValues,
     ) -> Result<VarStore, RuntimeError> {
         if let Some(schema) = &workflow.inputs {
-            let issues = validate_inputs(schema, &mut inputs.values);
+            let issues = input_validation::validate_provenanced_inputs(schema, &mut inputs);
             if !issues.is_empty() {
                 let has_errors = issues
                     .iter()

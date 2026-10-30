@@ -217,7 +217,8 @@ fn a_parameter_with_no_in_location_reaches_no_part_of_the_request() {
 #[test]
 fn a_parameter_value_that_warns_is_reported_once_per_parameter() {
     let engine = fixture_engine();
-    let vars = VarStore::default();
+    let mut vars = VarStore::default();
+    vars.set_input("document", json!({}));
 
     for location in [
         ParamLocation::Header,
@@ -225,15 +226,25 @@ fn a_parameter_value_that_warns_is_reported_once_per_parameter() {
         ParamLocation::Query,
         ParamLocation::Path,
     ] {
-        let step = step_at(
+        let mut step = step_at(
             "{$sourceDescriptions.test.url}#/paths/~1items~1%7Bid%7D/get",
             vec![param("probe", Some(location), "$inputs.absent")],
         );
+        let error = engine
+            .prepare_http_request(&step, &vars)
+            .err()
+            .unwrap_or_else(|| panic!("missing value refuses"));
+        assert_eq!(error.code(), "RUNTIME_UNRESOLVED_REQUEST_VALUE");
+        step.parameters[0].value = serde_yaml_ng::to_value(json!({
+            "context":"$inputs.document", "selector":"$.missing", "type":"jsonpath"
+        }))
+        .unwrap_or_else(|error| panic!("selector fixture: {error}"))
+        .into();
         let warnings = prepare(&engine, &step, &vars).warnings;
         assert_eq!(
             warnings.len(),
             1,
-            "{location:?}: one unresolvable value is one warning, got {warnings:?}"
+            "{location:?}: one zero-match value is one warning, got {warnings:?}"
         );
         assert!(
             warnings[0].starts_with("parameter \"probe\": "),
