@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a).
+Latest source cycle: [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -46,16 +46,18 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: independently checked root parse/validation measurements
-([ac-b2a8a](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b2a8a),
+Latest delivery: executable runtime fixtures and bounded sibling service
+([ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8),
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)).
-The dedicated Criterion target consumes fixed 10/100/1,000-step fixtures and
-times exactly one existing public parser call. Complete-model and zero-warning
-checks run outside timing on every result. Private benchmark support owns
-fixture expectations; production modules, public APIs and Fable's lane are unchanged.
-Independent source review and two fresh optimized runs passed. Formatting,
-strict Clippy and 1,685 workspace tests pass (0 failed, 35 existing ignores).
-Source publication remains held by the existing failed-review ancestor.
+The private example prepares 92 positive cases and 33 separate fault controls,
+retains actual strict CLI/source-check receipts and serves deterministic responses
+with responsive session control and bounded cleanup. Catalog, fixtures, source
+checks, protocol and service have separate owners; production modules do not grow.
+Fresh source review and independent executable QA passed for
+[d2418fa](https://github.com/strefethen/arazzo-cli/commit/d2418fabf0cde1ffbeac861b681c655447583ab1),
+now pushed. Formatting, strict Clippy and 1,725 workspace tests pass (0 failed,
+35 existing ignores), as do 22 optimized focused tests. Runtime timing workers
+and whole-unit performance proof remain future slices.
 
 Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
@@ -67,13 +69,12 @@ Acceptance and decomposition followed the standing mandate. The [dependency prop
 retains its policy/review/continuity warnings alongside that approval.
 No dependency version, checksum, feature or production edge changed.
 
-The [runtime workload unit](current/arazzo-runtime-workload-benchmarks.md) is now
-Decomposed into four serial implementation tickets after independent coverage
-review. Next is [ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8),
-the fixture/service foundation, followed by worker records and core cases,
-body/retry/cancellation cases, then complete executable proof. No new benchmark
-implementation is claimed. The unit uses existing public runtime APIs and
-dependencies. OS resources/statistics, CI and thresholds retain separate
+The [runtime workload unit](current/arazzo-runtime-workload-benchmarks.md) remains
+Decomposed into four serial implementation tickets. Its fixture/service foundation
+is delivered. Next is [ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221),
+worker records and source/expression/DAG cases, followed by body/retry/cancellation
+cases and complete executable proof. The unit uses existing public runtime APIs
+and dependencies. OS resources/statistics, CI and thresholds retain separate
 ownership and gates.
 Neither the completed root measurements nor this runtime plan complete the
 six-family program.
@@ -126,7 +127,7 @@ are routine; the exact claim remains gated. Structured workflow-output warnings
 are complete. Debug checkpoint cancellation and cleanup after client loss are
 reviewed and complete. Root parsing measurements under
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62) are delivered
-and its root unit plan is completed. The current source cycle is
+and its root unit plan is completed. The separate paused source cycle is
 [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f), the shared,
 bounded schema example walker under
 [epic:ac-31ca2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-31ca2).
@@ -145,13 +146,13 @@ Runtime inheritance
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
 
-Publication was reassessed under the updated policy: ticket pause or manual QA
-alone is not a push blocker. Fable's earlier candidate still lacks review PASS
-and has unresolved remediation in
-[ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f), so the hold
-remains. No Fable reservation was taken; the debugger repair only adds four
-existing-context field assignments in the message runtime after ownership
-clearance, with no Kafka/AsyncAPI transport behavior change.
+Publication was reassessed against a fresh origin/main fetch: the preceding
+accumulated range through cycle 30 is now upstream. Only the reviewed foundation
+candidate was newly published in cycle 31. The remaining decision and remediation
+in [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) stay paused;
+their publication does not imply review or completion. Main pushes trigger CI;
+release workflows require tags or manual dispatch. No release or deployment was
+performed. Fable's lane and paused generator/MCP source remain untouched.
 
 ## Direction and initial cycle
 
@@ -1603,3 +1604,42 @@ no new runtime capability or measurement result.
   [ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0).
   [ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) still holds
   publication of the accumulated range. No push, release or deployment occurred.
+
+## Delivered — cycle 31: executable runtime fixture foundation
+
+[ac-a42f8](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a42f8) adds usable
+prepare/service commands in eight new private example/test files. Reviewed source:
+[d2418fa](https://github.com/strefethen/arazzo-cli/commit/d2418fabf0cde1ffbeac861b681c655447583ab1)
+(pushed). This is foundation capability, not runtime timing or a speedup claim.
+
+- Sol implemented the settled contract; independent process QA and fresh-context
+  Astra source review passed. One review round used of two; bounded outcome stayed
+  within the 23:03–02:03 UTC cycle. No criterion, test or accepted design was weakened.
+- All 125 catalog cases have retained CLI/source receipts. Independent QA checked
+  92 positives, 33 controls, 2,214 exact input hashes, repeated generation, actual
+  fixed/chunked bodies through 8 MiB, retries, both stalls, release/reset/stop and
+  deadline cleanup. All eight spawned service processes were reaped and all 16
+  listener endpoints closed. No runtime worker measurements are claimed.
+- Full verification ran in a clean-base managed worktree with eight exact candidate
+  file hashes, excluding the visible paused generator/MCP changes on main. Formatting,
+  check and strict workspace Clippy passed; workspace tests: 1,725 passed, 0 failed,
+  35 existing ignores; 22 focused tests passed in debug and release. No existing
+  test/golden was rebaselined. All nine paused source hashes remain unchanged.
+- Decided by recommendation: lazy full-body expectations avoid eager catalog memory
+  growth; DAG outputs expose first/last predecessor values while retaining every
+  dependency edge; one nonblocking service owner quiesces handler states without
+  spawned handler threads. Independent review confirmed these private choices
+  preserve the accepted boundaries and proof obligations.
+- Evidence and immutable contract/candidate bindings: `/private/tmp/arazzo-cycle31/`.
+  The single delivery log explains before/after capability, responsibility boundaries
+  and next work. Desktop 1280px/mobile 390px QA passed without page overflow or
+  console warnings/errors; all 195 links and 31 historical sections passed structural
+  checks. Scripts/styles remain unchanged. These prose-only changes are
+  source-review exempt under SDLC.
+- The next source ticket is
+  [ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221).
+  Recheck readiness and reservations at kickoff. The plan remains Decomposed;
+  whole-unit success, OS counters/statistics and thresholds are not complete.
+- Fresh upstream inspection showed earlier accumulated commits were already
+  published. The only new source push was this reviewed candidate. Existing paused
+  decisions, Fable's Kafka/AsyncAPI lane and the schema walker remain untouched.
