@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5).
+Latest source cycle: [ac-69cee](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-69cee).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -29,9 +29,9 @@ release/deployment safeguards retain their owners.
 
 Steve also requested a visual HTML explanation after every delivery cycle and
 selected **hourly while there is ready work** for unattended follow-ups. The
-active `Arazzo maintainer cycles` heartbeat continues this chat with the current
-roadmap, live tickets and reservations. It reports meaningful deliveries,
-failures and decisions, and stays quiet when nothing actionable changes.
+`Arazzo maintainer cycles` heartbeat is now paused at Steve’s request. Its saved
+mandate remains available for explicit resumption; this CI repair does not
+reactivate it.
 
 - Choose the next bounded, independently useful outcome from accepted direction;
   refine it against current code before dispatch. Cycle sizes are checkpoints,
@@ -46,18 +46,19 @@ failures and decisions, and stays quiet when nothing actionable changes.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: checked body, retry and cancellation workers
-([ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5),
-[epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62)).
-The private example now measures all six accepted families. This slice adds
-64 positive cases and 28 controls, with exact body values, retry attempt/capture
-history, proven cancellation stalls and bounded cleanup. Response oracles and
-cancellation timing have separate Rust owners; production modules do not grow.
-Fresh source review and independent executable QA passed for
-[eb11c0d](https://github.com/strefethen/arazzo-cli/commit/eb11c0dc0f3d94d86dabbb17f04ccf1133bab6de), now pushed. Formatting, strict Clippy and 1,738 top-level
-workspace tests pass (0 failed, 35 existing ignores), alongside 31 affected debug and
-release tests after the deadline correction. Full-unit tooling, OS resources and performance
-thresholds remain separate work; no speedup is claimed.
+Latest delivery: the Windows settings-test compilation repair
+([ac-69cee](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-69cee)).
+Only Unix symlink operations are conditional; common checks remain active on
+Windows, and the Unix assertion now uses an otherwise valid target.
+Reviewed source [43159f4](https://github.com/strefethen/arazzo-cli/commit/43159f4197263a4c1e181afa2f784b071efa2766) passed [the complete Actions CI run](https://github.com/strefethen/arazzo-cli/actions/runs/40998697471).
+Local checks and independent review passed. The previous runtime measurement
+workers remain delivered; no runtime behavior changed in this repair.
+
+**Current stopping point:** hourly maintainer runs and the schema walker remain
+paused. Steve authorized this CI repair and existing main-push GitHub Pages
+deployments, not resumption of roadmap cycles. Preserve the uncommitted schema
+source until explicit resume. Final publication-head evidence lives in the
+repair ticket. Existing unrelated pauses remain intact.
 
 Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
@@ -138,9 +139,8 @@ Implementation is uncommitted. Steve approved
 return explicit errors when numeric bounds cannot be represented, using
 `Result<Example, String>` and the existing CRUD/MCP error paths. That decision
 ticket is closed and the implementation contract is reconciled without weakening
-ordinary-output or size-budget obligations. Resume this source next after fresh
-clearance/reservations, then add rejection/propagation proof and complete cumulative
-independent review. No completed implementation is claimed. The wider ingestion
+ordinary-output or size-budget obligations. This source remains paused; explicit resumption, fresh clearance/reservations,
+rejection/propagation proof and cumulative independent review are still required. No completed implementation is claimed. The wider ingestion
 plan and ac-6a778 stay paused.
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
@@ -149,13 +149,14 @@ Runtime inheritance
 source-type decision [ac-bd367](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-bd367)
 remains open.
 
-Publication is checked against a fresh origin/main fetch for every candidate.
-The preceding range and reviewed cycles 31–33 are now upstream. The remaining
-decision and remediation in
-[ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) stay paused;
-publication does not imply review or completion. Main pushes trigger CI;
-release workflows require tags or manual dispatch. No release or deployment was
-performed. Fable’s lane and the uncommitted generator/MCP source remain untouched.
+Publication correction: main pushes run CI **and deploy GitHub Pages** through
+provider configuration. Earlier CI-only/no-deployment claims were incorrect.
+Steve explicitly approved this existing Pages deployment in
+[ac-87a97](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-87a97), now closed.
+Reviewed main pushes may continue under that approval; tag/manual release gates
+and all unrelated pauses remain. The earlier Fable remediation decision
+[ac-18e6f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-18e6f) is unchanged.
+No release was tagged by this repair; Fable and paused schema source were untouched.
 
 ## Direction and initial cycle
 
@@ -1729,3 +1730,18 @@ OS-resource, private task-join or threshold claim.
 - One source slice stayed within the 02:08–05:08 UTC bound and used both permitted
   review rounds. The reviewed range passed existing publication gates; no
   release or deployment occurred and unrelated pauses remain intact.
+
+## Delivered — cycle 34: Windows CI portability repair
+
+[ac-69cee](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-69cee) repairs the
+unguarded Unix symlink call introduced in cycle 32. Reviewed source:
+[43159f4](https://github.com/strefethen/arazzo-cli/commit/43159f4197263a4c1e181afa2f784b071efa2766); [complete source CI success](https://github.com/strefethen/arazzo-cli/actions/runs/40998697471).
+The common settings test remains active everywhere; the Unix link must reject
+an otherwise accepted regular file. One test file changes, with no production,
+dependency or workflow edits. Local fmt/strict Clippy/workspace proof and fresh
+independent review passed. Final published-head CI verification is tracked in the ticket.
+
+The schema walker remains paused and its dirty source hashes are preserved.
+Hourly automation remains PAUSED. Steve approved existing main-push Pages
+deployments; the current publication wording above corrects the prior incomplete
+assessment. This is development reliability work, with no new runtime capability.
