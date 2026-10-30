@@ -66,6 +66,8 @@ mod nats_transport_trial;
 mod nats_transport_trial_tests;
 mod operation_target;
 mod payload;
+#[cfg(test)]
+mod payload_provenance_tests;
 mod redaction;
 mod regex_cache;
 mod replay;

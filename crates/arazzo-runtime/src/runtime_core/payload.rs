@@ -24,40 +24,101 @@ pub(super) fn resolve_value_source(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    resolve_value_checked(value, eval).into_parts()
+    resolve_value_source_with_provenance(value, eval).into_parts()
 }
 
-/// Value-resolution outcome with private hard-failure provenance.
-///
-/// Ordinary readers see only the projected `value` and `warnings`. Payload
-/// replacement additionally needs to know whether a JSONPath Selector Object
-/// anywhere inside the value failed hard — an unsupported version, invalid
-/// syntax, an admission limit, an evaluation failure, or a context that did
-/// not resolve — because the `Null` such a failure projects is not a selected
-/// value and must not be written into a request body as one. Zero matches
-/// and a legitimately selected `null` are ordinary selections, not failures.
 #[derive(Debug)]
-struct Resolution {
-    value: Value,
-    warnings: Vec<arazzo_expr::ExpressionWarning>,
+pub(crate) struct ResolvedValueSource {
+    pub(crate) value: Value,
+    pub(crate) warnings: Vec<arazzo_expr::ExpressionWarning>,
+    pub(crate) expressions: Vec<LocatedExpressionResolution>,
+    pub(crate) failures: Vec<ValueResolutionFailure>,
     jsonpath_failed: bool,
 }
 
-impl Resolution {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocatedExpressionResolution {
+    pub(crate) pointer: String,
+    pub(crate) resolution: arazzo_expr::ExpressionResolution,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ValueResolutionFailure {
+    pub(crate) pointer: String,
+    pub(crate) source: String,
+    pub(crate) reason: ValueResolutionFailureReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValueResolutionFailureReason {
+    ExpressionSyntax,
+    ExpressionMissing,
+    SelectorContextUnresolved,
+    SelectorHardFailure,
+}
+
+impl ResolvedValueSource {
     fn sound(value: Value, warnings: Vec<arazzo_expr::ExpressionWarning>) -> Self {
         Self {
             value,
             warnings,
+            expressions: Vec::new(),
+            failures: Vec::new(),
             jsonpath_failed: false,
         }
     }
 
-    fn jsonpath_failure(warnings: Vec<arazzo_expr::ExpressionWarning>) -> Self {
-        Self {
-            value: Value::Null,
-            warnings,
-            jsonpath_failed: true,
+    fn expression(resolution: arazzo_expr::ValueResolution, source: &str, pointer: &str) -> Self {
+        let mut failures = Vec::new();
+        if resolution.syntax_error {
+            failures.push(ValueResolutionFailure {
+                pointer: pointer.to_owned(),
+                source: source.to_owned(),
+                reason: ValueResolutionFailureReason::ExpressionSyntax,
+            });
         }
+        let expressions = resolution
+            .expressions
+            .into_iter()
+            .map(|resolution| {
+                if resolution.missing {
+                    failures.push(ValueResolutionFailure {
+                        pointer: pointer.to_owned(),
+                        source: resolution.expression.clone(),
+                        reason: ValueResolutionFailureReason::ExpressionMissing,
+                    });
+                }
+                LocatedExpressionResolution {
+                    pointer: pointer.to_owned(),
+                    resolution,
+                }
+            })
+            .collect();
+        Self {
+            value: resolution.value,
+            warnings: resolution.warnings,
+            expressions,
+            failures,
+            jsonpath_failed: false,
+        }
+    }
+
+    fn absorb(&mut self, child: Self) -> Value {
+        self.warnings.extend(child.warnings);
+        self.expressions.extend(child.expressions);
+        self.failures.extend(child.failures);
+        self.jsonpath_failed |= child.jsonpath_failed;
+        child.value
+    }
+
+    fn fail_selector(&mut self, selector: &SelectorObject, pointer: &str, message: &str) {
+        self.value = Value::Null;
+        self.warnings.push(selector_warning(selector, message));
+        self.failures.push(ValueResolutionFailure {
+            pointer: pointer.to_owned(),
+            source: selector.selector.clone(),
+            reason: ValueResolutionFailureReason::SelectorHardFailure,
+        });
     }
 
     fn into_parts(self) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
@@ -65,17 +126,36 @@ impl Resolution {
     }
 }
 
-fn resolve_value_checked(value: &ValueSource, eval: &ExpressionEvaluator) -> Resolution {
+pub(crate) fn resolve_value_source_with_provenance(
+    value: &ValueSource,
+    eval: &ExpressionEvaluator,
+) -> ResolvedValueSource {
+    resolve_value_checked(value, eval, "")
+}
+
+fn resolve_value_checked(
+    value: &ValueSource,
+    eval: &ExpressionEvaluator,
+    pointer: &str,
+) -> ResolvedValueSource {
     match value {
-        ValueSource::Selector(selector) => resolve_selector_checked(selector, eval),
-        ValueSource::Literal(value) => resolve_literal_checked(value, eval),
+        ValueSource::Selector(selector) => resolve_selector_checked(selector, eval, pointer),
+        ValueSource::Literal(value) => resolve_literal_checked(value, eval, pointer),
     }
 }
 
-fn resolve_literal_checked(value: &serde_yaml_ng::Value, eval: &ExpressionEvaluator) -> Resolution {
+fn child_pointer(pointer: &str, token: &str) -> String {
+    format!("{pointer}/{}", token.replace('~', "~0").replace('/', "~1"))
+}
+
+fn resolve_literal_checked(
+    value: &serde_yaml_ng::Value,
+    eval: &ExpressionEvaluator,
+    pointer: &str,
+) -> ResolvedValueSource {
     match value {
-        serde_yaml_ng::Value::Null => Resolution::sound(Value::Null, Vec::new()),
-        serde_yaml_ng::Value::Bool(v) => Resolution::sound(Value::Bool(*v), Vec::new()),
+        serde_yaml_ng::Value::Null => ResolvedValueSource::sound(Value::Null, Vec::new()),
+        serde_yaml_ng::Value::Bool(v) => ResolvedValueSource::sound(Value::Bool(*v), Vec::new()),
         serde_yaml_ng::Value::Number(v) => {
             let value = if let Some(i) = v.as_i64() {
                 json!(i)
@@ -86,49 +166,38 @@ fn resolve_literal_checked(value: &serde_yaml_ng::Value, eval: &ExpressionEvalua
             } else {
                 Value::Null
             };
-            Resolution::sound(value, Vec::new())
+            ResolvedValueSource::sound(value, Vec::new())
         }
         serde_yaml_ng::Value::String(v) => {
-            let (value, warnings) = eval.resolve_value_with_diagnostics(v);
-            Resolution::sound(value, warnings)
+            ResolvedValueSource::expression(eval.resolve_value_with_provenance(v), v, pointer)
         }
-        // Nested containers are not parsed here: the existing `ValueSource`
-        // model decides whether each item is a Selector Object, and this walk
-        // only carries every item's outcome upward.
         serde_yaml_ng::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
-            let mut warnings = Vec::new();
-            let mut jsonpath_failed = false;
-            for item in seq {
-                let item = resolve_value_checked(&item.clone().into(), eval);
-                jsonpath_failed |= item.jsonpath_failed;
-                out.push(item.value);
-                warnings.extend(item.warnings);
+            let mut result = ResolvedValueSource::sound(Value::Null, Vec::new());
+            for (index, item) in seq.iter().enumerate() {
+                let item = resolve_value_checked(
+                    &item.clone().into(),
+                    eval,
+                    &child_pointer(pointer, &index.to_string()),
+                );
+                out.push(result.absorb(item));
             }
-            Resolution {
-                value: Value::Array(out),
-                warnings,
-                jsonpath_failed,
-            }
+            result.value = Value::Array(out);
+            result
         }
         serde_yaml_ng::Value::Mapping(map) => {
             let mut out = serde_json::Map::new();
-            let mut warnings = Vec::new();
-            let mut jsonpath_failed = false;
+            let mut result = ResolvedValueSource::sound(Value::Null, Vec::new());
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
-                let item = resolve_value_checked(&v.clone().into(), eval);
-                jsonpath_failed |= item.jsonpath_failed;
-                out.insert(key, item.value);
-                warnings.extend(item.warnings);
+                let item =
+                    resolve_value_checked(&v.clone().into(), eval, &child_pointer(pointer, &key));
+                out.insert(key, result.absorb(item));
             }
-            Resolution {
-                value: Value::Object(out),
-                warnings,
-                jsonpath_failed,
-            }
+            result.value = Value::Object(out);
+            result
         }
-        _ => Resolution::sound(Value::Null, Vec::new()),
+        _ => ResolvedValueSource::sound(Value::Null, Vec::new()),
     }
 }
 
@@ -139,70 +208,83 @@ pub(super) fn resolve_selector(
     selector: &SelectorObject,
     eval: &ExpressionEvaluator,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    resolve_selector_checked(selector, eval).into_parts()
+    resolve_selector_with_provenance(selector, eval).into_parts()
 }
 
-fn resolve_selector_checked(selector: &SelectorObject, eval: &ExpressionEvaluator) -> Resolution {
+pub(crate) fn resolve_selector_with_provenance(
+    selector: &SelectorObject,
+    eval: &ExpressionEvaluator,
+) -> ResolvedValueSource {
+    resolve_selector_checked(selector, eval, "")
+}
+
+fn resolve_selector_checked(
+    selector: &SelectorObject,
+    eval: &ExpressionEvaluator,
+    pointer: &str,
+) -> ResolvedValueSource {
     let type_name = selector.type_.resolved_name();
     let version = selector.type_.declared_version();
 
-    // A jsonpath selector is admitted through the shared owner — declared
-    // version, resource budget and complete syntax — before its context is
-    // resolved, so an unsupported version or a malformed expression is
-    // reported even when the context turns out to be missing. Goessner is
-    // not a supported version; the owner rejects it like any other.
     let jsonpath = match type_name.as_str() {
         "jsonpath" => match JsonPathQuery::parse(&selector.selector, version) {
             Ok(query) => Some(query),
             Err(error) => {
-                return Resolution::jsonpath_failure(vec![selector_warning(
-                    selector,
-                    &error.to_string(),
-                )]);
+                let mut result = ResolvedValueSource::sound(Value::Null, Vec::new());
+                result.fail_selector(selector, pointer, &error.to_string());
+                result.jsonpath_failed = true;
+                return result;
             }
         },
         _ => None,
     };
 
-    let (context, mut warnings) = eval.evaluate_with_diagnostics(&selector.context);
-    if !warnings.is_empty() {
-        // The projection is unchanged: a context that did not resolve reads
-        // as `Null`. For a JSONPath selector that is failed resolution, not a
-        // selected value, so replacement use must not write it.
-        return Resolution {
-            value: Value::Null,
-            warnings,
-            jsonpath_failed: jsonpath.is_some(),
-        };
+    let mut result = ResolvedValueSource::expression(
+        eval.evaluate_with_provenance(&selector.context),
+        &selector.context,
+        pointer,
+    );
+    if !result.failures.is_empty() {
+        result.failures = vec![ValueResolutionFailure {
+            pointer: pointer.to_owned(),
+            source: selector.context.clone(),
+            reason: ValueResolutionFailureReason::SelectorContextUnresolved,
+        }];
+    }
+    if !result.warnings.is_empty() {
+        result.value = Value::Null;
+        result.jsonpath_failed = jsonpath.is_some();
+        return result;
     }
 
     let selected = if let Some(query) = jsonpath {
-        match query.select(&context) {
+        match query.select(&result.value) {
             Ok(selection) => Ok((selection.value, selection.match_count)),
             Err(error) => {
-                warnings.push(selector_warning(selector, &error.to_string()));
-                return Resolution::jsonpath_failure(warnings);
+                result.fail_selector(selector, pointer, &error.to_string());
+                result.jsonpath_failed = true;
+                return result;
             }
         }
     } else {
-        resolve_non_jsonpath_selector(selector, &context, version)
+        resolve_non_jsonpath_selector(selector, &result.value, version)
     };
 
     match selected {
         Ok((value, 0)) => {
-            warnings.push(selector_warning(selector, "selector matched no values"));
-            Resolution::sound(value, warnings)
+            result
+                .warnings
+                .push(selector_warning(selector, "selector matched no values"));
+            result.value = value;
         }
-        Ok((value, _)) => Resolution::sound(value, warnings),
+        Ok((value, _)) => result.value = value,
         Err(message) => {
-            warnings.push(selector_warning(selector, &message));
-            Resolution::sound(Value::Null, warnings)
+            result.fail_selector(selector, pointer, &message);
         }
     }
+    result
 }
 
-/// The JSON Pointer and XPath selector arms, unchanged by the JSONPath
-/// cutover: their errors are ordinary selector warnings, not hard failures.
 fn resolve_non_jsonpath_selector(
     selector: &SelectorObject,
     context: &Value,
@@ -285,7 +367,7 @@ pub(super) fn apply_replacements(
         // Value first: a hard JSONPath failure anywhere inside the value
         // projected `Null`, which is not a selected value. Nothing is written
         // and the target is not evaluated; later replacements continue.
-        let resolution = resolve_value_checked(&replacement.value, eval);
+        let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
         warnings.extend(
             resolution
                 .warnings
