@@ -3,42 +3,55 @@
 use serde_json::Value;
 
 use crate::{
-    classify_value_string, resolution::resolve_parsed, EvalContext, ExpressionWarning,
-    ValueStringSyntax,
+    classify_value_string, resolution::resolve_parsed_with_provenance, EvalContext,
+    ExpressionWarning, ValueResolution, ValueStringSyntax,
 };
 
-pub(crate) fn resolve_value(value: &str, context: &EvalContext) -> (Value, Vec<ExpressionWarning>) {
+pub(crate) fn resolve_value(value: &str, context: &EvalContext) -> ValueResolution {
     match classify_value_string(value) {
         Ok(ValueStringSyntax::Expression(expression)) => {
-            resolve_parsed(&expression, context).into_public()
+            resolve_parsed_with_provenance(&expression, context)
         }
         Ok(ValueStringSyntax::Template(expressions)) => {
             let mut rendered = String::with_capacity(value.len());
             let mut warnings = Vec::new();
+            let mut occurrences = Vec::new();
             let mut cursor = 0;
             for embedded in expressions {
                 let range = embedded.full_range();
                 rendered.push_str(&value[cursor..range.start]);
-                let (resolved, mut expression_warnings) =
-                    resolve_parsed(embedded.expression(), context).into_public();
-                match resolved {
+                let mut resolved = resolve_parsed_with_provenance(embedded.expression(), context);
+                match resolved.value {
                     Value::String(text) => rendered.push_str(&text),
                     other => rendered.push_str(&other.to_string()),
                 }
-                warnings.append(&mut expression_warnings);
+                warnings.append(&mut resolved.warnings);
+                occurrences.append(&mut resolved.expressions);
                 cursor = range.end;
             }
             rendered.push_str(&value[cursor..]);
-            (Value::String(rendered), warnings)
+            ValueResolution {
+                value: Value::String(rendered),
+                warnings,
+                expressions: occurrences,
+                syntax_error: false,
+            }
         }
-        Ok(ValueStringSyntax::Literal(literal)) => (Value::String(literal.to_owned()), Vec::new()),
-        Err(error) => (
-            Value::String(value.to_owned()),
-            vec![ExpressionWarning {
+        Ok(ValueStringSyntax::Literal(literal)) => ValueResolution {
+            value: Value::String(literal.to_owned()),
+            warnings: Vec::new(),
+            expressions: Vec::new(),
+            syntax_error: false,
+        },
+        Err(error) => ValueResolution {
+            value: Value::String(value.to_owned()),
+            warnings: vec![ExpressionWarning {
                 expression: value.to_owned(),
                 message: error.to_string(),
             }],
-        ),
+            expressions: Vec::new(),
+            syntax_error: true,
+        },
     }
 }
 

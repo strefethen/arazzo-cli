@@ -19,6 +19,8 @@ mod runtime_expression;
 mod simple_condition;
 mod step_output_reference;
 
+pub use resolution::{ExpressionResolution, StoredValueReference, ValueResolution};
+
 pub use step_output_reference::{
     local_step_output_references, LocalStepOutputReference, StepReferenceError, StepReferenceSyntax,
 };
@@ -155,6 +157,10 @@ impl ExpressionEvaluator {
     /// Resolve a value string while retaining ordered expression diagnostics.
     /// Malformed templates return their original text and one syntax warning.
     pub fn resolve_value_with_diagnostics(&self, value: &str) -> (Value, Vec<ExpressionWarning>) {
+        self.resolve_value_with_provenance(value).into_public()
+    }
+
+    pub fn resolve_value_with_provenance(&self, value: &str) -> ValueResolution {
         interpolation::resolve_value(value, self.context())
     }
 
@@ -181,23 +187,11 @@ impl ExpressionEvaluator {
     /// Evaluate an expression, returning both the value and any diagnostic
     /// warnings produced when resolution falls back to `Null`.
     pub fn evaluate_with_diagnostics(&self, expr: &str) -> (Value, Vec<ExpressionWarning>) {
-        match parse_runtime_expression(expr) {
-            Ok(parsed) => resolution::resolve_parsed(&parsed, self.context()).into_public(),
-            Err(error) => {
-                let mut message = error.to_string();
-                if let Some(hint) = body_pointer_migration_hint(expr, &error) {
-                    message.push_str("; ");
-                    message.push_str(&hint);
-                }
-                (
-                    Value::Null,
-                    vec![ExpressionWarning {
-                        expression: expr.to_owned(),
-                        message,
-                    }],
-                )
-            }
-        }
+        self.evaluate_with_provenance(expr).into_public()
+    }
+
+    pub fn evaluate_with_provenance(&self, expression: &str) -> ValueResolution {
+        resolution::evaluate_with_provenance(expression, self.context())
     }
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.

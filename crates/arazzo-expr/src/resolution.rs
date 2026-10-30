@@ -6,9 +6,154 @@ use serde_json::Value;
 
 use crate::runtime_expression::RuntimeExpressionForm;
 use crate::{
-    get_header_case_insensitive, EvalContext, ExpressionWarning, ParsedRuntimeExpression,
-    RuntimeExpressionNamespace, RuntimeExpressionPointer,
+    body_pointer_migration_hint, get_header_case_insensitive, parse_runtime_expression,
+    EvalContext, ExpressionWarning, ParsedRuntimeExpression, RuntimeExpressionNamespace,
+    RuntimeExpressionPointer,
 };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValueResolution {
+    pub value: Value,
+    pub warnings: Vec<ExpressionWarning>,
+    pub expressions: Vec<ExpressionResolution>,
+    pub syntax_error: bool,
+}
+
+impl ValueResolution {
+    pub(crate) fn into_public(self) -> (Value, Vec<ExpressionWarning>) {
+        (self.value, self.warnings)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpressionResolution {
+    pub expression: String,
+    pub namespace: RuntimeExpressionNamespace,
+    pub reference: Option<StoredValueReference>,
+    pub missing: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoredValueReference {
+    Input {
+        name: String,
+        pointer: Option<String>,
+    },
+    Output {
+        name: String,
+        pointer: Option<String>,
+    },
+    StepOutput {
+        step_id: String,
+        name: String,
+        pointer: Option<String>,
+    },
+    WorkflowInput {
+        workflow_id: String,
+        name: String,
+        pointer: Option<String>,
+    },
+    WorkflowOutput {
+        workflow_id: String,
+        name: String,
+        pointer: Option<String>,
+    },
+}
+
+impl StoredValueReference {
+    fn from_parsed(expression: &ParsedRuntimeExpression<'_>) -> Option<Self> {
+        use RuntimeExpressionForm as Form;
+        use RuntimeExpressionNamespace as Namespace;
+
+        let owned_pointer = |pointer: Option<RuntimeExpressionPointer<'_>>| {
+            pointer.map(|pointer| pointer.raw().to_owned())
+        };
+        match (expression.namespace(), expression.form()) {
+            (Namespace::Inputs, Form::Named(name, pointer)) => Some(Self::Input {
+                name: (*name).to_owned(),
+                pointer: owned_pointer(*pointer),
+            }),
+            (Namespace::Outputs, Form::Named(name, pointer)) => Some(Self::Output {
+                name: (*name).to_owned(),
+                pointer: owned_pointer(*pointer),
+            }),
+            (Namespace::Steps, Form::Step(reference)) => Some(Self::StepOutput {
+                step_id: reference.step_id().to_owned(),
+                name: reference.output_name().to_owned(),
+                pointer: owned_pointer(reference.pointer()),
+            }),
+            (
+                Namespace::Workflows,
+                Form::Workflow {
+                    id,
+                    field,
+                    name,
+                    pointer,
+                },
+            ) => {
+                let workflow_id = (*id).to_owned();
+                let name = (*name).to_owned();
+                let pointer = owned_pointer(*pointer);
+                Some(if field.eq_ignore_ascii_case("inputs") {
+                    Self::WorkflowInput {
+                        workflow_id,
+                        name,
+                        pointer,
+                    }
+                } else {
+                    Self::WorkflowOutput {
+                        workflow_id,
+                        name,
+                        pointer,
+                    }
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn evaluate_with_provenance(expression: &str, context: &EvalContext) -> ValueResolution {
+    match parse_runtime_expression(expression) {
+        Ok(parsed) => resolve_parsed_with_provenance(&parsed, context),
+        Err(error) => {
+            let mut message = error.to_string();
+            if let Some(hint) = body_pointer_migration_hint(expression, &error) {
+                message.push_str("; ");
+                message.push_str(&hint);
+            }
+            ValueResolution {
+                value: Value::Null,
+                warnings: vec![ExpressionWarning {
+                    expression: expression.to_owned(),
+                    message,
+                }],
+                expressions: Vec::new(),
+                syntax_error: true,
+            }
+        }
+    }
+}
+
+pub(crate) fn resolve_parsed_with_provenance(
+    expression: &ParsedRuntimeExpression<'_>,
+    context: &EvalContext,
+) -> ValueResolution {
+    let resolution = resolve_parsed(expression, context);
+    let occurrence = ExpressionResolution {
+        expression: expression.raw().to_owned(),
+        namespace: expression.namespace(),
+        reference: StoredValueReference::from_parsed(expression),
+        missing: matches!(resolution.value, ResolvedValue::Missing),
+    };
+    let (value, warnings) = resolution.into_public();
+    ValueResolution {
+        value,
+        warnings,
+        expressions: vec![occurrence],
+        syntax_error: false,
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ResolvedValue {

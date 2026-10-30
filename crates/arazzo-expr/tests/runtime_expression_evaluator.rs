@@ -220,13 +220,77 @@ fn canonical_routes_have_one_parse_boundary() {
         .split("/// Evaluate an expression and convert")
         .next()
         .unwrap();
-    assert_eq!(standalone.matches("parse_runtime_expression(").count(), 1);
-    assert_eq!(standalone.matches("resolution::resolve_parsed(").count(), 1);
+    assert!(!standalone.contains("parse_runtime_expression("));
+    assert!(!standalone.contains("resolution::resolve_parsed("));
+    assert_eq!(
+        standalone.matches("self.evaluate_with_provenance(").count(),
+        1
+    );
+    assert_eq!(
+        standalone
+            .matches("resolution::evaluate_with_provenance(")
+            .count(),
+        1
+    );
+    let value_renderer = facade
+        .split("pub fn resolve_value_with_diagnostics")
+        .nth(1)
+        .unwrap()
+        .split("/// Evaluate an expression and return")
+        .next()
+        .unwrap();
+    assert!(!value_renderer.contains("parse_runtime_expression("));
+    assert_eq!(
+        value_renderer
+            .matches("self.resolve_value_with_provenance(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        value_renderer
+            .matches("interpolation::resolve_value(")
+            .count(),
+        1
+    );
     let resolver = include_str!("../src/resolution.rs")
         .split("#[cfg(test)]")
         .next()
         .unwrap();
-    assert!(!resolver.contains("parse_runtime_expression("));
+    assert_eq!(resolver.matches("parse_runtime_expression(").count(), 1);
+    let expression_resolution = resolver
+        .split("pub(crate) fn evaluate_with_provenance")
+        .nth(1)
+        .unwrap()
+        .split("pub(crate) fn resolve_parsed_with_provenance")
+        .next()
+        .unwrap();
+    assert_eq!(
+        expression_resolution
+            .matches("parse_runtime_expression(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        expression_resolution
+            .matches("resolve_parsed_with_provenance(")
+            .count(),
+        1
+    );
+    let parsed_resolution = resolver
+        .split("pub(crate) fn resolve_parsed_with_provenance")
+        .nth(1)
+        .unwrap()
+        .split("#[derive")
+        .next()
+        .unwrap();
+    assert!(!parsed_resolution.contains("parse_runtime_expression("));
+    assert_eq!(parsed_resolution.matches("resolve_parsed(").count(), 1);
+    let interpolation = include_str!("../src/interpolation.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap();
+    assert!(!interpolation.contains("parse_runtime_expression("));
+    assert_eq!(interpolation.matches("classify_value_string(").count(), 1);
     let condition = include_str!("../src/simple_condition.rs");
     assert_eq!(
         condition
