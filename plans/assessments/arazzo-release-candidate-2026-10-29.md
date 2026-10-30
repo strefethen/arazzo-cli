@@ -127,7 +127,12 @@ before release. No tag, publication or hourly resumption is authorized.
   Live refusal is reviewed and closed in
   [ac-fd849](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fd849), local
   [c5639bd](https://github.com/strefethen/arazzo-cli/commit/c5639bd74362fcfbc35eb6d7fe0a952d5e60055c).
-  Dry-run presentation and the final combined system proof still gate full L4 clearance.
+  Dry-run presentation reached review; replacement-target selection required
+  correction, which now passes verification. The unrepresentable synthetic
+  querystring policy remains gated on
+  [ac-04969](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-04969).
+  Combined system tests pass, but cumulative independent re-review and final
+  plan disposition are still required before full L4 clearance.
 - Tokio 1.51.6 / macros 2.7.1 is reviewed and closed in
   [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
   [5d91f2b](https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5).
