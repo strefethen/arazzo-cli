@@ -1,26 +1,46 @@
 use super::catalog::{CaseSpec, ControlKind, HarnessError, Stall};
 use super::execution_oracle::{terminal, OracleReport};
 use super::protocol::{ControlClient, Identity, ReadyReceipt, Snapshot};
-use super::worker::{complete, TimedExecution, CLEANUP_BUDGET, SETUP_BUDGET};
+use super::worker::{
+    complete, CleanupBudget, ObservedExecution, TimedExecution, CLEANUP_BUDGET, SETUP_BUDGET,
+};
 use arazzo_runtime::{Engine, ExecutionHandle};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const API_BUDGET: Duration = Duration::from_millis(900);
+
+struct ReadinessState {
+    started: Instant,
+    stopped: Arc<AtomicBool>,
+}
 
 fn barrier_work(
     case: &CaseSpec,
     control: &ControlClient,
     identity: &Identity,
+    deadline: Instant,
+    stopped: Arc<AtomicBool>,
 ) -> JoinHandle<Result<ReadyReceipt, HarnessError>> {
     let control = control.clone();
     let identity = identity.clone();
     let mut expected = case.expected.required_paths.clone();
     expected.sort();
-    let deadline = Instant::now() + SETUP_BUDGET;
     tokio::task::spawn_blocking(move || loop {
+        if stopped.load(Ordering::Acquire) {
+            return Err(HarnessError::new(
+                "readiness",
+                "barrier_stopped",
+                "readiness phase ended",
+            ));
+        }
         if Instant::now() >= deadline {
             return Err(HarnessError::new(
                 "readiness",
@@ -62,28 +82,107 @@ fn barrier_work(
     })
 }
 
+async fn failed_readiness(
+    error: HarnessError,
+    completion: &mut Pin<Box<impl Future<Output = ObservedExecution>>>,
+    completed: Option<ObservedExecution>,
+    work: Option<JoinHandle<Result<ReadyReceipt, HarnessError>>>,
+    state: &ReadinessState,
+    cancel: CancellationToken,
+    cleanup_budget: &mut CleanupBudget,
+) -> HarnessError {
+    let cleanup_start = Instant::now();
+    let cleanup_deadline = cleanup_budget.begin();
+    state.stopped.store(true, Ordering::Release);
+    cancel.cancel();
+    let readiness_elapsed = state.started.elapsed();
+    let mut work = work;
+    let drain = async {
+        match completed {
+            Some(actual) => actual,
+            None => completion.await,
+        }
+    };
+    let join = async {
+        match work.as_mut() {
+            Some(work) => work
+                .await
+                .map_err(|e| HarnessError::new("cleanup", "readiness_join", e))
+                .and_then(|result| result.map(Some)),
+            None => Ok(None),
+        }
+    };
+    let cleanup =
+        tokio::time::timeout_at(cleanup_deadline.into(), async { tokio::join!(drain, join) }).await;
+    let (actual, joined) = match cleanup {
+        Ok(result) => result,
+        Err(timeout) => {
+            eprintln!(
+                "{}",
+                json!({"error":HarnessError::new("cleanup", "cleanup_deadline", json!({"cause":error,"timeout":timeout.to_string(),"readiness_elapsed_ns":readiness_elapsed.as_nanos(),"cleanup_budget_ms":CLEANUP_BUDGET.as_millis()}))})
+            );
+            std::process::exit(124);
+        }
+    };
+    let stage = error.stage.clone();
+    let code = error.code.clone();
+    HarnessError::new(
+        &stage,
+        &code,
+        json!({
+            "cause":error,
+            "readiness_elapsed_ns":readiness_elapsed.as_nanos(),
+            "cleanup_elapsed_ns":cleanup_start.elapsed().as_nanos(),
+            "barrier_cleanup":joined,
+            "completion_terminal":terminal(&actual),
+            "completion_error":actual.outputs.as_ref().err().map(|error|json!({"code":error.code(),"message":error.message})),
+            "completion_events":actual.events.len()
+        }),
+    )
+}
+
 async fn execute(
     handle: ExecutionHandle,
     case: &CaseSpec,
     control: &ControlClient,
     identity: &Identity,
     watchdog_start: Option<Instant>,
+    cleanup: &mut CleanupBudget,
 ) -> Result<TimedExecution, HarnessError> {
     let cancel = handle.cancel_token().clone();
     let mut completion = Box::pin(complete(handle, case.settings.handle_mode));
-    let mut barrier = barrier_work(case, control, identity);
+    let started = Instant::now();
+    let deadline = started + SETUP_BUDGET;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let mut barrier = barrier_work(case, control, identity, deadline, Arc::clone(&stopped));
+    let state = ReadinessState { started, stopped };
+    let mut completed = None;
+    let mut pending = true;
     let readiness = tokio::select! {
         biased;
-        actual = &mut completion => {
-            let joined = barrier.await.map_err(|e| HarnessError::new("readiness", "join", e))?;
-            return Err(HarnessError::new("readiness", "early_completion", json!({"terminal":terminal(&actual),"barrier":joined})));
+        _ = tokio::time::sleep_until(deadline.into()) => {
+            Err(HarnessError::new("readiness", "barrier_deadline", "absolute five-second stall deadline expired"))
         }
-        joined = &mut barrier => joined.map_err(|e| HarnessError::new("readiness", "join", e))?,
+        actual = &mut completion => {
+            completed = Some(actual);
+            Err(HarnessError::new("readiness", "early_completion", "selected completion finished before stall barrier"))
+        }
+        joined = &mut barrier => {
+            pending = false;
+            joined.map_err(|e| HarnessError::new("readiness", "join", e)).and_then(|result|result)
+        }
     };
     if let Err(error) = readiness {
-        cancel.cancel();
-        let _ = tokio::time::timeout(CLEANUP_BUDGET, &mut completion).await;
-        return Err(error);
+        return Err(failed_readiness(
+            error,
+            &mut completion,
+            completed,
+            if pending { Some(barrier) } else { None },
+            &state,
+            cancel,
+            cleanup,
+        )
+        .await);
     }
     let start = watchdog_start.unwrap_or_else(Instant::now);
     if watchdog_start.is_none() {
@@ -100,21 +199,45 @@ async fn execute(
     Ok(TimedExecution { elapsed_ns, actual })
 }
 
+#[allow(dead_code)]
 pub(crate) async fn execute_cancelled(
     engine: &Engine,
     case: &CaseSpec,
     control: &ControlClient,
     identity: &Identity,
 ) -> Result<TimedExecution, HarnessError> {
-    let handle = engine.execute(&case.workflow_id, BTreeMap::new());
-    execute(handle, case, control, identity, None).await
+    let mut cleanup = CleanupBudget::default();
+    execute_cancelled_with_cleanup(engine, case, control, identity, &mut cleanup).await
 }
 
+pub(crate) async fn execute_cancelled_with_cleanup(
+    engine: &Engine,
+    case: &CaseSpec,
+    control: &ControlClient,
+    identity: &Identity,
+    cleanup: &mut CleanupBudget,
+) -> Result<TimedExecution, HarnessError> {
+    let handle = engine.execute(&case.workflow_id, BTreeMap::new());
+    execute(handle, case, control, identity, None, cleanup).await
+}
+
+#[allow(dead_code)]
 pub(crate) async fn execute_watchdog(
     engine: &Engine,
     case: &CaseSpec,
     control: &ControlClient,
     identity: &Identity,
+) -> Result<TimedExecution, HarnessError> {
+    let mut cleanup = CleanupBudget::default();
+    execute_watchdog_with_cleanup(engine, case, control, identity, &mut cleanup).await
+}
+
+pub(crate) async fn execute_watchdog_with_cleanup(
+    engine: &Engine,
+    case: &CaseSpec,
+    control: &ControlClient,
+    identity: &Identity,
+    cleanup: &mut CleanupBudget,
 ) -> Result<TimedExecution, HarnessError> {
     let start = Instant::now();
     let handle = engine.execute_with_timeout(
@@ -122,7 +245,7 @@ pub(crate) async fn execute_watchdog(
         BTreeMap::new(),
         Duration::from_millis(case.dimensions.watchdog_timeout_ms),
     );
-    execute(handle, case, control, identity, Some(start)).await
+    execute(handle, case, control, identity, Some(start), cleanup).await
 }
 
 pub(crate) fn check_cancelled(

@@ -22,6 +22,19 @@ pub(crate) const EXECUTION_BUDGET: Duration = Duration::from_secs(60);
 pub(crate) const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 pub(crate) const WHOLE_BUDGET: Duration = Duration::from_secs(75);
 
+#[derive(Default)]
+pub(crate) struct CleanupBudget {
+    deadline: Option<Instant>,
+}
+
+impl CleanupBudget {
+    pub(crate) fn begin(&mut self) -> Instant {
+        *self
+            .deadline
+            .get_or_insert_with(|| Instant::now() + CLEANUP_BUDGET)
+    }
+}
+
 pub(crate) struct WorkerOptions {
     pub case_id: String,
     pub fixture_dir: PathBuf,
@@ -91,6 +104,11 @@ impl Watchdog {
             tx,
             join: Some(join),
         })
+    }
+    fn deadline(&self, deadline: Instant) -> Result<(), HarnessError> {
+        self.tx
+            .send(WatchdogMessage::Phase(Duration::ZERO, deadline))
+            .map_err(|e| HarnessError::new("worker", "watchdog_channel", e))
     }
     fn phase(&self, duration: Duration) -> Result<(), HarnessError> {
         self.tx
@@ -177,10 +195,25 @@ pub(crate) async fn execute_case(
     control: &ControlClient,
     identity: &Identity,
 ) -> Result<TimedExecution, HarnessError> {
+    let mut cleanup = CleanupBudget::default();
+    execute_case_with_cleanup(engine, case, control, identity, &mut cleanup).await
+}
+
+async fn execute_case_with_cleanup(
+    engine: &Engine,
+    case: &CaseSpec,
+    control: &ControlClient,
+    identity: &Identity,
+    cleanup: &mut CleanupBudget,
+) -> Result<TimedExecution, HarnessError> {
     if case.control == Some(ControlKind::Watchdog) {
-        super::cancellation::execute_watchdog(engine, case, control, identity).await
+        super::cancellation::execute_watchdog_with_cleanup(engine, case, control, identity, cleanup)
+            .await
     } else if case.family == Family::Cancellation {
-        super::cancellation::execute_cancelled(engine, case, control, identity).await
+        super::cancellation::execute_cancelled_with_cleanup(
+            engine, case, control, identity, cleanup,
+        )
+        .await
     } else {
         execute_with_budget(engine, case, EXECUTION_BUDGET).await
     }
@@ -298,6 +331,7 @@ pub(crate) fn run_worker_with_watchdog(
     let control = ControlClient::new(options.control_endpoint);
     let mut identity = None;
     let mut rt = None;
+    let mut cleanup = CleanupBudget::default();
     let result = (|| -> Result<(), HarnessError> {
         validate_invocation(&options.invocation_id)?;
         let case = catalog::case(&options.case_id)?;
@@ -418,7 +452,13 @@ pub(crate) fn run_worker_with_watchdog(
                 }
             };
             watchdog.phase(EXECUTION_BUDGET)?;
-            let timed = runtime.block_on(execute_case(&engine, &case, &control, id))?;
+            let timed = runtime.block_on(execute_case_with_cleanup(
+                &engine,
+                &case,
+                &control,
+                id,
+                &mut cleanup,
+            ))?;
             record.elapsed_ns = Some(timed.elapsed_ns);
             record_actual(&mut record, &dir, &timed.actual)?;
             let snapshot = control.snapshot(id)?;
@@ -446,9 +486,13 @@ pub(crate) fn run_worker_with_watchdog(
         Ok(())
     })();
     if let Err(error) = result {
+        if cleanup.deadline.is_some() {
+            eprintln!("{}", json!({"error":error}));
+        }
         record.failure = Some(error);
     }
-    watchdog.phase(CLEANUP_BUDGET)?;
+    let cleanup_deadline = cleanup.begin();
+    watchdog.deadline(cleanup_deadline)?;
     if session {
         if let Some(id) = &identity {
             if record.service.is_none() {
@@ -472,7 +516,7 @@ pub(crate) fn run_worker_with_watchdog(
         }
     }
     if let Some(runtime) = rt {
-        runtime.shutdown_timeout(CLEANUP_BUDGET);
+        runtime.shutdown_timeout(cleanup_deadline.saturating_duration_since(Instant::now()));
     }
     record.cleanup.runtime_shutdown_bounded = true;
     if record.failure.is_none() && record.oracle.passed && record.cleanup.release_ok {

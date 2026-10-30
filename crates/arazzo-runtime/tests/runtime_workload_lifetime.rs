@@ -233,6 +233,7 @@ fn proxy(
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut calls = Vec::new();
         let mut readiness = 0;
+        let started = Instant::now();
         while Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
                 Ok(v) => v,
@@ -269,8 +270,16 @@ fn proxy(
             upstream.read_to_end(&mut reply).unwrap();
             let mut value: serde_json::Value =
                 protocol::decode_frame(&reply, protocol::RESPONSE_CAP).unwrap();
-            if op == "ready" && readiness > 1 {
+            if op == "ready" && (readiness > 1 || fault == "slow_late") {
                 match fault {
+                    "slow_worker_release" => {
+                        std::thread::park_timeout(Duration::from_secs(4));
+                        value["payload"]["ready"] = json!(readiness > 2);
+                    }
+                    "slow_late" => {
+                        std::thread::park_timeout(Duration::from_secs(4));
+                        value["payload"]["ready"] = json!(readiness > 1);
+                    }
                     "identity" => value["identity"]["invocation_id"] = json!("stale"),
                     "omitted" => {
                         value["payload"]["ready"] = json!(true);
@@ -287,6 +296,13 @@ fn proxy(
                 }
             }
             if op == "release" {
+                if fault == "slow_worker_release" {
+                    println!(
+                        "delayed_release_started_ns={}",
+                        started.elapsed().as_nanos()
+                    );
+                    std::thread::park_timeout(Duration::from_secs(4));
+                }
                 match fault {
                     "release_refused" => {
                         value = json!({"op":"release","ok":false,"code":"release_failed","message":"injected release refusal"})
@@ -449,4 +465,235 @@ fn write_prepared(dir: &std::path::Path, case: &catalog::CaseSpec, endpoint: &st
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
+}
+
+fn slow_readiness_failure(watchdog: bool) {
+    let rig = Rig::new();
+    let case = catalog::case(if watchdog {
+        "control_watchdog"
+    } else {
+        "cancellation_w1_headers_collect"
+    })
+    .unwrap();
+    let id = rig.identity(&case);
+    rig.client().begin(&id, Duration::from_secs(70)).unwrap();
+    let (endpoint, join) = proxy(rig.ready.control_endpoint, "slow_late");
+    let control = protocol::ControlClient::new(endpoint);
+    let dir = temporary();
+    std::fs::create_dir(&dir).unwrap();
+    for (file, bytes) in fixtures::generated_files(&case, &rig.ready.data_endpoint).unwrap() {
+        std::fs::write(dir.join(file.path), bytes).unwrap();
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let entered = rt.enter();
+    let mut client = arazzo_runtime::ClientConfig {
+        timeout: Duration::from_secs(30),
+        rate_limit: arazzo_runtime::RateLimitConfig {
+            requests_per_second: 0.0,
+            burst: 20,
+        },
+        ..Default::default()
+    };
+    client.default_headers.insert(
+        case.settings.invocation_header.clone(),
+        id.invocation_id.clone(),
+    );
+    let engine = arazzo_runtime::EngineBuilder::new(
+        serde_json::from_value(fixtures::root_document(&case)).unwrap(),
+    )
+    .source_base_dir(&dir)
+    .client_config(client)
+    .parallel(true)
+    .build()
+    .unwrap();
+    drop(entered);
+    let started = Instant::now();
+    let error = rt
+        .block_on(async {
+            if watchdog {
+                cancellation::execute_watchdog(&engine, &case, &control, &id).await
+            } else {
+                cancellation::execute_cancelled(&engine, &case, &control, &id).await
+            }
+        })
+        .err()
+        .unwrap();
+    let elapsed = started.elapsed();
+    let details: serde_json::Value = serde_json::from_str(&error.message).unwrap();
+    let readiness_ns = details["readiness_elapsed_ns"].as_u64().unwrap();
+    let cleanup_ns = details["cleanup_elapsed_ns"].as_u64().unwrap();
+    assert_eq!(error.stage, "readiness");
+    assert!(readiness_ns < 5_500_000_000, "{details}");
+    assert!(cleanup_ns < 5_000_000_000, "{details}");
+    assert!(elapsed < Duration::from_secs(10));
+    if watchdog {
+        assert_eq!(error.code, "early_completion");
+        assert!(readiness_ns < 1_000_000_000, "{details}");
+        assert_eq!(details["completion_terminal"], "ExecutionTimeout");
+        assert_eq!(details["barrier_cleanup"]["Err"]["code"], "barrier_stopped");
+    } else {
+        assert_eq!(error.code, "barrier_deadline");
+        assert!(readiness_ns >= 5_000_000_000, "{details}");
+        assert!(cleanup_ns >= 2_000_000_000, "{details}");
+        assert_eq!(details["completion_terminal"], "ExecutionCancelled");
+        assert_eq!(
+            details["barrier_cleanup"]["Err"]["code"],
+            "barrier_deadline"
+        );
+    }
+    let snapshot = rig.client().snapshot(&id).unwrap();
+    assert_eq!(snapshot.active_connections, 1);
+    assert_eq!(snapshot.requests.len(), 1);
+    assert_eq!(snapshot.requests[0].path, "/s0/op0");
+    assert!(!snapshot.requests[0].complete);
+    assert!(rig
+        .client()
+        .begin(&rig.identity(&case), Duration::from_secs(5))
+        .is_err());
+    control.release(&id).unwrap();
+    let calls = join.join().unwrap();
+    assert_eq!(
+        calls.iter().filter(|op| *op == "ready").count(),
+        if watchdog { 1 } else { 2 }
+    );
+    assert_eq!(calls.last().unwrap(), "release");
+    drop(engine);
+    rt.shutdown_timeout(Duration::from_secs(5));
+    std::fs::remove_dir_all(dir).unwrap();
+    println!(
+        "slow_readiness_regression={}",
+        json!({
+            "watchdog": watchdog,
+            "readiness_elapsed_ns": readiness_ns,
+            "cleanup_elapsed_ns": cleanup_ns,
+            "wall_elapsed_ns": elapsed.as_nanos(),
+            "failure": error,
+            "control_calls": calls,
+            "released_after_completion": true,
+            "owned_control_joined": true
+        })
+    );
+}
+
+#[test]
+fn slow_subsequent_readiness_poll_cancels_at_absolute_deadline_then_joins_cleanup() {
+    slow_readiness_failure(false);
+}
+
+#[test]
+fn early_completion_ends_readiness_without_waiting_for_the_blocking_poll() {
+    slow_readiness_failure(true);
+}
+
+#[test]
+fn combined_cleanup_worker_child() {
+    let Ok(directory) = std::env::var("ARAZZO_SHARED_CLEANUP_CHILD_DIR") else {
+        return;
+    };
+    let dir = PathBuf::from(directory);
+    let rig = Rig::new();
+    std::fs::write(
+        dir.join("service-ready.json"),
+        serde_json::to_vec(&rig.ready).unwrap(),
+    )
+    .unwrap();
+    let case = catalog::case("cancellation_w1_headers_collect").unwrap();
+    std::fs::create_dir_all(dir.join("fixtures")).unwrap();
+    write_prepared(&dir.join("fixtures"), &case, &rig.ready.data_endpoint);
+    let (endpoint, _proxy) = proxy(rig.ready.control_endpoint, "slow_worker_release");
+    let _record = worker::run_worker(worker::WorkerOptions {
+        case_id: case.case_id.clone(),
+        fixture_dir: dir.join("fixtures"),
+        data_endpoint: rig.ready.data_endpoint.clone(),
+        control_endpoint: endpoint,
+        invocation_id: "aggregate_cleanup".into(),
+        role: records::InvocationRole::Verification,
+        settings: case.settings,
+        evidence_dir: dir.join("evidence"),
+    })
+    .unwrap();
+    panic!("aggregate cleanup watchdog did not terminate the worker");
+}
+
+struct OwnedRegressionChild(Option<std::process::Child>);
+
+impl Drop for OwnedRegressionChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            if child.try_wait().unwrap().is_none() {
+                child.kill().unwrap();
+                child.wait().unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn blocking_release_cannot_renew_the_shared_join_drain_and_teardown_deadline() {
+    let dir = temporary();
+    std::fs::create_dir(&dir).unwrap();
+    let started = Instant::now();
+    let mut owned = OwnedRegressionChild(Some(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "combined_cleanup_worker_child", "--nocapture"])
+            .env("ARAZZO_SHARED_CLEANUP_CHILD_DIR", &dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let deadline = started + Duration::from_secs(12);
+    loop {
+        if owned.0.as_mut().unwrap().try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "driver deadline reached");
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
+    let output = owned.0.take().unwrap().wait_with_output().unwrap();
+    let elapsed = started.elapsed();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(124), "{stdout}\n{stderr}");
+    assert!(elapsed >= Duration::from_millis(9500), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(11500), "{elapsed:?}");
+    assert!(stdout.contains("delayed_release_started_ns="), "{stdout}");
+    assert!(stderr.contains("barrier_deadline"), "{stderr}");
+    assert!(!stdout.contains("\"sample_eligible\":true"), "{stdout}");
+    let ready: protocol::ServiceReadiness =
+        serde_json::from_slice(&std::fs::read(dir.join("service-ready.json")).unwrap()).unwrap();
+    assert!(std::net::TcpStream::connect_timeout(
+        &ready.control_endpoint,
+        Duration::from_millis(100)
+    )
+    .is_err());
+    let data_endpoint = ready
+        .data_endpoint
+        .strip_prefix("http://")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        std::net::TcpStream::connect_timeout(&data_endpoint, Duration::from_millis(100)).is_err()
+    );
+    assert!(dir
+        .join("evidence/aggregate_cleanup/preflight.json")
+        .is_file());
+    println!(
+        "combined_cleanup_regression={}",
+        json!({
+            "exit":output.status.code(),
+            "wall_elapsed_ns":elapsed.as_nanos(),
+            "worker_reaped":true,
+            "service_sockets_closed":true,
+            "partial_preflight_retained":true,
+            "stdout":stdout,
+            "stderr":stderr
+        })
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
