@@ -1643,3 +1643,45 @@ prepare/service commands in eight new private example/test files. Reviewed sourc
 - Fresh upstream inspection showed earlier accumulated commits were already
   published. The only new source push was this reviewed candidate. Existing paused
   decisions, Fable's Kafka/AsyncAPI lane and the schema walker remain untouched.
+
+
+## Delivered — cycle 32: checked core runtime measurements
+
+[ac-4a221](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4a221) delivers one-invocation
+workers for source construction, expression-heavy execution and DAG workflows.
+Reviewed source: [c3bf3f8](https://github.com/strefethen/arazzo-cli/commit/c3bf3f8bec21fc7d3c0f286ad21ee524139b07aa)
+(pushed). This is development measurement capability, with no speedup, OS-resource
+or regression-threshold claim.
+
+- Worker lifetime/timing, record encoding/exit classification and semantic oracles
+  have separate private Rust owners. Main dispatches commands. Production APIs,
+  dependencies, the existing fixture/service contracts, Fable's lane and all nine
+  paused generator/MCP source hashes remain unchanged.
+- Independent executable QA checked all 28 positive cases and five controls,
+  complete outputs/events, 990 qualified source operations and 72,212 dependency
+  edges. Extra roles and empty-worker are ineligible. Negative and malformed runs
+  cannot become positive samples. Owned processes were reaped; service listeners
+  closed. Source timing excludes the routing probe; workflow timing ends at public
+  handle completion, with no private task-join claim.
+- Required formatting, check and strict workspace Clippy passed in the existing
+  clean-base verification checkout with six exact candidate hashes. Workspace tests:
+  1,726 top-level passed, 0 failed and 35 existing ignores (nested child summaries
+  excluded); 19 new tests passed in debug and release. All three named regression
+  consumers also passed in release mode. No test/golden was rebaselined.
+- Fresh-context Astra review passed round 1 with no findings. The stalled-control
+  probe hit its five-second setup watchdog and exited without a valid record,
+  retaining preflight. Independent review confirmed this follows the contract;
+  a separate refused connection emits an explicit invalid record. No acceptance,
+  test, design or fallback policy changed.
+- Evidence and immutable contract/candidate binding: `/private/tmp/arazzo-cycle32/`.
+  The delivery log explains before/after behavior, the two clocks and responsibility
+  boundaries. Desktop/mobile QA, link/history and script/style preservation checks
+  cover this prose-only bookkeeping, which is source-review exempt under SDLC.
+- Midpoint check: the accepted plan remains Decomposed. The remaining serial tickets
+  [ac-a34d5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a34d5) (bodies/retries/cancellation)
+  and [ac-0d779](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0d779) (full executable proof)
+  still cover the unit's system success condition. Re-ground callable seams and
+  reservations at the next kickoff. This slice does not close the whole unit.
+- This single outcome stayed within the 01:05–04:05 UTC bound and used one of two
+  allowed review rounds. Fresh upstream inspection permits the new reviewed range;
+  existing pauses remain intact. No release or deployment occurred.
