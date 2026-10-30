@@ -81,7 +81,10 @@ impl Engine {
                 message_receivers: Arc::default(),
             });
 
-            let result = engine.execute_inner(&ctx, &wf_id, inputs, 0).await;
+            let result = engine
+                .execute_inner(&ctx, &wf_id, inputs.into(), 0)
+                .await
+                .map(|outputs| outputs.values);
 
             // Drop event_tx (held inside ctx) BEFORE sending result.
             // This guarantees collect() drains all events before getting the result.
@@ -195,8 +198,9 @@ impl Engine {
             });
 
             let result = engine
-                .execute_step_inner(&ctx, &wf_id, &s_id, inputs, no_deps)
-                .await;
+                .execute_step_inner(&ctx, &wf_id, &s_id, inputs.into(), no_deps)
+                .await
+                .map(|outputs| outputs.values);
 
             drop(ctx);
             let _ = result_tx.send(result);
@@ -211,10 +215,9 @@ impl Engine {
         exec_ctx: &'a ExecutionContext,
         workflow_id: &'a str,
         step_id: &'a str,
-        inputs: BTreeMap<String, Value>,
+        inputs: ProvenancedValues,
         no_deps: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Value>, RuntimeError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<ProvenancedValues, RuntimeError>> + Send + 'a>> {
         Box::pin(async move {
             exec_ctx.check_cancelled()?;
             let workflow = self.get_workflow(workflow_id).cloned().ok_or_else(|| {
@@ -404,7 +407,7 @@ impl Engine {
                         inputs,
                     } => {
                         exec_ctx.check_cancelled()?;
-                        let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
+                        let inputs = inputs.unwrap_or_else(|| vars.input_values());
                         return self.execute_inner(exec_ctx, &workflow_id, inputs, 1).await;
                     }
                     FlowDecision::Error(err) => {
@@ -414,21 +417,20 @@ impl Engine {
             }
 
             exec_ctx.check_cancelled()?;
-            Ok(vars.step_outputs(step_id))
+            Ok(vars.step_values(step_id))
         })
     }
 
     /// Core recursive execution loop. Uses `Box::pin` for async recursion
     /// (GotoWorkflow and sub-workflow calls recurse back into this method).
     #[allow(clippy::type_complexity)]
-    fn execute_inner<'a>(
+    pub(super) fn execute_inner<'a>(
         &'a self,
         exec_ctx: &'a ExecutionContext,
         workflow_id: &'a str,
-        inputs: BTreeMap<String, Value>,
+        inputs: ProvenancedValues,
         depth: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Value>, RuntimeError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<ProvenancedValues, RuntimeError>> + Send + 'a>> {
         Box::pin(async move {
             exec_ctx.check_cancelled()?;
             if depth >= MAX_CALL_DEPTH {
@@ -596,7 +598,7 @@ impl Engine {
                         inputs,
                     } => {
                         exec_ctx.check_cancelled()?;
-                        let inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
+                        let inputs = inputs.unwrap_or_else(|| vars.input_values());
                         let result = self
                             .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
                             .await;
@@ -651,7 +653,7 @@ impl Engine {
                 exec_ctx,
                 ObserverEvent::WorkflowCompleted {
                     workflow_id: workflow_id.to_string(),
-                    outputs: workflow_outputs.clone(),
+                    outputs: workflow_outputs.values.clone(),
                     duration: workflow_start.elapsed(),
                     error: None,
                 },
@@ -696,7 +698,7 @@ impl Engine {
             .and_then(|idx| self.inner.index.spec.workflows.get(*idx))
     }
 
-    async fn execute_step_with_result(
+    pub(super) async fn execute_step_with_result(
         &self,
         exec_ctx: &ExecutionContext,
         workflow_id: &str,
@@ -763,9 +765,7 @@ impl Engine {
                 .send(EngineEvent::DryRunRequest(req))
                 .await;
         }
-        for (name, value) in &execution.outputs {
-            vars.set_step_output(&step.step_id, name, value.clone());
-        }
+        vars.merge_step_outputs(&step.step_id, execution.outputs.clone());
         Ok(execution)
     }
 
@@ -799,7 +799,7 @@ impl Engine {
                 inputs,
             } => {
                 exec_ctx.check_cancelled()?;
-                let sub_inputs = inputs.unwrap_or_else(|| vars.inputs.clone());
+                let sub_inputs = inputs.unwrap_or_else(|| vars.input_values());
                 self.emit_observer_event(
                     exec_ctx,
                     ObserverEvent::SubWorkflowStarted {
@@ -831,7 +831,12 @@ impl Engine {
                 // Register completed reference state for $workflows.<id>.* —
                 // the "context is returned" half of the spec sentence. The
                 // retried step's own outputs are not touched.
-                vars.register_workflow_state(&target, sub_inputs, outputs);
+                let omissions = super::value_provenance::optional_input_omissions(
+                    self.get_workflow(&target)
+                        .and_then(|workflow| workflow.inputs.as_ref()),
+                    &sub_inputs.values,
+                );
+                vars.register_workflow_values(&target, sub_inputs, outputs, omissions);
                 Ok(())
             }
             RetryReference::Step { step_id } => {
@@ -889,16 +894,20 @@ impl Engine {
     ) -> Result<StepExecution, RuntimeError> {
         exec_ctx.check_cancelled()?;
         let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
-        let mut sub_inputs = BTreeMap::new();
+        let mut sub_inputs = ProvenancedValues::default();
         let mut parameter_warnings = Vec::new();
         for (index, param) in step.parameters.iter().enumerate() {
-            let (value, warnings) = resolve_value_source(&param.value, &eval);
+            let resolution =
+                super::payload::resolve_value_source_with_provenance(&param.value, &eval);
+            let metadata = vars.value_provenance(&resolution, &ProvenancedValues::default(), None);
+            let value = resolution.value;
+            let warnings = resolution.warnings;
             parameter_warnings.extend(
                 warnings
                     .into_iter()
                     .map(|warning| format!("parameters[{index}].value: {warning}")),
             );
-            sub_inputs.insert(param.name.clone(), value);
+            sub_inputs.insert(param.name.clone(), value, metadata);
         }
         // Release the shared steps snapshot before tentative publication.
         drop(eval);
@@ -923,7 +932,12 @@ impl Engine {
         })?;
 
         // Register completed sub-workflow state for $workflows.<id>.* expressions.
-        vars.register_workflow_state(wf_id, sub_inputs, outputs.clone());
+        let omissions = super::value_provenance::optional_input_omissions(
+            self.get_workflow(wf_id)
+                .and_then(|workflow| workflow.inputs.as_ref()),
+            &sub_inputs.values,
+        );
+        vars.register_workflow_values(wf_id, sub_inputs, outputs.clone(), omissions);
 
         let previous = vars.replace_step_outputs(&step.step_id, outputs.clone());
         let success = {
@@ -945,7 +959,11 @@ impl Engine {
                 err: None,
                 err_kind: None,
             },
-            outputs: if success { outputs } else { BTreeMap::new() },
+            outputs: if success {
+                outputs
+            } else {
+                ProvenancedValues::default()
+            },
             dry_run_request: None,
             trace: StepTraceData {
                 warnings: parameter_warnings,
@@ -957,10 +975,10 @@ impl Engine {
     fn validate_and_populate_inputs(
         &self,
         workflow: &Workflow,
-        mut inputs: BTreeMap<String, Value>,
+        mut inputs: ProvenancedValues,
     ) -> Result<VarStore, RuntimeError> {
         if let Some(schema) = &workflow.inputs {
-            let issues = validate_inputs(schema, &mut inputs);
+            let issues = validate_inputs(schema, &mut inputs.values);
             if !issues.is_empty() {
                 let has_errors = issues
                     .iter()
@@ -985,9 +1003,11 @@ impl Engine {
         }
 
         let mut vars = VarStore::default();
-        for (k, v) in inputs {
-            vars.set_input(&k, v);
-        }
+        let omissions = super::value_provenance::optional_input_omissions(
+            workflow.inputs.as_ref(),
+            &inputs.values,
+        );
+        vars.set_inputs(inputs, omissions);
         Ok(vars)
     }
 
@@ -1007,11 +1027,12 @@ impl Engine {
         workflow: &Workflow,
         vars: &VarStore,
     ) -> (
-        Result<BTreeMap<String, Value>, RuntimeError>,
+        Result<ProvenancedValues, RuntimeError>,
         Vec<WorkflowOutputWarning>,
     ) {
         let mut ctx = self.make_eval_context(vars, None);
         let mut output_warnings = Vec::new();
+        let mut outputs = ProvenancedValues::default();
         for (name, output) in &workflow.outputs {
             if let Some(controller) = &self.inner.debug_controller {
                 if let Err(err) = controller
@@ -1027,20 +1048,27 @@ impl Engine {
                 }
             }
             let eval = ExpressionEvaluator::new(ctx.clone());
-            let (value, warnings) = match output {
+            let (value, warnings, metadata) = match output {
                 OutputValue::RuntimeExpression(expression) => {
-                    eval.resolve_value_with_diagnostics(expression)
+                    let result = eval.resolve_value_with_provenance(expression);
+                    let metadata = vars.expression_provenance(&result, &outputs, None);
+                    (result.value, result.warnings, metadata)
                 }
-                OutputValue::Selector(selector) => resolve_selector(selector, &eval),
+                OutputValue::Selector(selector) => {
+                    let result = super::payload::resolve_selector_with_provenance(selector, &eval);
+                    let metadata = vars.value_provenance(&result, &outputs, None);
+                    (result.value, result.warnings, metadata)
+                }
             };
             output_warnings.extend(
                 warnings.iter().map(|warning| {
                     WorkflowOutputWarning::new(&workflow.workflow_id, name, warning)
                 }),
             );
-            ctx.outputs.insert(name.clone(), value);
+            ctx.outputs.insert(name.clone(), value.clone());
+            outputs.insert(name.clone(), value, metadata);
         }
-        (Ok(ctx.outputs), output_warnings)
+        (Ok(outputs), output_warnings)
     }
 }
 

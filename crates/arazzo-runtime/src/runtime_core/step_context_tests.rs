@@ -73,7 +73,7 @@ async fn finish(
             err: (!success).then(|| "criteria failed".to_owned()),
             err_kind: (!success).then_some(RuntimeErrorKind::SuccessCriteriaFailed),
         },
-        outputs: BTreeMap::new(),
+        outputs: ProvenancedValues::default(),
         dry_run_request: None,
         trace: StepTraceData::default(),
     });
@@ -210,7 +210,7 @@ async fn goto_parameters_keep_typed_message_values_without_message_targets() {
         } => {
             assert_eq!(workflow_id, "callee");
             assert_eq!(
-                inputs.expect("mapped inputs"),
+                inputs.unwrap_or_else(|| panic!("mapped inputs")).values,
                 BTreeMap::from([
                     ("id".to_owned(), json!(42)),
                     ("accepted".to_owned(), json!(true)),
@@ -260,7 +260,7 @@ async fn retry_reference_parameters_read_message_while_target_does_not() {
         } => {
             assert_eq!(workflow_id, "callee");
             assert_eq!(
-                inputs.expect("mapped inputs"),
+                inputs.unwrap_or_else(|| panic!("mapped inputs")).values,
                 BTreeMap::from([
                     ("id".to_owned(), json!(42)),
                     ("accepted".to_owned(), json!(true)),

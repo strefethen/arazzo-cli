@@ -377,7 +377,18 @@ impl Engine {
                             self.make_eval_context(ctx.vars, ctx.response),
                             ctx.message,
                         ));
-                    let inputs = map_action_parameters(action, &parameter_eval);
+                    let inputs = map_action_parameters(
+                        action,
+                        &parameter_eval,
+                        ctx.vars,
+                        (self.inner.dry_run_mode && ctx.response.is_some()).then_some(
+                            ValueProducer {
+                                workflow_id: &ctx.workflow.workflow_id,
+                                step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
+                                site: ValueProducerSite::ActionParameter(""),
+                            },
+                        ),
+                    );
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow {
                             workflow_id: resolved_workflow_id.clone(),
@@ -424,7 +435,18 @@ impl Engine {
                         ));
                     Some(RetryReference::Workflow {
                         workflow_id: eval.interpolate_string(&action.workflow_id),
-                        inputs: map_action_parameters(action, &parameter_eval),
+                        inputs: map_action_parameters(
+                            action,
+                            &parameter_eval,
+                            ctx.vars,
+                            (self.inner.dry_run_mode && ctx.response.is_some()).then_some(
+                                ValueProducer {
+                                    workflow_id: &ctx.workflow.workflow_id,
+                                    step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
+                                    site: ValueProducerSite::ActionParameter(""),
+                                },
+                            ),
+                        ),
                     })
                 } else {
                     None
@@ -596,7 +618,7 @@ pub(super) enum FlowDecision {
         /// Callee inputs mapped from the action's `parameters`. `None` means
         /// the action declared no parameters, in which case the caller's own
         /// inputs transfer unchanged (the pre-1.1 behavior).
-        inputs: Option<BTreeMap<String, Value>>,
+        inputs: Option<ProvenancedValues>,
     },
     Error(RuntimeError),
 }
@@ -615,7 +637,7 @@ pub(super) enum RetryReference {
         /// Callee inputs mapped from the action's `parameters`; `None` means
         /// no parameters were declared and the caller's inputs forward
         /// unchanged (same contract as `FlowDecision::GotoWorkflow`).
-        inputs: Option<BTreeMap<String, Value>>,
+        inputs: Option<ProvenancedValues>,
     },
 }
 
@@ -629,17 +651,26 @@ pub(super) enum RetryReference {
 fn map_action_parameters(
     action: &OnAction,
     eval: &ExpressionEvaluator,
-) -> Option<BTreeMap<String, Value>> {
+    vars: &VarStore,
+    producer: Option<ValueProducer<'_>>,
+) -> Option<ProvenancedValues> {
     if action.parameters.is_empty() {
         return None;
     }
-    let mut mapped = BTreeMap::new();
+    let mut mapped = ProvenancedValues::default();
     for param in &action.parameters {
-        let (value, param_warnings) = resolve_value_source(&param.value, eval);
+        let result = super::payload::resolve_value_source_with_provenance(&param.value, eval);
+        let producer = producer.map(|producer| ValueProducer {
+            site: ValueProducerSite::ActionParameter(&param.name),
+            ..producer
+        });
+        let metadata = vars.value_provenance(&result, &ProvenancedValues::default(), producer);
+        let value = result.value;
+        let param_warnings = result.warnings;
         for warning in param_warnings {
             eprintln!("warning: action parameter {:?}: {warning}", param.name);
         }
-        mapped.insert(param.name.clone(), value);
+        mapped.insert(param.name.clone(), value, metadata);
     }
     Some(mapped)
 }

@@ -199,55 +199,63 @@ pub(crate) fn evaluate_output_expression_detailed(
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    if expr.starts_with('/') {
-        if let Some(resp) = response {
-            // Bare `//…` outputs are a repository extension routed
-            // explicitly to XPath 1.0 (ac-46638).
-            return match select_xpath(&resp.body, expr, Some("xpath-10")) {
-                Ok(selection) => {
-                    let warnings = if selection.match_count > 0 {
-                        Vec::new()
-                    } else {
-                        vec![arazzo_expr::ExpressionWarning {
-                            expression: expr.to_string(),
-                            message: "XPath matched no values".to_string(),
-                        }]
-                    };
-                    match selection.value {
-                        Ok(value) => (value, warnings),
-                        Err(message) => (
-                            Value::Null,
-                            vec![arazzo_expr::ExpressionWarning {
-                                expression: expr.to_string(),
-                                message,
-                            }],
-                        ),
-                    }
-                }
-                Err(message) => (
-                    Value::Null,
+    let (value, warnings, _) = evaluate_provenanced_output(
+        &OutputValue::RuntimeExpression(expr.to_owned()),
+        eval,
+        response,
+        &VarStore::default(),
+        None,
+    );
+    (value, warnings)
+}
+
+fn evaluate_xpath_output(
+    expr: &str,
+    response: Option<&Response>,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>, bool) {
+    if let Some(resp) = response {
+        // Bare `//…` outputs are a repository extension routed
+        // explicitly to XPath 1.0 (ac-46638).
+        return match select_xpath(&resp.body, expr, Some("xpath-10")) {
+            Ok(selection) => {
+                let warnings = if selection.match_count > 0 {
+                    Vec::new()
+                } else {
                     vec![arazzo_expr::ExpressionWarning {
                         expression: expr.to_string(),
-                        message,
-                    }],
-                ),
-            };
-        }
-        return (
-            Value::Null,
-            vec![arazzo_expr::ExpressionWarning {
-                expression: expr.to_string(),
-                message: "XPath output has no response context".to_string(),
-            }],
-        );
+                        message: "XPath matched no values".to_string(),
+                    }]
+                };
+                match selection.value {
+                    Ok(value) => (value, warnings, false),
+                    Err(message) => (
+                        Value::Null,
+                        vec![arazzo_expr::ExpressionWarning {
+                            expression: expr.to_string(),
+                            message,
+                        }],
+                        true,
+                    ),
+                }
+            }
+            Err(message) => (
+                Value::Null,
+                vec![arazzo_expr::ExpressionWarning {
+                    expression: expr.to_string(),
+                    message,
+                }],
+                true,
+            ),
+        };
     }
-
-    if expr.starts_with('$') {
-        return eval.evaluate_with_diagnostics(expr);
-    }
-
-    let json_path = to_json_path(expr);
-    eval.evaluate_with_diagnostics(&format!("$response.body.{json_path}"))
+    (
+        Value::Null,
+        vec![arazzo_expr::ExpressionWarning {
+            expression: expr.to_string(),
+            message: "XPath output has no response context".to_string(),
+        }],
+        true,
+    )
 }
 
 pub(crate) fn evaluate_output_value_detailed(
@@ -260,6 +268,56 @@ pub(crate) fn evaluate_output_value_detailed(
             evaluate_output_expression_detailed(expression, eval, response)
         }
         OutputValue::Selector(selector) => resolve_selector(selector, eval),
+    }
+}
+
+pub(super) fn evaluate_provenanced_output(
+    output: &OutputValue,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+    vars: &VarStore,
+    producer: Option<ValueProducer<'_>>,
+) -> (Value, Vec<arazzo_expr::ExpressionWarning>, ValueProvenance) {
+    let empty = ProvenancedValues::default();
+    match output {
+        OutputValue::RuntimeExpression(expression) if expression.starts_with('/') => {
+            let (value, warnings, unresolved) = evaluate_xpath_output(expression, response);
+            let mut metadata = ValueProvenance {
+                unresolved,
+                ..Default::default()
+            };
+            if let Some(producer) = producer {
+                metadata
+                    .skipped
+                    .push(super::value_provenance::SkippedOrigin {
+                        workflow_id: producer.workflow_id.to_owned(),
+                        step_id: producer.step_id.to_owned(),
+                        site: producer.site.to_owned(),
+                        source: expression.clone(),
+                    });
+            }
+            (value, warnings, metadata)
+        }
+        OutputValue::RuntimeExpression(expression) => {
+            let source = if expression.starts_with('$') {
+                expression.clone()
+            } else {
+                format!("$response.body.{}", to_json_path(expression))
+            };
+            let result = eval.evaluate_with_provenance(&source);
+            let mut metadata = vars.expression_provenance(&result, &empty, producer);
+            if !expression.starts_with('$') {
+                for origin in &mut metadata.skipped {
+                    origin.source = expression.clone();
+                }
+            }
+            (result.value, result.warnings, metadata)
+        }
+        OutputValue::Selector(selector) => {
+            let result = super::payload::resolve_selector_with_provenance(selector, eval);
+            let metadata = vars.value_provenance(&result, &empty, producer);
+            (result.value, result.warnings, metadata)
+        }
     }
 }
 

@@ -319,8 +319,8 @@ mod tests {
         let (outputs, warnings) = engine.build_outputs(&workflow, &vars);
         let outputs = outputs.unwrap_or_else(|err| panic!("workflow outputs: {err}"));
         assert!(warnings.is_empty());
-        assert_eq!(outputs.get("inputName"), Some(&json!("test")));
-        assert_eq!(outputs.get("stepResult"), Some(&json!("hello")));
+        assert_eq!(outputs.values.get("inputName"), Some(&json!("test")));
+        assert_eq!(outputs.values.get("stepResult"), Some(&json!("hello")));
     }
 
     fn make_spec_with_base(base_url: &str, workflows: Vec<Workflow>) -> ArazzoSpec {

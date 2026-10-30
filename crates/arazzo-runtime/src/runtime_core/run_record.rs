@@ -111,7 +111,7 @@ impl Engine {
             attempt: number,
             outcome,
             duration_ms: engine_trace::duration_ms_u64(attempt.duration),
-            outputs: execution.outputs.clone(),
+            outputs: execution.outputs.values.clone(),
             request,
             response,
             decision: attempt.decision.clone(),

@@ -26,10 +26,10 @@ use super::kafka::{
 };
 use super::step_context::{with_message, MessageSnapshot};
 use super::{
-    evaluate_criterion_detailed, evaluate_output_value_detailed, DryRunRequest, Engine,
-    EngineEvent, ExecutionContext, ExpressionEvaluator, ObserverEvent, ReceiverArmed, RuntimeError,
-    RuntimeErrorKind, StepExecution, StepResult, StepTraceData, TraceCriterionResult, TraceMessage,
-    TransportWarning, TransportWarningKind, VarStore, TRACE_BODY_PREVIEW_MAX_BYTES,
+    evaluate_criterion_detailed, evaluate_provenanced_output, DryRunRequest, Engine, EngineEvent,
+    ExecutionContext, ExpressionEvaluator, ObserverEvent, ProvenancedValues, ReceiverArmed,
+    RuntimeError, RuntimeErrorKind, StepExecution, StepResult, StepTraceData, TraceCriterionResult,
+    TraceMessage, TransportWarning, TransportWarningKind, VarStore, TRACE_BODY_PREVIEW_MAX_BYTES,
 };
 
 type ArmKey = (ConnectionIdentity, String);
@@ -390,7 +390,7 @@ impl Engine {
     /// (or simulated) message — the same sequence `evaluate_step_response`
     /// runs for an HTTP response.
     #[allow(clippy::too_many_arguments)]
-    async fn evaluate_message(
+    pub(super) async fn evaluate_message(
         &self,
         exec_ctx: &ExecutionContext,
         workflow_id: &str,
@@ -461,7 +461,7 @@ impl Engine {
                         err: None,
                         err_kind: None,
                     },
-                    outputs: BTreeMap::new(),
+                    outputs: ProvenancedValues::default(),
                     dry_run_request: None,
                     trace: StepTraceData {
                         request: None,
@@ -474,10 +474,11 @@ impl Engine {
             }
         }
 
-        let mut outputs = BTreeMap::new();
+        let mut outputs = ProvenancedValues::default();
         for (name, expr) in &step.outputs {
-            let (value, expr_warnings) = evaluate_output_value_detailed(expr, &eval, None);
-            outputs.insert(name.clone(), value.clone());
+            let (value, expr_warnings, metadata) =
+                evaluate_provenanced_output(expr, &eval, None, vars, None);
+            outputs.insert(name.clone(), value.clone(), metadata);
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));

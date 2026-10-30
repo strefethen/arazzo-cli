@@ -33,6 +33,28 @@ pub fn validate_inputs(
     schema: &SchemaObject,
     inputs: &mut BTreeMap<String, Value>,
 ) -> Vec<InputIssue> {
+    validate_inputs_inner(schema, inputs, &Default::default())
+}
+
+#[allow(dead_code)]
+pub(super) fn validate_provenanced_inputs(
+    schema: &SchemaObject,
+    inputs: &mut super::ProvenancedValues,
+) -> Vec<InputIssue> {
+    let unknown = inputs
+        .provenance
+        .keys()
+        .filter(|name| inputs.values.contains_key(*name))
+        .cloned()
+        .collect();
+    validate_inputs_inner(schema, &mut inputs.values, &unknown)
+}
+
+fn validate_inputs_inner(
+    schema: &SchemaObject,
+    inputs: &mut BTreeMap<String, Value>,
+    unknown: &std::collections::BTreeSet<String>,
+) -> Vec<InputIssue> {
     let mut issues = Vec::new();
 
     // Phase 1: Default injection
@@ -57,6 +79,9 @@ pub fn validate_inputs(
 
     // Phase 2: Required check
     for required_name in &schema.required {
+        if unknown.contains(required_name) {
+            continue;
+        }
         match inputs.get(required_name) {
             None | Some(Value::Null) => {
                 issues.push(InputIssue {
@@ -71,6 +96,9 @@ pub fn validate_inputs(
 
     // Phase 3: Type check
     for (name, prop) in &schema.properties {
+        if unknown.contains(name) {
+            continue;
+        }
         if let Some(declared_type) = &prop.type_ {
             if let Some(value) = inputs.get(name) {
                 if !value.is_null() && !json_type_matches(declared_type, value) {
@@ -89,6 +117,9 @@ pub fn validate_inputs(
 
     // Phase 4: Enum check
     for (name, prop) in &schema.properties {
+        if unknown.contains(name) {
+            continue;
+        }
         let Some(value) = inputs.get(name) else {
             continue;
         };

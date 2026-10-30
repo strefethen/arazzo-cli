@@ -478,12 +478,21 @@ impl Engine {
         };
         let dry_ctx = self.make_post_request_eval_context(vars, Some(&fake), &prep);
         let dry_eval = ExpressionEvaluator::new(dry_ctx);
-        let mut outputs = BTreeMap::new();
+        let mut outputs = ProvenancedValues::default();
         let mut warnings = prep.warnings.clone();
         for (name, expr) in &step.outputs {
-            let (value, expr_warnings) =
-                evaluate_output_value_detailed(expr, &dry_eval, Some(&fake));
-            outputs.insert(name.clone(), value);
+            let (value, expr_warnings, metadata) = evaluate_provenanced_output(
+                expr,
+                &dry_eval,
+                Some(&fake),
+                vars,
+                Some(ValueProducer {
+                    workflow_id,
+                    step_id: &step.step_id,
+                    site: ValueProducerSite::Output(name),
+                }),
+            );
+            outputs.insert(name.clone(), value, metadata);
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
@@ -494,7 +503,7 @@ impl Engine {
                 response: Some(&fake),
                 request: Some(&prep.trace_request),
                 message: None,
-                current_outputs: &outputs,
+                current_outputs: &outputs.values,
                 depth,
                 cancel: &exec_ctx.cancel,
                 is_timeout: &exec_ctx.is_timeout,
@@ -610,7 +619,7 @@ impl Engine {
                         err: None,
                         err_kind: None,
                     },
-                    outputs: BTreeMap::new(),
+                    outputs: ProvenancedValues::default(),
                     dry_run_request: None,
                     trace: StepTraceData {
                         request: Some(trace_request),
@@ -623,11 +632,11 @@ impl Engine {
             }
         }
 
-        let mut outputs = BTreeMap::new();
+        let mut outputs = ProvenancedValues::default();
         for (name, expr) in &step.outputs {
-            let (value, expr_warnings) =
-                evaluate_output_value_detailed(expr, &eval, Some(response));
-            outputs.insert(name.clone(), value.clone());
+            let (value, expr_warnings, metadata) =
+                evaluate_provenanced_output(expr, &eval, Some(response), vars, None);
+            outputs.insert(name.clone(), value.clone(), metadata);
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {
                 step_warnings.push(format!("output \"{name}\": {warning}"));

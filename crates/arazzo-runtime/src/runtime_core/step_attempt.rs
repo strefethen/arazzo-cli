@@ -43,6 +43,7 @@ use super::{
     error::RuntimeError,
     events::{ObserverEvent, TraceDecision},
     state::{Engine, ExecutionContext, StepExecution, StepResult, StepTraceData, VarStore},
+    ProvenancedValues,
 };
 
 /// The routing inputs of one attempt: a [`StepDecisionContext`] without the
@@ -250,7 +251,7 @@ impl Engine {
             workflow_id,
             step,
             status_code,
-            execution.outputs.clone(),
+            execution.outputs.values.clone(),
             execution.result.err.clone(),
             duration,
         )
@@ -261,7 +262,7 @@ impl Engine {
             step,
             status_code,
             duration,
-            execution.outputs.clone(),
+            execution.outputs.values.clone(),
             execution.result.err.clone(),
             execution.result.success,
         )
@@ -289,7 +290,7 @@ impl Engine {
             attempt.duration,
             &attempt.execution.trace,
             attempt.decision.clone(),
-            attempt.execution.outputs.clone(),
+            attempt.execution.outputs.values.clone(),
             attempt.trace_error.clone(),
         );
         Engine::push_trace_record(ctx, record).await;
@@ -310,7 +311,7 @@ pub(super) fn settle(run: Result<StepExecution, RuntimeError>) -> StepExecution 
             err: Some(err.message),
             err_kind: Some(err.kind),
         },
-        outputs: BTreeMap::new(),
+        outputs: ProvenancedValues::default(),
         dry_run_request: None,
         trace: StepTraceData::default(),
     })
@@ -381,7 +382,7 @@ mod tests {
                 err: err.map(str::to_string),
                 err_kind: None,
             },
-            outputs,
+            outputs: outputs.into(),
             dry_run_request: None,
             trace: StepTraceData::default(),
         }
@@ -394,7 +395,7 @@ mod tests {
 
         assert!(settled.result.success);
         assert_eq!(settled.result.err, None);
-        assert_eq!(settled.outputs, outputs);
+        assert_eq!(settled.outputs.values, outputs);
     }
 
     #[test]
@@ -408,7 +409,7 @@ mod tests {
         assert!(settled.result.response.is_none());
         assert_eq!(settled.result.err.as_deref(), Some("connection refused"));
         assert_eq!(settled.result.err_kind, Some(RuntimeErrorKind::HttpRequest));
-        assert!(settled.outputs.is_empty());
+        assert!(settled.outputs.values.is_empty());
         assert!(settled.dry_run_request.is_none());
         assert!(settled.trace.request.is_none());
         assert!(settled.trace.response.is_none());

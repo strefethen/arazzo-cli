@@ -39,7 +39,7 @@ impl Engine {
         workflow: &Workflow,
         vars: &mut VarStore,
         depth: usize,
-    ) -> Result<BTreeMap<String, Value>, RuntimeError> {
+    ) -> Result<ProvenancedValues, RuntimeError> {
         let workflow_start = Instant::now();
         let levels = build_levels(workflow)?;
         // Each step's task routes its own failures through the workflow's actions.
@@ -125,9 +125,7 @@ impl Engine {
                 }
                 match flow {
                     FlowDecision::Next(_) | FlowDecision::Done => {
-                        for (name, value) in execution.outputs {
-                            vars.set_step_output(&step.step_id, &name, value);
-                        }
+                        vars.merge_step_outputs(&step.step_id, execution.outputs);
                         if matches!(flow, FlowDecision::Done) {
                             terminal = Some(self.build_outputs(workflow, vars));
                         }
@@ -157,7 +155,7 @@ impl Engine {
                 // level's steps settled.
                 exec_ctx.check_cancelled()?;
                 let (outputs, error) = match &outcome {
-                    Ok(outputs) => (outputs.clone(), None),
+                    Ok(outputs) => (outputs.values.clone(), None),
                     Err(err) => (BTreeMap::new(), Some(err.message.clone())),
                 };
                 self.emit_observer_event(
@@ -186,7 +184,7 @@ impl Engine {
             exec_ctx,
             ObserverEvent::WorkflowCompleted {
                 workflow_id: workflow_id.to_string(),
-                outputs: workflow_outputs.clone(),
+                outputs: workflow_outputs.values.clone(),
                 duration: workflow_start.elapsed(),
                 error: None,
             },

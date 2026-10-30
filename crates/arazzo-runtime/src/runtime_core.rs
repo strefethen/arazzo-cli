@@ -71,6 +71,7 @@ mod payload_provenance_tests;
 mod redaction;
 mod regex_cache;
 mod replay;
+mod request_admission;
 mod run_record;
 mod source_document;
 mod state;
@@ -79,6 +80,9 @@ mod step_context;
 #[cfg(test)]
 mod step_context_tests;
 mod url;
+mod value_provenance;
+#[cfg(test)]
+mod value_provenance_tests;
 mod xml_admission;
 mod xpath;
 
@@ -90,6 +94,7 @@ pub use client::{
     RedirectDecision, RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
 };
 use control::{sleep_with_cancel, step_result_error};
+use criteria::evaluate_provenanced_output;
 pub(crate) use criteria::{
     evaluate_criterion, evaluate_criterion_detailed, evaluate_output_value_detailed,
     CriterionEvaluation,
@@ -129,6 +134,7 @@ use state::{
     UnusableServer, WorkflowIndex,
 };
 use url::{encode_cookie_value, replace_path_params, UrlBuildResult};
+use value_provenance::{ProvenancedValues, ValueProducer, ValueProducerSite, ValueProvenance};
 pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{

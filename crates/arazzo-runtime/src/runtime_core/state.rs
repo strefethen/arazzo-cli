@@ -255,7 +255,7 @@ pub(super) struct StepResult {
 #[derive(Debug, Clone)]
 pub(super) struct StepExecution {
     pub(super) result: StepResult,
-    pub(super) outputs: BTreeMap<String, Value>,
+    pub(super) outputs: ProvenancedValues,
     pub(super) dry_run_request: Option<DryRunRequest>,
     pub(super) trace: StepTraceData,
 }
@@ -274,14 +274,25 @@ pub(crate) struct VarStore {
     pub(super) inputs: BTreeMap<String, Value>,
     steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     workflow_states: BTreeMap<String, arazzo_expr::WorkflowEvalState>,
+    pub(super) input_provenance: BTreeMap<String, ValueProvenance>,
+    pub(super) step_provenance: Arc<BTreeMap<String, BTreeMap<String, ValueProvenance>>>,
+    pub(super) workflow_provenance: BTreeMap<String, super::value_provenance::WorkflowProvenance>,
+    pub(super) optional_omissions: BTreeSet<String>,
 }
 
 impl VarStore {
+    #[cfg(test)]
     pub(crate) fn set_input(&mut self, name: &str, value: Value) {
         self.inputs.insert(name.to_string(), value);
+        self.input_provenance.remove(name);
+        self.optional_omissions.remove(name);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_step_output(&mut self, step_id: &str, name: &str, value: Value) {
+        if let Some(metadata) = Arc::make_mut(&mut self.step_provenance).get_mut(step_id) {
+            metadata.remove(name);
+        }
         Arc::make_mut(&mut self.steps)
             .entry(step_id.to_string())
             .or_default()
@@ -292,23 +303,73 @@ impl VarStore {
     pub(crate) fn replace_step_outputs(
         &mut self,
         step_id: &str,
-        outputs: BTreeMap<String, Value>,
-    ) -> Option<BTreeMap<String, Value>> {
-        Arc::make_mut(&mut self.steps).insert(step_id.to_string(), outputs)
+        outputs: impl Into<ProvenancedValues>,
+    ) -> Option<ProvenancedValues> {
+        let outputs = outputs.into();
+        let previous = self.steps.get(step_id).map(|_| self.step_values(step_id));
+        Arc::make_mut(&mut self.steps).insert(step_id.to_string(), outputs.values);
+        Arc::make_mut(&mut self.step_provenance).insert(step_id.to_string(), outputs.provenance);
+        previous
     }
 
     pub(crate) fn restore_step_outputs(
         &mut self,
         step_id: &str,
-        previous: Option<BTreeMap<String, Value>>,
+        previous: Option<ProvenancedValues>,
     ) {
         let steps = Arc::make_mut(&mut self.steps);
         match previous {
             Some(outputs) => {
-                steps.insert(step_id.to_string(), outputs);
+                steps.insert(step_id.to_string(), outputs.values);
+                Arc::make_mut(&mut self.step_provenance)
+                    .insert(step_id.to_string(), outputs.provenance);
             }
             None => {
                 steps.remove(step_id);
+                Arc::make_mut(&mut self.step_provenance).remove(step_id);
+            }
+        }
+    }
+
+    pub(super) fn set_inputs(&mut self, inputs: ProvenancedValues, omissions: BTreeSet<String>) {
+        self.inputs = inputs.values;
+        self.input_provenance = inputs.provenance;
+        self.optional_omissions = omissions;
+    }
+
+    pub(super) fn input_values(&self) -> ProvenancedValues {
+        ProvenancedValues {
+            values: self.inputs.clone(),
+            provenance: self.input_provenance.clone(),
+        }
+    }
+
+    pub(super) fn step_values(&self, step_id: &str) -> ProvenancedValues {
+        ProvenancedValues {
+            values: self.step_outputs(step_id),
+            provenance: self
+                .step_provenance
+                .get(step_id)
+                .cloned()
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(super) fn merge_step_outputs(&mut self, step_id: &str, mut outputs: ProvenancedValues) {
+        if outputs.values.is_empty() {
+            return;
+        }
+        let values = Arc::make_mut(&mut self.steps)
+            .entry(step_id.to_owned())
+            .or_default();
+        let provenance = Arc::make_mut(&mut self.step_provenance)
+            .entry(step_id.to_owned())
+            .or_default();
+        for (name, value) in outputs.values {
+            values.insert(name.clone(), value);
+            provenance.remove(&name);
+            if let Some(metadata) = outputs.provenance.remove(&name) {
+                provenance.insert(name, metadata);
             }
         }
     }
@@ -325,15 +386,37 @@ impl VarStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn register_workflow_state(
         &mut self,
         workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
-        outputs: BTreeMap<String, Value>,
+        inputs: impl Into<ProvenancedValues>,
+        outputs: impl Into<ProvenancedValues>,
     ) {
+        self.register_workflow_values(workflow_id, inputs.into(), outputs.into(), BTreeSet::new());
+    }
+
+    pub(super) fn register_workflow_values(
+        &mut self,
+        workflow_id: &str,
+        inputs: ProvenancedValues,
+        outputs: ProvenancedValues,
+        optional_omissions: BTreeSet<String>,
+    ) {
+        self.workflow_provenance.insert(
+            workflow_id.to_string(),
+            super::value_provenance::WorkflowProvenance {
+                inputs: inputs.provenance,
+                outputs: outputs.provenance,
+                optional_omissions,
+            },
+        );
         self.workflow_states.insert(
             workflow_id.to_string(),
-            arazzo_expr::WorkflowEvalState { inputs, outputs },
+            arazzo_expr::WorkflowEvalState {
+                inputs: inputs.values,
+                outputs: outputs.values,
+            },
         );
     }
 

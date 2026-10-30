@@ -526,16 +526,17 @@ pub(super) async fn execute(
             break;
         }
     }
-    let mut outputs = BTreeMap::new();
+    let mut outputs = ProvenancedValues::default();
     if success {
         for (name, value) in &step.outputs {
-            let (value, warnings) = evaluate_output_value_detailed(value, &eval, None);
+            let (value, warnings, metadata) =
+                evaluate_provenanced_output(value, &eval, None, vars, None);
             if !warnings.is_empty() {
                 return Err(RuntimeError::unspecified(format!(
                     "NATS_TRIAL_OUTPUT_DIAGNOSTIC: {warnings:?}"
                 )));
             }
-            outputs.insert(name.clone(), value);
+            outputs.insert(name.clone(), value, metadata);
         }
     }
     Ok(StepExecution {
