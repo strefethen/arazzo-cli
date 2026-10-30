@@ -198,6 +198,8 @@
     <a href="#overview" class="mb-7 block text-lg font-semibold tracking-tight no-underline max-lg:hidden">arazzo<span class="text-muted-foreground">/</span>cli</a>
     <p class="eyebrow mb-3 px-3 max-lg:hidden">Delivery log</p>
     <a href="#overview" class="toc-link active" aria-current="location">At a glance</a>
+    <a href="#cycle-36" class="toc-link">36 · Missing-value foundation</a>
+    <a href="#cycle-35" class="toc-link">35 · Credential names</a>
     <a href="#cycle-34" class="toc-link">34 · Windows CI restored</a>
     <a href="#cycle-33" class="toc-link">33 · Bodies, retries and cancellation</a>
     <a href="#cycle-32" class="toc-link">32 · Checked runtime measurements</a>
@@ -240,7 +242,7 @@
     <header id="overview" class="section animate-fade-up" style="--i:0">
       <div class="mb-5 flex flex-wrap items-center gap-3"><span class="eyebrow">Maintainer journal</span><span class="text-sm text-muted-foreground">Updated 29 October 2026</span></div>
       <h1 class="max-w-4xl text-5xl font-semibold leading-[1.08] tracking-tight max-md:text-4xl">A more dependable engine.<br><span class="text-muted-foreground">One useful increment at a time.</span></h1>
-      <p class="mt-6 max-w-3xl text-lg leading-relaxed text-muted-foreground">Steve, Windows CI is restored and the reviewed repair passed the full Actions workflow. The fix keeps common settings tests active across platforms and strengthens Unix symlink rejection proof. Hourly maintainer runs remain paused; your existing schema work is preserved.</p>
+      <p class="mt-6 max-w-3xl text-lg leading-relaxed text-muted-foreground">Steve, release preparation has moved into targeted blocker repairs. Five additional credential names are now masked in structured evidence, with independent review complete. Encoded-query and free-text coverage has a review finding awaiting a narrow export-policy decision. Request-value admission is being built in separate, reviewed steps. Hourly runs remain paused; no release has been tagged or published.</p>
       <div class="mt-8 grid gap-4 md:grid-cols-3">
         <a href="#cycle-34" class="panel no-underline hover:border-foreground/40"><span class="badge done">CI repair</span><h2 class="mt-4 font-semibold">Restore the complete build matrix</h2><p class="mt-2 text-muted-foreground">Windows compiles the test target; full Actions CI passes.</p></a>
         <a href="#cycle-27" class="panel no-underline hover:border-foreground/40"><span class="badge done">Measurement</span><h2 class="mt-4 font-semibold">Measure validated root parsing</h2><p class="mt-2 text-muted-foreground">Three fixed sizes, exact result checks and repeatable native Criterion evidence.</p></a>
@@ -248,6 +250,41 @@
       </div>
       <p class="mt-5 text-sm text-muted-foreground">Publication correction: reviewed main pushes run CI and deploy GitHub Pages. Steve approved the existing Pages deployment. Earlier entries retain their historical statements; “CI only” and “no deployment” claims were incomplete. Hourly maintainer runs are paused. This journal is not a tagged release.</p>
     </header>
+
+    <section id="cycle-36" class="section" aria-labelledby="cycle-36-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 36 · 29 Oct 2026</span><span class="badge done">Foundation · local, reviewed</span></div>
+      <h2 id="cycle-36-title" class="cycle-title">A missing value is distinguishable from an intentional null.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">The expression package now retains whether a lookup succeeded, which stored value it referenced and where repeated expressions occurred. Existing evaluator APIs still return the same values and diagnostics. This is groundwork for refusing unresolved HTTP requests; refusal is not active yet.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Before · public projection</p><p class="mt-2 text-muted-foreground">A missing <code>$inputs.id</code> and a supplied <code>id: null</code> could both reach a caller as JSON <code>null</code>. Some missing references produce no warning, so warnings cannot reliably recover the difference.</p></div>
+        <div class="panel min-w-0"><p class="example-label">Now · provenance API</p><p class="mt-2 text-muted-foreground">The result retains <code>missing: true</code> for absence and <code>missing: false</code> for a real null, alongside the unchanged value. Successful aliases, repeated template references and syntax failures remain identifiable.</p></div>
+      </div>
+      <ol class="mt-5 grid list-none gap-4 p-0 md:grid-cols-3">
+        <li class="panel min-w-0"><h3 class="font-semibold">Canonical parser</h3><p class="mt-3 text-muted-foreground">Classifies each expression once using the existing grammar.</p></li>
+        <li class="panel min-w-0"><h3 class="font-semibold">Resolution owner</h3><p class="mt-3 text-muted-foreground">Retains value, diagnostics and typed reference metadata in one result.</p></li>
+        <li class="panel min-w-0"><h3 class="font-semibold">Compatibility APIs</h3><p class="mt-3 text-muted-foreground">Project existing outputs unchanged; future admission consumes the extra metadata.</p></li>
+      </ol>
+      <p class="mt-5 text-sm text-muted-foreground">Proof: 149 expression tests, package check and docs, workspace formatting, strict Clippy and tests passed. Fresh independent review passed. <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58">Contract and evidence</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b">reviewed source 9a6f832</a> (local; not pushed).</p>
+      <p class="mt-4 text-sm text-muted-foreground">Still required: recursive value propagation, child-workflow integration, shared runtime state, the transport admission guard and integrated dry-run/live proof. <a href="current/arazzo-request-value-admission.md">Follow the accepted plan</a>. The unresolved-request release blocker remains open.</p>
+    </section>
+
+    <section id="cycle-35" class="section" aria-labelledby="cycle-35-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 35 · 29 Oct 2026</span><span class="badge done">Credential fix · local, reviewed</span></div>
+      <h2 id="cycle-35-title" class="cycle-title">More credential names stay out of recorded evidence.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">Structured redaction now recognizes private keys, auth keys and subscription keys across nested values, headers, URLs and recorded inputs. The shared classifier owns the change; runtime execution values and public schemas remain unchanged.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Before · synthetic example</p><pre class="overflow-x-auto"><code>{"privateKey":"SYNTHETIC","primaryKey":"record-17"}</code></pre><p class="mt-3 text-muted-foreground">A credential name outside the old table could remain visible.</p></div>
+        <div class="panel min-w-0"><p class="example-label">Now · structured evidence</p><pre class="overflow-x-auto"><code>{"privateKey":"[REDACTED]","primaryKey":"record-17"}</code></pre><p class="mt-3 text-muted-foreground">The exact normalized name is masked. Ordinary business keys remain usable.</p></div>
+      </div>
+      <div class="mt-5 grid gap-4 md:grid-cols-3">
+        <article class="panel min-w-0"><h3 class="font-semibold">Five exact names</h3><p class="mt-3 text-muted-foreground"><code>privateKey</code>, <code>X-Auth-Key</code>, <code>authKey</code>, <code>subscription-key</code> and <code>Ocp-Apim-Subscription-Key</code>, using existing case/separator normalization.</p></article>
+        <article class="panel min-w-0"><h3 class="font-semibold">Real output proof</h3><p class="mt-3 text-muted-foreground">Tests exercise CLI dry-run JSON, trace files, verbose input output and persisted run exports, with synthetic secrets and ordinary-value controls.</p></article>
+        <article class="panel min-w-0"><h3 class="font-semibold">Deliberate limits</h3><p class="mt-3 text-muted-foreground">Generic <code>key</code> remains nonsensitive. This delivery does not claim configurable redaction or complete protection for every arbitrary error string.</p></article>
+      </div>
+      <p class="mt-5 text-sm text-muted-foreground">Proof: required formatting, strict Clippy and workspace tests passed; 1,761 tests passed with 35 existing ignores. Independent exact-candidate review passed. <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ff226">Ticket and proof</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/6b444c4c21a2d6d70f068993075f1f6844c956c9">reviewed source 6b444c4</a> (local; not pushed).</p>
+      <div class="mt-5 rounded-xl border border-amber-500/30 bg-muted/30 p-5"><h3 class="font-semibold">Follow-on remains blocked by review</h3><p class="mt-2 text-muted-foreground">Encoded query names and mirrored free-text masking pass automated tests, but independent review found that the exporter’s second masking pass can erase trailing query fields. <a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-208df">The proposed component-aware export boundary needs Steve’s decision</a>. That candidate is not a completed delivery. The full credential blocker and unresolved-request blocker remain open.</p></div>
+      <p class="mt-4 text-sm text-muted-foreground">Previously prepared CLI and VSIX artifacts predate these repairs and require a fresh final build. No tag, release publication or hourly-run resumption occurred.</p>
+    </section>
 
     <section id="cycle-34" class="section" aria-labelledby="cycle-34-title">
       <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 34 · 29 Oct 2026</span><span class="badge done">CI repair · independently reviewed</span></div>

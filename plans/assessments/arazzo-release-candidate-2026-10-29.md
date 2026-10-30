@@ -94,6 +94,32 @@ rerun the October 18 loopback probes or claim a new full security audit. Old
 contracts, ready generator status, and general unpushed/Pages-hold statements
 are historical; the dispositions above supersede them for this candidate.
 
+## Current repair checkpoint
+
+The native artifacts below predate the current blocker repairs. They remain
+verified for their stated baseline only; rebuild and reverify final artifacts
+before release. No tag, publication or hourly resumption is authorized.
+
+- Structured credential-name delivery is reviewed and closed in
+  [ac-ff226](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ff226), local commit
+  [6b444c4](https://github.com/strefethen/arazzo-cli/commit/6b444c4c21a2d6d70f068993075f1f6844c956c9).
+  This is partial L5 progress, not full blocker clearance.
+- Encoded-query/free-text follow-on
+  [ac-e1040](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-e1040) passed
+  automated checks but independent review found export URL field loss. It is
+  paused for the component-aware masking decision in
+  [ac-208df](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-208df).
+- L4 now has a reviewed decomposition in
+  [the request-admission plan](../current/arazzo-request-value-admission.md),
+  owned by [epic:ac-3d8bf](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3d8bf).
+  The earlier dry-run ticket has been reconciled with shared provenance; the
+  system success condition has not yet been demonstrated. Expression provenance
+  [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58) is reviewed
+  and closed at local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b); runtime propagation and refusal remain pending.
+- Tokio package/source review supports a precise 1.51.6 / macros 2.7.1 remedy
+  in [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f).
+  It does not yet constitute a verified dependency update or advisory clearance.
+
 ## Artifact verification — PASS for native preparation
 
 Source was exported from baseline `345e652438fdf8256edc40937e20b251cf6eef5f`,

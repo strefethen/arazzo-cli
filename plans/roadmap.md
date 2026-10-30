@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest source cycle: [ac-69cee](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-69cee).
+Latest reviewed source cycle: [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58) (local; not pushed).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -46,19 +46,26 @@ reactivate it.
 - Escalate real process or decision blockers as **ask Steve for…** tickets,
   with a concrete recommendation and evidence. Keep independent work moving.
 
-Latest delivery: the Windows settings-test compilation repair
-([ac-69cee](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-69cee)).
-Only Unix symlink operations are conditional; common checks remain active on
-Windows, and the Unix assertion now uses an otherwise valid target.
-Reviewed source [43159f4](https://github.com/strefethen/arazzo-cli/commit/43159f4197263a4c1e181afa2f784b071efa2766) passed [the complete Actions CI run](https://github.com/strefethen/arazzo-cli/actions/runs/40998697471).
-Local checks and independent review passed. The previous runtime measurement
-workers remain delivered; no runtime behavior changed in this repair.
+Latest reviewed delivery: five normalized exact credential names now participate
+in shared structured redaction, with real CLI sink proof and independent review
+([ac-ff226](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-ff226)).
+Source [6b444c4](https://github.com/strefethen/arazzo-cli/commit/6b444c4c21a2d6d70f068993075f1f6844c956c9)
+is local and unpushed. The encoded-query/free-text follow-on passed automated
+checks but failed independent review for export URL preservation; it is paused
+on [ac-208df](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-208df).
 
-**Current stopping point:** hourly maintainer runs and the schema walker remain
-paused. Steve authorized this CI repair and existing main-push GitHub Pages
-deployments, not resumption of roadmap cycles. Preserve the uncommitted schema
-source until explicit resume. Final publication-head evidence lives in the
-repair ticket. Existing unrelated pauses remain intact.
+**Current authorized work:** Steve requested release-blocker repairs, starting
+with unresolved request values and credential redaction, with subagents and
+tracked review. The [request-admission plan](current/arazzo-request-value-admission.md)
+is decomposed under [epic:ac-3d8bf](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3d8bf).
+Expression provenance is reviewed and closed in [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58), local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b). Recursive value propagation is next. This is foundation work, not a completed live-admission fix.
+The narrow Tokio advisory remedy is tracked in
+[ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f).
+
+Hourly maintainer runs remain paused. No tag or publication is authorized;
+current repair commits remain local. Preserve the paused schema-walker source.
+The earlier Windows repair remains published and Actions-verified; its result
+is historical evidence, not a CI claim for these new local candidates.
 
 Steve accepted the six-family benchmark design and unit-by-unit planning in
 [ac-0be12](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0be12), then explicitly
