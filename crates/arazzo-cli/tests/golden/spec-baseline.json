@@ -28,7 +28,7 @@
             {
               "method": "GET",
               "stepId": "fetch-profile",
-              "url": "https://httpbin.org/headers"
+              "url": "https://httpbin.org/headers?auth_state=%3Cunresolved%3A%24response.body%23%2Fauthenticated%3E"
             }
           ]
         }
@@ -239,7 +239,7 @@
             {
               "method": "GET",
               "stepId": "verify-value",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?check=%3Cunresolved%3A%24response.body%23%2Fargs%2Ffruit%3E"
             }
           ]
         },
@@ -297,7 +297,7 @@
             {
               "method": "GET",
               "stepId": "echo-origin",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?caller_ip=%3Cunresolved%3A%24response.body%23%2Forigin%3E"
             }
           ]
         },
@@ -353,7 +353,7 @@
             {
               "method": "GET",
               "stepId": "verify-child",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?from_child=%3Cunresolved%3A%24response.body%23%2Furl%3E"
             }
           ]
         }
@@ -543,12 +543,12 @@
             {
               "method": "GET",
               "stepId": "step-2",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?echo=%3Cunresolved%3A%24response.body%23%2Fargs%2Fseed%3E"
             },
             {
               "method": "GET",
               "stepId": "step-3",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?final=%3Cunresolved%3A%24response.body%23%2Fargs%2Fecho%3E"
             }
           ]
         },
@@ -563,17 +563,17 @@
             {
               "method": "GET",
               "stepId": "left",
-              "url": "https://httpbin.org/get?branch=left"
+              "url": "https://httpbin.org/get?from_root=%3Cunresolved%3A%24response.body%23%2Fargs%2Flabel%3E&branch=left"
             },
             {
               "method": "GET",
               "stepId": "right",
-              "url": "https://httpbin.org/get?branch=right"
+              "url": "https://httpbin.org/get?from_root=%3Cunresolved%3A%24response.body%23%2Fargs%2Flabel%3E&branch=right"
             },
             {
               "method": "GET",
               "stepId": "join",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?left=%3Cunresolved%3A%24response.body%23%2Fargs%2Fbranch%3E&right=%3Cunresolved%3A%24response.body%23%2Fargs%2Fbranch%3E"
             }
           ]
         },
@@ -726,7 +726,7 @@
             {
               "method": "GET",
               "stepId": "fetch-order",
-              "url": "http://127.0.0.1:18080/orders/"
+              "url": "http://127.0.0.1:18080/orders/%3Cunresolved:$message.payload%23%2ForderId%3E"
             }
           ]
         },
@@ -744,7 +744,7 @@
             {
               "method": "GET",
               "stepId": "fetch-order",
-              "url": "http://127.0.0.1:18080/orders/"
+              "url": "http://127.0.0.1:18080/orders/%3Cunresolved:$message.payload%23%2ForderId%3E"
             }
           ]
         }
@@ -841,7 +841,7 @@
             {
               "method": "GET",
               "stepId": "verify-child-output",
-              "url": "https://httpbin.org/get"
+              "url": "https://httpbin.org/get?child_url=%3Cunresolved%3A%24response.body%23%2Furl%3E"
             }
           ]
         }
@@ -864,12 +864,12 @@
             {
               "method": "GET",
               "stepId": "read-order",
-              "url": "https://petstore3.swagger.io/api/v3/store/order/"
+              "url": "https://petstore3.swagger.io/api/v3/store/order/%3Cunresolved:$response.body%23%2Fid%3E"
             },
             {
               "method": "DELETE",
               "stepId": "delete-order",
-              "url": "https://petstore3.swagger.io/api/v3/store/order/"
+              "url": "https://petstore3.swagger.io/api/v3/store/order/%3Cunresolved:$response.body%23%2Fid%3E"
             }
           ]
         },
@@ -884,12 +884,12 @@
             {
               "method": "GET",
               "stepId": "read-pet",
-              "url": "https://petstore3.swagger.io/api/v3/pet/"
+              "url": "https://petstore3.swagger.io/api/v3/pet/%3Cunresolved:$response.body%23%2Fid%3E"
             },
             {
               "method": "DELETE",
               "stepId": "delete-pet",
-              "url": "https://petstore3.swagger.io/api/v3/pet/"
+              "url": "https://petstore3.swagger.io/api/v3/pet/%3Cunresolved:$response.body%23%2Fid%3E"
             }
           ]
         },
@@ -904,17 +904,17 @@
             {
               "method": "GET",
               "stepId": "read-user",
-              "url": "https://petstore3.swagger.io/api/v3/user/"
+              "url": "https://petstore3.swagger.io/api/v3/user/%3Cunresolved:$response.body%23%2Fid%3E"
             },
             {
               "method": "PUT",
               "stepId": "update-user",
-              "url": "https://petstore3.swagger.io/api/v3/user/"
+              "url": "https://petstore3.swagger.io/api/v3/user/%3Cunresolved:$response.body%23%2Fid%3E"
             },
             {
               "method": "DELETE",
               "stepId": "delete-user",
-              "url": "https://petstore3.swagger.io/api/v3/user/"
+              "url": "https://petstore3.swagger.io/api/v3/user/%3Cunresolved:$response.body%23%2Fid%3E"
             }
           ]
         }

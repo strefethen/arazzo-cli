@@ -233,8 +233,18 @@ impl Engine {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_http_request(
         &self,
+        step: &Step,
+        vars: &VarStore,
+    ) -> Result<PreparedRequest, RuntimeError> {
+        self.prepare_http_request_for_workflow("test", step, vars)
+    }
+
+    fn prepare_http_request_for_workflow(
+        &self,
+        workflow_id: &str,
         step: &Step,
         vars: &VarStore,
     ) -> Result<PreparedRequest, RuntimeError> {
@@ -265,14 +275,20 @@ impl Engine {
             &method,
         ));
         let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
-        let url_result =
+        let admission = if self.inner.dry_run_mode {
+            admission.with_presentation(workflow_id)
+        } else {
+            admission
+        };
+        let (url_result, projected_url) =
             self.build_url_with_evaluator(&resolved.path, &resolved.base, step, &eval, &admission)?;
 
         let mut prep_warnings = url_result.warnings.clone();
+        let mut projected_body = None;
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
                 let resolution = payload::resolve_value_source_with_provenance(payload, &eval);
-                admission.check(&resolution, "requestBody.payload")?;
+                let mut projection = admission.project(&resolution, "requestBody.payload")?;
                 let mut body = resolution.value;
                 let payload_warnings = resolution.warnings;
                 prep_warnings.extend(
@@ -281,16 +297,32 @@ impl Engine {
                         .map(|warning| format!("requestBody.payload: {warning}")),
                 );
                 if !req_body.replacements.is_empty() {
-                    let (mutated, warnings) = apply_replacements(
-                        body,
-                        req_body.content_type.as_str(),
-                        &req_body.replacements,
-                        &eval,
-                        &admission,
-                    )?;
-                    body = mutated;
-                    prep_warnings.extend(warnings);
+                    if self.inner.dry_run_mode {
+                        let (mutated, display, warnings) = payload::apply_replacements_projected(
+                            body,
+                            projection,
+                            req_body.content_type.as_str(),
+                            &req_body.replacements,
+                            &eval,
+                            &admission,
+                        )?;
+                        body = mutated;
+                        projection = display;
+                        prep_warnings.extend(warnings);
+                    } else {
+                        let (mutated, warnings) = apply_replacements(
+                            body,
+                            req_body.content_type.as_str(),
+                            &req_body.replacements,
+                            &eval,
+                            &admission,
+                        )?;
+                        body = mutated;
+                        projection = body.clone();
+                        prep_warnings.extend(warnings);
+                    }
                 }
+                projected_body = Some(projection);
                 Some(body)
             } else {
                 None
@@ -324,11 +356,13 @@ impl Engine {
                 .unwrap_or_else(|| "application/json".to_string());
             headers.insert("Content-Type".to_string(), content_type);
         }
+        let mut projected_headers = headers.clone();
         let mut cookie_parts = Vec::new();
+        let mut projected_cookies = Vec::new();
         for (index, param) in step.parameters.iter().enumerate() {
             if param.in_ == Some(ParamLocation::Header) {
                 let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
-                admission.check(
+                let projection = admission.project(
                     &resolution,
                     &request_admission::RequestAdmission::parameter_location(index, param),
                 )?;
@@ -341,9 +375,10 @@ impl Engine {
                 );
                 let resolved = value_to_string(&value);
                 headers.insert(param.name.clone(), resolved);
+                projected_headers.insert(param.name.clone(), value_to_string(&projection));
             } else if param.in_ == Some(ParamLocation::Cookie) {
                 let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
-                admission.check(
+                let projection = admission.project(
                     &resolution,
                     &request_admission::RequestAdmission::parameter_location(index, param),
                 )?;
@@ -357,10 +392,16 @@ impl Engine {
                 let resolved = value_to_string(&value);
                 let encoded = encode_cookie_value(&resolved);
                 cookie_parts.push(format!("{}={}", param.name, encoded));
+                projected_cookies.push(format!(
+                    "{}={}",
+                    param.name,
+                    encode_cookie_value(&value_to_string(&projection))
+                ));
             }
         }
         if !cookie_parts.is_empty() {
             headers.insert("Cookie".to_string(), cookie_parts.join("; "));
+            projected_headers.insert("Cookie".to_string(), projected_cookies.join("; "));
         }
 
         let trace_request = TraceRequest {
@@ -371,6 +412,15 @@ impl Engine {
             redirects: Vec::new(),
         };
 
+        prep_warnings.extend(admission.presentation_warnings(step));
+        let presentation = TraceRequest {
+            method: method.clone(),
+            url: projected_url.url,
+            headers: projected_headers,
+            body: projected_body,
+            redirects: Vec::new(),
+        };
+
         Ok(PreparedRequest {
             method,
             url_result,
@@ -378,6 +428,7 @@ impl Engine {
             body,
             body_json,
             trace_request,
+            presentation,
             warnings: prep_warnings,
         })
     }
@@ -407,7 +458,7 @@ impl Engine {
         depth: usize,
     ) -> Result<StepExecution, RuntimeError> {
         exec_ctx.check_cancelled()?;
-        let prep = self.prepare_http_request(step, vars)?;
+        let prep = self.prepare_http_request_for_workflow(workflow_id, step, vars)?;
 
         if self.inner.dry_run_mode {
             self.emit_observer_event(
@@ -510,10 +561,13 @@ impl Engine {
                     transport: ValueProducerTransport::Http,
                 }),
             );
+            let producer_warnings =
+                dry_run::output_warnings(workflow_id, &step.step_id, name, expr, &metadata);
             outputs.insert(name.clone(), value, metadata);
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
+            warnings.extend(producer_warnings);
             let gate = DebugGateContext {
                 workflow_id,
                 step_id: &step.step_id,
@@ -531,9 +585,9 @@ impl Engine {
         let req = DryRunRequest {
             step_id: step.step_id.clone(),
             method: prep.method.clone(),
-            url: prep.url_result.url.clone(),
-            headers: prep.headers.clone(),
-            body: prep.body_json.clone(),
+            url: prep.presentation.url.clone(),
+            headers: prep.presentation.headers.clone(),
+            body: prep.presentation.body.clone(),
             warnings: warnings.clone(),
         };
         Ok(StepExecution {
@@ -713,6 +767,7 @@ impl Engine {
         ));
         let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
         self.build_url_with_evaluator(op_path, source_base, step, &eval, &admission)
+            .map(|pair| pair.0)
     }
 
     fn build_url_with_evaluator(
@@ -722,6 +777,55 @@ impl Engine {
         step: &Step,
         eval: &ExpressionEvaluator,
         admission: &request_admission::RequestAdmission<'_>,
+    ) -> Result<(UrlBuildResult, UrlBuildResult), RuntimeError> {
+        let mut projected = BTreeMap::new();
+        let ordinary = self.build_url_resolved(op_path, source_base, step, |index, param| {
+            let resolution = payload::resolve_value_source_with_provenance(&param.value, eval);
+            if param.in_.is_some() {
+                let mut projection = admission.project(
+                    &resolution,
+                    &request_admission::RequestAdmission::parameter_location(index, param),
+                )?;
+                if param.in_ == Some(ParamLocation::Querystring) && projection != resolution.value {
+                    if let Value::String(marker) = &projection {
+                        projection = Value::String(
+                            url_crate::form_urlencoded::byte_serialize(marker.as_bytes()).collect(),
+                        );
+                    }
+                }
+                projected.insert(index, projection);
+            } else {
+                projected.insert(index, resolution.value.clone());
+            }
+            let value = resolution.value;
+            let param_warnings = resolution.warnings;
+            let named: Vec<String> = param_warnings
+                .into_iter()
+                .map(|warning| format!("parameter {:?}: {warning}", param.name))
+                .collect();
+            Ok((value, named))
+        })?;
+        if !self.inner.dry_run_mode {
+            return Ok((ordinary.clone(), ordinary));
+        }
+        let presentation = self.build_url_resolved(op_path, source_base, step, |index, _| {
+            let value = projected.remove(&index).ok_or_else(|| {
+                RuntimeError::new(
+                    RuntimeErrorKind::InternalError,
+                    "missing resolved parameter projection",
+                )
+            })?;
+            Ok((value, Vec::new()))
+        })?;
+        Ok((ordinary, presentation))
+    }
+
+    fn build_url_resolved(
+        &self,
+        op_path: &str,
+        source_base: &str,
+        step: &Step,
+        mut resolve: impl FnMut(usize, &Parameter) -> Result<(Value, Vec<String>), RuntimeError>,
     ) -> Result<UrlBuildResult, RuntimeError> {
         let mut target = format!("{}{}", source_base.trim_end_matches('/'), op_path);
 
@@ -732,29 +836,6 @@ impl Engine {
         // so a step-level declaration overrides a workflow-level one.
         let mut querystring: Option<(String, String)> = None;
         let mut warnings = Vec::<String>::new();
-
-        // Resolution happens in the arm that owns the location, never once for
-        // every parameter up front. Resolving a header or cookie value here as
-        // well as where the request headers are built is what emitted each of
-        // their value-source warnings twice: `prepare_http_request` seeds its
-        // own warning list from this result and then resolves those two
-        // locations again.
-        let resolve = |index: usize, param: &Parameter| -> Result<_, RuntimeError> {
-            let resolution = payload::resolve_value_source_with_provenance(&param.value, eval);
-            if param.in_.is_some() {
-                admission.check(
-                    &resolution,
-                    &request_admission::RequestAdmission::parameter_location(index, param),
-                )?;
-            }
-            let value = resolution.value;
-            let param_warnings = resolution.warnings;
-            let named: Vec<String> = param_warnings
-                .into_iter()
-                .map(|warning| format!("parameter {:?}: {warning}", param.name))
-                .collect();
-            Ok((value, named))
-        };
 
         for (index, param) in step.parameters.iter().enumerate() {
             // No catch-all, and no guarded arm: a new `ParamLocation` variant
@@ -987,6 +1068,7 @@ pub(crate) struct PreparedRequest {
     pub body: Option<Vec<u8>>,
     pub body_json: Option<Value>,
     pub trace_request: TraceRequest,
+    presentation: TraceRequest,
     pub warnings: Vec<String>,
 }
 

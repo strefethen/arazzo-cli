@@ -47,11 +47,39 @@ pub(super) fn request_context(
 pub(super) struct RequestAdmission<'a> {
     step_id: &'a str,
     vars: &'a VarStore,
+    presentation: Option<dry_run::RequestPresentation<'a>>,
 }
 
 impl<'a> RequestAdmission<'a> {
     pub(super) fn new(step_id: &'a str, vars: &'a VarStore) -> Self {
-        Self { step_id, vars }
+        Self {
+            step_id,
+            vars,
+            presentation: None,
+        }
+    }
+
+    pub(super) fn with_presentation(mut self, workflow_id: &'a str) -> Self {
+        self.presentation = Some(dry_run::RequestPresentation::new(workflow_id, self.step_id));
+        self
+    }
+
+    pub(super) fn project(
+        &self,
+        result: &payload::ResolvedValueSource,
+        location: &str,
+    ) -> Result<Value, RuntimeError> {
+        self.check(result, location)?;
+        Ok(self.presentation.as_ref().map_or_else(
+            || result.value.clone(),
+            |presentation| presentation.project(self.vars, result, location),
+        ))
+    }
+
+    pub(super) fn presentation_warnings(&self, step: &Step) -> Vec<String> {
+        self.presentation
+            .as_ref()
+            .map_or_else(Vec::new, |presentation| presentation.warnings(step))
     }
 
     pub(super) fn parameter_location(index: usize, parameter: &Parameter) -> String {

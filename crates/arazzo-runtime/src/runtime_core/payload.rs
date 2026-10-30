@@ -41,6 +41,7 @@ pub(crate) struct ResolvedValueSource {
 pub(crate) struct LocatedExpressionResolution {
     pub(crate) pointer: String,
     pub(crate) resolution: arazzo_expr::ExpressionResolution,
+    pub(crate) direct: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +91,7 @@ impl ResolvedValueSource {
                 }
                 LocatedExpressionResolution {
                     pointer: pointer.to_owned(),
+                    direct: source == resolution.expression,
                     resolution,
                 }
             })
@@ -241,6 +243,9 @@ fn resolve_selector_checked(
         &selector.context,
         pointer,
     );
+    for occurrence in &mut result.expressions {
+        occurrence.direct = false;
+    }
     if !result.failures.is_empty() {
         result.failures = vec![ValueResolutionFailure {
             pointer: pointer.to_owned(),
@@ -345,33 +350,82 @@ enum TargetKind {
 /// when two entries resolve to the same location, the later entry wins.
 /// Warnings are already prefixed with the replacement index.
 pub(super) fn apply_replacements(
-    mut body: Value,
+    body: Value,
     content_type: &str,
     replacements: &[arazzo_spec::Replacement],
     eval: &ExpressionEvaluator,
     admission: &request_admission::RequestAdmission<'_>,
 ) -> Result<(Value, Vec<String>), RuntimeError> {
-    let mut warnings = Vec::<String>::new();
+    apply_replacements_resolved(body, content_type, replacements, |index, replacement| {
+        let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
+        admission.check(
+            &resolution,
+            &format!("requestBody.replacements[{index}].value"),
+        )?;
+        let warnings = resolution
+            .warnings
+            .iter()
+            .map(|warning| replacement_warning(index, &warning.to_string()))
+            .collect();
+        Ok((resolution.value, warnings))
+    })
+}
 
+pub(super) fn apply_replacements_projected(
+    body: Value,
+    projection: Value,
+    content_type: &str,
+    replacements: &[arazzo_spec::Replacement],
+    eval: &ExpressionEvaluator,
+    admission: &request_admission::RequestAdmission<'_>,
+) -> Result<(Value, Value, Vec<String>), RuntimeError> {
+    let mut projected = BTreeMap::new();
+    let (body, warnings) =
+        apply_replacements_resolved(body, content_type, replacements, |index, replacement| {
+            let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
+            let location = format!("requestBody.replacements[{index}].value");
+            let value = admission.project(&resolution, &location)?;
+            projected.insert(index, value);
+            let warnings = resolution
+                .warnings
+                .iter()
+                .map(|warning| replacement_warning(index, &warning.to_string()))
+                .collect();
+            Ok((resolution.value, warnings))
+        })?;
+    let (projection, _) =
+        apply_replacements_resolved(projection, content_type, replacements, |index, _| {
+            Ok((
+                projected.remove(&index).ok_or_else(|| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::InternalError,
+                        "missing resolved replacement projection",
+                    )
+                })?,
+                Vec::new(),
+            ))
+        })?;
+    Ok((body, projection, warnings))
+}
+
+fn apply_replacements_resolved(
+    mut body: Value,
+    content_type: &str,
+    replacements: &[arazzo_spec::Replacement],
+    mut resolve: impl FnMut(
+        usize,
+        &arazzo_spec::Replacement,
+    ) -> Result<(Value, Vec<String>), RuntimeError>,
+) -> Result<(Value, Vec<String>), RuntimeError> {
+    let mut warnings = Vec::<String>::new();
     for (index, replacement) in replacements.iter().enumerate() {
         let target = replacement.target.trim();
         if target.is_empty() {
             warnings.push(replacement_warning(index, "target is empty"));
             continue;
         }
-
-        let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
-        admission.check(
-            &resolution,
-            &format!("requestBody.replacements[{index}].value"),
-        )?;
-        warnings.extend(
-            resolution
-                .warnings
-                .iter()
-                .map(|warning| replacement_warning(index, &warning.to_string())),
-        );
-        let resolved = resolution.value;
+        let (resolved, value_warnings) = resolve(index, replacement)?;
+        warnings.extend(value_warnings);
 
         let declared = replacement.target_selector_type.as_ref();
         let kind = match declared {

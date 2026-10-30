@@ -5575,25 +5575,21 @@ fn transport_test_command_warnings_and_json_entries() {
 }
 
 // ── generate: document-pointing sourceDescriptions url (ac-91284) ────
-//
-// `arazzo generate` used to bake the OpenAPI `servers[0]` URL straight into
-// `sourceDescriptions[].url` (an http(s) origin, which the Arazzo
-// Specification does not sanction for that field). It now emits a relative
-// path to the OpenAPI document itself, and the runtime's document-semantics
-// loader derives the request base from that document's `servers[0]` at run
-// time instead. These tests are the behavior-preservation guard: the request
-// URLs a generated workflow resolves to under `--dry-run` must be byte-
-// identical to what the pre-change, base-URL-baking generator produced —
-// `https://petstore.example.com/v1/<path>`, captured by hand against this
-// change's engine_http.rs (untouched by this ticket) before writing these
-// assertions.
-
 const PETSTORE_DRY_RUN_URLS: &[(&str, &str)] = &[
     ("create-pets", "https://petstore.example.com/v1/pets"),
     ("list-pets", "https://petstore.example.com/v1/pets"),
-    ("read-pets", "https://petstore.example.com/v1/pets/"),
-    ("update-pets", "https://petstore.example.com/v1/pets/"),
-    ("delete-pets", "https://petstore.example.com/v1/pets/"),
+    (
+        "read-pets",
+        "https://petstore.example.com/v1/pets/%3Cunresolved:$response.body%23%2FpetId%3E",
+    ),
+    (
+        "update-pets",
+        "https://petstore.example.com/v1/pets/%3Cunresolved:$response.body%23%2FpetId%3E",
+    ),
+    (
+        "delete-pets",
+        "https://petstore.example.com/v1/pets/%3Cunresolved:$response.body%23%2FpetId%3E",
+    ),
 ];
 
 fn assert_petstore_dry_run_urls(body: &Value) {

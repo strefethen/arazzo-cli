@@ -146,7 +146,24 @@ Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.j
 - `--kafka-connect-timeout <duration>` — bound on connecting, authenticating, and snapshotting offsets before the first step (default `30s`)
 - `--asyncapi-server <source>=<server-key>` — pick the server for a source whose channel lists several eligible Kafka servers (repeatable)
 
-Dry-run uses a simulated HTTP 200 response with an empty JSON object. Outputs and later requests that depend on real responses may therefore be unresolved or differ from a live run; it does not validate live success criteria.
+Dry-run uses a simulated HTTP 200 response with an empty JSON object. A direct
+request value derived from skipped transport is displayed as
+`<unresolved:SOURCE>` with a request-local warning, including through child
+workflow inputs and outputs. For example, `parent-flow` in
+`examples/sub-workflow.arazzo.yaml` shows a query marker for
+`$response.body#/url`; the URL encodes the marker while the warning keeps the
+source readable. Human output prints warnings immediately after each request;
+JSON retains the existing `warnings` field. `--expr-diagnostics warn` reports
+these warnings; `error` returns `RUNTIME_EXPRESSION_DIAGNOSTICS`.
+
+This is a partial request plan, not live response or control-flow simulation.
+Stored synthetic values and ordinary request/trace/debug values stay unchanged.
+Markers cover direct aliases; pointer suffixes, interpolated strings and
+Selector transformations do not promise reconstructed markers. Genuinely
+unresolved values or hard Selector failures stop request preparation with
+`RUNTIME_UNRESOLVED_REQUEST_VALUE` in every diagnostics mode. Intentional nulls,
+empty values, optional omissions and legitimate zero-match Selectors remain
+admitted. Dry-run does not evaluate live success criteria.
 
 `test` flags:
 
@@ -481,7 +498,7 @@ outputs:
 
 Runtime JSONPath execution accepts an omitted version or `version: rfc9535`; `draft-goessner-dispatch-jsonpath-00` is rejected permanently — see [Typed JSONPath (RFC 9535)](#typed-jsonpath-rfc-9535). Runtime XPath execution requires an explicit `version: xpath-10`: every other declared version — and the bare `type: xpath` string form, whose omitted version the specification defaults to `xpath-31` — is rejected the same way. A rejected criterion fails its step with an error; a rejected selector resolves to `null` with one warning; a rejected replacement leaves the body unchanged with one warning. For XPath, `validate` flags each such declaration ahead of execution with a warning naming the rejected version and the `xpath-10` remedy, and `--strict` promotes it to an error; there is no equivalent JSONPath version advisory, so a Goessner declaration passes `validate` cleanly and is rejected only at run time.
 
-All selector callers use the same selection engine — RFC 9535 for `jsonpath`. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in query/document order. Invalid syntax, unsupported runtime versions, admission-limit rejections, and zero matches produce trace or dry-run warnings; only the last of those is a legitimate selection, and a JSONPath failure is never written into a request body as `null`. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
+All selector callers use the same selection engine — RFC 9535 for `jsonpath`. Zero matches resolve to `null`, one match resolves to the value, and multiple matches resolve to an array in query/document order. Invalid syntax, unsupported runtime versions and admission-limit rejections are hard failures: consuming them in a request refuses that request. Zero matches remain a legitimate null selection with a warning. A JSONPath failure is never written into a request body as `null`. A mapping is treated as a Selector Object only when it satisfies the complete `context` + `selector` + `type` contract, so ordinary literal mappings retain their existing recursive expression behavior.
 
 For XPath outputs, use a Selector Object with an explicit version (`type: {type: xpath, version: xpath-10}`). Starting with v0.8.0, bare `//xpath/expression` output strings are rejected as invalid runtime expressions; put the XPath in the Selector Object's `selector` field and supply its `context`.
 

@@ -667,6 +667,9 @@ pub fn emit_dry_run_requests(
         if let Some(body) = r.body {
             println!("  Body: {body}");
         }
+        for warning in r.warnings {
+            println!("  Warning: {warning}");
+        }
         println!();
     }
     Ok(())

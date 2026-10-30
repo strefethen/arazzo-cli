@@ -44,6 +44,7 @@ mod controlled_exchange_tests;
 mod criteria;
 mod deps;
 mod document_set;
+mod dry_run;
 mod engine_actions;
 mod engine_http;
 #[cfg(test)]

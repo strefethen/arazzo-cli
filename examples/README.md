@@ -14,7 +14,18 @@ cargo run -p arazzo-cli -- validate examples/httpbin-get.arazzo.yaml
 request, so the commands below need no network access. Drop the flag to
 actually call the endpoint — the `httpbin-*` specs target `https://httpbin.org`.
 Source descriptions point to local OpenAPI documents; operation targets select
-the method and path from those documents.
+the method and path from those documents. A plan can still fail on genuinely
+unresolved request values or hard Selector errors.
+
+`parent-flow` in `sub-workflow.arazzo.yaml` demonstrates a partial plan: its
+child response-derived URL becomes `<unresolved:$response.body#/url>` in the
+follow-up request, with a readable source warning and URL-encoded marker.
+Direct aliases through child inputs and outputs retain this origin. Stored
+values remain synthetic; pointer, interpolation and Selector transformations
+do not promise reconstructed markers. Human output places warnings after each
+request; JSON keeps them in `warnings`. Use `--expr-diagnostics error` to reject
+a skipped-transport incomplete plan. This does not simulate live responses or
+response-dependent control flow.
 
 ## Scenario-First Examples
 
@@ -76,8 +87,10 @@ Delete the `$self` line and the run fails, naming the file it looked for in
 ## Notes
 
 - `soap-customer-crud.arazzo.yaml` points at a SOAP mock on
-  `http://localhost:4010`, which this repo does not ship. Validate and dry-run
-  it as-is; a live run needs your own mock at that address.
+  `http://localhost:4010`, which this repo does not ship. It validates, but its
+  dry run stops when a later request consumes the failed XPath result: the
+  synthetic empty JSON response is not an XML string. A live run needs your
+  own mock at that address.
 - `kafka-order-followup.arazzo.yaml` validates and dry-runs offline; a live run
   needs `scripts/kafka/broker.sh up` and `scripts/kafka/order-server.py`, and
   a record produced after the armed line — the full sequence is in
