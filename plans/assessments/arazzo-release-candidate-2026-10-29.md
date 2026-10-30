@@ -121,7 +121,10 @@ before release. No tag, publication or hourly resumption is authorized.
   Child parameter unification is reviewed and closed in
   [ac-0b8c2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2), local
   [3664ac6](https://github.com/strefethen/arazzo-cli/commit/3664ac6c46fce4661b1eb35ac41913dfae2c8c8b).
-  Shared runtime propagation and refusal remain pending.
+  Shared runtime propagation is reviewed and closed in
+  [ac-1af66](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1af66), local
+  [74b00a0](https://github.com/strefethen/arazzo-cli/commit/74b00a04a4c7f960a7053d12603a6a0082f24ae6).
+  Refusal is in progress; the foundation alone does not clear L4.
 - Tokio 1.51.6 / macros 2.7.1 is reviewed and closed in
   [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
   [5d91f2b](https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5).

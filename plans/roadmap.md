@@ -1,7 +1,7 @@
 # Arazzo engine maintainer roadmap
 
 Updated: 2026-10-29. Owner: Codex Chief of Staff, working with Steve.
-Latest reviewed source cycle: [ac-0b8c2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2) (local; not pushed).
+Latest reviewed source cycle: [ac-1af66](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1af66) (local; not pushed).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
 Latest planning cycle: [ac-10ce6](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-10ce6).
 Initial roadmap: [ac-c45b9](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-c45b9).
@@ -58,7 +58,7 @@ on [ac-208df](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-208df).
 with unresolved request values and credential redaction, with subagents and
 tracked review. The [request-admission plan](current/arazzo-request-value-admission.md)
 is decomposed under [epic:ac-3d8bf](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-3d8bf).
-Expression provenance is reviewed and closed in [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58), local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b). Recursive value provenance is also reviewed and closed in [ac-b3093](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b3093), local [56cd5f1](https://github.com/strefethen/arazzo-cli/commit/56cd5f18eab70d33bebeaa803af4b4fc16f5b5b9). Child-workflow parameter unification is reviewed and closed in [ac-0b8c2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2), local [3664ac6](https://github.com/strefethen/arazzo-cli/commit/3664ac6c46fce4661b1eb35ac41913dfae2c8c8b). Shared runtime propagation is next; live admission is not yet repaired. [ac-fbb58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fbb58) holds final system proof and plan closure after the existing dry-run ticket, preventing premature epic completion.
+Expression provenance is reviewed and closed in [ac-48b58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-48b58), local [9a6f832](https://github.com/strefethen/arazzo-cli/commit/9a6f832bdc34a4718146dd8ff7956cb5e3930c8b). Recursive value provenance is also reviewed and closed in [ac-b3093](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-b3093), local [56cd5f1](https://github.com/strefethen/arazzo-cli/commit/56cd5f18eab70d33bebeaa803af4b4fc16f5b5b9). Child-workflow parameter unification is reviewed and closed in [ac-0b8c2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-0b8c2), local [3664ac6](https://github.com/strefethen/arazzo-cli/commit/3664ac6c46fce4661b1eb35ac41913dfae2c8c8b). Shared runtime propagation is reviewed and closed in [ac-1af66](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1af66), local [74b00a0](https://github.com/strefethen/arazzo-cli/commit/74b00a04a4c7f960a7053d12603a6a0082f24ae6). Live admission is now in progress in [ac-fd849](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fd849); it is not yet repaired. [ac-fbb58](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fbb58) holds final system proof and plan closure after the existing dry-run ticket, preventing premature epic completion.
 The narrow Tokio advisory remedy is reviewed and closed in
 [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
 [5d91f2b](https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5).

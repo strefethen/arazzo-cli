@@ -198,6 +198,7 @@
     <a href="#overview" class="mb-7 block text-lg font-semibold tracking-tight no-underline max-lg:hidden">arazzo<span class="text-muted-foreground">/</span>cli</a>
     <p class="eyebrow mb-3 px-3 max-lg:hidden">Delivery log</p>
     <a href="#overview" class="toc-link active" aria-current="location">At a glance</a>
+    <a href="#cycle-40" class="toc-link">40 · Runtime value provenance</a>
     <a href="#cycle-39" class="toc-link">39 · Child parameters</a>
     <a href="#cycle-38" class="toc-link">38 · Nested-value foundation</a>
     <a href="#cycle-37" class="toc-link">37 · Tokio advisory</a>
@@ -253,6 +254,24 @@
       </div>
       <p class="mt-5 text-sm text-muted-foreground">Publication correction: reviewed main pushes run CI and deploy GitHub Pages. Steve approved the existing Pages deployment. Earlier entries retain their historical statements; “CI only” and “no deployment” claims were incomplete. Hourly maintainer runs are paused. This journal is not a tagged release.</p>
     </header>
+
+    <section id="cycle-40" class="section" aria-labelledby="cycle-40-title">
+      <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 40 · 29 Oct 2026</span><span class="badge done">Foundation · local, reviewed</span></div>
+      <h2 id="cycle-40-title" class="cycle-title">Values retain their origin across workflow boundaries.</h2>
+      <p class="mt-4 max-w-3xl leading-relaxed text-muted-foreground">The runtime can now distinguish a missing value from a value unavailable because dry-run transport was skipped, even after child workflows, aliases, actions and parallel execution. This private metadata prepares the request safety guard; it does not activate refusal yet.</p>
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <div class="panel min-w-0"><p class="example-label">Before · indistinguishable projections</p><pre class="overflow-x-auto"><code>Missing expression → null
+Skipped response → null
+Intentional null → null</code></pre></div>
+        <div class="panel min-w-0"><p class="example-label">After · private origin alongside the value</p><pre class="overflow-x-auto"><code>Missing expression → unresolved
+Skipped response → skipped origin
+Intentional null → resolved
+Public JSON values stay unchanged.</code></pre></div>
+      </div>
+      <p class="mt-5 text-muted-foreground">Concrete overwrites clear stale metadata; rollback restores values and origins together. A separate request context preserves optional omissions without converting required or supplied-unresolved inputs into ordinary nulls.</p>
+      <p class="mt-4 text-sm text-muted-foreground">Proof: 18 focused tests pass in debug and release, full workspace tests and required checks pass, and parallel release controls pass. Independent second review passed after adding schema-derived omission controls. The live-request blocker remains open until admission and final integrated proof are complete.</p>
+      <p class="mt-4 text-sm text-muted-foreground"><a href="https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1af66">Contract and evidence</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/be3133242192656fde85cf1b1cf821a45d3002f3">implementation be31332</a> · <a href="https://github.com/strefethen/arazzo-cli/commit/74b00a04a4c7f960a7053d12603a6a0082f24ae6">reviewed final candidate 74b00a0</a> (local; not pushed).</p>
+    </section>
 
     <section id="cycle-39" class="section" aria-labelledby="cycle-39-title">
       <div class="flex flex-wrap items-center gap-3"><span class="eyebrow">Cycle 39 · 29 Oct 2026</span><span class="badge done">Behavior correction · local, reviewed</span></div>
