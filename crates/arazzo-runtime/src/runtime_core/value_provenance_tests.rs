@@ -127,6 +127,55 @@ fn request_projection_omissions_and_ordinary_context() {
     assert!(vars.debug_scopes().inputs.contains_key("x"));
 }
 
+#[test]
+fn schema_derived_request_omissions_preserve_required_and_supplied_unknown_absence() {
+    let schema = parse(json!({
+        "type": "object",
+        "required": ["required"],
+        "properties": {
+            "required": {"type": "string"},
+            "optional": {"type": "string"},
+            "x": {"type": "object"}
+        }
+    }));
+    let supplied = marked(json!({"concreteSibling": 7}));
+    let omissions =
+        super::value_provenance::optional_input_omissions(Some(&schema), &supplied.values);
+    assert_eq!(omissions, BTreeSet::from(["optional".to_owned()]));
+    let mut vars = VarStore::default();
+    vars.set_inputs(supplied.clone(), omissions.clone());
+    vars.register_workflow_values(
+        "child",
+        supplied.clone(),
+        ProvenancedValues::default(),
+        omissions,
+    );
+    let ordinary = vars.eval_context(None);
+    let debug = vars.debug_scopes();
+    let projected = super::request_admission::request_context(&vars, ordinary.clone(), "GET");
+    for inputs in [&projected.inputs, &projected.workflows["child"].inputs] {
+        assert_eq!(inputs.get("optional"), Some(&Value::Null));
+        assert!(!inputs.contains_key("required"));
+        assert!(!inputs.contains_key("undeclared"));
+        assert!(!inputs.contains_key("x"));
+    }
+    for inputs in [&ordinary.inputs, &ordinary.workflows["child"].inputs] {
+        assert_eq!(inputs, &supplied.values);
+        assert!(!inputs.contains_key("optional"));
+        assert!(!inputs.contains_key("required"));
+        assert!(!inputs.contains_key("undeclared"));
+    }
+    let unchanged = vars.eval_context(None);
+    assert_eq!(unchanged.inputs, ordinary.inputs);
+    assert_eq!(
+        unchanged.workflows["child"].inputs,
+        ordinary.workflows["child"].inputs
+    );
+    assert_eq!(vars.debug_scopes().inputs, debug.inputs);
+    assert_eq!(projected.method.as_deref(), Some("GET"));
+    assert_eq!(ordinary.method, None);
+}
+
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).unwrap_or_else(|error| panic!("fixture: {error}"))
 }
