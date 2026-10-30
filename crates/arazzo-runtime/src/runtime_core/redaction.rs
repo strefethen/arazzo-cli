@@ -126,6 +126,25 @@ pub fn redact_headers(headers: &mut BTreeMap<String, String>) {
     }
 }
 
+fn is_sensitive_query_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            for _ in 0..2 {
+                if !bytes.next().is_some_and(|digit| digit.is_ascii_hexdigit()) {
+                    return is_sensitive_key(name);
+                }
+            }
+        }
+    }
+    percent_encoding::percent_decode_str(name)
+        .decode_utf8()
+        .map_or_else(
+            |_| is_sensitive_key(name),
+            |decoded| is_sensitive_key(&decoded),
+        )
+}
+
 pub fn redact_url(url: &mut String) {
     // Edit only the authority's userinfo, preserving the original URL bytes
     // everywhere else. An @ in the path, query, or fragment is not userinfo.
@@ -140,10 +159,11 @@ pub fn redact_url(url: &mut String) {
     // Parse query params without reconstructing the URL to avoid
     // normalization artifacts (percent-encoding changes, reordering)
     // that could cause replay drift.
-    let Some(query_start) = url.find('?') else {
+    let query_end = url.find('#').unwrap_or(url.len());
+    let Some(query_start) = url[..query_end].find('?') else {
         return;
     };
-    let query = &url[query_start + 1..];
+    let query = &url[query_start + 1..query_end];
     if query.is_empty() {
         return;
     }
@@ -154,7 +174,7 @@ pub fn redact_url(url: &mut String) {
             redacted_query.push('&');
         }
         if let Some((key, _value)) = pair.split_once('=') {
-            if is_sensitive_key(key) {
+            if is_sensitive_query_name(key) {
                 redacted_query.push_str(key);
                 redacted_query.push('=');
                 redacted_query.push_str(REDACTED);
@@ -166,8 +186,7 @@ pub fn redact_url(url: &mut String) {
         }
     }
 
-    url.truncate(query_start + 1);
-    url.push_str(&redacted_query);
+    url.replace_range(query_start + 1..query_end, &redacted_query);
 }
 
 pub fn redact_json_object(map: &mut BTreeMap<String, Value>) {
@@ -211,7 +230,7 @@ pub fn redact_text_patterns(text: &str) -> String {
     // key=value or key: value where the key looks sensitive.
     static RE_KV: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"(?i)(password|passwd|secret|token|authorization|apikey|api_key|credential|pwd)(\s*[:=]\s*)\S+",
+            r"(?i)(password|passwd|secret|token|authorization|apikey|api_key|credential|pwd|private[-_ ]*key|x[-_ ]*auth[-_ ]*key|auth[-_ ]*key|subscription[-_ ]*key|ocp[-_ ]*apim[-_ ]*subscription[-_ ]*key)(\s*[:=]\s*)\S+",
         )
         .unwrap_or_else(|err| panic!("failed to compile kv regex: {err}"))
     });
@@ -458,22 +477,154 @@ mod tests {
     }
 
     #[test]
-    fn exact_name_slice_preserves_query_decoding_and_free_text_behavior() {
+    fn query_names_decode_once_and_leave_other_structured_names_undecoded() {
         for name in [
+            "x%2Dauth%2Dkey",
+            "x%2dauth%2dkey",
             "private%5Fkey",
+            "Private%20Key",
+            "api%5Fkey",
+            "%74oken",
+            "access%5Ftoken",
+            "%70%72%69%76%61%74%65%4b%65%79",
+        ] {
+            let mut url = format!("https://example.com/?{name}=SYNTHETIC");
+            redact_url(&mut url);
+            assert_eq!(
+                url,
+                format!("https://example.com/?{name}={REDACTED}"),
+                "{name}"
+            );
+        }
+        for name in [
+            "%6Bey",
             "private%255Fkey",
             "private+key",
-            "private%key",
-            "private%",
-            "private%FFkey",
+            "private%2Bkey",
+            "%2574oken",
         ] {
             let mut url = format!("https://example.com/?{name}=SYNTHETIC");
             let original = url.clone();
             redact_url(&mut url);
             assert_eq!(url, original, "{name}");
         }
-        let text = "private_key=SYNTHETIC X-Auth-Key: SYNTHETIC authKey=SYNTHETIC subscription-key=SYNTHETIC Ocp-Apim-Subscription-Key=SYNTHETIC";
-        assert_eq!(redact_text_patterns(text), text);
+        let mut headers = BTreeMap::from([("private%5Fkey".to_string(), "visible".to_string())]);
+        redact_headers(&mut headers);
+        assert_eq!(headers["private%5Fkey"], "visible");
+        let mut value = json!({"private%5Fkey": "visible"});
+        redact_json_value(&mut value);
+        assert_eq!(value, json!({"private%5Fkey": "visible"}));
+        assert!(sensitive_input_names(None, ["private%5Fkey"]).is_empty());
+    }
+
+    #[test]
+    fn invalid_query_decoding_classifies_the_whole_original_name() {
+        for (name, sensitive) in [
+            ("%", false),
+            ("%2", false),
+            ("%GG", false),
+            ("%2G", false),
+            ("%FF", false),
+            ("%C3%28", false),
+            ("%C3", false),
+            ("private%key", false),
+            ("private%", false),
+            ("private%FFkey", false),
+            ("%74oken%", false),
+            ("%74oken%2", false),
+            ("%74oken%GG", false),
+            ("%74oken%2G", false),
+            ("%74oken%FF", false),
+            ("%74oken%C3%28", false),
+            ("%74oken%C3", false),
+            ("token%GG", true),
+            ("token%FF", true),
+            ("t%C3%B6ken", false),
+            ("pr%C4%B0vateKey", false),
+            ("%F0%9F%94%91", false),
+            ("%C3%A9token", true),
+        ] {
+            let mut url = format!("https://example.com/?{name}=SYNTHETIC");
+            redact_url(&mut url);
+            let expected = if sensitive { REDACTED } else { "SYNTHETIC" };
+            assert_eq!(
+                url,
+                format!("https://example.com/?{name}={expected}"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_redaction_preserves_all_other_url_bytes_and_fragment_boundaries() {
+        for (original, expected) in [
+            (
+                "https://host/path?private%5Fkey=CANARY&key=visible#token=fragment-visible",
+                "https://host/path?private%5Fkey=[REDACTED]&key=visible#token=fragment-visible",
+            ),
+            ("https://host/path#fragment?token=visible", "https://host/path#fragment?token=visible"),
+            ("https://host/path?token=CANARY#fragment?token=visible", "https://host/path?token=[REDACTED]#fragment?token=visible"),
+            ("https://host/path?#token=visible", "https://host/path?#token=visible"),
+            (
+                "https://u:p@EXAMPLE.com/PaTh/%2f?privateKey=CANARY&&key=a=b%26c%3Dd&private%5fkey=&privateKey=SECOND&flag&=empty&privateKey&tail=#token=visible&privateKey=fragment",
+                "https://[REDACTED]@EXAMPLE.com/PaTh/%2f?privateKey=[REDACTED]&&key=a=b%26c%3Dd&private%5fkey=[REDACTED]&privateKey=[REDACTED]&flag&=empty&privateKey&tail=#token=visible&privateKey=fragment",
+            ),
+            ("https://host/path?&&key=&flag&&", "https://host/path?&&key=&flag&&"),
+        ] {
+            let mut actual = original.to_string();
+            redact_url(&mut actual);
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn free_text_mirrors_exact_names_with_repeated_separators_and_original_delimiters() {
+        for words in [
+            vec!["private", "key"],
+            vec!["x", "auth", "key"],
+            vec!["auth", "key"],
+            vec!["subscription", "key"],
+            vec!["ocp", "apim", "subscription", "key"],
+        ] {
+            for separator in ["", "-", "_", " ", "- _-- "] {
+                for delimiter in ["=", ": ", "  :  "] {
+                    let name = words.join(separator).to_ascii_uppercase();
+                    let text = format!("before {name}{delimiter}SYNTHETIC after");
+                    assert_eq!(
+                        redact_text_patterns(&text),
+                        format!("before {name}{delimiter}{REDACTED} after")
+                    );
+                }
+            }
+        }
+        for name in ["foo_authkey", "x-private-key", "x-subscription-key"] {
+            assert!(!is_sensitive_key(name), "{name}");
+            assert_eq!(
+                redact_text_patterns(&format!("{name}=SYNTHETIC")),
+                format!("{name}={REDACTED}")
+            );
+        }
+        assert_eq!(
+            redact_text_patterns("pRiVaTe KeY: expected PEM"),
+            "pRiVaTe KeY: [REDACTED] PEM"
+        );
+        for text in [
+            "key=visible",
+            "keyboardLayout=visible",
+            "primaryKey=visible",
+            "partition_key=visible",
+            "sortKey=visible",
+            "foreignKey=visible",
+            "Idempotency-Key=visible",
+            "publicKey=visible",
+            "no patterns here",
+        ] {
+            assert_eq!(redact_text_patterns(text), text);
+        }
+        assert_eq!(
+            redact_text_patterns("Bearer abc123 Basic dXNlcjpwYXNz"),
+            "Bearer [REDACTED] Basic [REDACTED]"
+        );
     }
 
     #[test]

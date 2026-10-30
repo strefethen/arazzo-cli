@@ -293,6 +293,73 @@ fn dry_run_trace_redacts_name_matched_and_schema_declared_inputs() {
 }
 
 #[test]
+fn encoded_query_names_reach_dry_run_json_and_trace_without_double_encoding() {
+    let fixture = Fixture::new("encoded-query");
+    let source_url = common::fixture_url("https://api.example.com/v1");
+    let pairs = [
+        ("private%5Fkey", "SYNTHETIC-query-private", true),
+        ("x%2Dauth%2Dkey", "SYNTHETIC-query-xauth", true),
+        ("auth%5Fkey", "SYNTHETIC-query-auth", true),
+        ("subscription%2Dkey", "SYNTHETIC-query-subscription", true),
+        (
+            "ocp%2dapim%2dsubscription%2dkey",
+            "SYNTHETIC-query-ocp",
+            true,
+        ),
+        ("api%5Fkey", "SYNTHETIC-query-api", true),
+        ("%74oken", "SYNTHETIC-query-token", true),
+        ("access%5Ftoken", "SYNTHETIC-query-access", true),
+        ("key", "visible-raw-key", false),
+        ("%6Bey", "visible-encoded-key", false),
+        ("private+key", "visible-plus", false),
+        ("private%2Bkey", "visible-encoded-plus", false),
+        ("private%255Fkey", "visible-double-private", false),
+        ("%2574oken", "visible-double-token", false),
+    ];
+    let raw_query = pairs
+        .iter()
+        .map(|(name, value, _)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let expected_query = pairs
+        .iter()
+        .map(|(name, value, sensitive)| {
+            format!("{name}={}", if *sensitive { REDACTED } else { value })
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    fs::write(&fixture.spec_path, format!(
+        "arazzo: 1.1.0\ninfo:\n  title: Encoded query redaction\n  version: 1.0.0\nsourceDescriptions:\n  - name: api\n    url: {source_url}\n    type: openapi\nworkflows:\n  - workflowId: wf\n    steps:\n      - stepId: list\n        operationId: fixtureGetItems\n        parameters:\n          - name: filter\n            in: querystring\n            value: {raw_query}\n"
+    )).unwrap_or_else(|err| panic!("writing encoded fixture: {err}"));
+    let trace_path = fixture.dir.join("trace.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+        .args(["--json", "run"])
+        .arg(&fixture.spec_path)
+        .args(["wf", "--dry-run", "--trace"])
+        .arg(&trace_path)
+        .output()
+        .unwrap_or_else(|err| panic!("running encoded fixture: {err}"));
+    assert_success(&output);
+    let dry_run: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("parsing encoded dry-run JSON: {err}"));
+    let trace = read_json(&trace_path);
+    for request in [&dry_run["requests"][0], &trace["steps"][0]["request"]] {
+        let url = request["url"]
+            .as_str()
+            .unwrap_or_else(|| panic!("request URL missing: {request}"));
+        assert!(
+            url.ends_with(&format!("/items?{expected_query}")),
+            "raw query name spelling or redaction changed: {url}"
+        );
+        for (_, canary, sensitive) in pairs {
+            if sensitive {
+                assert!(!url.contains(canary), "{canary} leaked: {url}");
+            }
+        }
+    }
+}
+
+#[test]
 fn verbose_inputs_echo_redacts_the_same_names_as_the_trace() {
     let fixture = Fixture::new("verbose");
     let trace_path = fixture.dir.join("trace.json");

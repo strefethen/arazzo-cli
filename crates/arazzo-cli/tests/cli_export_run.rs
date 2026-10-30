@@ -274,6 +274,147 @@ fn exact_credential_outputs_are_masked_only_in_persisted_evidence() {
 }
 
 #[test]
+fn encoded_request_query_names_are_masked_in_persisted_urls() {
+    let temp = TempDir::new();
+    let query = "private%5Fkey=SYNTHETIC-stored-private&x%2Dauth%2Dkey=SYNTHETIC-stored-xauth&api%5Fkey=SYNTHETIC-stored-api&%74oken=SYNTHETIC-stored-token&key=visible&%6Bey=encoded-visible&private+key=plus-visible&private%255Fkey=double-visible";
+    let server = Server::start(move |_, path| {
+        assert_eq!(
+            path,
+            format!("/one?{query}"),
+            "transport changed raw query spelling"
+        );
+        (200, "{}".into(), vec![])
+    });
+    let workflows = format!("  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        parameters:\n          - name: filter\n            in: querystring\n            value: {query}\n");
+    let spec = spec(&temp, &server.url, &workflows);
+    let path = temp.path("run.json");
+    let trace_path = temp.path("trace.json");
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--export-run",
+            path.to_str().unwrap(),
+            "--trace",
+            trace_path.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let export = artifact(&path);
+    let trace = artifact(&trace_path);
+    for request in [
+        &export["workflows"]["wf"]["steps"]["one"]["executions"][0]["request"],
+        &trace["steps"][0]["request"],
+    ] {
+        assert_eq!(request["url"], format!("{}/one?private%5Fkey=[REDACTED]&x%2Dauth%2Dkey=[REDACTED]&api%5Fkey=[REDACTED]&%74oken=[REDACTED]&key=visible&%6Bey=encoded-visible&private+key=plus-visible&private%255Fkey=double-visible", server.url));
+    }
+    assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn non_json_criteria_previews_mirror_names_and_export_omits_the_preview() {
+    let temp = TempDir::new();
+    let body = "private_key=SYNTHETIC-error-private X-Auth-Key: SYNTHETIC-error-xauth authKey=SYNTHETIC-error-auth subscription-key=SYNTHETIC-error-sub Ocp-Apim-Subscription-Key=SYNTHETIC-error-ocp key=visible";
+    let expected = "private_key=[REDACTED] X-Auth-Key: [REDACTED] authKey=[REDACTED] subscription-key=[REDACTED] Ocp-Apim-Subscription-Key=[REDACTED] key=visible";
+    assert!(body.len() < 500);
+    let server = Server::start(move |_, _| {
+        (
+            403,
+            body.into(),
+            vec![("Content-Type", "text/plain".into())],
+        )
+    });
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        successCriteria:\n          - condition: $statusCode == 200\n";
+    let spec = spec(&temp, &server.url, workflows);
+    let path = temp.path("run.json");
+    let trace_path = temp.path("trace.json");
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--trace",
+            trace_path.to_str().unwrap(),
+            "--export-run",
+            path.to_str().unwrap(),
+        ],
+    );
+    assert!(!output.status.success());
+    let error = json_stdout(&output);
+    assert_eq!(error["kind"], "error");
+    assert_eq!(error["code"], "RUNTIME_SUCCESS_CRITERIA_FAILED");
+    assert!(
+        error["error"].as_str().unwrap().contains(expected),
+        "{error}"
+    );
+    let trace = artifact(&trace_path);
+    assert_eq!(trace["steps"][0]["response"]["body"], expected);
+    assert_eq!(trace["steps"][0]["response"]["bodyPreview"], expected);
+    assert!(
+        trace["run"]["error"].as_str().unwrap().contains(expected),
+        "{trace}"
+    );
+    let export = artifact(&path);
+    assert_eq!(export["run"]["status"], "failure");
+    assert_eq!(
+        export["run"]["error"]["code"],
+        "RUNTIME_SUCCESS_CRITERIA_FAILED"
+    );
+    let message = export["run"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("status=403"), "{message}");
+    assert!(!message.contains("body="), "{message}");
+    assert!(!message.contains("key=visible"), "{message}");
+    assert_eq!(
+        export["workflows"]["wf"]["steps"]["one"]["executions"][0]["response"]["statusCode"],
+        403
+    );
+    for value in [&error, &trace, &export] {
+        assert!(!value.to_string().contains("SYNTHETIC-error-"), "{value}");
+    }
+}
+
+#[test]
+fn persisted_string_leaves_mirror_names_without_changing_live_success_values() {
+    let temp = TempDir::new();
+    let text = "private_key=SYNTHETIC-leaf-private X-Auth-Key: SYNTHETIC-leaf-xauth authKey=SYNTHETIC-leaf-auth subscription-key=SYNTHETIC-leaf-sub Ocp-Apim-Subscription-Key=SYNTHETIC-leaf-ocp key=visible";
+    let expected = "private_key=[REDACTED] X-Auth-Key: [REDACTED] authKey=[REDACTED] subscription-key=[REDACTED] Ocp-Apim-Subscription-Key=[REDACTED] key=visible";
+    let full = json!({"note": text, "items": [{"text": text}], "key": "visible"});
+    let body = full.to_string();
+    let server = Server::start(move |_, _| {
+        (
+            200,
+            body.clone(),
+            vec![("Content-Type", "application/json".into())],
+        )
+    });
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        outputs:\n          data: $response.body\n    outputs:\n      report: $steps.one.outputs.data\n";
+    let spec = spec(&temp, &server.url, workflows);
+    let path = temp.path("run.json");
+    let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let live = json_stdout(&output);
+    assert_eq!(live["kind"], "success");
+    assert_eq!(live["outputs"]["report"], full);
+    let export = artifact(&path);
+    for data in [
+        &export["outputs"]["report"],
+        &export["workflows"]["wf"]["steps"]["one"]["executions"][0]["outputs"]["data"],
+    ] {
+        assert_eq!(data["note"], expected);
+        assert_eq!(data["items"][0]["text"], expected);
+        assert_eq!(data["key"], "visible");
+    }
+    assert!(!export.to_string().contains("SYNTHETIC-leaf-"), "{export}");
+}
+
+#[test]
 fn partial_failures_redact_body_previews_and_keep_command_error() {
     let temp = TempDir::new();
     let server = Server::start(|_, path| {
