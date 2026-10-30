@@ -124,7 +124,10 @@ before release. No tag, publication or hourly resumption is authorized.
   Shared runtime propagation is reviewed and closed in
   [ac-1af66](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-1af66), local
   [74b00a0](https://github.com/strefethen/arazzo-cli/commit/74b00a04a4c7f960a7053d12603a6a0082f24ae6).
-  Refusal is in progress; the foundation alone does not clear L4.
+  Live refusal is reviewed and closed in
+  [ac-fd849](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fd849), local
+  [c5639bd](https://github.com/strefethen/arazzo-cli/commit/c5639bd74362fcfbc35eb6d7fe0a952d5e60055c).
+  Dry-run presentation and the final combined system proof still gate full L4 clearance.
 - Tokio 1.51.6 / macros 2.7.1 is reviewed and closed in
   [ac-a3f4f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-a3f4f), local
   [5d91f2b](https://github.com/strefethen/arazzo-cli/commit/5d91f2bc7aa79a76d9cb3d770996f8f23db855b5).
