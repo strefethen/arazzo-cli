@@ -10,7 +10,17 @@ use super::DryRunRequest;
 pub const REDACTED: &str = "[REDACTED]";
 
 /// Header/field names that are always sensitive (exact match, case-insensitive).
-const SENSITIVE_EXACT: [&str; 4] = ["proxy-authorization", "set-cookie", "x-api-key", "api-key"];
+const SENSITIVE_EXACT: [&str; 9] = [
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+    "api-key",
+    "privatekey",
+    "xauthkey",
+    "authkey",
+    "subscriptionkey",
+    "ocpapimsubscriptionkey",
+];
 
 /// Stems matched via `contains` to catch compound names like `bearerToken`.
 const SENSITIVE_STEMS: [&str; 10] = [
@@ -320,6 +330,8 @@ mod tests {
             "x_api_key",
             "X-Api-Key",
             "api key",
+            "access_token",
+            "authorization_key",
             // Existing-stem control: already matched `apikey` by `contains`.
             "apikeyless",
         ] {
@@ -328,6 +340,140 @@ mod tests {
         for name in ["notes", "key", "api", "page", "x-request-id", "accept"] {
             assert!(!is_sensitive_key(name), "{name} should not be sensitive");
         }
+    }
+
+    #[test]
+    fn exact_credential_names_ignore_case_and_repeated_separators() {
+        for (camel, words) in [
+            ("privateKey", vec!["private", "key"]),
+            ("xAuthKey", vec!["x", "auth", "key"]),
+            ("authKey", vec!["auth", "key"]),
+            ("subscriptionKey", vec!["subscription", "key"]),
+            (
+                "ocpApimSubscriptionKey",
+                vec!["ocp", "apim", "subscription", "key"],
+            ),
+        ] {
+            assert!(is_sensitive_key(camel), "{camel}");
+            for separator in ["", "-", "_", " ", "- _-- "] {
+                let name = words.join(separator);
+                assert!(is_sensitive_key(&name), "{name}");
+                assert!(is_sensitive_key(&name.to_ascii_uppercase()), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn exact_credential_names_reach_all_structured_helpers() {
+        for name in [
+            "privateKey",
+            "X-Auth-Key",
+            "auth_key",
+            "subscription key",
+            "Ocp-Apim-Subscription-Key",
+        ] {
+            let mut fields = BTreeMap::from([
+                (name.to_string(), json!({ "whole": "SYNTHETIC-subtree" })),
+                (
+                    "container".to_string(),
+                    json!([{name: "SYNTHETIC-nested", "key": "visible"}]),
+                ),
+            ]);
+            let expected = BTreeMap::from([
+                (name.to_string(), json!(REDACTED)),
+                (
+                    "container".to_string(),
+                    json!([{name: REDACTED, "key": "visible"}]),
+                ),
+            ]);
+            let sensitive = sensitive_input_names(None, [name, "container"]);
+            assert_eq!(sensitive, BTreeSet::from([name.to_string()]));
+            let mut inputs = fields.clone();
+            redact_inputs(&mut inputs, &sensitive);
+            assert_eq!(inputs, expected, "{name}");
+            redact_json_object(&mut fields);
+            assert_eq!(fields, expected, "{name}");
+
+            let mut request = DryRunRequest {
+                step_id: "probe".to_string(),
+                method: "POST".to_string(),
+                url: format!("https://example.com/?{name}=SYNTHETIC-query&key=visible"),
+                headers: BTreeMap::from([
+                    (name.to_string(), "SYNTHETIC-header".to_string()),
+                    ("key".to_string(), "visible".to_string()),
+                ]),
+                body: Some(
+                    json!({name: {"whole": "SYNTHETIC-body"}, "items": [{name: "SYNTHETIC-array", "key": "visible"}]}),
+                ),
+                warnings: Vec::new(),
+            };
+            redact_dry_run_request(&mut request);
+            assert_eq!(request.headers[name], REDACTED);
+            assert_eq!(request.headers["key"], "visible");
+            assert_eq!(
+                request.url,
+                format!("https://example.com/?{name}={REDACTED}&key=visible")
+            );
+            assert_eq!(
+                request.body,
+                Some(json!({name: REDACTED, "items": [{name: REDACTED, "key": "visible"}]}))
+            );
+        }
+    }
+
+    #[test]
+    fn exact_credential_names_preserve_business_and_near_match_keys() {
+        for name in [
+            "key",
+            "Key",
+            "primaryKey",
+            "partition_key",
+            "sortKey",
+            "foreignKey",
+            "Idempotency-Key",
+            "publicKey",
+            "keyboardLayout",
+            "x-private-key",
+            "privateKeyId",
+            "subscriptionKeyName",
+            "x-subscription-key",
+        ] {
+            assert!(!is_sensitive_key(name), "{name}");
+            let mut fields = BTreeMap::from([(name.to_string(), json!("visible"))]);
+            let original = fields.clone();
+            redact_json_object(&mut fields);
+            assert_eq!(fields, original, "{name}");
+            let sensitive = sensitive_input_names(None, [name]);
+            assert!(sensitive.is_empty(), "{name}");
+            redact_inputs(&mut fields, &sensitive);
+            assert_eq!(fields, original, "{name}");
+            let mut headers = BTreeMap::from([(name.to_string(), "visible".to_string())]);
+            redact_headers(&mut headers);
+            assert_eq!(headers[name], "visible");
+            let mut url = format!("https://example.com/?{name}=visible");
+            let original = url.clone();
+            redact_url(&mut url);
+            assert_eq!(url, original, "{name}");
+        }
+    }
+
+    #[test]
+    fn exact_name_slice_preserves_query_decoding_and_free_text_behavior() {
+        for name in [
+            "private%5Fkey",
+            "private%255Fkey",
+            "private+key",
+            "private%key",
+            "private%",
+            "private%FFkey",
+        ] {
+            let mut url = format!("https://example.com/?{name}=SYNTHETIC");
+            let original = url.clone();
+            redact_url(&mut url);
+            assert_eq!(url, original, "{name}");
+        }
+        let text = "private_key=SYNTHETIC X-Auth-Key: SYNTHETIC authKey=SYNTHETIC subscription-key=SYNTHETIC Ocp-Apim-Subscription-Key=SYNTHETIC";
+        assert_eq!(redact_text_patterns(text), text);
     }
 
     #[test]

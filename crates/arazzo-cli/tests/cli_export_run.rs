@@ -203,6 +203,77 @@ fn exports_typed_full_outputs_and_body_free_metadata_without_changing_stdout() {
 }
 
 #[test]
+fn exact_credential_outputs_are_masked_only_in_persisted_evidence() {
+    let temp = TempDir::new();
+    let outputs = json!({
+        "privateKey": {"whole": "SYNTHETIC-export-private"},
+        "X-Auth-Key": "SYNTHETIC-export-xauth",
+        "auth_key": "SYNTHETIC-export-auth",
+        "subscription-key": "SYNTHETIC-export-subscription",
+        "ocp_apim_subscription_key": "SYNTHETIC-export-ocp",
+        "key": "visible-business-key",
+        "nested": [{"privateKey": "SYNTHETIC-export-nested", "privateKeyId": "visible-id"}]
+    });
+    let body = outputs.to_string();
+    let server = Server::start(move |_, _| {
+        (
+            200,
+            body.clone(),
+            vec![("Content-Type", "application/json".into())],
+        )
+    });
+    let workflows = "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        outputs:\n          data: $response.body\n          privateKey: $response.body#/privateKey\n          key: $response.body#/key\n    outputs:\n      data: $steps.one.outputs.data\n      privateKey: $steps.one.outputs.privateKey\n      key: $steps.one.outputs.key\n";
+    let spec = spec(&temp, &server.url, workflows);
+    let path = temp.path("run.json");
+    let trace_path = temp.path("trace.json");
+    let output = run_json(
+        &spec,
+        "wf",
+        &[
+            "--export-run",
+            path.to_str().unwrap(),
+            "--trace",
+            trace_path.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let live = json_stdout(&output);
+    assert_eq!(live["kind"], "success");
+    assert_eq!(live["outputs"]["data"], outputs);
+    assert_eq!(live["outputs"]["privateKey"], outputs["privateKey"]);
+
+    let export = artifact(&path);
+    let trace = artifact(&trace_path);
+    for fields in [
+        &export["outputs"],
+        &export["workflows"]["wf"]["steps"]["one"]["executions"][0]["outputs"],
+        &trace["steps"][0]["outputs"],
+    ] {
+        assert_eq!(fields["privateKey"], "[REDACTED]");
+        assert_eq!(fields["key"], "visible-business-key");
+        for name in [
+            "privateKey",
+            "X-Auth-Key",
+            "auth_key",
+            "subscription-key",
+            "ocp_apim_subscription_key",
+        ] {
+            assert_eq!(fields["data"][name], "[REDACTED]", "{name}: {fields}");
+        }
+        assert_eq!(fields["data"]["key"], "visible-business-key");
+        assert_eq!(fields["data"]["nested"][0]["privateKey"], "[REDACTED]");
+        assert_eq!(fields["data"]["nested"][0]["privateKeyId"], "visible-id");
+    }
+    for value in [&export, &trace] {
+        assert!(!value.to_string().contains("SYNTHETIC-export-"), "{value}");
+    }
+}
+
+#[test]
 fn partial_failures_redact_body_previews_and_keep_command_error() {
     let temp = TempDir::new();
     let server = Server::start(|_, path| {

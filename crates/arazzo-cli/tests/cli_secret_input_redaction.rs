@@ -20,13 +20,26 @@ const REDACTED: &str = "[REDACTED]";
 
 /// Inputs passed as `--input name=value`; each value is unique so a leak of
 /// any one is attributable.
-const NAME_MATCHED: [(&str, &str); 5] = [
+const NAME_MATCHED: [(&str, &str); 10] = [
     ("apiKey", "CLEAR-camel"),
     ("api_key", "CLEAR-snake"),
     ("api-key", "CLEAR-kebab"),
     ("API_KEY", "CLEAR-upper"),
     ("x_api_key", "CLEAR-x-snake"),
+    ("privateKey", "SYNTHETIC-input-private"),
+    ("X-Auth-Key", "SYNTHETIC-input-xauth"),
+    ("auth_key", "SYNTHETIC-input-auth"),
+    ("subscriptionKey", "SYNTHETIC-input-subscription"),
+    ("ocp_apim_subscription_key", "SYNTHETIC-input-ocp"),
 ];
+const EXACT_NESTED: [(&str, &str); 5] = [
+    ("private_key", "SYNTHETIC-nested-private"),
+    ("x_auth_key", "SYNTHETIC-nested-xauth"),
+    ("authKey", "SYNTHETIC-nested-auth"),
+    ("subscription-key", "SYNTHETIC-nested-subscription"),
+    ("Ocp-Apim-Subscription-Key", "SYNTHETIC-nested-ocp"),
+];
+const GENERIC_KEY: (&str, &str) = ("key", "visible-generic-key");
 const SCHEMA_DECLARED: [(&str, &str); 2] =
     [("handle", "CLEAR-writeonly"), ("pin", "CLEAR-password")];
 const PLAIN: (&str, &str) = ("plain", "visible-plain");
@@ -59,6 +72,18 @@ workflows:
           type: string
         x_api_key:
           type: string
+        privateKey:
+          type: string
+        X-Auth-Key:
+          type: string
+        auth_key:
+          type: string
+        subscriptionKey:
+          type: string
+        ocp_apim_subscription_key:
+          type: string
+        key:
+          type: string
         handle:
           type: string
           writeOnly: true
@@ -75,7 +100,7 @@ workflows:
               writeOnly: true
     steps:
       - stepId: list
-        operationId: fixtureGetItems
+        operationId: fixturePostItems
         parameters:
           - name: api_key
             in: query
@@ -83,6 +108,21 @@ workflows:
           - name: page
             in: query
             value: 2
+          - name: privateKey
+            in: query
+            value: $inputs.privateKey
+          - name: key
+            in: query
+            value: $inputs.key
+          - name: X-Auth-Key
+            in: header
+            value: $inputs.X-Auth-Key
+          - name: key
+            in: header
+            value: $inputs.key
+        requestBody:
+          contentType: application/json
+          payload: $inputs.config
 "#
     )
 }
@@ -120,12 +160,23 @@ impl Fixture {
             .iter()
             .chain(SCHEMA_DECLARED.iter())
             .chain(std::iter::once(&PLAIN))
+            .chain(std::iter::once(&GENERIC_KEY))
         {
             command.arg("--input").arg(format!("{name}={value}"));
         }
+        let mut nested = serde_json::Map::new();
+        for (name, value) in EXACT_NESTED {
+            nested.insert(name.to_string(), json!(value));
+        }
         command.arg("--input-json").arg(format!(
             "config={}",
-            json!({ "inner": NESTED_VALUE, "password": NESTED_SECRET })
+            json!({
+                "inner": NESTED_VALUE,
+                "password": NESTED_SECRET,
+                "items": [nested],
+                "key": GENERIC_KEY.1,
+                "privateKey": {"whole": "SYNTHETIC-whole-subtree"}
+            })
         ));
         command
             .output()
@@ -160,6 +211,52 @@ fn secret_values() -> impl Iterator<Item = &'static str> {
         .chain(SCHEMA_DECLARED.iter())
         .map(|(_, value)| *value)
         .chain(std::iter::once(NESTED_SECRET))
+        .chain(EXACT_NESTED.iter().map(|(_, value)| *value))
+        .chain(std::iter::once("SYNTHETIC-whole-subtree"))
+}
+
+fn assert_request_redacted(request: &Value) {
+    let url = request["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("request URL missing: {request}"));
+    assert!(
+        url.ends_with(
+            "/items?api_key=[REDACTED]&page=2&privateKey=[REDACTED]&key=visible-generic-key"
+        ),
+        "request path or query changed: {url}"
+    );
+    let headers = request["headers"]
+        .as_object()
+        .unwrap_or_else(|| panic!("request headers missing: {request}"));
+    for (name, expected) in [("x-auth-key", REDACTED), GENERIC_KEY] {
+        assert!(
+            headers
+                .iter()
+                .any(|(key, value)| key.eq_ignore_ascii_case(name) && value == expected),
+            "{headers:?}"
+        );
+    }
+    assert_eq!(request["body"]["privateKey"], REDACTED);
+    assert_eq!(request["body"]["key"], GENERIC_KEY.1);
+    assert_eq!(request["body"]["inner"], NESTED_VALUE);
+    for (name, _) in EXACT_NESTED {
+        assert_eq!(request["body"]["items"][0][name], REDACTED, "{name}");
+    }
+}
+
+#[test]
+fn dry_run_json_redacts_exact_names_in_headers_queries_and_bodies() {
+    let fixture = Fixture::new("json");
+    let output = fixture.run(&["--json"]);
+    assert_success(&output);
+    let raw = String::from_utf8_lossy(&output.stdout);
+    for secret in secret_values() {
+        assert!(!raw.contains(secret), "{secret} leaked into JSON: {raw}");
+    }
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("parsing dry-run JSON: {err}"));
+    assert_eq!(value["kind"], "dryRun");
+    assert_request_redacted(&value["requests"][0]);
 }
 
 #[test]
@@ -181,22 +278,18 @@ fn dry_run_trace_redacts_name_matched_and_schema_declared_inputs() {
         assert_eq!(inputs[*name], json!(REDACTED), "input {name}: {inputs}");
     }
     assert_eq!(inputs[PLAIN.0], json!(PLAIN.1), "{inputs}");
+    assert_eq!(inputs[GENERIC_KEY.0], json!(GENERIC_KEY.1), "{inputs}");
     // Non-goal pinned: a `writeOnly` sub-property of a nested object input is
     // not reachable from the typed model, so it is not redacted by schema.
     // A nested field is still redacted by key name.
-    assert_eq!(
-        inputs["config"],
-        json!({ "inner": NESTED_VALUE, "password": REDACTED }),
-        "{inputs}"
-    );
-
-    let url = trace["steps"][0]["request"]["url"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no request url in trace: {trace}"));
-    assert!(
-        url.ends_with("/items?api_key=[REDACTED]&page=2"),
-        "query api_key not redacted: {url}"
-    );
+    assert_eq!(inputs["config"]["inner"], NESTED_VALUE);
+    assert_eq!(inputs["config"]["password"], REDACTED);
+    assert_eq!(inputs["config"]["key"], GENERIC_KEY.1);
+    assert_eq!(inputs["config"]["privateKey"], REDACTED);
+    for (name, _) in EXACT_NESTED {
+        assert_eq!(inputs["config"]["items"][0][name], REDACTED, "{name}");
+    }
+    assert_request_redacted(&trace["steps"][0]["request"]);
 }
 
 #[test]
@@ -243,6 +336,13 @@ fn verbose_inputs_echo_redacts_the_same_names_as_the_trace() {
         line.contains(NESTED_VALUE),
         "nested input missing from echo: {line}"
     );
+    assert!(line.contains(GENERIC_KEY.1), "{line}");
+    for (name, _) in EXACT_NESTED {
+        assert!(
+            line.contains(&format!("{name:?}: String({REDACTED:?})")),
+            "{name}: {line}"
+        );
+    }
     assert!(
         line.contains(&format!("\"password\": String({REDACTED:?})")),
         "nested password not redacted in echo: {line}"
