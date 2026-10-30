@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.10] - 2026-10-29
+
+Stop debug sessions reliably, including when the debug client disconnects.
+
+**Upgrade if** you have encountered paused sessions that remain alive after cancellation.
+
+- Cancelling a run releases paused checkpoints and prevents subsequent pauses.
+- The adapter cancels and joins its runtime on stdin EOF or transport failure.
+- Cancellation and timeout failures retain their distinct identities.
+
+### Fixed
+
+- Bundled runtime improvements include typed Criterion interpolation and workflow output-resolution diagnostics.
+
 ## [0.0.9] - 2026-10-27
 
 Share feedback directly from VS Code to help shape Arazzo Debugger.

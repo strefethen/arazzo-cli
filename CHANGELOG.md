@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
+Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.
+
+**Upgrade if** you need Kafka receive steps, typed success criteria, reliable debugger
+teardown, or consistent CLI JSON errors. Review the breaking changes below.
+
+- **Kafka receive workflows** — receive JSON messages, filter correlation IDs, and validate AsyncAPI targets offline.
+- **Spec fidelity** — standard operation targets, explicit reusable actions, and typed Criterion interpolation.
+- **Reliable execution** — corrected timeout classification, workflow output diagnostics, and cancellation-aware debugger teardown.
+- **Automation contracts** — shared JSON errors and stronger validation with machine-readable diagnostics.
+
 ### Added
 
 - **Offline receive validation** — `validate` uses the runtime's AsyncAPI
@@ -45,38 +57,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwrite protection now covers AsyncAPI source documents as well as
   OpenAPI ones.
 
-### Fixed
-
-- **Debugger teardown** — cancelling an invocation releases its paused debug
-  checkpoint and prevents later checkpoints from pausing it again. The DAP
-  adapter cancels and joins its active runtime on stdin EOF or transport failure,
-  preserving the original failure and cancellation-versus-timeout identity.
-- Structural validation now rejects `action` and `correlationId` on operation IDs
-  qualified to non-AsyncAPI sources, and `channelPath` references to those sources.
-  Errors identify the field, source name, and declared source type.
-
-## [0.9.0] - 2026-10-18
-
-Use standard Arazzo operation targets and make CLI failures predictable for automation.
-
-**Upgrade if** you use CLI JSON output, generate workflows from OpenAPI, or need
-the execution and security fixes below. Review the breaking changes before
-upgrading existing workflows and scripts.
-
-- **Standard operation targets** — operation IDs and canonical JSON Pointers
-  resolve against bound OpenAPI documents; generation emits standard targets.
-- **Explicit action reuse** — component actions use `reference`, while action
-  names stay literal.
-- **Consistent JSON errors** — CLI failures carry a shared error object and a
-  machine-readable code, including usage and input errors.
-- **Safer execution** — redact verbose request URLs, reject deeply nested
-  JSONPath queries, avoid dependency-check stack overflows, and update the
-  vulnerable `quinn-proto` dependency.
-- **Runtime and debugger fixes** — preserve constant child-workflow inputs and
-  report debugger expression, breakpoint, and session failures with context.
-
-### Changed
-
 - **Breaking:** Operation targets use standard Arazzo syntax exclusively. Both
   operation IDs and canonical JSON Pointers resolve against a bound OpenAPI
   document. Custom request-path syntax, method prefixes, URL-as-base routing,
@@ -101,6 +81,19 @@ upgrading existing workflows and scripts.
   `SERVE_TASK_PANIC`, or `SERVE_MCP` for `serve`.
 
 ### Fixed
+
+- Criterion interpolation preserves typed values for regex, JSONPath and XPath 1.0 evaluation.
+- Workflow output-resolution warnings are included in CLI results.
+- Request timeouts retain their timeout classification; cancellation remains distinct.
+- Verbose URL redaction removes URL userinfo credentials.
+
+- **Debugger teardown** — cancelling an invocation releases its paused debug
+  checkpoint and prevents later checkpoints from pausing it again. The DAP
+  adapter cancels and joins its active runtime on stdin EOF or transport failure,
+  preserving the original failure and cancellation-versus-timeout identity.
+- Structural validation now rejects `action` and `correlationId` on operation IDs
+  qualified to non-AsyncAPI sources, and `channelPath` references to those sources.
+  Errors identify the field, source name, and declared source type.
 
 - Update `rustls` from 0.23.45 to 0.23.46 to address RustSec advisories
   RUSTSEC-2026-0346 through RUSTSEC-2026-0349.
