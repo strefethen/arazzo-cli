@@ -189,6 +189,33 @@ pub fn redact_url(url: &mut String) {
     url.replace_range(query_start + 1..query_end, &redacted_query);
 }
 
+pub fn redact_url_components(url: &mut String) {
+    redact_url(url);
+    let (before_fragment, fragment) = match url.split_once('#') {
+        Some((before, fragment)) => (before, Some(fragment)),
+        None => (url.as_str(), None),
+    };
+    let (before_query, query) = match before_fragment.split_once('?') {
+        Some((before, query)) => (before, Some(query)),
+        None => (before_fragment, None),
+    };
+    let mut redacted = redact_text_patterns(before_query);
+    if let Some(query) = query {
+        redacted.push('?');
+        for (i, pair) in query.split('&').enumerate() {
+            if i > 0 {
+                redacted.push('&');
+            }
+            redacted.push_str(&redact_text_patterns(pair));
+        }
+    }
+    if let Some(fragment) = fragment {
+        redacted.push('#');
+        redacted.push_str(&redact_text_patterns(fragment));
+    }
+    *url = redacted;
+}
+
 pub fn redact_json_object(map: &mut BTreeMap<String, Value>) {
     for (key, value) in map {
         if is_sensitive_key(key) {
@@ -574,6 +601,76 @@ mod tests {
             let mut actual = original.to_string();
             redact_url(&mut actual);
             assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn url_components_keep_pairs_after_raw_names_and_mask_text_per_component() {
+        for (original, expected) in [
+            (
+                "https://host/path?privateKey=CANARY&key=visible#fragment-visible",
+                "https://host/path?privateKey=[REDACTED]&key=visible#fragment-visible",
+            ),
+            (
+                "https://host/path?X-Auth-Key=A&key=visible&authKey=B&&subscription_key=C&page=&Ocp-Apim-Subscription-Key=D&tail=visible",
+                "https://host/path?X-Auth-Key=[REDACTED]&key=visible&authKey=[REDACTED]&&subscription_key=[REDACTED]&page=&Ocp-Apim-Subscription-Key=[REDACTED]&tail=visible",
+            ),
+            (
+                "https://host/path?private%5Fkey=CANARY&key=visible#token=fragment-visible",
+                "https://host/path?private%5Fkey=[REDACTED]&key=visible#token=[REDACTED]",
+            ),
+            (
+                "https://host/path?privateKey=ONE&privateKey=TWO&flag&=empty&privateKey&tail=",
+                "https://host/path?privateKey=[REDACTED]&privateKey=[REDACTED]&flag&=empty&privateKey&tail=",
+            ),
+            (
+                "https://host/path?q=token=CANARY&key=a=b%26c%3Dd&note=Bearer",
+                "https://host/path?q=token=[REDACTED]&key=a=b%26c%3Dd&note=Bearer",
+            ),
+            (
+                "https://host/token=CANARY",
+                "https://host/token=[REDACTED]",
+            ),
+            (
+                "https://host/token=CANARY?key=visible#fragment-visible",
+                "https://host/token=[REDACTED]?key=visible#fragment-visible",
+            ),
+            (
+                "https://host/path#token=CANARY",
+                "https://host/path#token=[REDACTED]",
+            ),
+            (
+                "https://host/path?key=visible#token=CANARY",
+                "https://host/path?key=visible#token=[REDACTED]",
+            ),
+            (
+                "https://host/path#fragment?privateKey=CANARY&key=visible",
+                "https://host/path#fragment?privateKey=[REDACTED]",
+            ),
+            (
+                "https://u:p@EXAMPLE.com/PaTh/%2f?x-private-key=CANARY&%6Bey=visible&private+key=visible&key=#",
+                "https://[REDACTED]@EXAMPLE.com/PaTh/%2f?x-private-key=[REDACTED]&%6Bey=visible&private+key=visible&key=#",
+            ),
+            ("https://host/path?token:CANARY", "https://host/path?token:[REDACTED]"),
+            (
+                "https://host/path?a=1&token:CANARY&b=2#fragment-visible",
+                "https://host/path?a=1&token:[REDACTED]&b=2#fragment-visible",
+            ),
+            ("https://host/path?flag", "https://host/path?flag"),
+            (
+                "https://host/path?my_token=CANARY&key=visible",
+                "https://host/path?my_token=[REDACTED]&key=visible",
+            ),
+            (
+                "https://host/path?privateKey=[REDACTED]&key=visible#fragment-visible",
+                "https://host/path?privateKey=[REDACTED]&key=visible#fragment-visible",
+            ),
+            ("https://host/path?", "https://host/path?"),
+            ("https://host/path", "https://host/path"),
+        ] {
+            let mut actual = original.to_string();
+            redact_url_components(&mut actual);
+            assert_eq!(actual, expected, "{original}");
         }
     }
 

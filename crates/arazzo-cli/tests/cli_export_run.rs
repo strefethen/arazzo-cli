@@ -316,6 +316,69 @@ fn encoded_request_query_names_are_masked_in_persisted_urls() {
 }
 
 #[test]
+fn persisted_urls_keep_pairs_after_raw_credential_names_and_mask_path_and_fragment_text() {
+    let query = "privateKey=SYNTHETIC-raw-private&key=visible&X-Auth-Key=SYNTHETIC-raw-xauth&&authKey=SYNTHETIC-raw-auth&page=&subscription_key=SYNTHETIC-raw-sub&key=visible-again&Ocp-Apim-Subscription-Key=SYNTHETIC-raw-ocp&private%5Fkey=SYNTHETIC-encoded-private&privateKey=SYNTHETIC-raw-duplicate&flag&q=token=SYNTHETIC-value&tail=visible";
+    let masked = "privateKey=[REDACTED]&key=visible&X-Auth-Key=[REDACTED]&&authKey=[REDACTED]&page=&subscription_key=[REDACTED]&key=visible-again&Ocp-Apim-Subscription-Key=[REDACTED]&private%5Fkey=[REDACTED]&privateKey=[REDACTED]&flag&q=token=[REDACTED]&tail=visible";
+    for (prefix, query, sent, stored) in [
+        (
+            "",
+            query,
+            Some(format!("/one?{query}")),
+            format!("/one?{masked}"),
+        ),
+        (
+            "/token=SYNTHETIC-path",
+            "privateKey=SYNTHETIC-raw-private&key=visible",
+            Some(
+                "/token=SYNTHETIC-path/one?privateKey=SYNTHETIC-raw-private&key=visible"
+                    .to_string(),
+            ),
+            "/token=[REDACTED]?privateKey=[REDACTED]&key=visible".to_string(),
+        ),
+        (
+            "",
+            "a=1&token:SYNTHETIC-colon&b=2&flag&x-private-key=SYNTHETIC-prefixed",
+            Some(
+                "/one?a=1&token:SYNTHETIC-colon&b=2&flag&x-private-key=SYNTHETIC-prefixed"
+                    .to_string(),
+            ),
+            "/one?a=1&token:[REDACTED]&b=2&flag&x-private-key=[REDACTED]".to_string(),
+        ),
+        (
+            "/base#token=SYNTHETIC-fragment",
+            "key=visible",
+            None,
+            "/base#token=[REDACTED]".to_string(),
+        ),
+    ] {
+        let temp = TempDir::new();
+        let server = Server::start(move |_, path| {
+            if let Some(sent) = &sent {
+                assert_eq!(path, sent, "transport changed raw path or query spelling");
+            }
+            (200, "{}".into(), vec![])
+        });
+        let base = format!("{}{prefix}", server.url);
+        let workflows = format!("  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n        parameters:\n          - name: filter\n            in: querystring\n            value: {query}\n");
+        let spec = spec(&temp, &base, &workflows);
+        let path = temp.path("run.json");
+        let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let export = artifact(&path);
+        assert_eq!(
+            export["workflows"]["wf"]["steps"]["one"]["executions"][0]["request"]["url"],
+            format!("{}{stored}", server.url)
+        );
+        assert!(!export.to_string().contains("SYNTHETIC-"), "{export}");
+        assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
 fn non_json_criteria_previews_mirror_names_and_export_omits_the_preview() {
     let temp = TempDir::new();
     let body = "private_key=SYNTHETIC-error-private X-Auth-Key: SYNTHETIC-error-xauth authKey=SYNTHETIC-error-auth subscription-key=SYNTHETIC-error-sub Ocp-Apim-Subscription-Key=SYNTHETIC-error-ocp key=visible";

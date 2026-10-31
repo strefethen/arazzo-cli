@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    is_sensitive_key, redact_headers, redact_text_patterns, redact_url, ExecutionResult,
+    is_sensitive_key, redact_headers, redact_text_patterns, redact_url_components, ExecutionResult,
     RunStepOutcome, RunStepRecord, TraceDecision, REDACTED,
 };
 use humantime::format_rfc3339;
@@ -217,11 +217,11 @@ fn execution_from_record(record: &RunStepRecord) -> Result<Execution, String> {
         let mut headers = request.headers.clone();
         redact_header_values(&mut headers);
         let mut url = request.url.clone();
-        redact_url(&mut url);
         redact_url_userinfo(&mut url);
+        redact_url_components(&mut url);
         Request {
             method: request.method.clone(),
-            url: redact_text_patterns(&url),
+            url,
             headers,
         }
     });
