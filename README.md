@@ -159,8 +159,10 @@ these warnings; `error` returns `RUNTIME_EXPRESSION_DIAGNOSTICS`.
 This is a partial request plan, not live response or control-flow simulation.
 Stored synthetic values and ordinary request/trace/debug values stay unchanged.
 Markers cover direct aliases; pointer suffixes, interpolated strings and
-Selector transformations do not promise reconstructed markers. Genuinely
-unresolved values or hard Selector failures stop request preparation with
+Selector transformations do not promise reconstructed markers. A skipped object
+or array value used as an `in: querystring` Parameter gets no marker; it keeps
+`RUNTIME_INVALID_PARAMETER_VALUE`. Genuinely unresolved values or hard Selector
+failures stop request preparation with
 `RUNTIME_UNRESOLVED_REQUEST_VALUE` in every diagnostics mode. Intentional nulls,
 empty values, optional omissions and legitimate zero-match Selectors remain
 admitted. Dry-run does not evaluate live success criteria.

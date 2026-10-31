@@ -204,6 +204,59 @@ async fn whole_querystring_marker_is_encoded_while_warning_retains_raw_source() 
 }
 
 #[tokio::test]
+async fn skipped_object_querystring_keeps_invalid_parameter_error_while_string_keeps_marker() {
+    let workflows = |source: &str| {
+        json!([{"workflowId":"main","steps":[
+            {"stepId":"fetch","operationId":"produce","outputs":{"audio":source}},
+            {"stepId":"play","operationId":"consume","parameters":[{"name":"id","in":"path","value":"fixed"},{"name":"all","in":"querystring","value":"$steps.fetch.outputs.audio"}]}
+        ]}])
+    };
+    for strict in [false, true] {
+        let engine = builder("https://api.invalid", workflows("$response.body"))
+            .dry_run(true)
+            .strict_inputs(strict)
+            .build()
+            .unwrap_or_else(|error| panic!("engine: {error}"));
+        let result = engine.execute_collect("main", BTreeMap::new()).await;
+        let error = result
+            .outputs
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("object querystring is not representable"));
+        assert_eq!(error.code(), "RUNTIME_INVALID_PARAMETER_VALUE");
+        assert!(!error.to_string().contains("<unresolved:"), "{error}");
+        let requests = result.dry_run_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].step_id, "fetch");
+        assert_eq!(
+            requests[0].warnings,
+            vec![producer("main", "audio", "$response.body")]
+        );
+
+        let engine = builder("https://api.invalid", workflows(SOURCE))
+            .dry_run(true)
+            .strict_inputs(strict)
+            .build()
+            .unwrap_or_else(|error| panic!("engine: {error}"));
+        let result = engine.execute_collect("main", BTreeMap::new()).await;
+        successful(&result);
+        let requests = result.dry_run_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].url,
+            format!(
+                "https://api.invalid/consume/fixed?{}",
+                url::form_urlencoded::byte_serialize(MARKER.as_bytes()).collect::<String>()
+            )
+        );
+        assert_eq!(
+            requests[1].warnings,
+            vec![consumer("main", "parameters[1](querystring:all)", SOURCE)]
+        );
+    }
+}
+
+#[tokio::test]
 async fn workflow_output_aliases_remain_direct() {
     let engine = builder("https://api.invalid", json!([
         {"workflowId":"main","steps":[{"stepId":"produce","workflowId":"producer"},{"stepId":"play","operationId":"consume","parameters":[{"name":"id","in":"path","value":"$workflows.producer.outputs.streamUrl"}]}]},

@@ -22,8 +22,10 @@ child response-derived URL becomes `<unresolved:$response.body#/url>` in the
 follow-up request, with a readable source warning and URL-encoded marker.
 Direct aliases through child inputs and outputs retain this origin. Stored
 values remain synthetic; pointer, interpolation and Selector transformations
-do not promise reconstructed markers. Human output places warnings after each
-request; JSON keeps them in `warnings`. Use `--expr-diagnostics error` to reject
+do not promise reconstructed markers. A skipped object or array value used as
+an `in: querystring` Parameter keeps `RUNTIME_INVALID_PARAMETER_VALUE` instead
+of a marker. Human output places warnings after each request; JSON keeps them
+in `warnings`. Use `--expr-diagnostics error` to reject
 a skipped-transport incomplete plan. This does not simulate live responses or
 response-dependent control flow.
 
