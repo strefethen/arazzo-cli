@@ -449,9 +449,15 @@ async fn qualified_target_naming_an_arazzo_source_is_refused_as_non_conformant()
     );
     assert!(
         err.message
-            .contains("$sourceDescriptions.flows.<workflowId>"),
-        "the remedy is the workflowId field; message was: {err}"
+            .contains("workflowId is the specification-correct field"),
+        "message was: {err}"
     );
+    assert!(
+        err.message
+            .contains("cross-document workflow references are unsupported"),
+        "message was: {err}"
+    );
+    assert!(!err.message.contains("<workflowId>"), "message was: {err}");
     assert!(
         !err.message.contains("this runtime resolves"),
         "message was: {err}"

@@ -8,16 +8,16 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_operation_path, classify_workflow_dependency, parse_unvalidated_bytes,
-    unrecognized_fields, ActionType, ArazzoSpec, OnAction, ParamLocation, Parameter, SourceType,
-    Step, StepAction, StepTarget, ValueSource, VendorExtensions, Workflow, WorkflowDependency,
-    SUPPORTED_OPERATION_PATH_FORMS,
+    classify_workflow_dependency, parse_unvalidated_bytes, unrecognized_fields, ActionType,
+    ArazzoSpec, OnAction, ParamLocation, Parameter, SourceType, Step, StepAction, StepTarget,
+    ValueSource, VendorExtensions, Workflow, WorkflowDependency,
 };
 use iri_string::types::UriReferenceStr;
 
 mod async_applicability;
 mod expressions;
 mod step_dependencies;
+mod step_targets;
 mod version;
 mod xpath_advisory;
 
@@ -169,6 +169,7 @@ pub enum ValidationErrorKind {
     /// A specification-valid `operationPath` that this runtime cannot resolve.
     /// Warning severity: the document is conformant, the executor is not.
     UnsupportedOperationPath,
+    UnsupportedWorkflowId,
     /// A specification-valid XPath `type`/`version` declaration that this
     /// runtime will not execute: only an explicit `xpath-10` reaches the
     /// XPath 1.0 engine, while the §5.8.12.1 table also allows `xpath-31`
@@ -214,6 +215,7 @@ impl ValidationErrorKind {
             Self::InvalidCriterionType => "invalidCriterionType",
             Self::InvalidSelectorType => "invalidSelectorType",
             Self::UnsupportedOperationPath => "unsupportedOperationPath",
+            Self::UnsupportedWorkflowId => "unsupportedWorkflowId",
             Self::UnsupportedXpathVersion => "unsupportedXpathVersion",
             Self::InvalidIdentifier => "invalidIdentifier",
             Self::UnknownField => "unknownField",
@@ -1336,62 +1338,14 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                     ),
                 });
             }
-            match &step.target {
-                Some(StepTarget::OperationPath(operation_path)) => {
-                    let classified = classify_operation_path(operation_path);
-                    if let Some(source_name) = classified.source_name() {
-                        if !source_names.contains(source_name) {
-                            diagnostics.push(Diagnostic {
-                                severity: Severity::Error,
-                                kind: ValidationErrorKind::InvalidReference,
-                                path: format!("{step_path}.operationPath"),
-                                message: format!(
-                                    "{step_path}.operationPath references unknown sourceDescription \"{source_name}\""
-                                ),
-                            });
-                        }
-                    }
-                    if let Some(reason) = classified.malformed() {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            kind: ValidationErrorKind::UnsupportedOperationPath,
-                            path: format!("{step_path}.operationPath"),
-                            message: format!(
-                                "{step_path}.operationPath {reason}; expected {SUPPORTED_OPERATION_PATH_FORMS}"
-                            ),
-                        });
-                    }
-                    if step.action.is_some() {
-                        diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            kind: ValidationErrorKind::InvalidAsyncStep,
-                            path: format!("{step_path}.action"),
-                            message: format!(
-                                "{step_path}.action is only supported with operationId or channelPath async targets"
-                            ),
-                        });
-                    }
-                }
-                Some(StepTarget::ChannelPath(_)) if step.action.is_none() => {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        kind: ValidationErrorKind::InvalidAsyncStep,
-                        path: format!("{step_path}.action"),
-                        message: format!("{step_path}.channelPath requires action send or receive"),
-                    });
-                }
-                Some(StepTarget::WorkflowId(_)) if step.action.is_some() => {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        kind: ValidationErrorKind::InvalidAsyncStep,
-                        path: format!("{step_path}.action"),
-                        message: format!(
-                            "{step_path}.action is not applicable to workflowId targets"
-                        ),
-                    });
-                }
-                _ => {}
-            }
+            step_targets::check(
+                step,
+                &step_path,
+                &source_names,
+                &workflow_ids,
+                &source_types,
+                &mut diagnostics,
+            );
 
             let supports_async_fields = matches!(
                 &step.target,

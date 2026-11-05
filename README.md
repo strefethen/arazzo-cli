@@ -784,6 +784,8 @@ arazzo-cli run spec.yaml my-workflow --strict-inputs
 
 ## Sub-Workflows
 
+`workflowId` resolves only within the same document; this runtime does not execute cross-document workflow references.
+
 A step can invoke another workflow defined in the same spec by setting `workflowId` instead of an HTTP operation:
 
 ```yaml

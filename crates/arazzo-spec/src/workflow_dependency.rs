@@ -1,4 +1,4 @@
-//! Classification of workflow-level `dependsOn` references.
+//! Classification of workflow-level `dependsOn` and Step `workflowId` references.
 
 use crate::source_reference::parse_source_reference;
 
@@ -16,7 +16,7 @@ pub enum WorkflowDependency<'a> {
     Invalid,
 }
 
-/// Classifies an Arazzo workflow-level `dependsOn` value.
+/// Classifies an Arazzo workflow-level `dependsOn` or Step `workflowId` value.
 ///
 /// The specification permits either a local `workflowId` or the exact
 /// `$sourceDescriptions.<name>.<workflowId>` runtime-expression form. Other
@@ -46,6 +46,29 @@ pub fn classify_workflow_dependency(value: &str) -> WorkflowDependency<'_> {
 #[cfg(test)]
 mod tests {
     use super::{classify_workflow_dependency, WorkflowDependency};
+
+    #[test]
+    fn step_and_depends_on_forms_share_classification() -> Result<(), Box<dyn std::error::Error>> {
+        for value in [
+            "local",
+            "$sourceDescriptions.child.flow",
+            "$workflows.local",
+        ] {
+            let document = format!(
+                r#"{{"arazzo":"1.1.0","info":{{"title":"Refs","version":"1"}},"sourceDescriptions":[],"workflows":[{{"workflowId":"parent","dependsOn":["{value}"],"steps":[{{"stepId":"call","workflowId":"{value}"}}]}}]}}"#
+            );
+            let spec = crate::parse_unvalidated_bytes(document.as_bytes())?;
+            let workflow = &spec.workflows[0];
+            let Some(crate::StepTarget::WorkflowId(step_value)) = &workflow.steps[0].target else {
+                panic!("workflow target");
+            };
+            assert_eq!(
+                classify_workflow_dependency(step_value),
+                classify_workflow_dependency(&workflow.depends_on[0])
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn classifies_local_and_external_references() {

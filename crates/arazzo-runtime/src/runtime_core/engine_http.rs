@@ -154,8 +154,8 @@ impl Engine {
                     "operationId \"{target}\" names sourceDescription \"{source_name}\", whose \
                      type is \"{declared}\"; an arazzo source describes workflows rather than \
                      operations, so the specification does not let an operationId reference one \
-                     — name it from workflowId as \
-                     \"$sourceDescriptions.{source_name}.<workflowId>\" instead",
+                     — workflowId is the specification-correct field for workflow references, but \
+                     cross-document workflow references are unsupported by this runtime",
                     declared = source.type_,
                 ),
             ));
