@@ -2,7 +2,6 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::process::{Child, Command};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -180,7 +179,7 @@ async fn check_cancellation(case: &str) {
         .debug_controller(Arc::clone(&controller))
         .build()
         .unwrap_or_else(|err| panic!("engine: {err}"));
-    let handle = engine.execute("wf", BTreeMap::new());
+    let mut handle = engine.execute("wf", BTreeMap::new());
     assert!(controller
         .wait_for_stop_count(1, Duration::from_secs(2))
         .unwrap_or_else(|err| panic!("stop handshake: {err}")));
@@ -192,9 +191,14 @@ async fn check_cancellation(case: &str) {
         checkpoint
     );
     if case == "timeout_identity" {
-        handle.timeout_flag().store(true, Ordering::Release);
+        handle.start_watchdog(Duration::ZERO);
+        while handle.cancel_token().outcome() == arazzo_runtime::ExecutionOutcome::Running {
+            tokio::task::yield_now().await;
+        }
     }
-    handle.cancel_token().cancel();
+    if case != "timeout_identity" {
+        handle.cancel_token().cancel();
+    }
     if case == "cancellation_prevents_later_output" {
         controller
             .force_resume()

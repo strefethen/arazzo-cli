@@ -39,184 +39,15 @@ impl Engine {
             .collect()
     }
 
-    /// Spawns an async task that executes the workflow and returns a handle
-    /// for streaming events and awaiting the final result.
-    ///
-    /// A Tokio runtime must be active when calling this method.
-    pub fn execute(&self, workflow_id: &str, inputs: BTreeMap<String, Value>) -> ExecutionHandle {
-        self.execute_with_completed_workflows(workflow_id, inputs, &BTreeSet::new())
-    }
-
-    /// Spawns execution with caller-provided completion evidence for local
-    /// workflow dependencies. The set is copied into this invocation and is
-    /// not retained by the engine after the handle is dropped.
-    pub fn execute_with_completed_workflows(
-        &self,
-        workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
-        completed_workflows: &BTreeSet<String>,
-    ) -> ExecutionHandle {
-        let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
-        let (result_tx, result_rx) = oneshot::channel();
-        let cancel = CancellationToken::new();
-        let is_timeout = Arc::new(AtomicBool::new(false));
-
-        let engine = self.clone();
-        let wf_id = workflow_id.to_string();
-        let cancel_clone = cancel.clone();
-        let timeout_clone = Arc::clone(&is_timeout);
-        let completed_workflows = completed_workflows.clone();
-
-        tokio::spawn(async move {
-            let ctx = Arc::new(ExecutionContext {
-                event_tx,
-                role: ContextRole::Invocation,
-                trace_seq: AtomicU64::new(0),
-                run_seq: AtomicU64::new(0),
-                execution_event_seq: AtomicU64::new(0),
-                step_attempts: Mutex::new(BTreeMap::new()),
-                cancel: cancel_clone,
-                is_timeout: timeout_clone,
-                completed_workflows: Mutex::new(completed_workflows),
-                message_receivers: Arc::default(),
-            });
-
-            let result = engine
-                .execute_inner(&ctx, &wf_id, inputs.into(), 0)
-                .await
-                .map(|outputs| outputs.values);
-
-            // Drop event_tx (held inside ctx) BEFORE sending result.
-            // This guarantees collect() drains all events before getting the result.
-            drop(ctx);
-            let _ = result_tx.send(result);
-        });
-
-        ExecutionHandle::new(event_rx, result_rx, cancel, is_timeout)
-    }
-
-    /// Spawns execution with a timeout watchdog that cancels after `timeout`.
-    pub fn execute_with_timeout(
-        &self,
-        workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
-        timeout: Duration,
-    ) -> ExecutionHandle {
-        self.execute_with_timeout_and_completed_workflows(
-            workflow_id,
-            inputs,
-            timeout,
-            &BTreeSet::new(),
-        )
-    }
-
-    /// Spawns execution with a timeout and caller-provided completion
-    /// evidence for local workflow dependencies.
-    pub fn execute_with_timeout_and_completed_workflows(
-        &self,
-        workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
-        timeout: Duration,
-        completed_workflows: &BTreeSet<String>,
-    ) -> ExecutionHandle {
-        let handle =
-            self.execute_with_completed_workflows(workflow_id, inputs, completed_workflows);
-        let cancel = handle.cancel_token().clone();
-        let timeout_flag = handle.timeout_flag().clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(timeout).await;
-            timeout_flag.store(true, Ordering::Release);
-            cancel.cancel();
-        });
-        handle
-    }
-
-    /// Convenience: collects all events and the final result.
-    pub async fn execute_collect(
-        &self,
-        workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
-    ) -> ExecutionResult {
-        self.execute(workflow_id, inputs).collect().await
-    }
-
-    /// Execute a single step (and optionally its transitive dependencies) within a workflow.
-    ///
-    /// When `no_deps` is false (default), computes transitive step dependencies via
-    /// `$steps.*` references and executes them in workflow order before the target.
-    /// When `no_deps` is true, executes only the target step — failing early if it
-    /// references outputs from steps that have not been executed.
-    pub fn execute_step(
-        &self,
-        workflow_id: &str,
-        step_id: &str,
-        inputs: BTreeMap<String, Value>,
-        no_deps: bool,
-    ) -> ExecutionHandle {
-        self.execute_step_with_completed_workflows(
-            workflow_id,
-            step_id,
-            inputs,
-            no_deps,
-            &BTreeSet::new(),
-        )
-    }
-
-    /// Executes a step while enforcing workflow-level completion evidence.
-    pub fn execute_step_with_completed_workflows(
-        &self,
-        workflow_id: &str,
-        step_id: &str,
-        inputs: BTreeMap<String, Value>,
-        no_deps: bool,
-        completed_workflows: &BTreeSet<String>,
-    ) -> ExecutionHandle {
-        let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
-        let (result_tx, result_rx) = oneshot::channel();
-        let cancel = CancellationToken::new();
-        let is_timeout = Arc::new(AtomicBool::new(false));
-
-        let engine = self.clone();
-        let wf_id = workflow_id.to_string();
-        let s_id = step_id.to_string();
-        let cancel_clone = cancel.clone();
-        let timeout_clone = Arc::clone(&is_timeout);
-        let completed_workflows = completed_workflows.clone();
-
-        tokio::spawn(async move {
-            let ctx = Arc::new(ExecutionContext {
-                event_tx,
-                role: ContextRole::Invocation,
-                trace_seq: AtomicU64::new(0),
-                run_seq: AtomicU64::new(0),
-                execution_event_seq: AtomicU64::new(0),
-                step_attempts: Mutex::new(BTreeMap::new()),
-                cancel: cancel_clone,
-                is_timeout: timeout_clone,
-                completed_workflows: Mutex::new(completed_workflows),
-                message_receivers: Arc::default(),
-            });
-
-            let result = engine
-                .execute_step_inner(&ctx, &wf_id, &s_id, inputs.into(), no_deps)
-                .await
-                .map(|outputs| outputs.values);
-
-            drop(ctx);
-            let _ = result_tx.send(result);
-        });
-
-        ExecutionHandle::new(event_rx, result_rx, cancel, is_timeout)
-    }
-
     #[allow(clippy::type_complexity)]
-    fn execute_step_inner<'a>(
+    pub(super) fn execute_step_inner<'a>(
         &'a self,
         exec_ctx: &'a ExecutionContext,
         workflow_id: &'a str,
         step_id: &'a str,
         inputs: ProvenancedValues,
         no_deps: bool,
+        completion: Option<&'a ExecutionCancellation>,
     ) -> Pin<Box<dyn Future<Output = Result<ProvenancedValues, RuntimeError>> + Send + 'a>> {
         Box::pin(async move {
             exec_ctx.check_cancelled()?;
@@ -408,7 +239,9 @@ impl Engine {
                     } => {
                         exec_ctx.check_cancelled()?;
                         let inputs = inputs.unwrap_or_else(|| vars.input_values());
-                        return self.execute_inner(exec_ctx, &workflow_id, inputs, 1).await;
+                        return self
+                            .execute_inner(exec_ctx, &workflow_id, inputs, 1, completion)
+                            .await;
                     }
                     FlowDecision::Error(err) => {
                         return Err(err);
@@ -430,6 +263,7 @@ impl Engine {
         workflow_id: &'a str,
         inputs: ProvenancedValues,
         depth: usize,
+        completion: Option<&'a ExecutionCancellation>,
     ) -> Pin<Box<dyn Future<Output = Result<ProvenancedValues, RuntimeError>> + Send + 'a>> {
         Box::pin(async move {
             exec_ctx.check_cancelled()?;
@@ -474,7 +308,14 @@ impl Engine {
                     Engine::push_sequential_fallback(exec_ctx, fallback).await;
                 } else {
                     let result = self
-                        .execute_parallel(exec_ctx, workflow_id, &workflow, &mut vars, depth)
+                        .execute_parallel(
+                            exec_ctx,
+                            workflow_id,
+                            &workflow,
+                            &mut vars,
+                            depth,
+                            completion,
+                        )
                         .await;
                     // execute_parallel settles cancellation before it reports a
                     // terminal outcome, so its result decides: a cancelled
@@ -566,6 +407,7 @@ impl Engine {
                                 // A cancelled invocation did not complete, so it
                                 // is neither recorded nor reported as completed.
                                 exec_ctx.check_cancelled()?;
+                                events::complete(completion)?;
                                 exec_ctx.mark_workflow_completed(workflow_id);
                                 self.emit_observer_event(
                                     exec_ctx,
@@ -600,7 +442,13 @@ impl Engine {
                         exec_ctx.check_cancelled()?;
                         let inputs = inputs.unwrap_or_else(|| vars.input_values());
                         let result = self
-                            .execute_inner(exec_ctx, &target_workflow_id, inputs, depth + 1)
+                            .execute_inner(
+                                exec_ctx,
+                                &target_workflow_id,
+                                inputs,
+                                depth + 1,
+                                completion,
+                            )
                             .await;
                         // The target settled its own outcome, cancellation
                         // included, so its result decides: a cancelled caller
@@ -614,6 +462,7 @@ impl Engine {
                         return result;
                     }
                     FlowDecision::Error(err) => {
+                        events::complete(completion)?;
                         exec_ctx.mark_workflow_completed(workflow_id);
                         self.emit_observer_event(
                             exec_ctx,
@@ -649,6 +498,7 @@ impl Engine {
                     .await;
             }
             let workflow_outputs = workflow_outputs?;
+            events::complete(completion)?;
             self.emit_observer_event(
                 exec_ctx,
                 ObserverEvent::WorkflowCompleted {
@@ -812,7 +662,7 @@ impl Engine {
                 .await;
                 exec_ctx.check_cancelled()?;
                 let output_result = self
-                    .execute_inner(exec_ctx, &target, sub_inputs.clone(), depth + 1)
+                    .execute_inner(exec_ctx, &target, sub_inputs.clone(), depth + 1, None)
                     .await;
                 if exec_ctx.cancel.is_cancelled() {
                     return Err(exec_ctx.cancelled_error());
@@ -917,7 +767,7 @@ impl Engine {
             _ => "",
         };
         let output_result = self
-            .execute_inner(exec_ctx, wf_id, sub_inputs.clone(), depth + 1)
+            .execute_inner(exec_ctx, wf_id, sub_inputs.clone(), depth + 1, None)
             .await;
         if exec_ctx.cancel.is_cancelled() {
             return Err(exec_ctx.cancelled_error());

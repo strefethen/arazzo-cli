@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::Duration;
 
+use arazzo_runtime::ExecutionCancellation;
 use arazzo_runtime::{
     Engine, EngineBuilder, EngineEvent, ExecutionEventKind, ExecutionObserver, ExecutionResult,
     ObserverEvent, RuntimeErrorKind, TraceHook, TraceStepRecord,
@@ -22,7 +23,6 @@ use common::{
     TestServer, TestTraceHook,
 };
 use serde_json::{json, Value};
-use tokio_util::sync::CancellationToken;
 
 type Outputs = BTreeMap<String, Value>;
 
@@ -840,7 +840,7 @@ async fn execute_step_records_each_attempt_as_execute_does() {
 /// attempt is being announced, before the event enters the stream.
 #[derive(Default)]
 struct CancelOnStepStarted {
-    token: OnceLock<CancellationToken>,
+    token: OnceLock<ExecutionCancellation>,
     tags: TestObserver,
 }
 

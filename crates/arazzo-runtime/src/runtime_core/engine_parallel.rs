@@ -39,6 +39,7 @@ impl Engine {
         workflow: &Workflow,
         vars: &mut VarStore,
         depth: usize,
+        completion: Option<&ExecutionCancellation>,
     ) -> Result<ProvenancedValues, RuntimeError> {
         let workflow_start = Instant::now();
         let levels = build_levels(workflow)?;
@@ -154,6 +155,7 @@ impl Engine {
                 // A cancelled invocation did not complete, whatever its
                 // level's steps settled.
                 exec_ctx.check_cancelled()?;
+                events::complete(completion)?;
                 let (outputs, error) = match &outcome {
                     Ok(outputs) => (outputs.values.clone(), None),
                     Err(err) => (BTreeMap::new(), Some(err.message.clone())),
@@ -180,6 +182,7 @@ impl Engine {
                 .await;
         }
         let workflow_outputs = workflow_outputs?;
+        events::complete(completion)?;
         self.emit_observer_event(
             exec_ctx,
             ObserverEvent::WorkflowCompleted {

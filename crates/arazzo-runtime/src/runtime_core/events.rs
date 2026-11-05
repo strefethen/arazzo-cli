@@ -29,17 +29,25 @@ pub enum EngineEvent {
 /// via the oneshot channel, guaranteeing that `collect()` can drain all
 /// events before awaiting the result.
 ///
-/// Dropping the handle cancels the running task via the `CancellationToken`.
+/// Dropping the handle requests cancellation through its shared terminal arbiter.
 pub struct ExecutionHandle {
     events: Option<mpsc::Receiver<EngineEvent>>,
     result: Option<oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>>,
-    cancel: CancellationToken,
-    is_timeout: Arc<AtomicBool>,
+    cancellation: ExecutionCancellation,
+    watchdog: Option<tokio::task::JoinHandle<()>>,
 }
+
+mod cancellation;
+mod execution;
+pub(crate) use cancellation::complete;
+pub use cancellation::{ExecutionCancellation, ExecutionOutcome};
 
 impl Drop for ExecutionHandle {
     fn drop(&mut self) {
-        self.cancel.cancel();
+        self.cancellation.claim(ExecutionOutcome::Dropped);
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.abort();
+        }
     }
 }
 
@@ -47,25 +55,28 @@ impl ExecutionHandle {
     pub(crate) fn new(
         events: mpsc::Receiver<EngineEvent>,
         result: oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>,
-        cancel: CancellationToken,
-        is_timeout: Arc<AtomicBool>,
+        cancellation: ExecutionCancellation,
     ) -> Self {
         Self {
             events: Some(events),
             result: Some(result),
-            cancel,
-            is_timeout,
+            cancellation,
+            watchdog: None,
         }
     }
 
-    /// Access the cancellation token to cancel the running task.
-    pub fn cancel_token(&self) -> &CancellationToken {
-        &self.cancel
+    pub fn start_watchdog(&mut self, timeout: Duration) {
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.abort();
+        }
+        let cancellation = self.cancellation.clone();
+        self.watchdog = Some(tokio::spawn(async move {
+            cancellation.watchdog(tokio::time::sleep(timeout)).await;
+        }));
     }
 
-    /// Access the timeout flag (set by `execute_with_timeout` watchdog).
-    pub fn timeout_flag(&self) -> &Arc<AtomicBool> {
-        &self.is_timeout
+    pub fn cancel_token(&self) -> &ExecutionCancellation {
+        &self.cancellation
     }
 
     /// Drain all events and await the final result.

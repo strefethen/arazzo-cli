@@ -18,6 +18,10 @@ pub struct ServerState {
 }
 
 impl ServerState {
+    pub(crate) fn timeouts(&self) -> crate::timeout_policy::TimeoutPolicy {
+        Default::default()
+    }
+
     /// Parse and load specs from the given file paths.
     pub fn load(paths: &[String], allowed_dirs: Option<Vec<String>>) -> Result<Self, String> {
         let mut specs = Vec::with_capacity(paths.len());

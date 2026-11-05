@@ -246,7 +246,7 @@ async fn recursive_compounds_and_multiple_workflow_aliases_keep_skipped_origins(
     );
     let (ctx, _rx) = context();
     let result = engine
-        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
+        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0, None)
         .await
         .unwrap_or_else(|error| panic!("recursive run: {error}"));
     for name in ["a", "b", "c", "registered"] {
@@ -281,7 +281,7 @@ async fn parallel_merge_and_real_missing_output_aliases() {
     );
     let (ctx, _rx) = context();
     let result = engine
-        .execute_inner(&ctx, "main", marked(json!(42)), 0)
+        .execute_inner(&ctx, "main", marked(json!(42)), 0, None)
         .await
         .unwrap_or_else(|error| panic!("parallel run: {error}"));
     assert_eq!(result.values["c"], json!(42));
@@ -314,7 +314,7 @@ async fn goto_with_and_without_parameters_preserves_caller_carriers() {
             );
             let (ctx, _rx) = context();
             let result = engine
-                .execute_inner(&ctx, "main", supplied.clone(), 0)
+                .execute_inner(&ctx, "main", supplied.clone(), 0, None)
                 .await
                 .unwrap_or_else(|error| panic!("goto run: {error}"));
             assert_eq!(result.values["b"], json!(12));
@@ -365,7 +365,7 @@ async fn retry_workflow_and_live_http_outputs_keep_metadata() {
             );
             let (ctx, _rx) = context();
             let result = engine
-                .execute_inner(&ctx, "main", supplied.clone(), 0)
+                .execute_inner(&ctx, "main", supplied.clone(), 0, None)
                 .await
                 .unwrap_or_else(|error| panic!("retry run: {error}"));
             worker.join().unwrap_or_else(|_| panic!("server failed"));
@@ -402,7 +402,7 @@ async fn production_strict_child_defers_unknown_validation_to_request_consumptio
         );
         let (ctx, mut rx) = context();
         let result = engine
-            .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
+            .execute_inner(&ctx, "main", ProvenancedValues::default(), 0, None)
             .await;
         if consumed {
             assert_eq!(
@@ -736,7 +736,7 @@ async fn dry_action_response_parameters_keep_explicit_producer_and_real_misses()
     );
     let (ctx, _rx) = context();
     let result = engine
-        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
+        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0, None)
         .await
         .unwrap_or_else(|error| panic!("action: {error}"));
     assert_eq!(result.values["status"], json!(200));
@@ -769,7 +769,7 @@ async fn concrete_repeated_parameter_clears_metadata_and_json_cannot_create_it()
     );
     let (ctx, _rx) = context();
     let result = engine
-        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0)
+        .execute_inner(&ctx, "main", ProvenancedValues::default(), 0, None)
         .await
         .unwrap_or_else(|error| panic!("repeat: {error}"));
     assert_eq!(

@@ -8,7 +8,14 @@
 pub mod handlers;
 pub mod protocol;
 pub mod state;
+mod timeout_policy;
 pub mod tools;
+
+#[derive(Default)]
+pub struct McpServerConfig {
+    pub allowed_dirs: Option<Vec<String>>,
+    pub(crate) timeouts: timeout_policy::TimeoutPolicy,
+}
 
 use std::io::{BufRead, Read, Write};
 
@@ -30,7 +37,29 @@ where
     R: BufRead + Read + Send + 'static,
     W: Write,
 {
-    let server_state = state::ServerState::load(spec_paths, allowed_dirs)?;
+    run_mcp_stdio_configured(
+        reader,
+        writer,
+        spec_paths,
+        McpServerConfig {
+            allowed_dirs,
+            ..McpServerConfig::default()
+        },
+    )
+}
+
+pub fn run_mcp_stdio_configured<R, W>(
+    reader: R,
+    writer: &mut W,
+    spec_paths: &[String],
+    config: McpServerConfig,
+) -> Result<(), String>
+where
+    R: BufRead + Read + Send + 'static,
+    W: Write,
+{
+    let server_state = state::ServerState::load(spec_paths, config.allowed_dirs)?;
+    let _ = config.timeouts;
 
     // Diagnostics go to stderr only when specs are loaded (not in bare MCP mode).
     if !spec_paths.is_empty() {

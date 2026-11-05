@@ -54,10 +54,16 @@ pub fn definitions(_state: &ServerState) -> Vec<Value> {
                     },
                     "http_timeout_seconds": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::timeout_policy::TimeoutPolicy::HTTP_SECONDS,
+                        "default": crate::timeout_policy::TimeoutPolicy::HTTP_SECONDS,
                         "description": "Per-request HTTP timeout in seconds (default: 30)"
                     },
                     "execution_timeout_seconds": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": crate::timeout_policy::TimeoutPolicy::EXECUTION_SECONDS,
+                        "default": crate::timeout_policy::TimeoutPolicy::EXECUTION_SECONDS,
                         "description": "Overall workflow execution timeout in seconds (default: 300)"
                     }
                 },

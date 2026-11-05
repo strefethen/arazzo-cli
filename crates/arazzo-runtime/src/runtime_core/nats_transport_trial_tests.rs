@@ -384,7 +384,7 @@ struct LiveResources {
     clients: Vec<FixtureClient>,
     trial: Option<Arc<NatsTrial>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
-    cancels: Vec<tokio_util::sync::CancellationToken>,
+    cancels: Vec<crate::ExecutionCancellation>,
 }
 impl LiveResources {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {

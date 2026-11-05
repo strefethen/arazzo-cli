@@ -215,14 +215,9 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
     let run_started_at = SystemTime::now();
     let run_started_inst = std::time::Instant::now();
     let exec_result = if let Some(step_id) = &run.step_id {
-        let handle = engine.execute_step(&run.workflow_id, step_id, inputs.clone(), run.no_deps);
-        let cancel = handle.cancel_token().clone();
-        let timeout_flag = handle.timeout_flag().clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(execution_timeout).await;
-            timeout_flag.store(true, std::sync::atomic::Ordering::Release);
-            cancel.cancel();
-        });
+        let mut handle =
+            engine.execute_step(&run.workflow_id, step_id, inputs.clone(), run.no_deps);
+        handle.start_watchdog(execution_timeout);
         handle.collect().await
     } else {
         engine

@@ -111,11 +111,11 @@ use engine_impl::merge_workflow_params;
 use engine_trace::{build_trace_response, DebugGateContext};
 pub use error::{RuntimeError, RuntimeErrorKind};
 pub use events::{
-    DryRunRequest, EngineEvent, ExecutionEvent, ExecutionEventKind, ExecutionHandle,
-    ExecutionObserver, ExecutionResult, ObserverEvent, ReceiverArmed, SequentialFallback,
-    SequentialFallbackReason, StepEvent, TraceCriterionResult, TraceDecision, TraceDecisionPath,
-    TraceHook, TraceMessage, TraceRedirectHop, TraceRequest, TraceResponse, TraceStepRecord,
-    TransportWarning, TransportWarningKind, WorkflowOutputWarning,
+    DryRunRequest, EngineEvent, ExecutionCancellation, ExecutionEvent, ExecutionEventKind,
+    ExecutionHandle, ExecutionObserver, ExecutionOutcome, ExecutionResult, ObserverEvent,
+    ReceiverArmed, SequentialFallback, SequentialFallbackReason, StepEvent, TraceCriterionResult,
+    TraceDecision, TraceDecisionPath, TraceHook, TraceMessage, TraceRedirectHop, TraceRequest,
+    TraceResponse, TraceStepRecord, TransportWarning, TransportWarningKind, WorkflowOutputWarning,
 };
 #[cfg(test)]
 use input_validation::validate_inputs;

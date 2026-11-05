@@ -29,3 +29,5 @@ This repository now treats the following surfaces as frozen internal v1 contract
 2. Renames/removals/type-shape changes require a version bump and migration note.
 3. Deterministic event ordering is part of the contract.
 4. Trace redaction behavior is part of the contract.
+
+Execution cancellation consumers must follow the [cancellation handle migration](runtime-cancellation.md). MCP users can consult the [fixed timeout policy](mcp-timeouts.md).

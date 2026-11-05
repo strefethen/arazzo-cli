@@ -5,12 +5,12 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use arazzo_runtime::ExecutionCancellation;
 use arazzo_runtime::{
     DebugController, DebugStopEvent, DebugStopReason, EngineBuilder, RuntimeError, StepBreakpoint,
 };
 use arazzo_spec::OutputValue;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
 use super::events::{exited_event, output_event, stopped_event, terminated_event};
 use super::requests::DapBreakpoint;
@@ -47,7 +47,7 @@ pub(super) struct LaunchConfig {
 pub(super) struct RuntimeSession {
     pub(super) outputs: BTreeMap<(String, String, String), OutputValue>,
     pub(super) controller: Arc<DebugController>,
-    pub(super) cancel_token: Option<CancellationToken>,
+    pub(super) cancel_token: Option<ExecutionCancellation>,
     pub(super) monitor_handle: Option<thread::JoinHandle<()>>,
     pub(super) last_stop: Option<DebugStopEvent>,
     pub(super) terminated: bool,
@@ -121,7 +121,7 @@ pub(super) fn ensure_runtime_started(
             .map_err(|err| format!("requesting initial pause: {err}"))?;
     }
 
-    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<CancellationToken>();
+    let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<ExecutionCancellation>();
     let mut engine_builder = EngineBuilder::new(spec)
         .debug_controller(Arc::clone(&controller))
         .dry_run(launch.dry_run);
@@ -154,7 +154,7 @@ pub(super) fn ensure_runtime_started(
         result
     });
 
-    // Receive the CancellationToken from the engine thread (blocks briefly).
+    // Receive the ExecutionCancellation from the engine thread (blocks briefly).
     let cancel_token = cancel_rx.recv().ok();
 
     // Thread C: monitors engine stop events and thread completion.
@@ -238,7 +238,7 @@ pub(super) fn rebuild_runtime_breakpoints(state: &mut SessionState) {
 fn engine_event_monitor(
     controller: Arc<DebugController>,
     event_tx: mpsc::Sender<EngineEvent>,
-    cancel_token: Option<CancellationToken>,
+    cancel_token: Option<ExecutionCancellation>,
     engine_handle: thread::JoinHandle<Result<BTreeMap<String, Value>, RuntimeError>>,
     engine_done: Arc<AtomicBool>,
 ) {
@@ -488,7 +488,7 @@ mod completion_tests {
 
     #[test]
     fn cleanup_cancels_then_joins_and_is_idempotent() {
-        let token = CancellationToken::new();
+        let token = ExecutionCancellation::default();
         let worker_token = token.clone();
         let (joined_tx, joined_rx) = mpsc::channel();
         let engine = thread::spawn(move || {

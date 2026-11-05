@@ -513,7 +513,7 @@ impl HttpClient {
         let mut hops: Vec<TraceRedirectHop> = Vec::new();
         // Whole-chain deadline: reqwest's builder timeout spanned the
         // full redirect chain plus body; per-hop budgets reproduce it.
-        let deadline = Instant::now() + self.timeout;
+        let deadline = checked_deadline(self.timeout)?;
 
         let mut resp = loop {
             if cancel.is_cancelled() {
@@ -1040,5 +1040,26 @@ mod tests {
         };
 
         assert_eq!(err.kind, RuntimeErrorKind::ExecutionCancelled);
+    }
+}
+
+fn checked_deadline(timeout: Duration) -> Result<Instant, RuntimeError> {
+    Instant::now().checked_add(timeout).ok_or_else(|| {
+        RuntimeError::new(
+            RuntimeErrorKind::HttpRequest,
+            "HTTP timeout exceeds supported deadline range",
+        )
+    })
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn deadline_overflow_is_an_error() {
+        assert!(checked_deadline(Duration::MAX).is_err());
+        assert!(checked_deadline(ClientConfig::default().timeout).is_ok());
+        assert_eq!(ClientConfig::default().timeout, Duration::from_secs(30));
     }
 }

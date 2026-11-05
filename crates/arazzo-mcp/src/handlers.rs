@@ -2,16 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 
 use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
 use crate::state::ServerState;
-
-const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
-const DEFAULT_EXECUTION_TIMEOUT_SECS: u64 = 300;
 
 // ---------------------------------------------------------------------------
 // Tool result helpers
@@ -217,6 +213,19 @@ pub fn run_workflow(
         .and_then(Value::as_str)
         .ok_or_else(|| "missing required argument: workflow_id".to_string())?;
 
+    let (http_timeout, execution_timeout) = match state.timeouts().parse(args) {
+        Ok(timeouts) => timeouts,
+        Err(message) => {
+            return tool_err(
+                &json!({
+                    "code": "MCP_INVALID_ARGUMENT",
+                    "message": message,
+                })
+                .to_string(),
+            )
+        }
+    };
+
     let (loaded, _wf) = match state.find_workflow(workflow_id) {
         Ok(found) => found,
         Err(err) => return tool_err(&err),
@@ -237,18 +246,6 @@ pub fn run_workflow(
         .get("parallel")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-
-    let http_timeout = Duration::from_secs(
-        args.get("http_timeout_seconds")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_HTTP_TIMEOUT_SECS),
-    );
-
-    let execution_timeout = Duration::from_secs(
-        args.get("execution_timeout_seconds")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_EXECUTION_TIMEOUT_SECS),
-    );
 
     // Relative `type: openapi` source urls resolve against the spec file's
     // directory and are loaded from disk at engine build; vet every resolved

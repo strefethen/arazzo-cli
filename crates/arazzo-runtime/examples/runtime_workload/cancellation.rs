@@ -4,6 +4,7 @@ use super::protocol::{ControlClient, Identity, ReadyReceipt, Snapshot};
 use super::worker::{
     complete, CleanupBudget, ObservedExecution, TimedExecution, CLEANUP_BUDGET, SETUP_BUDGET,
 };
+use arazzo_runtime::ExecutionCancellation;
 use arazzo_runtime::{Engine, ExecutionHandle};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -13,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 pub(crate) const API_BUDGET: Duration = Duration::from_millis(900);
 
@@ -88,7 +88,7 @@ async fn failed_readiness(
     completed: Option<ObservedExecution>,
     work: Option<JoinHandle<Result<ReadyReceipt, HarnessError>>>,
     state: &ReadinessState,
-    cancel: CancellationToken,
+    cancel: ExecutionCancellation,
     cleanup_budget: &mut CleanupBudget,
 ) -> HarnessError {
     let cleanup_start = Instant::now();
