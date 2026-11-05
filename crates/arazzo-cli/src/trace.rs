@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_headers, redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
-    redact_url, SequentialFallback, TraceStepRecord, TransportWarning,
+    redact_trace_request, SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -200,15 +200,7 @@ fn redact_trace_file(
     redact_inputs(&mut trace.inputs, sensitive_inputs);
     for step in &mut trace.steps {
         if let Some(request) = &mut step.request {
-            redact_headers(&mut request.headers);
-            redact_url(&mut request.url);
-            for hop in &mut request.redirects {
-                redact_url(&mut hop.from);
-                redact_url(&mut hop.to);
-            }
-            if let Some(body) = &mut request.body {
-                redact_json_value(body);
-            }
+            redact_trace_request(request);
         }
 
         if let Some(response) = &mut step.response {

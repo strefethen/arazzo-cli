@@ -520,6 +520,7 @@ impl Engine {
                     headers: prep.headers.clone(),
                     body: prep.body.clone(),
                 },
+                prep.body_json.as_ref(),
                 &exec_ctx.cancel,
                 &exec_ctx.is_timeout,
             )

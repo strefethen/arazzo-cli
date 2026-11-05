@@ -5917,3 +5917,51 @@ fn generate_dry_run_round_trip_with_server_variable_default() {
         Some("https://api.example.com/v2/items")
     );
 }
+
+#[test]
+fn replay_redacted_auth_examples_offline() {
+    for (example, workflow, count) in [
+        ("httpbin-auth.arazzo.yaml", "bearer-auth", 1),
+        ("auth-flow.arazzo.yaml", "auth-then-fetch", 2),
+    ] {
+        let server = start_route_server(|_| {
+            (
+            200,
+            vec![("Content-Type".into(), "application/json".into())],
+            r#"{"authenticated":true,"token":"response-token-canary","headers":{"Authorization":"Bearer response-token-canary"}}"#.into(),
+        )
+        });
+        let temp = TempDir::new("replay-redacted-auth");
+        let spec = hermetic_example_spec(example, &server.base_url, temp.path());
+        let trace = temp.path().join("trace.json");
+        let recorded = run(
+            &[
+                "--json",
+                "run",
+                &spec.to_string_lossy(),
+                workflow,
+                "--input",
+                "token=input-token-canary",
+                "--input",
+                "session=session-canary",
+                "--trace",
+                &trace.to_string_lossy(),
+            ],
+            None,
+        );
+        assert!(recorded.status.success(), "{}", stdout_text(&recorded));
+        let persisted = fs::read_to_string(&trace).unwrap_or_else(|err| panic!("trace: {err}"));
+        for secret in [
+            "my-secret-api-token",
+            "input-token-canary",
+            "session-canary",
+            "response-token-canary",
+        ] {
+            assert!(!persisted.contains(secret), "{secret}");
+        }
+        drop(server);
+        let replayed = run(&["--json", "replay", &trace.to_string_lossy()], None);
+        assert!(replayed.status.success(), "{}", stdout_text(&replayed));
+        assert_eq!(stdout_json(&replayed)["requestsChecked"], json!(count));
+    }
+}

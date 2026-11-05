@@ -447,11 +447,12 @@ impl HttpClient {
     pub(super) async fn request(
         &self,
         cfg: RequestConfig,
+        logical_body: Option<&Value>,
         cancel: &CancellationToken,
         is_timeout: &AtomicBool,
     ) -> Result<Response, RuntimeError> {
         if let HttpClientMode::Replay(state) = &self.mode {
-            return self.replay_request(state, cfg).await;
+            return self.replay_request(state, cfg, logical_body).await;
         }
 
         let (verified, insecure) = match &self.mode {
@@ -741,6 +742,7 @@ impl HttpClient {
         &self,
         state: &Arc<tokio::sync::Mutex<ReplayState>>,
         cfg: RequestConfig,
+        logical_body: Option<&Value>,
     ) -> Result<Response, RuntimeError> {
         let key = ReplayKey {
             workflow_id: cfg.workflow_id.clone(),
@@ -769,7 +771,13 @@ impl HttpClient {
             })?
         };
 
-        validate_replay_request(&record.request, &cfg, record.seq, record.attempt)?;
+        super::replay_projection::validate_replay_request(
+            &record.request,
+            &cfg,
+            logical_body,
+            record.seq,
+            record.attempt,
+        )?;
 
         let trace_response = match (record.response, record.error) {
             (Some(response), _) => response,

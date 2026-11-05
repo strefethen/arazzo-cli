@@ -5,7 +5,7 @@ use arazzo_spec::{PropertyDef, SchemaObject};
 use regex::Regex;
 use serde_json::Value;
 
-use super::DryRunRequest;
+use super::{DryRunRequest, TraceRequest};
 
 pub const REDACTED: &str = "[REDACTED]";
 
@@ -102,6 +102,18 @@ pub fn redact_inputs(map: &mut BTreeMap<String, Value>, sensitive: &BTreeSet<Str
         } else {
             redact_json_value(value);
         }
+    }
+}
+
+pub fn redact_trace_request(request: &mut TraceRequest) {
+    redact_headers(&mut request.headers);
+    redact_url(&mut request.url);
+    for hop in &mut request.redirects {
+        redact_url(&mut hop.from);
+        redact_url(&mut hop.to);
+    }
+    if let Some(body) = &mut request.body {
+        redact_json_value(body);
     }
 }
 

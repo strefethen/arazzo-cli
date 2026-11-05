@@ -73,6 +73,7 @@ mod payload_provenance_tests;
 mod redaction;
 mod regex_cache;
 mod replay;
+mod replay_projection;
 mod request_admission;
 mod run_record;
 mod source_document;
@@ -127,7 +128,7 @@ use payload::{
     apply_replacements, json_type_name, resolve_selector, to_json_path, value_to_string,
 };
 use regex_cache::RegexCache;
-use replay::{validate_replay_request, ReplayKey, ReplayState};
+use replay::{ReplayKey, ReplayState};
 pub use run_record::{RunRequestMetadata, RunResponseMetadata, RunStepOutcome, RunStepRecord};
 pub use source_document::SourceDocumentLoader;
 pub use state::Engine;
@@ -146,6 +147,7 @@ pub(crate) use xpath::{replace_xpath, select_xpath, xpath_version_rejection};
 
 pub use redaction::{
     is_schema_declared_secret, is_sensitive_key, redact_dry_run_request, redact_headers,
-    redact_inputs, redact_json_object, redact_json_value, redact_text_patterns, redact_url,
-    redact_url_components, redacted_dry_run_request, sensitive_input_names, REDACTED,
+    redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
+    redact_trace_request, redact_url, redact_url_components, redacted_dry_run_request,
+    sensitive_input_names, REDACTED,
 };

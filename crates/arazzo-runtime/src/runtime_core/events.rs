@@ -284,6 +284,13 @@ pub struct TraceRedirectHop {
     pub to: String,
 }
 
+fn deserialize_present_body<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// Trace request payload for one step attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -292,7 +299,11 @@ pub struct TraceRequest {
     pub url: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_body"
+    )]
     pub body: Option<Value>,
     /// Redirect chain followed before the final response, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
