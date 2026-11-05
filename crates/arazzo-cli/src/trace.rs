@@ -213,13 +213,7 @@ fn redact_trace_file(
 
         if let Some(response) = &mut step.response {
             redact_headers(&mut response.headers);
-            // Try JSON redaction on both body and body_preview regardless of
-            // content type — catches JSON with incorrect content-type headers.
-            // For non-JSON bodies, fall back to regex-based pattern redaction.
-            for text in [&mut response.body_preview, &mut response.body]
-                .into_iter()
-                .flatten()
-            {
+            if let Some(text) = response.body.as_mut().or(response.body_preview.as_mut()) {
                 if let Ok(mut value) = serde_json::from_str::<Value>(text) {
                     redact_json_value(&mut value);
                     if let Ok(serialized) = serde_json::to_string(&value) {
@@ -229,28 +223,14 @@ fn redact_trace_file(
                     *text = redact_text_patterns(text);
                 }
             }
-            // Truncate body_preview to max_body_bytes (at a char boundary to
-            // avoid splitting multi-byte UTF-8 sequences).
-            if let Some(preview) = &mut response.body_preview {
-                if preview.len() > max_body_bytes {
-                    let mut end = max_body_bytes;
-                    while !preview.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    preview.truncate(end);
-                    preview.push_str("...");
-                }
+            if let Some(body) = &response.body {
+                response.body_preview = Some(body.clone());
             }
-            // Truncate body to max_body_bytes
-            if let Some(body) = &mut response.body {
-                if body.len() > max_body_bytes {
-                    let mut end = max_body_bytes;
-                    while !body.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    body.truncate(end);
-                    body.push_str("...");
-                }
+            for text in [&mut response.body_preview, &mut response.body]
+                .into_iter()
+                .flatten()
+            {
+                truncate_at_char_boundary(text, max_body_bytes);
             }
         }
 
@@ -349,6 +329,105 @@ mod tests {
                 error: None,
                 message: None,
             }],
+        }
+    }
+
+    #[test]
+    fn http_preview_is_derived_after_full_body_redaction() {
+        let body = format!(
+            r#"{{"a_token":"FAKE-HTTP-SECRET","b_nested":{{"password":"FAKE-NESTED-SECRET"}},"c_name":"visible","zz_padding":"{}"}}"#,
+            "é".repeat(3000)
+        );
+        for content_type in [ContentType::Json, ContentType::Other("text/plain".into())] {
+            for limit in [0, 101, 2048, 4096, 10000] {
+                let mut trace = make_trace_file(TraceResponse {
+                    status_code: 201,
+                    content_type: content_type.clone(),
+                    body_bytes: body.len() as u64,
+                    body_preview: Some(format!(
+                        "{}...",
+                        String::from_utf8_lossy(&body.as_bytes()[..2048])
+                    )),
+                    body: Some(body.clone()),
+                    body_lossy: false,
+                    headers: BTreeMap::new(),
+                });
+                redact_trace_file(&mut trace, limit, &BTreeSet::new());
+                let response = trace.steps[0]
+                    .response
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("response"));
+                assert_eq!(response.body_preview, response.body);
+                let text = response.body.as_ref().unwrap_or_else(|| panic!("body"));
+                assert!(!text.contains("FAKE-HTTP-SECRET"));
+                assert!(!text.contains("FAKE-NESTED-SECRET"));
+                assert!(text.len() <= limit + 3);
+                if limit >= 2048 {
+                    assert!(text.contains(REDACTED));
+                    assert!(text.contains("visible"));
+                }
+                if limit == 0 {
+                    assert_eq!(text, "...");
+                }
+                assert_eq!(response.status_code, 201);
+                assert_eq!(response.content_type, content_type);
+                assert_eq!(response.body_bytes, body.len() as u64);
+                assert!(!response.body_lossy);
+            }
+        }
+    }
+
+    #[test]
+    fn http_body_preview_preserves_utf8_and_plain_text_redaction() {
+        for (body, limit, expected) in [
+            ("ééé", 3, "é..."),
+            (
+                "token=FAKE-TEXT user=visible",
+                4096,
+                "token=[REDACTED] user=visible",
+            ),
+        ] {
+            let mut trace = make_trace_file(TraceResponse {
+                body: Some(body.into()),
+                body_preview: Some("stale preview".into()),
+                body_lossy: true,
+                ..TraceResponse::default()
+            });
+            redact_trace_file(&mut trace, limit, &BTreeSet::new());
+            let response = trace.steps[0]
+                .response
+                .as_ref()
+                .unwrap_or_else(|| panic!("response"));
+            assert_eq!(response.body.as_deref(), Some(expected));
+            assert_eq!(response.body_preview.as_deref(), Some(expected));
+            assert!(response.body_lossy);
+        }
+    }
+
+    #[test]
+    fn http_preview_only_and_empty_responses_keep_existing_behavior() {
+        for (preview, expected) in [
+            (None, None),
+            (
+                Some(r#"{"token":"FAKE-PREVIEW"}"#),
+                Some(r#"{"token":"[REDACTED]"}"#),
+            ),
+            (
+                Some("token=FAKE-PREVIEW user=visible"),
+                Some("token=[REDACTED] user=visible"),
+            ),
+        ] {
+            let mut trace = make_trace_file(TraceResponse {
+                body_preview: preview.map(str::to_owned),
+                ..TraceResponse::default()
+            });
+            redact_trace_file(&mut trace, 2048, &BTreeSet::new());
+            let response = trace.steps[0]
+                .response
+                .as_ref()
+                .unwrap_or_else(|| panic!("response"));
+            assert_eq!(response.body_preview.as_deref(), expected);
+            assert!(response.body.is_none());
         }
     }
 
