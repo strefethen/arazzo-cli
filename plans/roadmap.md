@@ -137,19 +137,18 @@ are routine; the exact claim remains gated. Structured workflow-output warnings
 are complete. Debug checkpoint cancellation and cleanup after client loss are
 reviewed and complete. Root parsing measurements under
 [epic:ac-8ba62](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-8ba62) are delivered
-and its root unit plan is completed. The separate paused source cycle is
+and its root unit plan is completed. The separate generator delivery is
 [ac-2763f](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-2763f), the shared,
 bounded schema example walker under
 [epic:ac-31ca2](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-31ca2).
 Its Option C synthesis direction passed fresh readiness after a private typed
 compatibility refinement; original criteria and expected values remain intact.
-Implementation is uncommitted. Steve approved
-[ac-4c7b0](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-4c7b0) on 2026-10-30 UTC:
-return explicit errors when numeric bounds cannot be represented, using
-`Result<Example, String>` and the existing CRUD/MCP error paths. That decision
-ticket is closed and the implementation contract is reconciled without weakening
-ordinary-output or size-budget obligations. This source remains paused; explicit resumption, fresh clearance/reservations,
-rejection/propagation proof and cumulative independent review are still required. No completed implementation is claimed. The wider ingestion
+Implementation is committed locally as `29ef7e8` (2026-11-05). Steve's approved
+numeric-error policy is implemented through the existing CRUD/MCP error paths.
+Independent source review found no defects and verified all five acceptance
+criteria, 21 unchanged fixture outcomes, and 1,885 passing workspace tests.
+Parent documentation and browser QA remain the final completion gates; no push
+or release is claimed. The wider ingestion
 plan and ac-6a778 stay paused.
 Namespace evidence resumes after the wording decision and fresh clearance.
 Runtime inheritance
