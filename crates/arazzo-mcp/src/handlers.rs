@@ -499,9 +499,9 @@ pub fn generate_example(args: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .unwrap_or("value");
 
-    let example =
-        arazzo_generate::standalone_example::generate_from_json_schema(schema, field_name);
-    tool_ok(&example)
+    let schema = serde_yaml_ng::to_value(schema).map_err(|e| e.to_string())?;
+    let example = arazzo_generate::examples::generate_example(&schema, &schema, field_name)?;
+    tool_ok(&example.value)
 }
 
 #[cfg(test)]

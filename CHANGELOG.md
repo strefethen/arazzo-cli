@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Example generation** — CRUD generation and MCP tools share one bounded
+  schema walker. Oversized request bodies trim at 1,000 units and warn once per
+  step; `password` and `byte` formats produce their intended examples. A
+  numeric bound no JSON number can satisfy, such as
+  `exclusiveMinimum: 1.7976931348623157e308`, is now an error instead of an
+  example that violates it. MCP `generate_example` also handles OpenAPI 3.1
+  type arrays, `examples`, `const` and numeric exclusive bounds, resolves local
+  references, infers objects from `properties`, and skips null literals.
+
 ## [0.9.0] - 2026-10-29
 
 Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.

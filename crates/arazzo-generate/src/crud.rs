@@ -13,7 +13,7 @@ use arazzo_spec::{
 };
 use openapiv3::{OpenAPI, ReferenceOr, StatusCode};
 
-use crate::examples::{generate_example, json_to_yml};
+use crate::examples::{generate_example, json_to_yml, typed_bridge};
 use crate::operation_targets::{operation_target, validate_operation_ids};
 use crate::refs::{resolve_response_ref, resolve_schema_ref};
 
@@ -61,11 +61,19 @@ pub fn generate_crud(
     let auth = detect_auth(openapi);
     let source_name = derive_source_name(&openapi.info.title, spec_filename);
 
+    let example_root = typed_bridge::root(openapi)?;
     let mut workflows = Vec::new();
     let resource_names: Vec<String> = groups.iter().map(|g| g.name.clone()).collect();
 
     for group in &groups {
-        workflows.push(build_workflow(group, &source_name, &auth, openapi)?);
+        workflows.push(build_workflow(
+            group,
+            &source_name,
+            &auth,
+            openapi,
+            &example_root,
+            &mut warnings,
+        )?);
     }
 
     let spec = ArazzoSpec {
@@ -684,6 +692,8 @@ fn build_workflow(
     source_name: &str,
     auth: &Option<AuthRequirement>,
     openapi: &OpenAPI,
+    example_root: &serde_yaml_ng::Value,
+    warnings: &mut Vec<String>,
 ) -> Result<Workflow, String> {
     let workflow_id = format!("crud-{}", group.name);
     let (id_body_field, id_param_name) = find_id_field(group, openapi);
@@ -751,6 +761,8 @@ fn build_workflow(
             source_name,
             &create.operation,
             &openapi.components,
+            example_root,
+            warnings,
             Some(&id_body_field),
         )?);
     }
@@ -764,6 +776,8 @@ fn build_workflow(
             source_name,
             &list.operation,
             &openapi.components,
+            example_root,
+            warnings,
             None,
         )?);
     }
@@ -777,6 +791,8 @@ fn build_workflow(
             source_name,
             &read.operation,
             &openapi.components,
+            example_root,
+            warnings,
             None,
         )?;
         if let Some(ref param_name) = group.id_param {
@@ -805,6 +821,8 @@ fn build_workflow(
             source_name,
             &update.operation,
             &openapi.components,
+            example_root,
+            warnings,
             None,
         )?;
         if let Some(ref param_name) = group.id_param {
@@ -833,6 +851,8 @@ fn build_workflow(
             source_name,
             &delete.operation,
             &openapi.components,
+            example_root,
+            warnings,
             None,
         )?;
         if let Some(ref param_name) = group.id_param {
@@ -883,24 +903,35 @@ fn build_step(
     source_name: &str,
     operation: &openapiv3::Operation,
     components: &Option<openapiv3::Components>,
+    example_root: &serde_yaml_ng::Value,
+    warnings: &mut Vec<String>,
     output_id_field: Option<&str>,
 ) -> Result<Step, String> {
     let target = operation_target(source_name, path, method, operation)?;
     let status_code = extract_success_code(&operation.responses, method);
 
-    let request_body = operation.request_body.as_ref().and_then(|rb_ref| {
+    let body_schema = operation.request_body.as_ref().and_then(|rb_ref| {
         let rb = crate::refs::resolve_request_body_ref(rb_ref, components, &mut HashSet::new())?;
-        let json_content = rb.content.get("application/json")?;
-        let schema_ref = json_content.schema.as_ref()?;
-        let example = generate_example(schema_ref, "body", components, 0);
-
+        rb.content.get("application/json")?.schema.as_ref()
+    });
+    let request_body = if let Some(schema_ref) = body_schema {
+        let schema = typed_bridge::schema(schema_ref)?;
+        let example = generate_example(&schema, example_root, "body")
+            .map_err(|err| format!("request body example for step \"{step_id}\": {err}"))?;
+        if example.trimmed {
+            warnings.push(format!(
+                "request body example for step \"{step_id}\" exceeded the example size limit (1000) and was trimmed; fields past the limit are null"
+            ));
+        }
         Some(RequestBody {
             content_type: "application/json".to_string(),
-            payload: Some(json_to_yml(example).into()),
+            payload: Some(json_to_yml(example.value).into()),
             reference: String::new(),
             ..RequestBody::default()
         })
-    });
+    } else {
+        None
+    };
 
     let success_criteria = vec![SuccessCriterion {
         condition: format!("$statusCode == {status_code}"),
