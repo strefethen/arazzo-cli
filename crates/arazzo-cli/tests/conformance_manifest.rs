@@ -1395,10 +1395,10 @@ fn checked_in_manifest_has_deterministic_separate_totals() {
     assert_eq!(
         report.arazzo,
         StatusTotals {
-            covered: 14,
+            covered: 15,
             fail_closed: 0,
             unsupported: 4,
-            deviation: 7,
+            deviation: 6,
         }
     );
     assert_eq!(

@@ -178,36 +178,40 @@ async fn send_missing_correlation_object_and_replay_fail_before_any_connection()
     fixture.asyncapi("127.0.0.1:1", "orders.placed");
     fixture.openapi("http://127.0.0.1:1");
 
-    let send = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: s\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: send\n");
-    let started = Instant::now();
-    let err = EngineBuilder::new(send)
-        .source_base_dir(fixture.path())
-        .message_transport(options(Duration::from_secs(10)))
-        .build()
-        .expect("engine")
-        .execute_collect("w", BTreeMap::new())
-        .await
-        .outputs
-        .expect_err("send is refused");
-    assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
-    assert!(err.message.contains("617"), "{}", err.message);
-    assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "no connection attempt"
-    );
+    for dry_run in [false, true] {
+        let send = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: s\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: send\n");
+        let started = Instant::now();
+        let err = EngineBuilder::new(send)
+            .source_base_dir(fixture.path())
+            .dry_run(dry_run)
+            .message_transport(options(Duration::from_secs(10)))
+            .build()
+            .expect("engine")
+            .execute_collect("w", BTreeMap::new())
+            .await
+            .outputs
+            .expect_err("send is refused");
+        assert_eq!(err.kind, RuntimeErrorKind::UnsupportedAsyncApiTransport);
+        assert!(err.message.contains("617"), "{}", err.message);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "no connection attempt"
+        );
 
-    let correlation = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: s\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: $inputs.id\n");
-    let err = EngineBuilder::new(correlation)
-        .source_base_dir(fixture.path())
-        .message_transport(options(Duration::from_secs(10)))
-        .build()
-        .expect("engine")
-        .execute_collect("w", BTreeMap::new())
-        .await
-        .outputs
-        .expect_err("correlationId needs a document-side object");
-    assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
-    assert!(err.message.contains("correlationId"), "{}", err.message);
+        let correlation = fixture.arazzo("  - workflowId: w\n    steps:\n      - stepId: s\n        operationId: $sourceDescriptions.orders.receiveOrderPlaced\n        action: receive\n        correlationId: $inputs.id\n");
+        let err = EngineBuilder::new(correlation)
+            .source_base_dir(fixture.path())
+            .dry_run(dry_run)
+            .message_transport(options(Duration::from_secs(10)))
+            .build()
+            .expect("engine")
+            .execute_collect("w", BTreeMap::new())
+            .await
+            .outputs
+            .expect_err("correlationId needs a document-side object");
+        assert_eq!(err.kind, RuntimeErrorKind::MessageTransportConfig);
+        assert!(err.message.contains("correlationId"), "{}", err.message);
+    }
 
     let replay = fixture.arazzo(RECEIVE_THEN_HTTP);
     let started = Instant::now();
