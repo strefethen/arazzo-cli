@@ -83,14 +83,14 @@ async fn missing_id_never_sends_delete_in_sequential_parallel_or_run_step() {
     let captured = Arc::clone(&log);
     let server = start_server(move |method, url, headers, body| {
         record_request(&captured, &method, &url, &headers, &body);
-        MockHttpResponse::json(200, "{}")
+        MockHttpResponse::json(200, r#"{"name":"rex"}"#)
     });
     for mode in ["sequential", "parallel", "step"] {
         for source in ["$steps.find.outputs.id", "prefix-{$steps.find.outputs.id}"] {
             let observer = Arc::new(TestObserver::default());
             let engine = builder(&server.base_url, json!([{"workflowId":"main", "steps":[
                 {"stepId":"find", "operationId":"find", "outputs":{"id":"$response.body#/id"}},
-                {"stepId":"remove", "operationId":"remove", "dependsOn":["find"], "parameters":[{"name":"id", "in":"path", "value":source}]}
+                {"stepId":"remove", "operationId":"remove", "dependsOn":["find"], "parameters":[{"name":"id", "in":"path", "value":source},{"name":"owner", "in":"query", "value":"$steps.find.outputs.id"}]}
             ]}])).parallel(mode == "parallel").observer(observer.clone()).build().unwrap_or_else(|error| panic!("engine: {error}"));
             let before = logged_requests(&log).len();
             let result = if mode == "step" {
@@ -363,6 +363,68 @@ async fn null_empty_optional_omissions_and_zero_match_selectors_stay_admitted() 
             result.dry_run_requests()[0].url,
             "https://api.invalid/pets/"
         );
+    }
+}
+
+#[tokio::test]
+async fn live_l4_null_empty_and_selector_residual_reach_loopback_unchanged() {
+    let log = new_request_log();
+    let captured = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&captured, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, r#"{"id":null,"name":"rex"}"#)
+    });
+    for mode in ["sequential", "parallel", "step"] {
+        for (output, value) in [
+            (json!("$response.body#/id"), json!(null)),
+            (json!("$response.body#/id"), json!("")),
+            (json!("$response.body#/id"), json!("$steps.find.outputs.id")),
+            (
+                json!({"context":"$response.body","selector":"$.absent","type":"jsonpath"}),
+                json!("$steps.find.outputs.id"),
+            ),
+            (
+                json!({"context":"$response.body","selector":"/absent","type":"jsonpointer"}),
+                json!("$steps.find.outputs.id"),
+            ),
+        ] {
+            let engine = builder(
+                &server.base_url,
+                json!([{"workflowId":"main","steps":[
+                    {"stepId":"find","operationId":"find","outputs":{"id":output}},
+                    {"stepId":"remove","operationId":"remove","dependsOn":["find"],"parameters":[
+                        {"name":"id","in":"path","value":value},
+                        {"name":"owner","in":"query","value":value}
+                    ]}
+                ]}]),
+            )
+            .parallel(mode == "parallel")
+            .build()
+            .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+            let before = logged_requests(&log).len();
+            let result = if mode == "step" {
+                engine
+                    .execute_step("main", "remove", BTreeMap::new(), false)
+                    .collect()
+                    .await
+            } else {
+                engine.execute_collect("main", BTreeMap::new()).await
+            };
+            assert!(result.outputs.is_ok(), "{mode}: {:?}", result.outputs);
+            if mode == "parallel" {
+                assert!(result.sequential_fallbacks().is_empty());
+            }
+            let requests = logged_requests(&log);
+            assert_eq!(requests.len(), before + 2);
+            assert_eq!(requests[before].method, "GET");
+            assert_eq!(requests[before + 1].method, "DELETE");
+            let expected = if value == json!("") {
+                "/pets/?owner="
+            } else {
+                "/pets/"
+            };
+            assert_eq!(requests[before + 1].url, expected);
+        }
     }
 }
 

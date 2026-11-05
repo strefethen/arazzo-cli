@@ -69,8 +69,9 @@ impl Fixture {
             "sourceDescriptions": [{"name": "api", "url": "source.json", "type": "openapi"}],
             "workflows": [{"workflowId": "guarded", "steps": [
                 {"stepId": "find", "operationId": "find", "outputs": {"id": "$response.body#/id"}},
-                {"stepId": "remove", "operationId": "remove", "parameters": [
-                    {"name": "petId", "in": "path", "value": "$steps.find.outputs.id"}
+                {"stepId": "remove", "operationId": "remove", "dependsOn": ["find"], "parameters": [
+                    {"name": "petId", "in": "path", "value": "$steps.find.outputs.id"},
+                    {"name": "owner", "in": "query", "value": "$steps.find.outputs.id"}
                 ]}
             ]}]
         });
@@ -101,6 +102,122 @@ impl Fixture {
         process
             .output()
             .unwrap_or_else(|error| panic!("run CLI admission fixture: {error}"))
+    }
+}
+
+#[test]
+fn l4_exact_and_template_refuse_across_cli_execution_paths_and_dry_run_keeps_markers() {
+    for path in ["sequential", "parallel", "step"] {
+        for template in [false, true] {
+            for diagnostics in ["off", "warn", "error"] {
+                let fixture = Fixture::new();
+                let file = fixture.directory.join("workflow.arazzo.json");
+                if template {
+                    let mut spec: Value = serde_json::from_slice(
+                        &fs::read(&file)
+                            .unwrap_or_else(|error| panic!("fixture result required: {error:?}")),
+                    )
+                    .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+                    spec["workflows"][0]["steps"][1]["parameters"][0]["value"] =
+                        json!("pet-{$steps.find.outputs.id}");
+                    fs::write(&file, spec.to_string())
+                        .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+                }
+                let mut command = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"));
+                command.args(["--json", "run"]).arg(&file).args([
+                    "guarded",
+                    "--expr-diagnostics",
+                    diagnostics,
+                ]);
+                match path {
+                    "parallel" => {
+                        command.arg("--parallel");
+                    }
+                    "step" => {
+                        command.args(["--step", "remove"]);
+                    }
+                    _ => {}
+                }
+                let output = command
+                    .output()
+                    .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+                assert!(
+                    !output.status.success(),
+                    "{path} {template} {diagnostics}: {output:?}"
+                );
+                let body: Value = serde_json::from_slice(&output.stdout)
+                    .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+                assert_eq!(body["code"], CODE, "{body}");
+                assert_diagnostic(
+                    body["error"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("fixture value required")),
+                );
+                assert_eq!(
+                    *fixture
+                        .requests
+                        .lock()
+                        .unwrap_or_else(|error| panic!("fixture result required: {error:?}")),
+                    ["GET /pets"]
+                );
+            }
+        }
+        let fixture = Fixture::new();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"));
+        command
+            .args(["--json", "run"])
+            .arg(fixture.directory.join("workflow.arazzo.json"))
+            .args(["guarded", "--dry-run"]);
+        match path {
+            "parallel" => {
+                command.arg("--parallel");
+            }
+            "step" => {
+                command.args(["--step", "remove"]);
+            }
+            _ => {}
+        }
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+        assert!(output.status.success(), "{path}: {output:?}");
+        let body: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("fixture result required: {error:?}"));
+        assert_eq!(body["kind"], "dryRun", "{body}");
+        let requests = body["requests"]
+            .as_array()
+            .unwrap_or_else(|| panic!("fixture value required"));
+        assert_eq!(requests.len(), 2, "{body}");
+        assert_eq!(requests[1]["method"], "DELETE");
+        let marker = "%3Cunresolved%3A%24response.body%23%2Fid%3E";
+        assert!(
+            requests[1]["url"]
+                .as_str()
+                .unwrap_or_else(|| panic!("fixture value required"))
+                .ends_with(&format!(
+                    "/pets/%3Cunresolved:$response.body%23%2Fid%3E?owner={marker}"
+                )),
+            "{body}"
+        );
+        assert_eq!(
+            requests[0]["warnings"]
+                .as_array()
+                .unwrap_or_else(|| panic!("fixture value required"))
+                .len(),
+            1
+        );
+        assert_eq!(
+            requests[1]["warnings"]
+                .as_array()
+                .unwrap_or_else(|| panic!("fixture value required"))
+                .len(),
+            2
+        );
+        assert!(fixture
+            .requests
+            .lock()
+            .unwrap_or_else(|error| panic!("fixture result required: {error:?}"))
+            .is_empty());
     }
 }
 
