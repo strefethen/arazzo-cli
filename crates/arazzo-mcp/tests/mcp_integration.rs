@@ -11,6 +11,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+#[path = "support/filesystem.rs"]
+mod filesystem_support;
+use filesystem_support::*;
+
 use arazzo_mcp::protocol;
 use arazzo_mcp::state::ServerState;
 use arazzo_spec::{
@@ -280,7 +284,7 @@ fn test_full_flow() {
     });
 
     let spec = make_spec(&server.base_url);
-    let state = ServerState::from_spec("test.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("test.arazzo.yaml", spec);
 
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -336,10 +340,8 @@ fn test_full_flow() {
     assert!(detail["steps"][0]["method"].is_null(), "{detail}");
 
     // 5: run_workflow
-    assert!(!is_tool_error(&responses[4]));
-    let run_result = extract_tool_text(&responses[4]);
-    assert!(run_result.is_some());
-    let run = run_result.unwrap_or(Value::Null);
+    assert_eq!(is_tool_error(&responses[4]), !cfg!(target_os = "linux"));
+    let run = workflow_tool_or_denial_and_native_runtime(&responses[4], &state, "get-data", false);
     assert_eq!(run["kind"], "success");
     assert_eq!(run["outputs"]["value"], "hello-world");
 }
@@ -367,7 +369,7 @@ workflows:
     std::fs::write(&spec_path, spec_yaml).unwrap_or_else(|e| panic!("write temp: {e}"));
 
     let path_str = spec_path.to_string_lossy().to_string();
-    let state = ServerState::empty();
+    let state = rooted_file_state(&path_str);
 
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -384,16 +386,18 @@ workflows:
 
     let validate_result = extract_tool_text(&responses[1]);
     assert!(validate_result.is_some());
-    let result = validate_result.unwrap_or(Value::Null);
+    let result = validation_tool_or_denial_and_byte_parser(
+        validate_result.unwrap_or(Value::Null),
+        &path_str,
+    );
     assert_eq!(result["valid"], true);
     assert_eq!(result["workflows"], 1);
 
-    // Cleanup
     let _ = std::fs::remove_file(&spec_path);
 }
 
 fn call_validate_spec(file_path: &str) -> Value {
-    let state = ServerState::empty();
+    let state = rooted_file_state(file_path);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -407,7 +411,7 @@ fn call_validate_spec(file_path: &str) -> Value {
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
     match extract_tool_text(&responses[1]) {
-        Some(value) => value,
+        Some(value) => validation_tool_or_denial_and_byte_parser(value, file_path),
         None => panic!("validate_spec returned no tool text"),
     }
 }
@@ -499,7 +503,7 @@ fn test_run_workflow_error() {
     let server = start_server(|_method, _url| (500, r#"{"error":"internal"}"#.to_string()));
 
     let spec = make_spec(&server.base_url);
-    let state = ServerState::from_spec("test.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("test.arazzo.yaml", spec);
 
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -542,7 +546,7 @@ fn test_run_workflow_preserves_nested_dependency_error_code() {
             ..Workflow::default()
         },
     ];
-    let state = ServerState::from_spec("dependency.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("dependency.arazzo.yaml", spec);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -554,9 +558,9 @@ fn test_run_workflow_preserves_nested_dependency_error_code() {
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
     assert!(is_tool_error(&responses[1]));
-    let text = responses[1]["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default();
+    let payload =
+        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "parent", false);
+    let text = payload.to_string();
     assert!(
         text.contains("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED"),
         "nested dependency code must cross MCP boundary: {text}"
@@ -610,7 +614,7 @@ fn test_dry_run() {
     });
 
     let spec = make_spec(&server.base_url);
-    let state = ServerState::from_spec("test.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("test.arazzo.yaml", spec);
 
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -624,11 +628,10 @@ fn test_dry_run() {
 
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
-    assert!(!is_tool_error(&responses[1]));
+    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
 
-    let result = extract_tool_text(&responses[1]);
-    assert!(result.is_some());
-    let dry_run = result.unwrap_or(Value::Null);
+    let dry_run =
+        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
     assert_eq!(dry_run["kind"], "dryRun");
     let requests = dry_run["requests"].as_array();
     assert!(requests.is_some_and(|r| !r.is_empty()));
@@ -638,7 +641,7 @@ fn test_dry_run() {
 fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
     let spec = make_spec("https://user:prefix@MCP-LEAKED-SECRET@example.com");
     let source = spec.source_descriptions[0].url.clone();
-    let state = ServerState::from_spec("multiple-at.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("multiple-at.arazzo.yaml", spec);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -648,8 +651,13 @@ fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
     protocol::serve(Cursor::new(messages), &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
-    assert!(!is_tool_error(&responses[1]), "{responses:?}");
-    let result = extract_tool_text(&responses[1]).unwrap_or_else(|| panic!("dry-run response"));
+    assert_eq!(
+        is_tool_error(&responses[1]),
+        !cfg!(target_os = "linux"),
+        "{responses:?}"
+    );
+    let result =
+        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
     assert_eq!(
         result["requests"][0]["url"],
         "https://[REDACTED]@example.com/data"
@@ -662,7 +670,7 @@ fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
 fn test_dry_run_redacts_url_userinfo() {
     let spec = make_spec("http://user:MCP-USERINFO-PASSWORD@example.com");
     let source = spec.source_descriptions[0].url.clone();
-    let state = ServerState::from_spec("userinfo.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("userinfo.arazzo.yaml", spec);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -672,8 +680,13 @@ fn test_dry_run_redacts_url_userinfo() {
     protocol::serve(Cursor::new(messages), &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
-    assert!(!is_tool_error(&responses[1]), "{responses:?}");
-    let result = extract_tool_text(&responses[1]).unwrap_or_else(|| panic!("dry-run response"));
+    assert_eq!(
+        is_tool_error(&responses[1]),
+        !cfg!(target_os = "linux"),
+        "{responses:?}"
+    );
+    let result =
+        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
     assert_eq!(result["kind"], "dryRun");
     assert_eq!(
         result["requests"][0]["url"],
@@ -690,7 +703,7 @@ fn test_dry_run_redacts_sensitive_request_parts() {
     });
 
     let spec = make_sensitive_spec(&server.base_url);
-    let state = ServerState::from_spec("sensitive.arazzo.yaml", spec);
+    let state = rooted_state_from_spec("sensitive.arazzo.yaml", spec);
 
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -704,16 +717,11 @@ fn test_dry_run_redacts_sensitive_request_parts() {
 
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
-    assert!(!is_tool_error(&responses[1]));
+    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
 
-    let result_text = responses[1]
-        .get("result")
-        .and_then(|r| r.get("content"))
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("text"))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("expected tool text response: {:?}", responses[1]));
+    let payload =
+        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "send-secret", true);
+    let result_text = payload.to_string();
     assert!(
         !result_text.contains("top-secret-jwt")
             && !result_text.contains("query-secret-123")
@@ -722,9 +730,7 @@ fn test_dry_run_redacts_sensitive_request_parts() {
         "MCP dry-run response should not contain raw secrets, got: {result_text}"
     );
 
-    let result = extract_tool_text(&responses[1]);
-    assert!(result.is_some());
-    let dry_run = result.unwrap_or(Value::Null);
+    let dry_run = payload;
     assert_eq!(dry_run["kind"], "dryRun");
     let requests = dry_run["requests"]
         .as_array()
@@ -776,19 +782,19 @@ fn test_dry_run_redacts_sensitive_request_parts() {
 }
 
 // ---------------------------------------------------------------------------
-// sourceDescriptions document loading (relative urls)
 // ---------------------------------------------------------------------------
 
 fn testdata_path(rel: &str) -> String {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata");
     let joined = if rel.is_empty() { dir } else { dir.join(rel) };
-    joined.to_string_lossy().to_string()
+    fs::canonicalize(joined)
+        .unwrap_or_else(|error| panic!("fixture: {error}"))
+        .to_string_lossy()
+        .to_string()
 }
 
 #[test]
 fn test_run_workflow_relative_source_dry_run() {
-    // Allowed-dirs restriction is active, so the resolved source path passes
-    // through check_path_allowed (and is allowed: it is inside testdata/).
     let state = match ServerState::load(
         &[testdata_path("petstore-relative.arazzo.yaml")],
         Some(vec![testdata_path("")]),
@@ -812,17 +818,22 @@ fn test_run_workflow_relative_source_dry_run() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    assert!(
-        !is_tool_error(&responses[1]),
-        "run_workflow should succeed, got: {}",
-        responses[1]
-    );
-
-    let run = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
+    let run = if cfg!(target_os = "linux") {
+        extract_tool_text(&responses[1]).unwrap_or(Value::Null)
+    } else {
+        let path = testdata_path("petstore-relative.arazzo.yaml");
+        native_dry_run_bytes(
+            &fs::read(&path).unwrap_or_else(|error| panic!("fixture: {error}")),
+            Path::new(&path)
+                .parent()
+                .unwrap_or_else(|| panic!("fixture parent")),
+            "list-pets",
+            BTreeMap::new(),
+        )
+    };
     assert_eq!(run["kind"], "dryRun", "unexpected result: {run}");
     assert_eq!(run["requests"][0]["method"], "GET");
-    // The operationId resolves from the loaded source document and the base
-    // derives from its servers[0].url — no openapi input exists over MCP.
     assert_eq!(
         run["requests"][0]["url"],
         "https://petstore.example.com/v1/pets"
@@ -866,7 +877,11 @@ fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        text.contains("path not allowed"),
+        text.contains(if cfg!(target_os = "linux") {
+            "path not allowed"
+        } else {
+            "File access denied by server policy"
+        }),
         "expected path denial, got: {text}"
     );
     assert!(
@@ -1022,27 +1037,20 @@ fn test_run_workflow_self_based_source_is_refused_not_read() {
         "the refusal should name the resolved URI, got: {text}"
     );
     assert!(
-        !text.contains("path not allowed"),
+        !text.contains(if cfg!(target_os = "linux") {
+            "path not allowed"
+        } else {
+            "File access denied by server policy"
+        }),
         "the source never reaches the filesystem gate, so it is not a path denial: {text}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// generate_workflow: document-pointing sourceDescriptions url (ac-91284)
-// ---------------------------------------------------------------------------
-//
-// generate_workflow returns YAML as a string with no output path, and its
-// `file_path` argument is commonly absolute (an MCP client passes whatever
-// path it has). There is no "directory the generated file will live in" to
-// rebase against here, so the emitted url is just the OpenAPI document's own
-// file name — correct wherever the caller ultimately saves the returned YAML
-// alongside that document, and never the absolute directory `file_path` came
-// from.
-
 #[test]
 fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
-    let state = ServerState::empty();
     let file_path = testdata_path("petstore.openapi.yaml");
+    let state = rooted_file_state(&file_path);
     assert!(
         Path::new(&file_path).is_absolute(),
         "fixture path must be absolute to exercise the MCP scenario"
@@ -1063,13 +1071,7 @@ fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    assert!(
-        !is_tool_error(&responses[1]),
-        "generate_workflow should succeed, got: {}",
-        responses[1]
-    );
-
-    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    let result = generation_tool_or_denial_and_byte_parser(&responses[1], &file_path);
     let yaml = result["yaml"]
         .as_str()
         .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
@@ -1091,14 +1093,6 @@ fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
 
 #[test]
 fn test_generate_workflow_guards_colon_bearing_file_name() {
-    // P1 regression (ac-91284 review): a file name with a `:` in it (e.g. an
-    // OpenAPI-style versioned name) is not on its own a valid RFC 3986 §4.2
-    // relative-path reference — it parses as an absolute URI with that text
-    // as its scheme. Without a `./` guard the emitted
-    // `url: api:v2.openapi.yaml` would make the runtime's classifier
-    // (`is_relative_document_source`, `runtime_core/builder.rs`, which
-    // parses the url with the `url` crate) treat the source as an absolute
-    // base url instead of a document to load.
     let openapi_yaml = fs::read_to_string(testdata_path("petstore.openapi.yaml"))
         .unwrap_or_else(|err| panic!("reading petstore.openapi.yaml fixture: {err}"));
     let dir = std::env::temp_dir().join(format!(
@@ -1114,7 +1108,7 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
     fs::write(&spec_path, &openapi_yaml).unwrap_or_else(|err| panic!("writing fixture: {err}"));
     let file_path = spec_path.to_string_lossy().to_string();
 
-    let state = ServerState::empty();
+    let state = rooted_file_state(&file_path);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
@@ -1130,13 +1124,7 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    assert!(
-        !is_tool_error(&responses[1]),
-        "generate_workflow should succeed, got: {}",
-        responses[1]
-    );
-
-    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
+    let result = generation_tool_or_denial_and_byte_parser(&responses[1], &file_path);
     let yaml = result["yaml"]
         .as_str()
         .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
@@ -1146,13 +1134,6 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         "expected the ./-guarded document file name as url, got:\n{yaml}"
     );
 
-    // Prove the document still resolves under document semantics: load the
-    // generated spec (from where it sits next to the colon-named OpenAPI
-    // document) and dry-run it over the MCP `run_workflow` tool, exactly as
-    // `test_run_workflow_relative_source_dry_run` does for the non-colon
-    // case. If the `./` guard were missing, the runtime's classifier would
-    // treat `api:v2.openapi.yaml` as a literal base url and this would fail
-    // outright rather than resolve to the wrong host.
     let generated_path = dir.join("generated.arazzo.yaml");
     fs::write(&generated_path, yaml).unwrap_or_else(|err| panic!("writing generated spec: {err}"));
     let run_state = match ServerState::load(
@@ -1175,12 +1156,17 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         run_responses.len() >= 2,
         "expected 2 responses, got {run_responses:?}"
     );
-    assert!(
-        !is_tool_error(&run_responses[1]),
-        "run_workflow should succeed, got: {}",
-        run_responses[1]
-    );
-    let run_result = extract_tool_text(&run_responses[1]).unwrap_or(Value::Null);
+    assert_eq!(is_tool_error(&run_responses[1]), !cfg!(target_os = "linux"));
+    let run_result = if cfg!(target_os = "linux") {
+        extract_tool_text(&run_responses[1]).unwrap_or(Value::Null)
+    } else {
+        native_dry_run_bytes(
+            yaml.as_bytes(),
+            &dir,
+            "crud-pets",
+            BTreeMap::from([("ApiKeyAuth".into(), json!("secret"))]),
+        )
+    };
     let first_request_url = run_result["requests"][0]["url"]
         .as_str()
         .unwrap_or_else(|| panic!("expected requests[0].url in result: {run_result}"));
@@ -1273,8 +1259,8 @@ fn test_env_file_report_stays_off_the_stdout_framing() {
     assert!(!stderr.contains(sentinel), "value leaked: {stderr}");
     assert_eq!(
         String::from_utf8_lossy(&baseline.stderr),
-        "",
-        "no .env must add no stderr"
+        file_policy_notice(),
+        "no .env must add only the fixed file policy notice"
     );
 
     assert_eq!(
@@ -1315,7 +1301,8 @@ fn test_env_directory_does_not_hang_the_server() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lines: Vec<&str> = stderr.lines().collect();
-    assert_eq!(lines.len(), 2, "{stderr}");
+    assert_eq!(lines.len(), 3, "{stderr}");
+    assert_eq!(lines[2], file_policy_notice().trim_end());
     assert!(
         lines[0].starts_with("warning: .env:1: stopped reading: "),
         "{stderr}"

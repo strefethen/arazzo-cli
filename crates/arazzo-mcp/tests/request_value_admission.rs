@@ -73,7 +73,7 @@ impl Fixture {
         }
     }
 
-    fn call(&self, workflow: &str, inputs: Value) -> Value {
+    fn call_with_native_platform_control(&self, workflow: &str, inputs: Value) -> (bool, Value) {
         let spec = serde_json::from_value(json!({
             "arazzo": "1.1.0",
             "info": {"title": "MCP admission fixture", "version": "1"},
@@ -95,19 +95,26 @@ impl Fixture {
             ]
         }))
         .unwrap_or_else(|error| panic!("parse fixture model: {error}"));
-        let state = ServerState::from_spec(
-            self.directory
+        let mut state = ServerState::load(
+            &[],
+            Some(vec![self.directory.to_string_lossy().into_owned()]),
+        )
+        .unwrap_or_else(|error| panic!("configure explicit fixture root: {error}"));
+        state.specs.push(arazzo_mcp::state::LoadedSpec {
+            file_path: self
+                .directory
                 .join("workflow.arazzo.json")
-                .to_string_lossy(),
+                .to_string_lossy()
+                .into_owned(),
             spec,
-        );
+        });
         let messages = [
             json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
                 "protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"admission-test","version":"1"}
             }}),
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-                "name":"run_workflow","arguments":{"workflow_id":workflow,"inputs":inputs}
+                "name":"run_workflow","arguments":{"workflow_id":workflow,"inputs":inputs.clone()}
             }}),
         ];
         let mut input = Vec::new();
@@ -130,10 +137,37 @@ impl Fixture {
             })
             .collect();
         assert_eq!(responses.len(), 2, "{responses:?}");
-        responses
+        let response = responses
             .into_iter()
             .find(|response| response["id"] == 2)
-            .unwrap_or_else(|| panic!("tools/call response must be present"))
+            .unwrap_or_else(|| panic!("tools/call response must be present"));
+        if cfg!(target_os = "linux") {
+            return (response["result"]["isError"] == true, tool_body(&response));
+        }
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("File access denied by server policy"));
+        self.assert_requests(&[]);
+        let engine = arazzo_runtime::EngineBuilder::new(state.specs[0].spec.clone())
+            .source_base_dir(self.directory.clone())
+            .strict_inputs(true)
+            .build()
+            .unwrap_or_else(|error| panic!("native control build: {error}"));
+        let runtime = tokio::runtime::Runtime::new()
+            .unwrap_or_else(|error| panic!("native runtime: {error}"));
+        let inputs = inputs
+            .as_object()
+            .unwrap_or_else(|| panic!("fixture input map"))
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let result = runtime.block_on(async { engine.execute(workflow, inputs).collect().await });
+        match result.outputs {
+            Ok(outputs) => (false, json!({"kind": "success", "outputs": outputs})),
+            Err(error) => (true, json!({"code": error.code(), "error": error.message})),
+        }
     }
 
     fn assert_requests(&self, expected: &[&str]) {
@@ -172,9 +206,9 @@ fn tool_body(response: &Value) -> Value {
 #[test]
 fn strict_run_workflow_preserves_nested_admission_code_and_source() {
     let fixture = Fixture::new();
-    let response = fixture.call("parent", json!({}));
-    assert_eq!(response["result"]["isError"], true, "{response}");
-    let body = tool_body(&response);
+    let response = fixture.call_with_native_platform_control("parent", json!({}));
+    assert!(response.0, "{response:?}");
+    let body = response.1;
     assert_eq!(body["code"], "RUNTIME_UNRESOLVED_REQUEST_VALUE", "{body}");
     let message = body["error"]
         .as_str()
@@ -195,15 +229,15 @@ fn strict_run_workflow_preserves_nested_admission_code_and_source() {
 fn strict_run_workflow_keeps_concrete_input_validation_and_valid_input() {
     for inputs in [json!({}), json!({"id": null}), json!({"id": 7})] {
         let fixture = Fixture::new();
-        let response = fixture.call("child", inputs.clone());
-        assert_eq!(response["result"]["isError"], true, "{inputs}: {response}");
-        let body = tool_body(&response);
+        let response = fixture.call_with_native_platform_control("child", inputs.clone());
+        assert!(response.0, "{inputs}: {response:?}");
+        let body = response.1;
         assert_eq!(body["code"], "RUNTIME_INPUT_VALIDATION", "{inputs}: {body}");
         fixture.assert_requests(&[]);
     }
     let fixture = Fixture::new();
-    let response = fixture.call("child", json!({"id": "known"}));
-    assert_ne!(response["result"]["isError"], true, "{response}");
-    assert_eq!(tool_body(&response)["kind"], "success", "{response}");
+    let response = fixture.call_with_native_platform_control("child", json!({"id": "known"}));
+    assert!(!response.0, "{response:?}");
+    assert_eq!(response.1["kind"], "success", "{response:?}");
     fixture.assert_requests(&["DELETE /pets/known"]);
 }

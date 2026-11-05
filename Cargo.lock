@@ -186,6 +186,7 @@ dependencies = [
  "arazzo-spec",
  "arazzo-validate",
  "clap",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",

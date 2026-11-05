@@ -19,7 +19,9 @@ struct Args {
     #[arg(long = "dir")]
     dir: Option<String>,
 
-    /// Restrict validate_spec file access to these directories (repeatable)
+    #[arg(
+        help = "Replace default MCP file roots (repeatable); defaults are startup-spec parents; tool reads require Linux and deny dot-prefixed descendants"
+    )]
     #[arg(long = "allowed-dir")]
     allowed_dir: Vec<String>,
 }

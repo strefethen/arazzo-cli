@@ -5,6 +5,7 @@
 //! Exposes Arazzo workflows as discoverable, invocable tools for AI agents
 //! over JSON-RPC 2.0 stdio transport with Content-Length framing.
 
+mod filesystem;
 pub mod handlers;
 pub mod protocol;
 pub mod state;
@@ -60,6 +61,8 @@ where
 {
     let server_state = state::ServerState::load(spec_paths, config.allowed_dirs)?;
     let _ = config.timeouts;
+
+    eprintln!("{}", server_state.file_notice());
 
     // Diagnostics go to stderr only when specs are loaded (not in bare MCP mode).
     if !spec_paths.is_empty() {

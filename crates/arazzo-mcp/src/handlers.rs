@@ -337,11 +337,12 @@ pub fn validate_spec(state: &ServerState, args: &Value) -> Result<Value, String>
         .and_then(Value::as_str)
         .ok_or_else(|| "missing required argument: file_path".to_string())?;
 
-    if let Err(err) = state.check_path_allowed(file_path) {
-        return tool_err(&err);
-    }
+    let document = match state.acquire_document(file_path) {
+        Ok(document) => document,
+        Err(error) => return Ok(error.tool_result()),
+    };
 
-    match arazzo_validate::parse_with_diagnostics(file_path) {
+    match arazzo_validate::parse_bytes_with_diagnostics(&document.bytes) {
         Ok((spec, warnings)) => tool_ok(&json!({
             "valid": true,
             "file": file_path,
@@ -417,11 +418,12 @@ pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
         .and_then(Value::as_str)
         .ok_or_else(|| "missing required argument: file_path".to_string())?;
 
-    if let Err(err) = state.check_path_allowed(file_path) {
-        return tool_err(&err);
-    }
+    let document = match state.acquire_document(file_path) {
+        Ok(document) => document,
+        Err(error) => return Ok(error.tool_result()),
+    };
 
-    let openapi = match arazzo_generate::parse_openapi_file(file_path) {
+    let openapi = match arazzo_generate::parse_openapi_bytes(&document.bytes) {
         Ok(spec) => spec,
         Err(err) => return tool_err(&err),
     };
@@ -434,14 +436,7 @@ pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
     // `relative_document_url`: a file name containing a `:` (e.g.
     // `api:v2.yaml`) is not a valid RFC 3986 §4.2 relative reference on its
     // own — it parses as a URI scheme — so it needs the same `./` prefix.
-    let document_name = match Path::new(file_path).file_name().and_then(|n| n.to_str()) {
-        Some(name) => arazzo_generate::crud::guard_uri_scheme_ambiguity(name),
-        None => {
-            return tool_err(&format!(
-                "cannot derive a document file name from \"{file_path}\""
-            ))
-        }
-    };
+    let document_name = arazzo_generate::crud::guard_uri_scheme_ambiguity(&document.document_name);
 
     let result = match arazzo_generate::crud::generate_crud(&openapi, file_path, &document_name) {
         Ok(r) => r,
@@ -469,11 +464,12 @@ pub fn describe_openapi(state: &ServerState, args: &Value) -> Result<Value, Stri
         .and_then(Value::as_str)
         .ok_or_else(|| "missing required argument: file_path".to_string())?;
 
-    if let Err(err) = state.check_path_allowed(file_path) {
-        return tool_err(&err);
-    }
+    let document = match state.acquire_document(file_path) {
+        Ok(document) => document,
+        Err(error) => return Ok(error.tool_result()),
+    };
 
-    let openapi = match arazzo_generate::parse_openapi_file(file_path) {
+    let openapi = match arazzo_generate::parse_openapi_bytes(&document.bytes) {
         Ok(spec) => spec,
         Err(err) => return tool_err(&err),
     };

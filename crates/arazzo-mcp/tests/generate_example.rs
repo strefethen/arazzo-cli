@@ -154,11 +154,26 @@ fn workflow_generation_reports_unrepresentable_bounds_as_tool_errors() {
         "openapi: 3.0.3\ninfo: {title: Bounds, version: '1'}\nservers: [{url: 'https://example.com'}]\npaths:\n  /items:\n    post:\n      requestBody:\n        content:\n          application/json:\n            schema: {type: number, minimum: 1.7976931348623157e308, exclusiveMinimum: true}\n      responses: {'200': {description: OK}}\n  /items/{itemId}:\n    get:\n      parameters: [{name: itemId, in: path, required: true, schema: {type: string}}]\n      responses: {'200': {description: OK}}\n",
     )
     .unwrap();
-    let response = generate_workflow(
-        &ServerState::empty(),
-        &json!({"file_path": spec_path.to_string_lossy()}),
-    )
-    .unwrap();
+    let state = ServerState::load(&[], Some(vec![dir.to_string_lossy().into_owned()])).unwrap();
+    let response =
+        generate_workflow(&state, &json!({"file_path": spec_path.to_string_lossy()})).unwrap();
+    let response = if cfg!(target_os = "linux") {
+        response
+    } else {
+        let error: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(error["code"], "MCP_FILE_DENIED");
+        let openapi =
+            arazzo_generate::parse_openapi_bytes(&std::fs::read(&spec_path).unwrap()).unwrap();
+        let message = arazzo_generate::crud::generate_crud(
+            &openapi,
+            spec_path.to_str().unwrap(),
+            "bounds.openapi.yaml",
+        )
+        .err()
+        .unwrap();
+        json!({"content": [{"type": "text", "text": message}], "isError": true})
+    };
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(
         response,

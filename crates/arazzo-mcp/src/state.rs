@@ -1,8 +1,11 @@
 //! Server state: loaded Arazzo specs and workflow lookup.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arazzo_spec::{ArazzoSpec, Workflow};
+
+use crate::filesystem::{AcquiredDocument, FileAccess, FileAccessError, SourceReadBudget};
 
 /// A parsed spec with its source file path.
 pub struct LoadedSpec {
@@ -13,8 +16,8 @@ pub struct LoadedSpec {
 /// Holds all loaded specs for the MCP server session.
 pub struct ServerState {
     pub specs: Vec<LoadedSpec>,
-    /// Canonicalized allowed directories for `validate_spec`. `None` means unrestricted.
     pub allowed_dirs: Option<Vec<PathBuf>>,
+    pub(crate) file_access: Arc<FileAccess>,
 }
 
 impl ServerState {
@@ -33,10 +36,12 @@ impl ServerState {
                 spec,
             });
         }
-        let allowed = canonicalize_allowed_dirs(allowed_dirs)?;
+        let file_access = Arc::new(FileAccess::configure(paths, allowed_dirs)?);
+        let allowed = Some(file_access.selectors());
         Ok(Self {
             specs,
             allowed_dirs: allowed,
+            file_access,
         })
     }
 
@@ -44,7 +49,8 @@ impl ServerState {
     pub fn empty() -> Self {
         Self {
             specs: Vec::new(),
-            allowed_dirs: None,
+            allowed_dirs: Some(Vec::new()),
+            file_access: Arc::new(FileAccess::deny_all()),
         }
     }
 
@@ -55,17 +61,26 @@ impl ServerState {
                 file_path: file_path.into(),
                 spec,
             }],
-            allowed_dirs: None,
+            allowed_dirs: Some(Vec::new()),
+            file_access: Arc::new(FileAccess::deny_all()),
         }
     }
 
-    /// Check whether a file path is allowed under the configured directory restrictions.
-    ///
-    /// Returns `Ok(())` if allowed (or if no restrictions are configured).
-    /// Returns `Err` with a generic message if the path is outside allowed directories.
+    pub(crate) fn file_notice(&self) -> String {
+        self.file_access.notice()
+    }
+
+    pub(crate) fn acquire_document(&self, path: &str) -> Result<AcquiredDocument, FileAccessError> {
+        self.file_access
+            .acquire_shared(path, &SourceReadBudget::shared())
+    }
+
     pub fn check_path_allowed(&self, file_path: &str) -> Result<(), String> {
+        if !cfg!(target_os = "linux") {
+            return Err("File access denied by server policy".to_string());
+        }
         let Some(allowed) = &self.allowed_dirs else {
-            return Ok(());
+            return Err("File access denied by server policy".to_string());
         };
 
         let path = Path::new(file_path);
@@ -140,24 +155,6 @@ pub fn discover_specs(dir: &str) -> Result<Vec<String>, String> {
     collect_arazzo_files(root, &mut paths).map_err(|err| format!("scanning {dir}: {err}"))?;
     paths.sort();
     Ok(paths)
-}
-
-/// Canonicalize allowed directory paths at startup. Returns `None` if no
-/// restrictions are configured, or `Some(dirs)` with resolved absolute paths.
-fn canonicalize_allowed_dirs(dirs: Option<Vec<String>>) -> Result<Option<Vec<PathBuf>>, String> {
-    let Some(dirs) = dirs else {
-        return Ok(None);
-    };
-    if dirs.is_empty() {
-        return Ok(None);
-    }
-    let mut canonical = Vec::with_capacity(dirs.len());
-    for dir in &dirs {
-        let resolved =
-            std::fs::canonicalize(dir).map_err(|err| format!("--allowed-dir {dir}: {err}"))?;
-        canonical.push(resolved);
-    }
-    Ok(Some(canonical))
 }
 
 fn collect_arazzo_files(dir: &Path, out: &mut Vec<String>) -> Result<(), std::io::Error> {
