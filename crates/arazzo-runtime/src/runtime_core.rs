@@ -55,6 +55,7 @@ mod engine_parallel;
 mod engine_trace;
 mod error;
 mod events;
+mod form_body;
 #[cfg(test)]
 mod helper_tests;
 mod helpers;

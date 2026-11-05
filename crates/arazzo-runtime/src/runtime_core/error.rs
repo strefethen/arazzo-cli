@@ -43,6 +43,7 @@ pub enum RuntimeErrorKind {
     /// A parameter resolved to a value that cannot be placed where the
     /// parameter says it belongs.
     InvalidParameterValue,
+    InvalidRequestBody,
     UnresolvedRequestValue,
     HttpClientBuild,
     HttpRequest,
@@ -105,6 +106,7 @@ impl RuntimeErrorKind {
             Self::GotoTargetNotFound => "RUNTIME_GOTO_TARGET_NOT_FOUND",
             Self::GotoTargetMissing => "RUNTIME_GOTO_TARGET_MISSING",
             Self::InvalidHttpMethod => "RUNTIME_INVALID_HTTP_METHOD",
+            Self::InvalidRequestBody => "RUNTIME_INVALID_REQUEST_BODY",
             Self::InvalidParameterValue => "RUNTIME_INVALID_PARAMETER_VALUE",
             Self::UnresolvedRequestValue => "RUNTIME_UNRESOLVED_REQUEST_VALUE",
             Self::HttpClientBuild => "RUNTIME_HTTP_CLIENT_BUILD",

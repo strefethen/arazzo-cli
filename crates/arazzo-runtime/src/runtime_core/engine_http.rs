@@ -330,21 +330,25 @@ impl Engine {
         } else {
             None
         };
-        // Content-type-aware serialization: non-JSON string payloads (e.g. XML/SOAP)
-        // are sent as raw bytes instead of being JSON-serialized (which would double-quote them).
-        let body = body_json.as_ref().map(|value| {
-            let ct = step
-                .request_body
-                .as_ref()
-                .map(|rb| rb.content_type.as_str())
-                .unwrap_or("application/json");
-            if !ct.contains("json") {
-                if let Value::String(s) = value {
-                    return s.as_bytes().to_vec();
+        let body = body_json
+            .as_ref()
+            .map(|value| {
+                let ct = step
+                    .request_body
+                    .as_ref()
+                    .map(|rb| rb.content_type.as_str())
+                    .unwrap_or("application/json");
+                if super::form_body::is_form(ct) {
+                    return super::form_body::encode(value);
                 }
-            }
-            serde_json::to_vec(value).unwrap_or_default()
-        });
+                if !ct.contains("json") {
+                    if let Value::String(s) = value {
+                        return Ok(s.as_bytes().to_vec());
+                    }
+                }
+                Ok(serde_json::to_vec(value).unwrap_or_default())
+            })
+            .transpose()?;
 
         let mut headers = BTreeMap::new();
         if body.is_some() {

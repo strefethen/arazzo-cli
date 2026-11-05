@@ -114,7 +114,8 @@ async fn execute_request_body_content_type_and_method_selection() {
     let put_method_ref = Arc::clone(&put_method);
     let put_content_type = Arc::new(Mutex::new(String::new()));
     let put_content_type_ref = Arc::clone(&put_content_type);
-    let put_server = start_server(move |method, _url, headers, _body| {
+    let put_server = start_server(move |method, _url, headers, body| {
+        assert_eq!(body.as_bytes(), b"key=val");
         let content_type = header_value(&headers, "Content-Type").unwrap_or_default();
         match put_content_type_ref.lock() {
             Ok(mut guard) => *guard = content_type,
