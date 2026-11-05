@@ -316,6 +316,46 @@ fn encoded_request_query_names_are_masked_in_persisted_urls() {
 }
 
 #[test]
+fn real_export_retains_nonsecret_fragments_after_raw_and_encoded_query_pairs() {
+    for (query, masked) in [
+        (
+            "privateKey=SYNTHETIC-fragment-raw&key=visible&&privateKey=SYNTHETIC-fragment-duplicate&page=&key=visible-again&flag&tail=visible&",
+            "privateKey=[REDACTED]&key=visible&&privateKey=[REDACTED]&page=&key=visible-again&flag&tail=visible&",
+        ),
+        (
+            "private%5Fkey=SYNTHETIC-fragment-encoded&key=visible&&private%5Fkey=SYNTHETIC-fragment-duplicate&page=&key=visible-again&flag&tail=visible&",
+            "private%5Fkey=[REDACTED]&key=visible&&private%5Fkey=[REDACTED]&page=&key=visible-again&flag&tail=visible&",
+        ),
+    ] {
+        let temp = TempDir::new();
+        let server = Server::start(move |_, path| {
+            assert_eq!(path, format!("/base?{query}"));
+            (200, "{}".into(), vec![])
+        });
+        let base = format!("{}/base?{query}#fragment-visible", server.url);
+        let spec = spec(
+            &temp,
+            &base,
+            "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n",
+        );
+        let path = temp.path("run.json");
+        let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let export = artifact(&path);
+        assert_eq!(
+            export["workflows"]["wf"]["steps"]["one"]["executions"][0]["request"]["url"],
+            format!("{}/base?{masked}#fragment-visible/one", server.url)
+        );
+        assert!(!export.to_string().contains("SYNTHETIC-"), "{export}");
+        assert_eq!(server.hits.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
 fn persisted_urls_keep_pairs_after_raw_credential_names_and_mask_path_and_fragment_text() {
     let query = "privateKey=SYNTHETIC-raw-private&key=visible&X-Auth-Key=SYNTHETIC-raw-xauth&&authKey=SYNTHETIC-raw-auth&page=&subscription_key=SYNTHETIC-raw-sub&key=visible-again&Ocp-Apim-Subscription-Key=SYNTHETIC-raw-ocp&private%5Fkey=SYNTHETIC-encoded-private&privateKey=SYNTHETIC-raw-duplicate&flag&q=token=SYNTHETIC-value&tail=visible";
     let masked = "privateKey=[REDACTED]&key=visible&X-Auth-Key=[REDACTED]&&authKey=[REDACTED]&page=&subscription_key=[REDACTED]&key=visible-again&Ocp-Apim-Subscription-Key=[REDACTED]&private%5Fkey=[REDACTED]&privateKey=[REDACTED]&flag&q=token=[REDACTED]&tail=visible";
@@ -343,6 +383,12 @@ fn persisted_urls_keep_pairs_after_raw_credential_names_and_mask_path_and_fragme
                     .to_string(),
             ),
             "/one?a=1&token:[REDACTED]&b=2&flag&x-private-key=[REDACTED]".to_string(),
+        ),
+        (
+            "",
+            "token:SYNTHETIC-name=visible&key=visible&&tail=visible",
+            Some("/one?token:SYNTHETIC-name=visible&key=visible&&tail=visible".to_string()),
+            "/one?token:[REDACTED]&key=visible&&tail=visible".to_string(),
         ),
         (
             "/base#token=SYNTHETIC-fragment",
