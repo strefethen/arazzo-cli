@@ -129,8 +129,8 @@ fn empty_directory_keeps_structured_no_specs_error() {
 }
 
 #[test]
-fn cli_test_and_serve_help_name_all_recursive_suffixes() {
-    for command in ["test", "serve"] {
+fn cli_test_help_names_all_recursive_suffixes() {
+    for command in ["test"] {
         let output = run(&[command, "--help"]);
         assert!(output.status.success(), "{command} help failed");
         let help =

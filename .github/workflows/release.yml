@@ -73,6 +73,10 @@ jobs:
         run: |
           set -euo pipefail
           BIN_PATH="target/release/${BIN_NAME}${{ matrix.exe_suffix }}"
+          if "$BIN_PATH" serve --help >/dev/null 2>&1; then
+            echo "ERROR: release binary exposes MCP serve." >&2
+            exit 1
+          fi
           "$BIN_PATH" --json validate examples/httpbin-get.arazzo.yaml >/dev/null
 
       - name: Package release asset

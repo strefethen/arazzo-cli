@@ -7,18 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Example generation** — CRUD generation and MCP tools share one bounded
-  schema walker. Oversized request bodies trim at 1,000 units and warn once per
-  step; `password` and `byte` formats produce their intended examples. A
-  numeric bound no JSON number can satisfy, such as
-  `exclusiveMinimum: 1.7976931348623157e308`, is now an error instead of an
-  example that violates it. MCP `generate_example` also handles OpenAPI 3.1
-  type arrays, `examples`, `const` and numeric exclusive bounds, resolves local
-  references, infers objects from `properties`, and skips null literals.
-
-## [0.9.0] - 2026-10-29
+## [0.9.0] - 2026-11-06
 
 Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.
 
@@ -29,6 +18,7 @@ errors. Review the breaking changes below.
 - **Kafka receive workflows** — receive JSON messages, filter correlation IDs, and validate AsyncAPI targets offline.
 - **Spec fidelity** — standard operation targets, explicit reusable actions, and typed Criterion interpolation.
 - **Reliable execution** — corrected timeout classification, workflow output diagnostics, and cancellation-aware debugger teardown.
+- **MCP disabled** — the release excludes the MCP server pending security hardening.
 - **Automation contracts** — shared JSON errors and stronger validation with machine-readable diagnostics.
 
 ### Added
@@ -62,12 +52,12 @@ errors. Review the breaking changes below.
 
 ### Changed
 
+- **Breaking: MCP temporarily removed.** The CLI no longer exposes `serve` or links the MCP server. Security hardening remains incomplete; there is no runtime flag to restore MCP in release binaries. Disconnect existing MCP client configurations. Do not downgrade as a security workaround. Ordinary CLI workflow execution remains available.
+
 - `trace.v1` step records gain an optional `message` object for receive steps
   (transport, host, topic, partition, offset, timestamp, headers, redacted
   payload preview, `simulated` for dry runs); HTTP records are unchanged.
-- The local-source inventory behind MCP `--allowed-dir` and `--export-run`
-  overwrite protection now covers AsyncAPI source documents as well as
-  OpenAPI ones.
+
 
 - **Breaking:** Operation targets use standard Arazzo syntax exclusively. Both
   operation IDs and canonical JSON Pointers resolve against a bound OpenAPI
@@ -87,12 +77,24 @@ errors. Review the breaking changes below.
   failures that had none now use `TEST_*` codes, and its `-i`,
   `--input-json`, and `--openapi` errors print the object instead of plain
   text.
-- `schema` and `serve` failures with `--json` now print the JSON error object
-  instead of plain text on stderr: `SCHEMA_UNKNOWN_COMMAND` for an unknown
-  `schema` name, and `SERVE_SPEC_DISCOVERY`, `SERVE_NO_SPECS`,
-  `SERVE_TASK_PANIC`, or `SERVE_MCP` for `serve`.
+- `schema` failures with `--json` print the shared JSON error object, with
+  `SCHEMA_UNKNOWN_COMMAND` for an unknown schema name.
 
 ### Fixed
+
+- **Example generation** — CRUD generation uses a bounded
+  schema walker. Oversized request bodies trim at 1,000 units and warn once per
+  step; `password` and `byte` formats produce their intended examples. A
+  numeric bound no JSON number can satisfy, such as
+  `exclusiveMinimum: 1.7976931348623157e308`, is now an error instead of an
+  example that violates it.
+
+- Form request mappings serialize as form bytes rather than JSON.
+- Replay compares canonical redacted logical requests, preserving useful mismatch checks without requiring secrets from persisted traces.
+- Redaction covers complete bodies before preview truncation, encoded query credential names, and the accepted exact credential vocabulary; export URLs preserve unrelated query pairs and fragments.
+- Nested workflow parameters retain container types, and invalid workflow references are rejected before execution.
+- Dry-run plans identify transport-dependent skipped values without overwriting ordinary replacement targets.
+- Cancellation outcomes are synchronized, and Tokio includes the patched AsyncFd release.
 
 - **Unresolved request values** — HTTP steps refuse unresolved parameters,
   payloads and replacement values, including hard Selector failures, before

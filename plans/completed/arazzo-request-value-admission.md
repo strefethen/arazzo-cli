@@ -1,5 +1,6 @@
 ---
-status: decomposed
+status: completed
+completed: 2026-11-06
 epic: ac-3d8bf
 created: 2026-10-29
 ---
@@ -64,4 +65,4 @@ After all implementation concerns close, rerun the assessment's loopback produce
 
 Independent transfer audit passed after one bounded file-scope correction pass; its coverage record is in the epic. Foundation tickets do not clear the release blocker.
 
-Final integrated verification completed on 2026-11-04 against the recorded shared tree based on `71d0fdd`, including its preserved dirty generator/MCP build inputs. The single [system evidence packet](/private/tmp/arazzo-rel09/fda34-final/review-packet.md) records the final candidate binding, exact contract snapshots, loopback missing-id/DELETE matrix (sequential, parallel, run-step and nested workflows), diagnostic modes, failure routing, live/null/empty/zero-match controls, strict/non-strict dry-run composition, all four drift guards and full required checks. The accepted Selector residual remains observable: a zero-match Selector can still send `DELETE /pets/`. No production behavior or criteria changed in this verification pass. Fresh independent review of the final candidate remains pending; this evidence does not itself authorize ticket closure or release publication.
+Final integrated verification completed on 2026-11-04 against the recorded shared tree based on `71d0fdd`, including its preserved dirty generator/MCP build inputs. The single [system evidence packet](/private/tmp/arazzo-rel09/fda34-final/review-packet.md) records the final candidate binding, exact contract snapshots, loopback missing-id/DELETE matrix (sequential, parallel, run-step and nested workflows), diagnostic modes, failure routing, live/null/empty/zero-match controls, strict/non-strict dry-run composition, all four drift guards and full required checks. The accepted Selector residual remains observable: a zero-match Selector can still send `DELETE /pets/`. No production behavior or criteria changed in this verification pass. Fresh independent review subsequently passed. Completion reconciled on 2026-11-06: the [system proof reconciliation](/tmp/arazzo-release-20261106/admission-closeout/evidence.md) binds the retained owned-change review to the later pristine committed candidate b68a1080fcc702acb1a335f5603007e9bbf30388 and its passing full workspace run. This completes the admission system condition only; the Selector residual above remains explicit, and other release gates retain their owners.

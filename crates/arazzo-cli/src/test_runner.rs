@@ -40,8 +40,7 @@ pub struct TestRunOptions {
 /// Discover Arazzo test specs from a list of file paths and directories.
 ///
 /// Explicit files are selected by path; the parser determines whether their
-/// contents are valid. Directories are scanned recursively using the same
-/// convention as `arazzo_mcp::state::discover_specs`.
+/// contents are valid. Directories are scanned recursively.
 pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, CliError> {
     let mut specs = Vec::new();
 
@@ -54,7 +53,7 @@ pub fn discover_test_specs(paths: &[String]) -> Result<Vec<PathBuf>, CliError> {
             ));
         }
         if path.is_dir() {
-            let discovered = arazzo_mcp::state::discover_specs(path_str).map_err(|err| {
+            let discovered = crate::spec_discovery::discover_specs(path_str).map_err(|err| {
                 CliError::new("TEST_PATH_SCAN", format!("scanning {path_str}: {err}"))
             })?;
             for p in discovered {

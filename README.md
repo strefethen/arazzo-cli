@@ -52,7 +52,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
-| **JSON output** | Structured command results for scripting and CI; `generate` writes YAML, `serve` speaks MCP |
+| **JSON output** | Structured command results for scripting and CI; `generate` writes YAML |
 | **Expression language** | `$inputs`, `$steps`, `$response`, JSON Pointer, interpolation |
 | **Arazzo 1.1 selectors** | Typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects across values and outputs |
 | **Success criteria** | Simple expressions, regex, XPath, and RFC 9535 JSONPath criterion types |
@@ -63,7 +63,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec, burst 20; configurable through the Rust API) |
 | **Transport controls** | Scoped TLS exceptions, redirect limits, HTTPS downgrade protection, and structured transport warnings |
 | **Reusable components** | `$ref` for input schemas; `reference` for shared parameters and actions in `components` |
-| **MCP server** | Expose workflows as tools for AI agents via Model Context Protocol (`serve`), plus authoring tools for OpenAPI inspection and workflow generation |
+| **MCP server** | Unavailable in v0.9.0 pending security hardening; removed from release binaries |
 
 Operation targets use standard Arazzo syntax: an `operationId`, or a source-description expression with a JSON Pointer in `operationPath`. Both resolve the method, path, and server from a bound OpenAPI document; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps) for remaining limits.
 
@@ -104,18 +104,17 @@ arazzo-cli show <workflow-id> --dir <dir>  Display workflow details (inputs, out
 arazzo-cli generate --spec <openapi>       Generate Arazzo workflows from an OpenAPI spec
 arazzo-cli schema [command]                Print JSON Schema for a command's --json output
 arazzo-cli test <paths>...                 Run workflows as tests (TAP, JUnit XML, or JSON)
-arazzo-cli serve [specs...] [--dir <dir>]  Start an MCP server for AI agent integration
 ```
 
 Global flags:
 
-- `--json` — structured command results; `generate` rejects it, `serve` reserves stdout for MCP protocol messages, and `schema` already writes JSON
+- `--json` — structured command results; `generate` rejects it, and `schema` already writes JSON
 - `--verbose` — step-by-step execution details
 - `--strict` — promote spec validation warnings to errors in `validate`; distinct from runtime `--strict-inputs`
 
 `validate` admits receive steps offline against their local AsyncAPI documents; use the repeatable `--asyncapi-server <SOURCE=KEY>` flag to select among eligible Kafka servers.
 
-Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.json` files directly in the selected directory; `test` and `serve --dir` recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files.
+Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.json` files directly in the selected directory; `test` recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files.
 
 `run` flags:
 
@@ -192,12 +191,6 @@ admitted. Dry-run does not evaluate live success criteria.
 - `--spec <path>` — path to an OpenAPI 3.0.x spec (YAML or JSON; required; 3.1 and 3.2 are rejected)
 - `--scenario <name>` — generation scenario (default `crud`)
 - `-o`/`--output <path>` — write generated YAML to file instead of stdout
-
-`serve` flags:
-
-- `[specs...]` — Arazzo spec files to load (positional, repeatable)
-- `--dir <path>` — recursively discover `.arazzo.yaml`, `.arazzo.yml`, and `.arazzo.json` files
-- `--allowed-dir <path>` — restrict file-accepting MCP tools and relative OpenAPI source paths to explicit roots (repeatable; see [MCP security](#security))
 
 ## Examples
 
@@ -872,6 +865,12 @@ The `openapiv3` model used by generation targets OpenAPI 3.0.x; documents declar
 This gives you a runnable starting point that you can customize — add assertions, error handling, conditional logic, or compose into larger workflows.
 
 ## MCP Server
+
+**Unavailable in v0.9.0.** Release binaries exclude MCP and reject `serve`;
+there is no flag to enable it. Disconnect existing MCP client configurations.
+MCP will return only after its security gates pass. Do not downgrade as a
+security workaround. The following setup reference applies only to older
+versions and experimental source builds, not this release.
 
 arazzo-cli includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes Arazzo workflows as tools for AI agents. Any MCP-compatible client — Claude Desktop, Cursor, or custom agents — can discover and execute your workflows.
 

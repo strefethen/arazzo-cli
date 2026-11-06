@@ -11,7 +11,7 @@ use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES}
     version,
     about = "Execute Arazzo 1.0 workflows",
     long_about = "Execute, validate, inspect, generate, and test Arazzo 1.0 workflows.\n\nFor agents: use --json for machine-readable output, use schema <command> to discover the JSON contract, and use run --dry-run --json before a live run.",
-    after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n  7. Expose workflows to agents: arazzo-cli serve --dir <dir> --allowed-dir <dir>\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."
+    after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."
 )]
 pub struct Cli {
     /// Emit machine-readable JSON on stdout when the command has a JSON contract.
@@ -403,24 +403,6 @@ pub enum Commands {
         /// Choose the AsyncAPI server for a source description listing several eligible Kafka servers, as <source>=<server-key>. Repeatable.
         #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
         asyncapi_server: Vec<String>,
-    },
-    /// Start an MCP server for AI agent integration
-    #[command(
-        after_help = "For agents:\n  - Load specs with positional files, --dir, or both.\n  - Use --allowed-dir to constrain file access exposed through MCP tools.\n  - This command speaks MCP over stdio; stdout is reserved for protocol messages."
-    )]
-    Serve {
-        /// Arazzo spec files to load
-        specs: Vec<String>,
-
-        /// Directory containing .arazzo.json, .arazzo.yaml, or .arazzo.yml files to load
-        #[arg(long = "dir")]
-        dir: Option<String>,
-
-        #[arg(
-            help = "Replace default MCP file roots (repeatable); defaults are startup-spec parents; tool reads require Linux and deny dot-prefixed descendants"
-        )]
-        #[arg(long = "allowed-dir")]
-        allowed_dir: Vec<String>,
     },
 }
 

@@ -20,6 +20,16 @@ I'll acknowledge reports within a reasonable timeframe and provide an update whe
 
 This policy covers this repository's CLI, workspace crates, MCP server, and VS Code debug adapter, including dependency vulnerabilities that affect their security. Report upstream dependency defects to their maintainers as well; let this project know privately when its use of the dependency creates exposure.
 
+## MCP availability
+
+The v0.9.0 CLI release removes MCP support, including the `serve` command,
+while security hardening is completed. Release artifacts do not link or package
+the MCP server. There is no flag to re-enable it in those artifacts. Existing
+MCP client configurations must be disconnected; do not downgrade to restore MCP
+as a security workaround. The development crate remains in the source workspace
+and is not part of this release. The risks below concern older releases and
+development builds, not an available v0.9.0 CLI feature.
+
 ## MCP deployment risks
 
 MCP allows an AI client to request file reads and API workflow execution. The server runs with the permissions of the account that launches it; stdio does not provide isolation. Untrusted content or prompt injection can cause an agent to request unintended operations. API workflows can modify or delete data and transmit credentials or other sensitive information.
