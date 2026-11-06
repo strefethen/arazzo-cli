@@ -3,16 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#080f1e">
+    <meta name="arazzo-cli:version" content="0.9.0">
+    <meta name="arazzo-cli:release-tag" content="v0.9.0">
+    <meta name="arazzo-cli:page-updated" content="2026-11-06">
     <title>arazzo-cli — Execute API workflows from YAML</title>
-    <meta name="description" content="Standalone Arazzo workflow executor, CI contract tester, MCP server, and VS Code debugger. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.">
+    <meta name="description" content="Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Define multi-step HTTP and Kafka workflows in YAML, then validate, run, test, trace, replay, and debug them.">
     <meta property="og:title" content="arazzo-cli — Execute API workflows from YAML">
-    <meta property="og:description" content="Standalone Arazzo workflow executor, CI contract tester, MCP server, and VS Code debugger. Run, test, trace, replay, and debug API workflows from YAML.">
+    <meta property="og:description" content="Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Validate, run, test, trace, replay, and debug HTTP and Kafka workflows from YAML.">
     <meta property="og:image" content="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://strefethen.github.io/arazzo-cli/">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="arazzo-cli — Execute API workflows from YAML">
-    <meta name="twitter:description" content="Standalone Arazzo workflow executor, CI contract tester, MCP server, and VS Code debugger. Run, test, trace, replay, and debug API workflows from YAML.">
+    <meta name="twitter:description" content="Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Validate, run, test, trace, replay, and debug HTTP and Kafka workflows from YAML.">
     <meta name="twitter:image" content="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
     <link rel="canonical" href="https://strefethen.github.io/arazzo-cli/">
     <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png">
@@ -21,9 +27,12 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "arazzo-cli",
+        "softwareVersion": "0.9.0",
+        "dateModified": "2026-11-06",
         "operatingSystem": "Linux, macOS, Windows",
         "applicationCategory": "DeveloperApplication",
-        "description": "Standalone Arazzo workflow executor, CI contract tester, MCP server, and VS Code debugger. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.",
+        "description": "Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Define multi-step HTTP and Kafka workflows in YAML, then validate, run, test, trace, replay, and debug them.",
+        "downloadUrl": "https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "license": "https://opensource.org/licenses/MIT"
     }
@@ -39,7 +48,15 @@
         theme: {
             extend: {
                 colors: {
-                    deep: { DEFAULT: '#080f1e', mid: '#0c1529' },
+                    page: 'rgb(var(--page) / <alpha-value>)',
+                    alt: 'rgb(var(--alt) / <alpha-value>)',
+                    surface: 'rgb(var(--surface) / <alpha-value>)',
+                    ink: 'rgb(var(--ink) / <alpha-value>)',
+                    'ink-2': 'rgb(var(--ink-2) / <alpha-value>)',
+                    'ink-3': 'rgb(var(--ink-3) / <alpha-value>)',
+                    line: 'rgb(var(--line) / <alpha-value>)',
+                    link: 'rgb(var(--link) / <alpha-value>)',
+                    warn: 'rgb(var(--warn) / <alpha-value>)',
                     accent: { blue: '#3b82f6', teal: '#14b8a6' },
                 },
                 fontFamily: {
@@ -51,57 +68,162 @@
     }
     </script>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js" integrity="sha384-Z3REaz79l2IaAZqJsSABtTbhjgOUYyV3p90XNnAPCSHg3EMTz1fouunq9WZRtj3d" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/lucide@1.70.0/dist/umd/lucide.min.js" integrity="sha384-64z4N640tVzhAicQVGzxE/48VNN9yS53U5kv9UH8ca7xGU4KSJ9zz8nD4C2BEerP" crossorigin="anonymous"></script>
 
     <style>
+        :root {
+            color-scheme: light dark;
+
+            --page: 255 255 255;
+            --alt: 241 245 249;
+            --surface: 255 255 255;
+            --ink: 15 23 42;
+            --ink-2: 71 85 105;
+            --ink-3: 90 104 125;
+            --line: 203 213 225;
+            --link: 29 78 216;
+            --warn: 146 64 14;
+
+            --nav-bg: rgba(255, 255, 255, 0.72);
+            --nav-bg-scrolled: rgba(255, 255, 255, 0.94);
+            --dot: rgba(15, 23, 42, 0.06);
+            --card-hover: rgba(15, 23, 42, 0.03);
+            --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+            --glow-blue: rgba(59, 130, 246, 0.14);
+            --glow-teal: rgba(20, 184, 166, 0.08);
+            --start-edge-a: rgba(59, 130, 246, 0.09);
+            --start-edge-b: rgba(20, 184, 166, 0.09);
+
+            --grad-from: #2563eb;
+            --grad-to: #0f766e;
+
+            --code-bg: #f6f8fa;
+            --code-bar: #eaeef2;
+            --code-line: #d0d7de;
+            --code-ink: #1f2328;
+            --code-muted: #57606a;
+            --code-shadow: 0 24px 48px -20px rgba(15, 23, 42, 0.22);
+            --tok-key: #0550ae;
+            --tok-value: #0a3069;
+            --tok-string: #116329;
+            --tok-param: #cf222e;
+            --tok-name: #8250df;
+            --tok-prompt: #0f766e;
+
+            --i-blue: #2563eb;
+            --i-teal: #0f766e;
+            --i-indigo: #4f46e5;
+            --i-emerald: #047857;
+            --i-green: #15803d;
+            --i-amber: #b45309;
+            --i-rose: #be123c;
+            --i-violet: #7c3aed;
+            --i-orange: #c2410c;
+            --i-sky: #0369a1;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --page: 8 15 30;
+                --alt: 13 22 42;
+                --surface: 16 26 48;
+                --ink: 241 245 249;
+                --ink-2: 170 181 199;
+                --ink-3: 137 150 171;
+                --line: 44 56 80;
+                --link: 96 165 250;
+                --warn: 251 191 36;
+
+                --nav-bg: rgba(8, 15, 30, 0.7);
+                --nav-bg-scrolled: rgba(8, 15, 30, 0.94);
+                --dot: rgba(255, 255, 255, 0.03);
+                --card-hover: rgba(255, 255, 255, 0.04);
+                --card-shadow: none;
+                --glow-blue: rgba(59, 130, 246, 0.15);
+                --glow-teal: rgba(20, 184, 166, 0.08);
+                --start-edge-a: rgba(59, 130, 246, 0.06);
+                --start-edge-b: rgba(20, 184, 166, 0.06);
+
+                --grad-from: #3b82f6;
+                --grad-to: #14b8a6;
+
+                --code-bg: #0d1117;
+                --code-bar: #080c14;
+                --code-line: rgba(255, 255, 255, 0.08);
+                --code-ink: #e6edf3;
+                --code-muted: #8b949e;
+                --code-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.5);
+                --tok-key: #79c0ff;
+                --tok-value: #a5d6ff;
+                --tok-string: #7ee787;
+                --tok-param: #ff7b72;
+                --tok-name: #d2a8ff;
+                --tok-prompt: #14b8a6;
+
+                --i-blue: #60a5fa;
+                --i-teal: #2dd4bf;
+                --i-indigo: #818cf8;
+                --i-emerald: #34d399;
+                --i-green: #4ade80;
+                --i-amber: #fbbf24;
+                --i-rose: #fb7185;
+                --i-violet: #a78bfa;
+                --i-orange: #fb923c;
+                --i-sky: #38bdf8;
+            }
+        }
+
         .gradient-text {
-            background: linear-gradient(135deg, #3b82f6 0%, #14b8a6 100%);
+            background: linear-gradient(135deg, var(--grad-from) 0%, var(--grad-to) 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
 
-        .glass {
-            background: rgba(255, 255, 255, 0.025);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            transition: background 0.3s, border-color 0.3s, transform 0.3s;
+        .btn-primary {
+            color: #ffffff;
+            background: linear-gradient(90deg, #2563eb 0%, #0f766e 100%);
+            transition: box-shadow 0.2s;
         }
-        .glass:hover {
-            background: rgba(255, 255, 255, 0.055);
-            border-color: rgba(255, 255, 255, 0.12);
+        .btn-primary:hover { box-shadow: 0 10px 24px -8px rgba(37, 99, 235, 0.5); }
+
+        .card {
+            background: rgb(var(--surface));
+            border: 1px solid rgb(var(--line));
+            box-shadow: var(--card-shadow);
+            transition: background 0.3s, border-color 0.3s;
         }
+        .card:hover { background: linear-gradient(var(--card-hover), var(--card-hover)), rgb(var(--surface)); }
 
         .dot-pattern {
-            background-image: radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-image: radial-gradient(var(--dot) 1px, transparent 1px);
             background-size: 28px 28px;
         }
 
         #navbar {
-            background: rgba(8, 15, 30, 0.7);
+            background: var(--nav-bg);
             backdrop-filter: blur(14px);
             -webkit-backdrop-filter: blur(14px);
+            border-bottom: 1px solid transparent;
             transition: background 0.3s, border-color 0.3s;
         }
         #navbar.scrolled {
-            background: rgba(8, 15, 30, 0.94);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
+            background: var(--nav-bg-scrolled);
+            border-bottom-color: rgb(var(--line));
         }
 
         .code-window {
-            background: #0d1117;
-            border: 1px solid rgba(255,255,255,0.06);
+            background: var(--code-bg);
+            border: 1px solid var(--code-line);
             border-radius: 16px;
             overflow: hidden;
-            box-shadow:
-                0 0 0 1px rgba(59,130,246,0.08),
-                0 30px 60px -15px rgba(0,0,0,0.5);
+            box-shadow: var(--code-shadow);
         }
         .code-titlebar {
-            background: #080c14;
+            background: var(--code-bar);
+            color: var(--code-muted);
             padding: 12px 16px;
             display: flex;
             align-items: center;
@@ -113,21 +235,20 @@
             font-size: 12.5px;
             line-height: 1.75;
             overflow-x: auto;
+            color: var(--code-ink);
             font-family: 'JetBrains Mono', monospace;
         }
-        .ck { color: #79c0ff; }
-        .cv { color: #a5d6ff; }
-        .cs { color: #7ee787; }
-        .cp { color: #ff7b72; }
-        .cc { color: rgba(255,255,255,0.2); }
-        .cn { color: #d2a8ff; }
+        .ck { color: var(--tok-key); }
+        .cv { color: var(--tok-value); }
+        .cs { color: var(--tok-string); }
+        .cp { color: var(--tok-param); }
+        .cn { color: var(--tok-name); }
 
         .debugger-frame {
             border-radius: 12px;
             overflow: hidden;
-            box-shadow:
-                0 0 0 1px rgba(255,255,255,0.06),
-                0 40px 80px -20px rgba(0,0,0,0.6);
+            border: 1px solid rgb(var(--line));
+            box-shadow: var(--code-shadow);
         }
         .debugger-frame img {
             display: block;
@@ -141,288 +262,353 @@
         }
 
         .terminal-block {
-            background: #0d1117;
-            border: 1px solid rgba(255,255,255,0.06);
+            background: var(--code-bg);
+            border: 1px solid var(--code-line);
             border-radius: 12px;
             padding: 16px 20px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 13px;
-            color: #e6edf3;
+            line-height: 1.7;
+            color: var(--code-ink);
             overflow-x: auto;
+            white-space: nowrap;
         }
-        .terminal-block .prompt { color: #14b8a6; }
-        .terminal-block .cmd { color: #e6edf3; }
-        .terminal-block .flag { color: #79c0ff; }
-        .terminal-block .comment { color: rgba(255,255,255,0.25); }
+        .terminal-block .prompt { color: var(--tok-prompt); }
+        .terminal-block .flag { color: var(--tok-key); }
+        .terminal-block .arg { color: var(--tok-value); }
+        .terminal-block .comment { color: var(--code-muted); }
+
+        code.inline {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875em;
+            color: rgb(var(--ink));
+        }
     </style>
     <script defer data-domain="strefethen.github.io" src="https://analytics.ca-17.com/js/script.js"></script>
 </head>
-<body class="bg-deep font-sans antialiased text-white">
+<body class="bg-page font-sans antialiased text-ink">
 
-    <!-- ============================================ -->
-    <!-- NAVIGATION                                   -->
-    <!-- ============================================ -->
+    <svg xmlns="http://www.w3.org/2000/svg" class="hidden" aria-hidden="true">
+        <symbol id="icon-github" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2.15c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/>
+        </symbol>
+    </svg>
+
     <nav id="navbar" class="fixed top-0 left-0 right-0 z-50">
         <div class="max-w-6xl mx-auto px-6 flex items-center justify-between h-16">
             <a href="#" class="flex items-center gap-2.5">
-                <img src="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png" alt="arazzo-cli" class="w-8 h-8 rounded-lg">
+                <img src="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png" alt="" class="w-8 h-8 rounded-lg">
                 <span class="font-semibold text-lg tracking-tight">arazzo-cli</span>
             </a>
             <div class="hidden md:flex items-center gap-8">
-                <a href="#how-it-works" class="text-sm text-white/50 hover:text-white transition-colors">How It Works</a>
-                <a href="#features" class="text-sm text-white/50 hover:text-white transition-colors">Features</a>
-                <a href="#debugger" class="text-sm text-white/50 hover:text-white transition-colors">Debugger</a>
-                <a href="#get-started" class="text-sm text-white/50 hover:text-white transition-colors">Get Started</a>
+                <a href="#whats-new" class="text-sm text-ink-2 hover:text-ink transition-colors">What's New</a>
+                <a href="#how-it-works" class="text-sm text-ink-2 hover:text-ink transition-colors">How It Works</a>
+                <a href="#features" class="text-sm text-ink-2 hover:text-ink transition-colors">Features</a>
+                <a href="#debugger" class="text-sm text-ink-2 hover:text-ink transition-colors">Debugger</a>
+                <a href="#get-started" class="text-sm text-ink-2 hover:text-ink transition-colors">Get Started</a>
             </div>
-            <a href="https://github.com/strefethen/arazzo-cli" class="text-sm font-medium text-accent-blue border border-accent-blue/30 rounded-full px-5 py-2 hover:bg-accent-blue/10 transition-colors inline-flex items-center gap-2">
-                <i data-lucide="github" class="w-4 h-4"></i>
+            <a href="https://github.com/strefethen/arazzo-cli" class="text-sm font-medium text-link border border-link/30 rounded-full px-5 py-2 hover:bg-link/10 transition-colors inline-flex items-center gap-2">
+                <svg class="w-4 h-4" aria-hidden="true"><use href="#icon-github"></use></svg>
                 GitHub
             </a>
         </div>
     </nav>
 
-    <!-- ============================================ -->
-    <!-- HERO                                         -->
-    <!-- ============================================ -->
-    <section id="hero" class="min-h-screen flex flex-col items-center justify-center relative overflow-hidden pt-16 dot-pattern">
+    <section id="hero" class="min-h-screen flex flex-col items-center justify-center relative overflow-hidden pt-24 pb-16 dot-pattern">
         <div class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] pointer-events-none opacity-50">
-            <div class="absolute inset-0 rounded-full blur-[140px]" style="background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(20,184,166,0.08) 50%, transparent 70%)"></div>
+            <div class="absolute inset-0 rounded-full blur-[140px]" style="background: radial-gradient(circle, var(--glow-blue) 0%, var(--glow-teal) 50%, transparent 70%)"></div>
         </div>
 
         <div class="relative z-10 text-center px-6 max-w-4xl mx-auto mb-12 md:mb-16">
-            <div id="hero-badge" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/50 mb-8">
+            <a id="hero-badge" href="#whats-new" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface border border-line text-xs text-ink-2 hover:text-ink transition-colors mb-8">
                 <span class="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse"></span>
-                Arazzo 1.1.0 &middot; OpenAPI Initiative
-            </div>
+                v0.9.0 &middot; Arazzo 1.1.0 &middot; OpenAPI Initiative
+            </a>
             <h1 id="hero-title" class="text-4xl sm:text-5xl md:text-7xl font-extrabold leading-[1.08] tracking-tight mb-6">
                 Execute API workflows<br>
                 <span class="gradient-text">from YAML.</span>
             </h1>
-            <p id="hero-subtitle" class="text-lg md:text-xl text-white/40 max-w-2xl mx-auto mb-10 leading-relaxed">
-                No code generation. No glue scripts. Define multi-step API sequences in YAML, then run, test, trace, replay, and debug them interactively.
+            <p id="hero-subtitle" class="text-lg md:text-xl text-ink-2 max-w-2xl mx-auto mb-10 leading-relaxed">
+                No code generation. No glue scripts. Define multi-step HTTP and Kafka workflows in YAML or JSON, then validate, run, test, trace, replay, and debug them.
             </p>
             <div id="hero-ctas" class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="#get-started" id="scroll-to-start" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white bg-gradient-to-r from-accent-blue to-accent-teal hover:shadow-lg hover:shadow-accent-blue/25 transition-all">
+                <a href="#get-started" id="scroll-to-start" class="btn-primary inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold">
                     Get Started
                     <i data-lucide="arrow-down" class="w-4 h-4"></i>
                 </a>
-                <a href="https://github.com/strefethen/arazzo-cli" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white/80 border border-white/15 hover:border-white/25 transition-colors">
+                <a href="https://github.com/strefethen/arazzo-cli" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-ink border border-line hover:border-ink-3 transition-colors">
                     View on GitHub
-                    <i data-lucide="github" class="w-4 h-4"></i>
+                    <svg class="w-4 h-4" aria-hidden="true"><use href="#icon-github"></use></svg>
                 </a>
             </div>
         </div>
 
         <div id="hero-code" class="relative z-10 w-full max-w-2xl mx-auto px-6">
             <div class="absolute -inset-20 pointer-events-none">
-                <div class="absolute inset-0 rounded-full blur-[100px]" style="background: radial-gradient(circle, rgba(59,130,246,0.12) 0%, rgba(20,184,166,0.06) 60%, transparent 80%); animation: pulse-glow 4s ease-in-out infinite;"></div>
+                <div class="absolute inset-0 rounded-full blur-[100px]" style="background: radial-gradient(circle, var(--glow-blue) 0%, var(--glow-teal) 60%, transparent 80%); animation: pulse-glow 4s ease-in-out infinite;"></div>
             </div>
             <div class="code-window relative z-10">
                 <div class="code-titlebar">
                     <div class="code-dot" style="background:#ff5f57"></div>
                     <div class="code-dot" style="background:#febc2e"></div>
                     <div class="code-dot" style="background:#28c840"></div>
-                    <span class="ml-2 text-xs text-white/25 font-mono">auth-flow.arazzo.yaml</span>
+                    <span class="ml-2 text-xs font-mono">auth-flow.arazzo.yaml</span>
                 </div>
-                <pre class="code-content"><code><span class="ck">arazzo</span>: <span class="cs">"1.0.0"</span>
+                <pre class="code-content"><code><span class="ck">arazzo</span>: <span class="cs">1.1.0</span>
 <span class="ck">info</span>:
   <span class="ck">title</span>: <span class="cs">User Authentication Flow</span>
-  <span class="ck">version</span>: <span class="cs">"1.0"</span>
+  <span class="ck">version</span>: <span class="cs">1.0.0</span>
 <span class="ck">sourceDescriptions</span>:
   - <span class="ck">name</span>: <span class="cs">api</span>
-    <span class="ck">url</span>: <span class="cs">https://api.example.com</span>
+    <span class="ck">url</span>: <span class="cs">./openapi.yaml</span>
     <span class="ck">type</span>: <span class="cs">openapi</span>
 <span class="ck">workflows</span>:
   - <span class="ck">workflowId</span>: <span class="cn">authenticate</span>
+    <span class="ck">inputs</span>:
+      <span class="ck">type</span>: <span class="cs">object</span>
+      <span class="ck">properties</span>:
+        <span class="ck">username</span>: { <span class="ck">type</span>: <span class="cs">string</span> }
+        <span class="ck">password</span>: { <span class="ck">type</span>: <span class="cs">string</span> }
     <span class="ck">steps</span>:
       - <span class="ck">stepId</span>: <span class="cn">login</span>
-        <span class="ck">operationPath</span>: <span class="cv">POST /auth/login</span>
-        <span class="ck">parameters</span>:
-          - <span class="ck">name</span>: <span class="cs">Content-Type</span>
-            <span class="ck">in</span>: <span class="cs">header</span>
-            <span class="ck">value</span>: <span class="cs">"application/json"</span>
+        <span class="ck">operationId</span>: <span class="cv">login</span>
         <span class="ck">requestBody</span>:
+          <span class="ck">contentType</span>: <span class="cs">application/json</span>
           <span class="ck">payload</span>:
-            <span class="ck">username</span>: <span class="cp">{$inputs.username}</span>
-            <span class="ck">password</span>: <span class="cp">{$inputs.password}</span>
+            <span class="ck">username</span>: <span class="cp">$inputs.username</span>
+            <span class="ck">password</span>: <span class="cp">$inputs.password</span>
         <span class="ck">successCriteria</span>:
           - <span class="ck">condition</span>: <span class="cv">$statusCode == 200</span>
         <span class="ck">outputs</span>:
           <span class="ck">token</span>: <span class="cv">$response.body#/token</span>
       - <span class="ck">stepId</span>: <span class="cn">get-profile</span>
-        <span class="ck">operationPath</span>: <span class="cv">GET /users/me</span>
+        <span class="ck">operationId</span>: <span class="cv">getProfile</span>
         <span class="ck">parameters</span>:
           - <span class="ck">name</span>: <span class="cs">Authorization</span>
             <span class="ck">in</span>: <span class="cs">header</span>
-            <span class="ck">value</span>: <span class="cs">"Bearer </span><span class="cp">{$steps.login.outputs.token}</span><span class="cs">"</span>
+            <span class="ck">value</span>: <span class="cs">Bearer </span><span class="cp">{$steps.login.outputs.token}</span>
         <span class="ck">successCriteria</span>:
-          - <span class="ck">condition</span>: <span class="cv">$statusCode == 200</span></code></pre>
+          - <span class="ck">condition</span>: <span class="cv">$statusCode == 200</span>
+        <span class="ck">outputs</span>:
+          <span class="ck">name</span>: <span class="cv">$response.body#/name</span>
+    <span class="ck">outputs</span>:
+      <span class="ck">displayName</span>: <span class="cv">$steps.get-profile.outputs.name</span></code></pre>
             </div>
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- HOW IT WORKS                                 -->
-    <!-- ============================================ -->
-    <section id="how-it-works" class="py-24 md:py-32 bg-slate-50">
+    <section id="whats-new" class="py-24 md:py-32 bg-alt">
         <div class="max-w-6xl mx-auto px-6">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-5xl font-extrabold text-slate-900 tracking-tight mb-4">How It Works</h2>
-                <p class="text-lg text-slate-500 max-w-xl mx-auto">Three steps from YAML to running workflows.</p>
+                <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">New in v0.9.0</h2>
+                <p class="text-lg text-ink-2 max-w-2xl mx-auto">Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.</p>
+            </div>
+            <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+                <div class="new-card card rounded-2xl p-6">
+                    <i data-lucide="radio" class="w-6 h-6 mb-4" style="color:var(--i-blue)"></i>
+                    <h3 class="text-lg font-bold mb-2">Kafka receive</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Receive JSON messages, filter on correlation IDs, and validate AsyncAPI targets offline.</p>
+                </div>
+                <div class="new-card card rounded-2xl p-6">
+                    <i data-lucide="file-check-2" class="w-6 h-6 mb-4" style="color:var(--i-teal)"></i>
+                    <h3 class="text-lg font-bold mb-2">Spec fidelity</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Standard operation targets, explicit reusable actions, and typed Criterion interpolation.</p>
+                </div>
+                <div class="new-card card rounded-2xl p-6">
+                    <i data-lucide="timer" class="w-6 h-6 mb-4" style="color:var(--i-indigo)"></i>
+                    <h3 class="text-lg font-bold mb-2">Reliable execution</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Corrected timeout classification, workflow output diagnostics, and cancellation-aware debugger teardown.</p>
+                </div>
+                <div class="new-card card rounded-2xl p-6">
+                    <i data-lucide="braces" class="w-6 h-6 mb-4" style="color:var(--i-amber)"></i>
+                    <h3 class="text-lg font-bold mb-2">Automation contracts</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Shared JSON errors with stable codes, plus stronger validation with machine-readable diagnostics.</p>
+                </div>
+            </div>
+            <div class="grid md:grid-cols-2 gap-5 mb-8">
+                <div id="mcp-notice" class="new-card card rounded-2xl p-6">
+                    <div class="flex items-center gap-2.5 mb-2">
+                        <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0" style="color:rgb(var(--warn))"></i>
+                        <h3 class="font-bold text-warn">MCP server unavailable</h3>
+                    </div>
+                    <p class="text-ink-2 text-sm leading-relaxed">v0.9.0 excludes the MCP server pending security hardening, and <code class="inline">arazzo-cli serve</code> no longer exists. No flag restores it in release binaries. Disconnect existing MCP client configurations, and do not downgrade as a security workaround.</p>
+                </div>
+                <div class="new-card card rounded-2xl p-6">
+                    <div class="flex items-center gap-2.5 mb-2">
+                        <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0" style="color:rgb(var(--warn))"></i>
+                        <h3 class="font-bold text-warn">Breaking changes</h3>
+                    </div>
+                    <p class="text-ink-2 text-sm leading-relaxed">Operation targets must use an <code class="inline">operationId</code> or a canonical JSON Pointer resolved from a declared source. Action <code class="inline">name</code> fields are literal, so component reuse requires <code class="inline">reference</code>. <code class="inline">generate</code> writes YAML only.</p>
+                </div>
+            </div>
+            <p class="text-center text-sm">
+                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="inline-flex items-center gap-2 text-link font-semibold hover:underline">
+                    Read the full release notes
+                    <i data-lucide="external-link" class="w-4 h-4"></i>
+                </a>
+            </p>
+        </div>
+    </section>
+
+    <section id="how-it-works" class="py-24 md:py-32 bg-page">
+        <div class="max-w-6xl mx-auto px-6">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">How It Works</h2>
+                <p class="text-lg text-ink-2 max-w-xl mx-auto">Three steps from YAML to running workflows.</p>
             </div>
             <div class="grid md:grid-cols-3 gap-8">
-                <div class="step-card bg-white rounded-2xl p-8 shadow-sm border border-slate-100 text-center">
+                <div class="step-card card rounded-2xl p-8 text-center">
                     <div class="text-5xl font-extrabold gradient-text mb-5">01</div>
                     <div class="w-14 h-14 rounded-2xl bg-accent-blue/10 flex items-center justify-center mx-auto mb-4">
-                        <i data-lucide="file-code-2" class="w-7 h-7" style="color:#3b82f6"></i>
+                        <i data-lucide="file-code-2" class="w-7 h-7" style="color:var(--i-blue)"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-slate-900 mb-2">Define</h3>
-                    <p class="text-slate-500 leading-relaxed">Write your API workflow in YAML using the Arazzo spec. Steps, parameters, criteria, control flow — all declarative.</p>
+                    <h3 class="text-xl font-bold mb-2">Define</h3>
+                    <p class="text-ink-2 leading-relaxed">Describe your workflow with the Arazzo spec and bind it to OpenAPI or AsyncAPI sources. Steps, parameters, criteria, and control flow are all declarative.</p>
                 </div>
-                <div class="step-card bg-white rounded-2xl p-8 shadow-sm border border-slate-100 text-center">
+                <div class="step-card card rounded-2xl p-8 text-center">
                     <div class="text-5xl font-extrabold gradient-text mb-5">02</div>
                     <div class="w-14 h-14 rounded-2xl bg-accent-teal/10 flex items-center justify-center mx-auto mb-4">
-                        <i data-lucide="play" class="w-7 h-7" style="color:#14b8a6"></i>
+                        <i data-lucide="play" class="w-7 h-7" style="color:var(--i-teal)"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-slate-900 mb-2">Run</h3>
-                    <p class="text-slate-500 leading-relaxed">Execute against live APIs. Expressions resolve automatically, retries fire on failure, control flow routes on criteria.</p>
+                    <h3 class="text-xl font-bold mb-2">Run</h3>
+                    <p class="text-ink-2 leading-relaxed">Preview with a dry run, then execute against live APIs. Expressions resolve, retry actions fire, and control flow routes on criteria.</p>
                 </div>
-                <div class="step-card bg-white rounded-2xl p-8 shadow-sm border border-slate-100 text-center">
+                <div class="step-card card rounded-2xl p-8 text-center">
                     <div class="text-5xl font-extrabold gradient-text mb-5">03</div>
                     <div class="w-14 h-14 rounded-2xl bg-indigo-500/10 flex items-center justify-center mx-auto mb-4">
-                        <i data-lucide="bug" class="w-7 h-7" style="color:#6366F1"></i>
+                        <i data-lucide="bug" class="w-7 h-7" style="color:var(--i-indigo)"></i>
                     </div>
-                    <h3 class="text-xl font-bold text-slate-900 mb-2">Debug</h3>
-                    <p class="text-slate-500 leading-relaxed">Set breakpoints in VS Code, step through workflows, inspect variables. Full DAP debugger with watch expressions.</p>
+                    <h3 class="text-xl font-bold mb-2">Debug</h3>
+                    <p class="text-ink-2 leading-relaxed">Set breakpoints in VS Code, step through workflows, and inspect variables with a full DAP debugger and watch expressions.</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- FEATURES                                     -->
-    <!-- ============================================ -->
-    <section id="features" class="py-24 md:py-32 bg-deep dot-pattern relative">
+    <section id="features" class="py-24 md:py-32 bg-alt dot-pattern relative">
         <div class="max-w-6xl mx-auto px-6">
             <div class="text-center mb-16">
                 <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">Features</h2>
-                <p class="text-lg text-white/40 max-w-xl mx-auto">Everything you need to run multi-step API workflows.</p>
+                <p class="text-lg text-ink-2 max-w-xl mx-auto">Everything you need to run multi-step API workflows.</p>
             </div>
             <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-accent-blue/10 flex items-center justify-center mb-4">
-                        <i data-lucide="play-circle" class="w-6 h-6" style="color:#3b82f6"></i>
+                        <i data-lucide="play-circle" class="w-6 h-6" style="color:var(--i-blue)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Run Workflows</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Execute HTTP steps, resolve expressions, evaluate success criteria, route control flow via onSuccess/onFailure actions.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">Execute HTTP steps, resolve expressions, evaluate success criteria, and route control flow. Preview with --dry-run or run one step with --step.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
+                    <div class="w-12 h-12 rounded-xl bg-accent-blue/10 flex items-center justify-center mb-4">
+                        <i data-lucide="radio" class="w-6 h-6" style="color:var(--i-sky)"></i>
+                    </div>
+                    <h3 class="text-lg font-bold mb-2">Kafka Receive</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Arazzo 1.1 receive steps wait for JSON records on a Kafka topic from an AsyncAPI 3.0 source, filter on correlation IDs, and feed outputs to HTTP steps.</p>
+                </div>
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-accent-teal/10 flex items-center justify-center mb-4">
-                        <i data-lucide="git-branch" class="w-6 h-6" style="color:#14b8a6"></i>
+                        <i data-lucide="git-branch" class="w-6 h-6" style="color:var(--i-teal)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Parallel Execution</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">DAG-based scheduling runs independent steps concurrently. Deterministic traces even under parallel execution.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">--parallel runs independent steps concurrently with DAG-based scheduling. Trace records keep a stable order; timing and live data can vary.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-indigo-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="file-search" class="w-6 h-6" style="color:#818cf8"></i>
+                        <i data-lucide="file-search" class="w-6 h-6" style="color:var(--i-indigo)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Execution Traces</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Detailed trace.v1 JSON artifacts capture every request, response, criteria evaluation, and routing decision. Sensitive values auto-redacted.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">trace.v1 JSON artifacts record each attempt's request, response, criteria, and routing decision. Recognized sensitive values are redacted on a best-effort basis, so review traces before sharing.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-emerald-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="rotate-ccw" class="w-6 h-6" style="color:#34d399"></i>
+                        <i data-lucide="rotate-ccw" class="w-6 h-6" style="color:var(--i-emerald)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Deterministic Replay</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Re-execute traces offline with injected responses. Detect request drift for CI regression testing without network access.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">Re-execute traces offline with recorded responses. Request drift fails the replay, so CI catches unintended changes without a live API.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-green-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="check-check" class="w-6 h-6" style="color:#4ade80"></i>
+                        <i data-lucide="check-check" class="w-6 h-6" style="color:var(--i-green)"></i>
                     </div>
-                    <h3 class="text-lg font-bold mb-2">Contract Testing</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Run every workflow as a CI contract test with arazzo-cli test. TAP, JUnit XML, or JSON output, regex filtering, fail-fast, and non-zero exit on any failure.</p>
+                    <h3 class="text-lg font-bold mb-2">Test Suites</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">arazzo-cli test runs workflows from files or directories against real APIs. TAP, JUnit XML, or JSON reports, regex filtering, fail-fast, and non-zero exit on any failure.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-amber-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="braces" class="w-6 h-6" style="color:#fbbf24"></i>
+                        <i data-lucide="braces" class="w-6 h-6" style="color:var(--i-amber)"></i>
                     </div>
-                    <h3 class="text-lg font-bold mb-2">Expression Language</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">$inputs, $steps, $response, XPath, JSON Pointer, string interpolation — the Arazzo expression surface plus a few labeled arazzo-cli extensions.</p>
+                    <h3 class="text-lg font-bold mb-2">Expressions and Selectors</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">$inputs, $steps, $response, $message, and interpolation, plus typed RFC 9535 JSONPath, JSON Pointer, and XPath Selector Objects. Extensions and gaps are documented.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-rose-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="shield-check" class="w-6 h-6" style="color:#fb7185"></i>
+                        <i data-lucide="shield-check" class="w-6 h-6" style="color:var(--i-rose)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Input Validation</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Type-check workflow inputs against JSON Schema. Strict mode makes validation errors fatal. Catch mistakes before network calls.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">Require, type-check, and enforce top-level property enums for workflow inputs. --strict-inputs makes validation errors fatal.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-violet-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="wand-2" class="w-6 h-6" style="color:#8b5cf6"></i>
+                        <i data-lucide="wand-2" class="w-6 h-6" style="color:var(--i-violet)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Generate Workflows</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Scaffold CRUD workflows from OpenAPI 3.x specs. Authentication detection, chained outputs, realistic request bodies.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">Scaffold CRUD workflows as YAML from OpenAPI 3.0.x specs, with standard operation targets and chained outputs. OpenAPI 3.1 and 3.2 are rejected.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-orange-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="repeat" class="w-6 h-6" style="color:#f97316"></i>
+                        <i data-lucide="repeat" class="w-6 h-6" style="color:var(--i-orange)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Control Flow</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">onSuccess/onFailure actions with goto, retry (with backoff), and end. Criteria guards select the first matching action.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">onSuccess and onFailure actions with goto, delayed retry, and end. Sub-workflows nest up to 10 levels with input and output passing.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-teal-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="terminal" class="w-6 h-6" style="color:#2dd4bf"></i>
+                        <i data-lucide="terminal" class="w-6 h-6" style="color:var(--i-teal)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">JSON Output</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">--json on every command. Stable schemas, structured errors, JSON Schema introspection. Built for CI and scripting.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">--json returns structured results, and failures carry a stable code. arazzo-cli schema prints the JSON Schema for each contract. generate writes YAML instead.</p>
                 </div>
-                <div class="feature-card glass rounded-2xl p-6">
+                <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-sky-400/10 flex items-center justify-center mb-4">
-                        <i data-lucide="bot" class="w-6 h-6" style="color:#38bdf8"></i>
+                        <i data-lucide="network" class="w-6 h-6" style="color:var(--i-sky)"></i>
                     </div>
-                    <h3 class="text-lg font-bold mb-2">MCP Server</h3>
-                    <p class="text-white/40 text-sm leading-relaxed">Expose workflow tools to AI agents over the Model Context Protocol. arazzo-cli serve runs an MCP server over stdio to generate, describe, and run Arazzo workflows.</p>
+                    <h3 class="text-lg font-bold mb-2">Transport Controls</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Scoped TLS exceptions, redirect limits, HTTPS downgrade protection, structured transport warnings, and a built-in token-bucket rate limiter.</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- VS CODE DEBUGGER                             -->
-    <!-- ============================================ -->
-    <section id="debugger" class="py-24 md:py-32 bg-slate-50">
+    <section id="debugger" class="py-24 md:py-32 bg-page">
         <div class="max-w-6xl mx-auto px-6">
             <div class="debugger-section grid md:grid-cols-2 gap-12 md:gap-16 items-center">
                 <div>
-                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent-blue/10 text-accent-blue text-xs font-medium mb-6 border border-accent-blue/20">
+                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-link/10 text-link text-xs font-medium mb-6 border border-link/20">
                         <i data-lucide="monitor" class="w-3.5 h-3.5"></i>
                         VS Code Extension
                     </div>
-                    <h2 class="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight mb-4">Step through your workflows</h2>
-                    <p class="text-slate-500 leading-relaxed mb-4">Full Debug Adapter Protocol implementation. Set breakpoints on workflow steps, success criteria, and actions. Step through execution, inspect variables, evaluate watch expressions.</p>
-                    <p class="text-slate-500 leading-relaxed mb-6">One of only two DAP implementations that supports breakpoints directly in YAML source files.</p>
+                    <h2 class="text-3xl md:text-4xl font-extrabold tracking-tight mb-4">Step through your workflows</h2>
+                    <p class="text-ink-2 leading-relaxed mb-6">Full Debug Adapter Protocol implementation. Set breakpoints on workflow steps, success criteria, actions, and outputs directly in YAML, then step through execution and evaluate expressions as you go.</p>
                     <div class="space-y-3 mb-8">
-                        <div class="flex items-center gap-3 text-sm text-slate-600">
-                            <i data-lucide="circle-dot" class="w-4 h-4 flex-shrink-0" style="color:#3b82f6"></i>
-                            <span>Breakpoints on steps, criteria, and actions</span>
+                        <div class="flex items-center gap-3 text-sm text-ink-2">
+                            <i data-lucide="circle-dot" class="w-4 h-4 flex-shrink-0" style="color:var(--i-blue)"></i>
+                            <span>Conditional breakpoints on steps, criteria, actions, and outputs</span>
                         </div>
-                        <div class="flex items-center gap-3 text-sm text-slate-600">
-                            <i data-lucide="eye" class="w-4 h-4 flex-shrink-0" style="color:#3b82f6"></i>
+                        <div class="flex items-center gap-3 text-sm text-ink-2">
+                            <i data-lucide="eye" class="w-4 h-4 flex-shrink-0" style="color:var(--i-blue)"></i>
                             <span>Variable inspection: Locals, Request, Response, Inputs, Steps</span>
                         </div>
-                        <div class="flex items-center gap-3 text-sm text-slate-600">
-                            <i data-lucide="activity" class="w-4 h-4 flex-shrink-0" style="color:#3b82f6"></i>
-                            <span>Watch expressions with full Arazzo syntax</span>
+                        <div class="flex items-center gap-3 text-sm text-ink-2">
+                            <i data-lucide="activity" class="w-4 h-4 flex-shrink-0" style="color:var(--i-blue)"></i>
+                            <span>Watch expressions evaluated in the selected stack frame</span>
                         </div>
-                        <div class="flex items-center gap-3 text-sm text-slate-600">
-                            <i data-lucide="layers" class="w-4 h-4 flex-shrink-0" style="color:#3b82f6"></i>
+                        <div class="flex items-center gap-3 text-sm text-ink-2">
+                            <i data-lucide="layers" class="w-4 h-4 flex-shrink-0" style="color:var(--i-blue)"></i>
                             <span>Call stack with sub-workflow depth tracking</span>
                         </div>
                     </div>
-                    <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="inline-flex items-center gap-2 text-accent-blue font-semibold text-sm hover:underline">
+                    <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="inline-flex items-center gap-2 text-link font-semibold text-sm hover:underline">
                         Install from VS Code Marketplace
                         <i data-lucide="external-link" class="w-4 h-4"></i>
                     </a>
@@ -436,137 +622,141 @@
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- WHY                                          -->
-    <!-- ============================================ -->
-    <section id="why" class="py-24 md:py-32 bg-deep dot-pattern">
+    <section id="why" class="py-24 md:py-32 bg-alt dot-pattern">
         <div class="max-w-6xl mx-auto px-6">
             <div class="text-center mb-16">
                 <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">Why arazzo-cli</h2>
-                <p class="text-lg text-white/40 max-w-xl mx-auto">Built for reliability.</p>
+                <p class="text-lg text-ink-2 max-w-xl mx-auto">Built for reliability.</p>
             </div>
             <div class="grid md:grid-cols-3 gap-8">
                 <div class="why-card text-center">
                     <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-blue/15 to-accent-blue/5 flex items-center justify-center mx-auto mb-6 border border-accent-blue/10">
-                        <i data-lucide="shield" class="w-8 h-8" style="color:#3b82f6"></i>
+                        <i data-lucide="shield" class="w-8 h-8" style="color:var(--i-blue)"></i>
                     </div>
                     <h3 class="text-2xl font-bold mb-3">Safe</h3>
-                    <p class="text-white/40 leading-relaxed">No unsafe code. unwrap/expect denied by clippy. Bounded execution limits. Automatic secret redaction in traces and output.</p>
+                    <p class="text-ink-2 leading-relaxed">Unsafe code is forbidden across the workspace, and Clippy denies unwrap and expect. Retries, sub-workflow depth, timeouts, and response sizes are bounded, and HTTPS downgrade redirects are refused by default.</p>
                 </div>
                 <div class="why-card text-center">
                     <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-teal/15 to-accent-teal/5 flex items-center justify-center mx-auto mb-6 border border-accent-teal/10">
-                        <i data-lucide="zap" class="w-8 h-8" style="color:#14b8a6"></i>
+                        <i data-lucide="zap" class="w-8 h-8" style="color:var(--i-teal)"></i>
                     </div>
                     <h3 class="text-2xl font-bold mb-3">Fast</h3>
-                    <p class="text-white/40 leading-relaxed">Compiled Rust binary. Regex caching via LazyLock. Parallel DAG execution. Sub-second startup. LTO-optimized release builds.</p>
+                    <p class="text-ink-2 leading-relaxed">A single compiled Rust binary with thin-LTO release builds. DAG-based parallel execution runs independent steps at the same time.</p>
                 </div>
                 <div class="why-card text-center">
                     <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-400/15 to-indigo-400/5 flex items-center justify-center mx-auto mb-6 border border-indigo-400/10">
-                        <i data-lucide="code-2" class="w-8 h-8" style="color:#818cf8"></i>
+                        <i data-lucide="code-2" class="w-8 h-8" style="color:var(--i-indigo)"></i>
                     </div>
                     <h3 class="text-2xl font-bold mb-3">Open</h3>
-                    <p class="text-white/40 leading-relaxed">MIT licensed. 1030 hermetic tests. Arazzo 1.1 expression surface — extensions and gaps labeled. Programmatic Rust API via arazzo-runtime crate.</p>
+                    <p class="text-ink-2 leading-relaxed">MIT licensed with a network-free test suite. Targets Arazzo 1.1.0 with <a href="https://github.com/strefethen/arazzo-cli#specification-conformance-extensions-and-gaps" class="text-link hover:underline">extensions and conformance gaps documented</a>. Embed the engine through the arazzo-runtime Rust API.</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- GET STARTED                                  -->
-    <!-- ============================================ -->
-    <section id="get-started" class="py-24 md:py-32 relative overflow-hidden">
-        <div class="absolute inset-0" style="background: linear-gradient(135deg, rgba(59,130,246,0.06) 0%, #080f1e 40%, #080f1e 60%, rgba(20,184,166,0.06) 100%)"></div>
+    <section id="get-started" class="py-24 md:py-32 relative overflow-hidden bg-page">
+        <div class="absolute inset-0" style="background: linear-gradient(135deg, var(--start-edge-a) 0%, transparent 40%, transparent 60%, var(--start-edge-b) 100%)"></div>
         <div class="relative z-10 max-w-4xl mx-auto px-6">
             <div class="text-center mb-16">
                 <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">Get Started</h2>
-                <p class="text-lg text-white/40 max-w-xl mx-auto">Install, validate, run.</p>
+                <p class="text-lg text-ink-2 max-w-xl mx-auto">Install, validate, run.</p>
             </div>
 
             <div class="space-y-6 mb-16">
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Install from source</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Install v0.9.0 from source</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">cargo install</span> <span class="flag">--git</span> <span class="cv">https://github.com/strefethen/arazzo-cli.git</span> arazzo-cli <span class="flag">--locked</span>
+                        <span class="prompt">$</span> cargo install <span class="flag">--git</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span> <span class="flag">--tag</span> <span class="arg">v0.9.0</span> <span class="flag">--locked</span> arazzo-cli
                     </div>
                 </div>
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Or download a prebuilt binary</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Or download a prebuilt binary</p>
                     <div class="terminal-block">
-                        <span class="comment"># Linux, macOS, and Windows binaries on every release</span><br>
-                        <span class="prompt">$</span> <span class="cmd">gh release download v0.8.0</span> <span class="flag">-R</span> <span class="cv">strefethen/arazzo-cli</span>
+                        <span class="comment"># Linux x86_64, macOS, and Windows x86_64</span><br>
+                        <span class="prompt">$</span> gh release download v0.9.0 <span class="flag">-R</span> <span class="arg">strefethen/arazzo-cli</span> <span class="flag">-p</span> <span class="arg">'arazzo-cli-v0.9.0-*'</span>
                     </div>
                 </div>
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Validate and run a workflow</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Get the example workflows</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli validate</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span><br>
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli run</span> <span class="cv">examples/httpbin-auth.arazzo.yaml</span> bearer-auth <span class="flag">--verbose</span>
+                        <span class="prompt">$</span> git clone <span class="flag">--branch</span> <span class="arg">v0.9.0</span> <span class="flag">--depth</span> <span class="arg">1</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span><br>
+                        <span class="prompt">$</span> cd arazzo-cli
                     </div>
                 </div>
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Record a trace and replay it offline</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Validate, preview, and run a workflow</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli run</span> <span class="cv">spec.yaml</span> my-workflow <span class="flag">--trace</span> <span class="cv">./trace.json</span><br>
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli replay</span> <span class="cv">./trace.json</span>
+                        <span class="prompt">$</span> arazzo-cli validate <span class="arg">examples/httpbin-get.arazzo.yaml</span><br>
+                        <span class="prompt">$</span> arazzo-cli run <span class="arg">examples/httpbin-get.arazzo.yaml</span> get-origin <span class="flag">--dry-run</span><br>
+                        <span class="prompt">$</span> arazzo-cli run <span class="arg">examples/httpbin-get.arazzo.yaml</span> get-origin <span class="flag">--verbose</span>
                     </div>
                 </div>
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Test every workflow in CI</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Record a trace and replay it offline</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli test</span> <span class="cv">./specs</span> <span class="flag">--format</span> <span class="cv">junit</span>
+                        <span class="prompt">$</span> arazzo-cli run <span class="arg">examples/httpbin-get.arazzo.yaml</span> get-origin <span class="flag">--trace</span> <span class="arg">./trace.json</span><br>
+                        <span class="prompt">$</span> arazzo-cli replay <span class="arg">./trace.json</span>
                     </div>
                 </div>
                 <div>
-                    <p class="text-white/50 text-sm font-medium mb-3">Serve workflows to AI agents over MCP</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Run workflows as tests in CI</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> <span class="cmd">arazzo-cli serve</span>
+                        <span class="prompt">$</span> arazzo-cli test <span class="arg">examples/httpbin-get.arazzo.yaml</span> <span class="flag">--filter</span> <span class="arg">'^get-origin$'</span> <span class="flag">--format</span> <span class="arg">junit</span>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Generate workflows from an OpenAPI 3.0.x spec</p>
+                    <div class="terminal-block">
+                        <span class="prompt">$</span> arazzo-cli generate <span class="flag">--spec</span> <span class="arg">examples/swagger-petstore.openapi.json</span> <span class="flag">-o</span> <span class="arg">petstore-crud.arazzo.yaml</span>
+                    </div>
+                </div>
+                <div>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Validate a Kafka receive workflow without a broker (<a href="https://github.com/strefethen/arazzo-cli/blob/v0.9.0/docs/kafka-receive.md" class="text-link hover:underline">full Kafka guide</a>)</p>
+                    <div class="terminal-block">
+                        <span class="prompt">$</span> arazzo-cli validate <span class="arg">examples/kafka-order-followup.arazzo.yaml</span>
                     </div>
                 </div>
             </div>
 
             <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="https://github.com/strefethen/arazzo-cli" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white bg-gradient-to-r from-accent-blue to-accent-teal hover:shadow-lg hover:shadow-accent-blue/25 transition-all">
-                    <i data-lucide="github" class="w-5 h-5"></i>
+                <a href="https://github.com/strefethen/arazzo-cli" class="btn-primary inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold">
+                    <svg class="w-5 h-5" aria-hidden="true"><use href="#icon-github"></use></svg>
                     View on GitHub
                 </a>
-                <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white/80 border border-white/15 hover:border-white/25 transition-colors">
+                <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-ink border border-line hover:border-ink-3 transition-colors">
                     <i data-lucide="puzzle" class="w-5 h-5"></i>
                     VS Code Extension
                 </a>
-                <a href="https://github.com/strefethen/arazzo-cli/releases" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-white/80 border border-white/15 hover:border-white/25 transition-colors">
+                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-ink border border-line hover:border-ink-3 transition-colors">
                     <i data-lucide="download" class="w-5 h-5"></i>
                     Download Binaries
                 </a>
             </div>
 
-            <p class="text-center text-white/20 text-sm mt-8">Rust 1.88+ &middot; Linux, macOS, Windows &middot; MIT License</p>
+            <p class="text-center text-ink-3 text-sm mt-8">Rust 1.88+ &middot; Linux, macOS, Windows &middot; MIT License</p>
         </div>
     </section>
 
-    <!-- ============================================ -->
-    <!-- FOOTER                                       -->
-    <!-- ============================================ -->
-    <footer class="bg-deep border-t border-white/5 py-12">
+    <footer class="bg-page border-t border-line py-12">
         <div class="max-w-6xl mx-auto px-6">
             <div class="flex flex-col md:flex-row items-center justify-between gap-6">
                 <div class="flex items-center gap-2.5">
-                    <img src="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png" alt="arazzo-cli" class="w-6 h-6 rounded-md">
-                    <span class="font-medium text-white/50">arazzo-cli</span>
+                    <img src="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png" alt="" class="w-6 h-6 rounded-md">
+                    <span class="font-medium text-ink-2">arazzo-cli</span>
+                    <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="text-sm text-ink-3 hover:text-ink transition-colors">v0.9.0</a>
                 </div>
-                <div class="flex items-center gap-6 text-sm text-white/30">
-                    <a href="https://github.com/strefethen/arazzo-cli" class="hover:text-white/60 transition-colors">GitHub</a>
-                    <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="hover:text-white/60 transition-colors">VS Code</a>
-                    <a href="https://spec.openapis.org/arazzo/latest.html" class="hover:text-white/60 transition-colors">Arazzo Spec</a>
-                    <a href="https://github.com/strefethen/arazzo-cli/blob/main/LICENSE" class="hover:text-white/60 transition-colors">MIT License</a>
+                <div class="flex flex-wrap items-center justify-center gap-6 text-sm text-ink-3">
+                    <a href="https://github.com/strefethen/arazzo-cli" class="hover:text-ink transition-colors">GitHub</a>
+                    <a href="https://marketplace.visualstudio.com/items?itemName=strefethen.arazzo-debug" class="hover:text-ink transition-colors">VS Code</a>
+                    <a href="https://spec.openapis.org/arazzo/latest.html" class="hover:text-ink transition-colors">Arazzo Spec</a>
+                    <a href="https://github.com/strefethen/arazzo-cli/blob/main/CHANGELOG.md" class="hover:text-ink transition-colors">Changelog</a>
+                    <a href="https://github.com/strefethen/arazzo-cli/blob/main/LICENSE" class="hover:text-ink transition-colors">MIT License</a>
                 </div>
-                <div class="text-sm text-white/20">&copy; 2026 Steve Trefethen</div>
+                <div class="text-sm text-ink-3">&copy; 2026 Steve Trefethen</div>
             </div>
         </div>
     </footer>
 
-    <!-- ============================================ -->
-    <!-- SCRIPTS                                      -->
-    <!-- ============================================ -->
     <script>
         lucide.createIcons();
         gsap.registerPlugin(ScrollTrigger);
@@ -592,6 +782,11 @@
             .from('#hero-subtitle', { y: 30, opacity: 0, duration: 0.8 }, '-=0.6')
             .from('#hero-ctas', { y: 20, opacity: 0, duration: 0.8 }, '-=0.5')
             .from('#hero-code', { y: 50, opacity: 0, scale: 0.97, duration: 1.2 }, '-=0.4');
+
+        gsap.from('.new-card', {
+            scrollTrigger: { trigger: '#whats-new', start: 'top 80%' },
+            y: 30, opacity: 0, stagger: 0.08, duration: 0.7, ease: 'power3.out',
+        });
 
         gsap.from('.step-card', {
             scrollTrigger: { trigger: '#how-it-works', start: 'top 80%' },
