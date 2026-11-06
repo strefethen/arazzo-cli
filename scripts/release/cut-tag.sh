@@ -43,6 +43,8 @@ if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
   exit 1
 fi
 
+bash "$ROOT_DIR/scripts/ci/verify-site-version.sh" "$TAG"
+
 echo "Running release preflight checks..."
 bash "$ROOT_DIR/scripts/release/verify-readiness.sh"
 

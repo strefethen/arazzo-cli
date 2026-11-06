@@ -144,7 +144,11 @@ fix — new ticket, not an inline decision.
   bulleted highlight list before the `###` sections. `cut-tag.sh` refuses a tag
   whose version has no section; it cannot tell a terse one from a good one.
 - **Never** pipe a verification command in a background task — redirect to a file and echo $?; or set set -o pipefail in the harness's background shell.
+- `docs/index.html` is the public site, deployed from `main`, and is part of
+  every release: review its content in the version-bump commit and update its
+  `arazzo-cli:*` meta tags. `scripts/ci/verify-site-version.sh` fails CI,
+  `cut-tag.sh`, and the release workflow when they disagree with `Cargo.toml`.
 
-`tests/` holds four drift guards: `golden_spec_baseline`, `schema_drift`,
-`operation_path_agreement`, `cli_contract_snapshots`. A failure is the signal —
-don't re-baseline without knowing why output moved.
+`tests/` holds five drift guards: `golden_spec_baseline`, `schema_drift`,
+`operation_path_agreement`, `cli_contract_snapshots`, `site_page_drift`. A
+failure is the signal — don't re-baseline without knowing why output moved.

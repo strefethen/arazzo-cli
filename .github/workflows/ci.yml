@@ -70,6 +70,12 @@ jobs:
       - name: Verify CHANGELOG version matches Cargo.toml
         run: bash scripts/ci/verify-changelog-version.sh
 
+      - name: Verify docs/index.html matches the release version
+        run: bash scripts/ci/verify-site-version.sh
+
+      - name: Test the site version gate
+        run: bash scripts/ci/tests/verify-site-version-test.sh
+
       - name: Set up Rust 1.98.1
         uses: dtolnay/rust-toolchain@1.98.1
 

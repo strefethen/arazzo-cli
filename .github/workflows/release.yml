@@ -65,6 +65,11 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify-private-workspace.sh
 
+      - name: Verify docs/index.html matches the release tag
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/verify-site-version.sh "$RELEASE_TAG"
+
       - name: Build release binary
         run: cargo build --locked --release -p arazzo-cli
 

@@ -53,6 +53,7 @@ require_command bash "Use an environment with bash available."
 require_command cargo "Install Rust with rustup and use the repository toolchain."
 
 run_step "Private workspace guard" bash "$ROOT_DIR/scripts/ci/verify-private-workspace.sh"
+run_step "Site version guard" bash "$ROOT_DIR/scripts/ci/verify-site-version.sh"
 
 require_cargo_subcommand fmt "Install rustfmt for the active toolchain: rustup component add rustfmt"
 run_step "Rust format check" cargo fmt --all -- --check
