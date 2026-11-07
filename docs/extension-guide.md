@@ -1,61 +1,101 @@
-# Extension Guide
+# Extension guide
 
-This guide covers the safest way to add features without regressing CLI contracts.
+Start with the [system map](system-architecture.md) and the
+[runtime flow](architecture.md). Add a capability at its semantic owner, then
+project its facts into the affected interfaces. A command, tool or view is not
+a new execution engine.
 
-## Add a New CLI Command
+## Choose the owner before the entry point
 
-1. Add the command shape in `crates/arazzo-cli/src/cli.rs`.
-2. Route it in `crates/arazzo-cli/src/main.rs`.
-3. Implement logic in `crates/arazzo-cli/src/handlers.rs`.
-4. Add output serializers/formatters in `crates/arazzo-cli/src/output.rs`.
-5. Add integration tests in `crates/arazzo-cli/tests/cli_integration.rs`.
-6. If JSON output changes, update snapshot tests.
+| Concern | Owner |
+|---|---|
+| Document shape and target classification | `arazzo-spec`, governed by vendored specification text |
+| Validation and its diagnostics | `arazzo-validate` |
+| Expression evaluation and resolution provenance | `arazzo-expr` |
+| Binding, admission, scheduling, transport, capture and cancellation | Focused `arazzo-runtime` owner |
+| CLI syntax and process exit/error presentation | `cli.rs`, shell wiring and `cli_error.rs` |
+| CLI use-case behavior | Existing command owner; `handlers.rs` delegates substantial responsibilities |
+| MCP argument/policy/framing/result adaptation | Focused `arazzo-mcp` owners |
+| DAP session/protocol adaptation | `arazzo-debug-adapter`; runtime owns debug control |
+| OpenAPI generation | `arazzo-generate` |
 
-## Add Run-time Flags
+Reuse existing public surfaces. Do not copy a parser, classifier or scheduler
+into an adapter to save a dependency discussion. A shared responsibility needs
+an explicit unit boundary; a helper named `utils` does not establish one.
+Repository legacy-module safeguards apply before extending large modules.
 
-For `run`, add options to `RunOptions` and thread them through `RunContext`.
+## Add a CLI capability
 
-Guideline:
+1. Add syntax in `crates/arazzo-cli/src/cli.rs` and thin dispatch in `main.rs`.
+2. Put behavior in its focused existing owner. Run, generation, test and workflow
+   catalog already have owners outside the generic handler facade.
+3. Keep ordinary output models/rendering with the output owner, while trace and
+   run-export serialization/persistence retain their dedicated owners.
+4. Return errors through `CliError`/`CliFailure`; let the shell print them.
+   New command failures use the canonical JSON error object, with optional
+   command-specific fields. Preserve established result-reporting behavior.
+5. Generate affected schemas from their types and verify the relevant CLI,
+   schema and contract snapshots. Understand changed output before refreshing
+   a baseline.
 
-- Parse in `cli.rs`
-- Store in `run_context.rs`
-- Consume in `handlers.rs`
-- Keep formatter behavior in `output.rs`
+Run flags flow through `RunOptions`/`RunContext` to the execution owner. Test
+their combinations, effective behavior and failure paths at that boundary.
 
-## Add Runtime Trace/Replay Features
+The [discovery draft](../plans/current/agent-discovery-and-inspection.md) proposes
+grammar-derived metadata and shared inspection. Those surfaces do not exist
+yet. Once accepted and implemented, every new capability must update its
+semantic annotations and prove that advertised effects match actual behavior.
+Do not hand-maintain a competing command schema now.
 
-1. Extend `ExecutionEvent` and/or `TraceStepRecord` in `arazzo-runtime`.
-2. Preserve deterministic sequencing semantics.
-3. Update `arazzo_runtime::api_v1` only if the change is part of the frozen contract.
-4. Update CLI trace redaction/writer only in `trace.rs`.
-5. Add runtime tests first, then CLI integration tests.
+## Propagate meaning, not just fields
 
-## Add Debugger Features
+For an affected capability, follow its path from authored input through admission
+and execution to public output. Check each actual consumer: CLI, MCP, DAP,
+capture/export and replay where applicable. A new runtime fact is not delivered
+to agents merely because it exists in a private struct.
 
-1. Extend runtime debug types under `crates/arazzo-runtime/src/debug/`.
-2. Keep step gate ordering deterministic and covered by tests.
-3. Extend adapter protocol handling in `crates/arazzo-debug-adapter/src/dap.rs`.
-4. Add transcript tests in `crates/arazzo-debug-adapter/tests/`.
-5. Update `vscode-arazzo-debug/` only after runtime/adapter contracts are stable.
+Keep validation, supported capability, configured permission and observed outcome
+distinct. Preserve missing-value provenance through consumers; presentation
+redaction must not change execution data. Document unsupported behavior and
+unknowns instead of claiming readiness from a successful parse.
 
-## Add Expression Capabilities
+Bind diagnostics and evidence to the narrowest identity available. Do not invent
+child-invocation identity from older artifacts or turn incomplete replay into an
+equivalence claim. The accepted
+[replay fidelity decision](../plans/assessments/replay-fidelity-decision.md)
+owns that target contract.
 
-1. Implement in `arazzo-expr`.
-2. Add deterministic tests and property tests.
-3. Validate no panic paths with fuzz-style generated inputs.
+## Change execution, capture or debug control
 
-## Required Verification Before Commit
+Runtime owns lifecycle events, settled attempts, final results and cancellation.
+Adapters project them; they do not retry failed sends independently or treat
+lost observations as proof of rollback. Preserve deterministic logical ordering
+without claiming deterministic wall-clock completion.
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-```
+Use the [internal API policy](internal-api-v1.md),
+[trace contract](trace-schema-v1.md) and [run export contract](run-export-v1.md)
+for compatibility. New fields need end-to-end redaction and serialization proof.
+Breaking changes need versioning and migration. A new streaming consumer must
+first have a usable public subscription and bounded lifetime contract; private
+channels are not an integration API.
 
-## Common Pitfalls
+Debug behavior belongs under runtime debug control; DAP transcript tests verify
+its protocol projection. Update the editor integration after runtime/adapter
+contracts are settled.
 
-- Mixing business logic with output formatting
-- Emitting hook/events from worker threads in non-deterministic order
-- Changing trace schema fields without versioning
-- Adding parser behavior without property tests
-- Letting extension assumptions drift from adapter/runtime contracts
+## Verify the operator outcome
+
+Exercise a complete, bounded workflow through the changed public surface:
+discover/configure when relevant, admit, act, observe and explain. Include the
+meaningful rejection path and independently observe side effects where that is
+the failure risk. Retain compatibility controls for affected consumers.
+
+For an ergonomics or performance claim, compare the same task and candidate
+conditions. Measure calls, bytes and valid timing samples without discarding
+required evidence. One reviewed regression fixture is more reusable than a
+large transcript with no stable expected result.
+
+Repository instructions own mandatory build gates and lifecycle; this guide
+does not duplicate or weaken them. Documentation-only changes need link,
+authority and current-versus-proposed checks; do not describe those as runtime
+verification.

@@ -1040,6 +1040,11 @@ The internal API types (`EngineEvent`, `ExecutionHandle`, `RuntimeError`, `Trace
 
 ## Repository Layout
 
+For responsibility boundaries and the path from document to execution evidence,
+start with the [system architecture](docs/system-architecture.md). The
+[extension guide](docs/extension-guide.md) explains how to evolve those owners;
+proposed agent-facing capabilities are labeled Draft in the linked plans.
+
 ```text
 crates/
   arazzo-spec              Arazzo domain model types

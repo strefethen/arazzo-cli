@@ -1,8 +1,14 @@
 # Arazzo CLI Architecture
 
-This document describes the runtime and CLI architecture.
+This document owns the detailed runtime and CLI flow. Start with the
+[system map](system-architecture.md) for the abstraction ladder, ownership and
+contract boundaries. The [agent operability plan](../plans/current/agent-operability.md)
+describes proposed improvements; it does not establish current functionality.
 
-## High-level Layers
+## Implementation navigation
+
+These are entry points into the current implementation, not independent engines
+or a linear stack. Runtime owns execution meaning; adapters own presentation.
 
 1. CLI shell (`crates/arazzo-cli/src/main.rs`)
 2. Command parsing (`crates/arazzo-cli/src/cli.rs`)
@@ -15,7 +21,9 @@ This document describes the runtime and CLI architecture.
 9. Debug adapter (`crates/arazzo-debug-adapter`)
 10. Spec model + validation (`crates/arazzo-spec`, `crates/arazzo-validate`)
 11. Expression evaluator (`crates/arazzo-expr`)
-12. VSCode extension scaffold (`vscode-arazzo-debug`)
+12. VSCode extension (`vscode-arazzo-debug`)
+13. MCP adapter (`crates/arazzo-mcp`)
+14. OpenAPI workflow generation (`crates/arazzo-generate`)
 
 ## CLI Command Flow
 
@@ -45,6 +53,13 @@ Clap declarations and shell wiring pass these settings to the run owner;
 execution and artifact policy stay outside the shell and dispatcher.
 
 ## Runtime Event/Trace Model
+
+The CLI runs on Tokio. `Engine::execute` returns an `ExecutionHandle` carrying
+cancellation and separate event/result channels. The current public collection
+API retains events; the private receivers are not an already-available public
+streaming subscription. A new adapter needing bounded streaming must settle
+that API at the runtime event owner, as the
+[explorer draft](../plans/current/arazzo-workflow-explorer.md) requires.
 
 The runtime exposes three complementary views:
 
@@ -86,7 +101,16 @@ records dated measurements, ownership guidance and remaining structural debt.
 
 1. `arazzo-runtime` exposes debug controller APIs for breakpoints, stepping, and paused scopes.
 2. `arazzo-debug-adapter` exposes the DAP loop (`run_dap_stdio`).
-3. `vscode-arazzo-debug/` is the editor integration scaffold.
+3. `vscode-arazzo-debug/` is the editor integration.
+
+Runtime owns breakpoints, paused scopes, evaluation and stepping; DAP owns
+session/protocol projection. Watch evaluation uses the runtime/expression
+owners. Debugger pause/resume is local execution control, not durable recovery
+or rollback of already-sent operations. Client loss must release local control;
+a missing final observation cannot establish that remote effects were undone.
+New source/run/invocation/attempt correlation requires versioned contracts;
+existing DAP responses cannot be assumed to contain it. The
+[debugger guide](debugger-user-guide.md) covers current use.
 
 ## Typed Query Ownership
 
