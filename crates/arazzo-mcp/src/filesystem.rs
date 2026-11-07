@@ -1,14 +1,11 @@
 use std::fs::File;
-#[cfg(any(target_os = "linux", test))]
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-#[cfg(any(target_os = "linux", test))]
 const DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
-#[cfg(any(target_os = "linux", test))]
 const SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const SOURCE_ATTEMPTS: usize = 16;
 const STARTUP_DENIED: &str = "Invalid server file access configuration";
@@ -20,25 +17,43 @@ pub(crate) enum FileAccessError {
 }
 
 impl FileAccessError {
-    pub(crate) fn tool_result(self) -> Value {
-        let (code, message) = match self {
-            Self::Denied => ("MCP_FILE_DENIED", "File access denied by server policy"),
-            Self::Limit => (
-                "MCP_LIMIT_EXCEEDED",
-                "Operation exceeded a server resource limit",
-            ),
-        };
-        json!({
-            "content": [{"type": "text", "text": json!({"code": code, "message": message}).to_string()}],
-            "isError": true,
-        })
+    fn code(self) -> &'static str {
+        match self {
+            Self::Denied => "MCP_FILE_DENIED",
+            Self::Limit => "MCP_LIMIT_EXCEEDED",
+        }
     }
+
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Denied => "File access denied by server policy",
+            Self::Limit => "Operation exceeded a server resource limit",
+        }
+    }
+
+    pub(crate) fn tool_result(self) -> Value {
+        error_tool_result(&json!({"code": self.code(), "message": self.message()}))
+    }
+
+    pub(crate) fn source_tool_result(self, source_name: &str) -> Value {
+        error_tool_result(&json!({
+            "code": self.code(),
+            "message": self.message(),
+            "sourceDescription": source_name,
+        }))
+    }
+}
+
+fn error_tool_result(payload: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": payload.to_string()}],
+        "isError": true,
+    })
 }
 
 #[derive(Default)]
 pub(crate) struct SourceReadBudget {
     attempts: usize,
-    #[cfg(any(target_os = "linux", test))]
     bytes: usize,
 }
 
@@ -58,7 +73,6 @@ impl SourceReadBudget {
         Ok(())
     }
 
-    #[cfg(any(target_os = "linux", test))]
     fn allowance(&self) -> Result<usize, FileAccessError> {
         Ok(DOCUMENT_BYTES.min(
             SOURCE_BYTES
@@ -67,7 +81,6 @@ impl SourceReadBudget {
         ))
     }
 
-    #[cfg(any(target_os = "linux", test))]
     fn debit(&mut self, bytes: usize) -> Result<(), FileAccessError> {
         let next = self
             .bytes
@@ -110,8 +123,23 @@ pub(crate) struct AcquiredDocument {
 
 struct RootCapability {
     selectors: Vec<PathBuf>,
+    canonical: PathBuf,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            dead_code,
+            reason = "Only the Linux backend opens beneath a pinned root"
+        )
+    )]
     handle: File,
     identity: FileIdentity,
+}
+
+struct Resolution<'a> {
+    root_id: usize,
+    root: &'a RootCapability,
+    relative: PathBuf,
+    document_name: String,
 }
 
 pub(crate) struct FileAccess {
@@ -184,12 +212,13 @@ impl FileAccess {
                 }
             } else if !roots.iter().any(|root| root.selectors.contains(&selector)) {
                 let selectors = if authored == selector {
-                    vec![selector]
+                    vec![selector.clone()]
                 } else {
-                    vec![authored, selector]
+                    vec![authored, selector.clone()]
                 };
                 roots.push(RootCapability {
                     selectors,
+                    canonical: selector,
                     handle,
                     identity,
                 });
@@ -202,8 +231,17 @@ impl FileAccess {
         })
     }
 
+    /// Reports the policy mode and root count. Outside Linux, containment is a
+    /// canonical-path check followed by an open, so it does not hold against
+    /// another local process replacing a path between the two. Referenced
+    /// AsyncAPI documents are authorized before the engine is built and then
+    /// read by the runtime itself.
     pub(crate) fn notice(&self) -> String {
-        format!("arazzo-mcp: file policy mode={}, roots={}; dot-prefixed descendants denied; tool file reads {}", self.mode, self.roots.len(), if cfg!(target_os = "linux") { "use secure Linux acquisition" } else { "denied on this platform" })
+        format!(
+            "arazzo-mcp: file policy mode={}, roots={}",
+            self.mode,
+            self.roots.len()
+        )
     }
 
     pub(crate) fn selectors(&self) -> Vec<PathBuf> {
@@ -244,13 +282,32 @@ impl FileAccess {
         ) -> Result<(Vec<u8>, FileIdentity), FileAccessError>,
     {
         budget.reserve_attempt()?;
-        if !cfg!(target_os = "linux") {
-            return Err(FileAccessError::Denied);
-        }
+        let resolution = self.resolve(path)?;
+        let (bytes, file_identity) = acquire(resolution.root, &resolution.relative, budget)?;
+        Ok(AcquiredDocument {
+            bytes,
+            root_id: resolution.root_id,
+            file_identity,
+            document_name: resolution.document_name,
+        })
+    }
+
+    pub(crate) fn authorize(&self, path: &str) -> Result<(), FileAccessError> {
+        let resolution = self.resolve(path)?;
+        unaliased_target(resolution.root, &resolution.relative).map(drop)
+    }
+
+    fn resolve(&self, path: &str) -> Result<Resolution<'_>, FileAccessError> {
         if path.contains('\0')
             || Path::new(path)
                 .components()
-                .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+                .any(|component| match component {
+                    Component::ParentDir => true,
+                    Component::Prefix(prefix) => {
+                        !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+                    }
+                    _ => false,
+                })
         {
             return Err(FileAccessError::Denied);
         }
@@ -279,13 +336,20 @@ impl FileAccess {
             .and_then(|name| name.to_str())
             .ok_or(FileAccessError::Denied)?
             .to_string();
-        let (bytes, file_identity) = acquire(root, relative, budget)?;
-        Ok(AcquiredDocument {
-            bytes,
+        Ok(Resolution {
             root_id,
-            file_identity,
+            root,
+            relative: relative.to_path_buf(),
             document_name,
         })
+    }
+}
+
+fn unaliased_target(root: &RootCapability, relative: &Path) -> Result<PathBuf, FileAccessError> {
+    let expected = root.canonical.join(relative);
+    match std::fs::canonicalize(&expected) {
+        Ok(canonical) if canonical == expected => Ok(canonical),
+        _ => Err(FileAccessError::Denied),
     }
 }
 
@@ -320,14 +384,10 @@ fn root_identity(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (handle, metadata);
-        Ok(FileIdentity {
-            device: 0,
-            inode: 0,
-        })
+        Ok(UNPINNED_IDENTITY)
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
 fn read_bounded(
     reader: &mut impl Read,
     budget: &mut SourceReadBudget,
@@ -452,13 +512,59 @@ where
 }
 
 #[cfg(not(target_os = "linux"))]
+const UNPINNED_IDENTITY: FileIdentity = FileIdentity {
+    device: 0,
+    inode: 0,
+};
+
+#[cfg(not(target_os = "linux"))]
 fn acquire_from_root(
     root: &RootCapability,
     relative: &Path,
     budget: &mut SourceReadBudget,
 ) -> Result<(Vec<u8>, FileIdentity), FileAccessError> {
-    let _ = (&root.handle, relative, budget);
-    Err(FileAccessError::Denied)
+    let target = unaliased_target(root, relative)?;
+    if !std::fs::metadata(&target)
+        .map_err(|_| FileAccessError::Denied)?
+        .is_file()
+    {
+        return Err(FileAccessError::Denied);
+    }
+    let mut file = File::open(&target).map_err(|_| FileAccessError::Denied)?;
+    let length = single_link_regular_length(&file)?;
+    let allowance = budget.allowance()? as u64;
+    if length > allowance {
+        return Err(FileAccessError::Limit);
+    }
+    let bytes = read_bounded(&mut file, budget)?;
+    let final_length = single_link_regular_length(&file)?;
+    if final_length > allowance {
+        return Err(FileAccessError::Limit);
+    }
+    if final_length > bytes.len() as u64 {
+        return Err(FileAccessError::Denied);
+    }
+    Ok((bytes, UNPINNED_IDENTITY))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn single_link_regular_length(file: &File) -> Result<u64, FileAccessError> {
+    let metadata = file.metadata().map_err(|_| FileAccessError::Denied)?;
+    if !metadata.is_file() || !has_single_link(&metadata) {
+        return Err(FileAccessError::Denied);
+    }
+    Ok(metadata.len())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn has_single_link(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_link(_metadata: &std::fs::Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -545,29 +651,6 @@ mod tests {
             FileAccess::deny_all().acquire_shared("canary", &budget),
             Err(FileAccessError::Denied)
         ));
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn platform_denial_never_invokes_target_acquisition() {
-        let path = std::env::current_exe().unwrap();
-        let parent = path.parent().unwrap().to_str().unwrap().to_string();
-        for dirs in [None, Some(vec![]), Some(vec![parent])] {
-            let access =
-                FileAccess::configure(&[path.to_str().unwrap().to_string()], dirs).unwrap();
-            assert!(path.is_file());
-            let mut calls = 0;
-            let result = access.acquire_using(
-                path.to_str().unwrap(),
-                &mut SourceReadBudget::default(),
-                |_, _, _| {
-                    calls += 1;
-                    panic!("target metadata/open/read invoked");
-                },
-            );
-            assert!(matches!(result, Err(FileAccessError::Denied)));
-            assert_eq!(calls, 0);
-        }
     }
 
     #[cfg(target_os = "linux")]

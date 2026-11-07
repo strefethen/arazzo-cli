@@ -157,23 +157,6 @@ fn workflow_generation_reports_unrepresentable_bounds_as_tool_errors() {
     let state = ServerState::load(&[], Some(vec![dir.to_string_lossy().into_owned()])).unwrap();
     let response =
         generate_workflow(&state, &json!({"file_path": spec_path.to_string_lossy()})).unwrap();
-    let response = if cfg!(target_os = "linux") {
-        response
-    } else {
-        let error: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(error["code"], "MCP_FILE_DENIED");
-        let openapi =
-            arazzo_generate::parse_openapi_bytes(&std::fs::read(&spec_path).unwrap()).unwrap();
-        let message = arazzo_generate::crud::generate_crud(
-            &openapi,
-            spec_path.to_str().unwrap(),
-            "bounds.openapi.yaml",
-        )
-        .err()
-        .unwrap();
-        json!({"content": [{"type": "text", "text": message}], "isError": true})
-    };
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(
         response,

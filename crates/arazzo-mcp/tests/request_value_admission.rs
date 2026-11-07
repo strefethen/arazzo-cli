@@ -141,33 +141,7 @@ impl Fixture {
             .into_iter()
             .find(|response| response["id"] == 2)
             .unwrap_or_else(|| panic!("tools/call response must be present"));
-        if cfg!(target_os = "linux") {
-            return (response["result"]["isError"] == true, tool_body(&response));
-        }
-        assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("File access denied by server policy"));
-        self.assert_requests(&[]);
-        let engine = arazzo_runtime::EngineBuilder::new(state.specs[0].spec.clone())
-            .source_base_dir(self.directory.clone())
-            .strict_inputs(true)
-            .build()
-            .unwrap_or_else(|error| panic!("native control build: {error}"));
-        let runtime = tokio::runtime::Runtime::new()
-            .unwrap_or_else(|error| panic!("native runtime: {error}"));
-        let inputs = inputs
-            .as_object()
-            .unwrap_or_else(|| panic!("fixture input map"))
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
-        let result = runtime.block_on(async { engine.execute(workflow, inputs).collect().await });
-        match result.outputs {
-            Ok(outputs) => (false, json!({"kind": "success", "outputs": outputs})),
-            Err(error) => (true, json!({"code": error.code(), "error": error.message})),
-        }
+        (response["result"]["isError"] == true, tool_body(&response))
     }
 
     fn assert_requests(&self, expected: &[&str]) {

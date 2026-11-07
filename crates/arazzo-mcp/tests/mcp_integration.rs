@@ -340,8 +340,8 @@ fn test_full_flow() {
     assert!(detail["steps"][0]["method"].is_null(), "{detail}");
 
     // 5: run_workflow
-    assert_eq!(is_tool_error(&responses[4]), !cfg!(target_os = "linux"));
-    let run = workflow_tool_or_denial_and_native_runtime(&responses[4], &state, "get-data", false);
+    assert!(!is_tool_error(&responses[4]));
+    let run = extract_tool_text(&responses[4]).unwrap_or(Value::Null);
     assert_eq!(run["kind"], "success");
     assert_eq!(run["outputs"]["value"], "hello-world");
 }
@@ -386,10 +386,7 @@ workflows:
 
     let validate_result = extract_tool_text(&responses[1]);
     assert!(validate_result.is_some());
-    let result = validation_tool_or_denial_and_byte_parser(
-        validate_result.unwrap_or(Value::Null),
-        &path_str,
-    );
+    let result = validate_result.unwrap_or(Value::Null);
     assert_eq!(result["valid"], true);
     assert_eq!(result["workflows"], 1);
 
@@ -411,7 +408,7 @@ fn call_validate_spec(file_path: &str) -> Value {
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
     match extract_tool_text(&responses[1]) {
-        Some(value) => validation_tool_or_denial_and_byte_parser(value, file_path),
+        Some(value) => value,
         None => panic!("validate_spec returned no tool text"),
     }
 }
@@ -558,8 +555,7 @@ fn test_run_workflow_preserves_nested_dependency_error_code() {
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
     assert!(is_tool_error(&responses[1]));
-    let payload =
-        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "parent", false);
+    let payload = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     let text = payload.to_string();
     assert!(
         text.contains("RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED"),
@@ -628,10 +624,9 @@ fn test_dry_run() {
 
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
-    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
+    assert!(!is_tool_error(&responses[1]));
 
-    let dry_run =
-        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
+    let dry_run = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     assert_eq!(dry_run["kind"], "dryRun");
     let requests = dry_run["requests"].as_array();
     assert!(requests.is_some_and(|r| !r.is_empty()));
@@ -651,13 +646,8 @@ fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
     protocol::serve(Cursor::new(messages), &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
-    assert_eq!(
-        is_tool_error(&responses[1]),
-        !cfg!(target_os = "linux"),
-        "{responses:?}"
-    );
-    let result =
-        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
+    assert!(!is_tool_error(&responses[1]), "{responses:?}");
+    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     assert_eq!(
         result["requests"][0]["url"],
         "https://[REDACTED]@example.com/data"
@@ -680,13 +670,8 @@ fn test_dry_run_redacts_url_userinfo() {
     protocol::serve(Cursor::new(messages), &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
-    assert_eq!(
-        is_tool_error(&responses[1]),
-        !cfg!(target_os = "linux"),
-        "{responses:?}"
-    );
-    let result =
-        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "get-data", true);
+    assert!(!is_tool_error(&responses[1]), "{responses:?}");
+    let result = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     assert_eq!(result["kind"], "dryRun");
     assert_eq!(
         result["requests"][0]["url"],
@@ -717,10 +702,9 @@ fn test_dry_run_redacts_sensitive_request_parts() {
 
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
-    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
+    assert!(!is_tool_error(&responses[1]));
 
-    let payload =
-        workflow_tool_or_denial_and_native_runtime(&responses[1], &state, "send-secret", true);
+    let payload = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     let result_text = payload.to_string();
     assert!(
         !result_text.contains("top-secret-jwt")
@@ -818,20 +802,8 @@ fn test_run_workflow_relative_source_dry_run() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    assert_eq!(is_tool_error(&responses[1]), !cfg!(target_os = "linux"));
-    let run = if cfg!(target_os = "linux") {
-        extract_tool_text(&responses[1]).unwrap_or(Value::Null)
-    } else {
-        let path = testdata_path("petstore-relative.arazzo.yaml");
-        native_dry_run_bytes(
-            &fs::read(&path).unwrap_or_else(|error| panic!("fixture: {error}")),
-            Path::new(&path)
-                .parent()
-                .unwrap_or_else(|| panic!("fixture parent")),
-            "list-pets",
-            BTreeMap::new(),
-        )
-    };
+    assert!(!is_tool_error(&responses[1]));
+    let run = extract_tool_text(&responses[1]).unwrap_or(Value::Null);
     assert_eq!(run["kind"], "dryRun", "unexpected result: {run}");
     assert_eq!(run["requests"][0]["method"], "GET");
     assert_eq!(
@@ -843,7 +815,7 @@ fn test_run_workflow_relative_source_dry_run() {
 #[test]
 fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
     // The spec sits inside the allowed dir, but its relative source url
-    // resolves to a document outside it — check_path_allowed must refuse.
+    // resolves to a document outside it — authorize_document must refuse.
     let state = match ServerState::load(
         &[testdata_path("mcp-denied/spec.arazzo.yaml")],
         Some(vec![testdata_path("mcp-denied")]),
@@ -877,11 +849,7 @@ fn test_run_workflow_relative_source_outside_allowed_dirs_denied() {
         .as_str()
         .unwrap_or_default();
     assert!(
-        text.contains(if cfg!(target_os = "linux") {
-            "path not allowed"
-        } else {
-            "File access denied by server policy"
-        }),
+        text.contains("File access denied by server policy"),
         "expected path denial, got: {text}"
     );
     assert!(
@@ -909,7 +877,7 @@ fn normalized(path: &Path) -> std::path::PathBuf {
 #[test]
 fn test_relative_source_vetting_list_names_the_file_the_engine_reads() {
     // The gate's coverage property, stated directly: every source the engine
-    // will open is offered to check_path_allowed first. The dry run above
+    // will open is offered to authorize_document first. The dry run above
     // proves this same file is the one the request base came from.
     let spec = match arazzo_validate::parse(testdata_path("petstore-relative.arazzo.yaml")) {
         Ok(spec) => spec,
@@ -1037,11 +1005,7 @@ fn test_run_workflow_self_based_source_is_refused_not_read() {
         "the refusal should name the resolved URI, got: {text}"
     );
     assert!(
-        !text.contains(if cfg!(target_os = "linux") {
-            "path not allowed"
-        } else {
-            "File access denied by server policy"
-        }),
+        !text.contains("File access denied by server policy"),
         "the source never reaches the filesystem gate, so it is not a path denial: {text}"
     );
 }
@@ -1071,7 +1035,7 @@ fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    let result = generation_tool_or_denial_and_byte_parser(&responses[1], &file_path);
+    let result = generation_tool_result(&responses[1]);
     let yaml = result["yaml"]
         .as_str()
         .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
@@ -1124,7 +1088,7 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         responses.len() >= 2,
         "expected 2 responses, got {responses:?}"
     );
-    let result = generation_tool_or_denial_and_byte_parser(&responses[1], &file_path);
+    let result = generation_tool_result(&responses[1]);
     let yaml = result["yaml"]
         .as_str()
         .unwrap_or_else(|| panic!("expected a yaml string in result: {result}"));
@@ -1156,17 +1120,8 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         run_responses.len() >= 2,
         "expected 2 responses, got {run_responses:?}"
     );
-    assert_eq!(is_tool_error(&run_responses[1]), !cfg!(target_os = "linux"));
-    let run_result = if cfg!(target_os = "linux") {
-        extract_tool_text(&run_responses[1]).unwrap_or(Value::Null)
-    } else {
-        native_dry_run_bytes(
-            yaml.as_bytes(),
-            &dir,
-            "crud-pets",
-            BTreeMap::from([("ApiKeyAuth".into(), json!("secret"))]),
-        )
-    };
+    assert!(!is_tool_error(&run_responses[1]));
+    let run_result = extract_tool_text(&run_responses[1]).unwrap_or(Value::Null);
     let first_request_url = run_result["requests"][0]["url"]
         .as_str()
         .unwrap_or_else(|| panic!("expected requests[0].url in result: {run_result}"));

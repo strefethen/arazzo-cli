@@ -40,11 +40,10 @@ fn legacy_and_configured_runners_share_default_explicit_empty_semantics() {
             Some(vec![root.to_str().unwrap().to_string()]),
             Some(vec![other.to_str().unwrap().to_string()]),
         ] {
-            let expected = cfg!(target_os = "linux")
-                && (roots.is_none()
-                    || roots
-                        .as_ref()
-                        .is_some_and(|roots| roots.contains(&root.to_str().unwrap().to_string())));
+            let expected = roots.is_none()
+                || roots
+                    .as_ref()
+                    .is_some_and(|roots| roots.contains(&root.to_str().unwrap().to_string()));
             let mut output = Vec::new();
             if configured {
                 let mut config = McpServerConfig::default();
@@ -145,10 +144,7 @@ fn standalone_binary_preserves_startup_and_denies_safe_failure_details() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(responses.len(), 2);
-        assert_eq!(
-            responses[0]["result"]["isError"],
-            !cfg!(target_os = "linux")
-        );
+        assert_eq!(responses[0]["result"]["isError"], false);
         assert_eq!(responses[1]["result"]["isError"], true);
         assert!(!responses[1].to_string().contains("CANARY"));
         let stderr = String::from_utf8(output.stderr).unwrap();
@@ -199,6 +195,6 @@ fn relative_paths_use_captured_cwd_after_process_cwd_changes() {
     std::env::set_current_dir(&replacement).unwrap();
     let result =
         arazzo_mcp::handlers::describe_openapi(&state, &json!({"file_path":"./api.yaml"})).unwrap();
-    assert_eq!(result["isError"], !cfg!(target_os = "linux"));
+    assert_eq!(result["isError"], false);
     assert!(!result.to_string().contains("CANARY"));
 }

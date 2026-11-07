@@ -108,11 +108,7 @@ fn asyncapi_source_outside_the_allowed_dir_is_refused_before_the_engine_is_built
     let (is_error, text) = run_workflow_text(&state);
     assert!(is_error, "run_workflow should be denied, got: {text}");
     assert!(
-        text.contains(if cfg!(target_os = "linux") {
-            "path not allowed"
-        } else {
-            "File access denied by server policy"
-        }),
+        text.contains("File access denied by server policy"),
         "expected the allowed-dir denial, got: {text}"
     );
     assert!(
@@ -137,11 +133,7 @@ fn asyncapi_source_inside_the_allowed_dir_passes_the_gate() {
 
     let (_, text) = run_workflow_text(&state);
     assert!(
-        if cfg!(target_os = "linux") {
-            !text.contains("path not allowed")
-        } else {
-            text.contains("File access denied by server policy")
-        },
+        !text.contains("File access denied by server policy"),
         "an in-root AsyncAPI source must not be denied by the gate, got: {text}"
     );
 }

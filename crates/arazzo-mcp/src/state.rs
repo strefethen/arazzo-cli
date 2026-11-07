@@ -3,9 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arazzo_runtime::{RuntimeError, RuntimeErrorKind, SourceDocumentLoader};
 use arazzo_spec::{ArazzoSpec, Workflow};
 
-use crate::filesystem::{AcquiredDocument, FileAccess, FileAccessError, SourceReadBudget};
+use crate::filesystem::{
+    AcquiredDocument, FileAccess, FileAccessError, SharedSourceReadBudget, SourceReadBudget,
+};
 
 /// A parsed spec with its source file path.
 pub struct LoadedSpec {
@@ -75,35 +78,15 @@ impl ServerState {
             .acquire_shared(path, &SourceReadBudget::shared())
     }
 
-    pub fn check_path_allowed(&self, file_path: &str) -> Result<(), String> {
-        if !cfg!(target_os = "linux") {
-            return Err("File access denied by server policy".to_string());
-        }
-        let Some(allowed) = &self.allowed_dirs else {
-            return Err("File access denied by server policy".to_string());
-        };
+    pub(crate) fn authorize_document(&self, path: &str) -> Result<(), FileAccessError> {
+        self.file_access.authorize(path)
+    }
 
-        let path = Path::new(file_path);
-
-        // Try to canonicalize the file path. If the file doesn't exist,
-        // try the parent directory to prevent existence probing.
-        let canonical = std::fs::canonicalize(path).or_else(|_| {
-            path.parent()
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::NotFound, "no parent directory")
-                })
-                .and_then(std::fs::canonicalize)
-        });
-
-        let canonical = canonical.map_err(|_| format!("path not allowed: {file_path}"))?;
-
-        for dir in allowed {
-            if canonical.starts_with(dir) {
-                return Ok(());
-            }
-        }
-
-        Err(format!("path not allowed: {file_path}"))
+    pub(crate) fn source_document_loader(&self) -> Arc<dyn SourceDocumentLoader> {
+        Arc::new(RootedSourceLoader {
+            file_access: Arc::clone(&self.file_access),
+            budget: SourceReadBudget::shared(),
+        })
     }
 
     /// Find a workflow by ID across all loaded specs.
@@ -142,6 +125,27 @@ impl ServerState {
             }
         }
         result
+    }
+}
+
+struct RootedSourceLoader {
+    file_access: Arc<FileAccess>,
+    budget: SharedSourceReadBudget,
+}
+
+impl SourceDocumentLoader for RootedSourceLoader {
+    fn load(&self, source_name: &str, resolved_path: &Path) -> Result<Vec<u8>, RuntimeError> {
+        resolved_path
+            .to_str()
+            .ok_or(FileAccessError::Denied)
+            .and_then(|path| self.file_access.acquire_shared(path, &self.budget))
+            .map(|document| document.bytes)
+            .map_err(|error| {
+                RuntimeError::new(
+                    RuntimeErrorKind::SourceDescriptionLoad,
+                    format!("sourceDescription \"{source_name}\": {}", error.message()),
+                )
+            })
     }
 }
 

@@ -257,8 +257,8 @@ pub fn run_workflow(
     for (source_name, resolved) in
         arazzo_runtime::relative_openapi_source_paths(&loaded.spec, &spec_dir)
     {
-        if let Err(err) = state.check_path_allowed(&resolved.to_string_lossy()) {
-            return tool_err(&format!("sourceDescription \"{source_name}\": {err}"));
+        if let Err(error) = state.authorize_document(&resolved.to_string_lossy()) {
+            return Ok(error.source_tool_result(&source_name));
         }
     }
 
@@ -276,6 +276,7 @@ pub fn run_workflow(
         .dry_run(dry_run)
         .strict_inputs(true)
         .source_base_dir(spec_dir)
+        .source_document_loader(state.source_document_loader())
         .build()
     {
         Ok(e) => e,
