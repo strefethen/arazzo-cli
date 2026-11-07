@@ -1,5 +1,38 @@
 # Arazzo engine maintainer roadmap
 
+## System direction — design revision, 2026-11-05
+
+Optimize the complete operator loop: discover → inspect → preview → execute →
+explain → reuse. The [system map](../docs/system-architecture.md) is the compact entry point;
+the [agent operability plan](current/agent-operability.md) owns the proposed
+cross-surface design and measurable system success condition.
+
+| Next design outcome | Owner | State |
+|---|---|---|
+| Grammar-derived discovery and scoped, qualified workflow inspection | [Discovery/inspection plan](current/agent-discovery-and-inspection.md) | Draft; exact APIs, limits and new schemas need acceptance |
+| Honest preview, effect/capability disclosure and recovery evidence | [Operability umbrella](current/agent-operability.md) | Proposed sequence; bounded follow-on designs required |
+| Reusable local evidence with applicability checks | [Operability umbrella](current/agent-operability.md) | Proposal; prove value before persistent caching or indexing |
+| Interactive view over the same facts and controls | [Workflow explorer](current/arazzo-workflow-explorer.md) | Draft; optional consumer after shared inspection and streaming settlement |
+
+These documentation revisions are decided by recommendation under Steve's
+current request. They do not accept implementation plans, change existing ticket
+criteria, resume paused work or authorize publication. MCP security, conformance,
+request admission and workload benchmarks retain their current owners. New
+ergonomics must expose their true limitations instead of weakening their gates.
+
+Use the baseline and system scenarios in the umbrella to prioritize slices:
+first remove incorrect inference and unnecessary discovery work, then make
+execution explainable, then measure reuse. A smaller prompt is useful only if
+the agent still reaches the right result with the necessary evidence.
+
+## Dated maintainer checkpoint and delivery record
+
+The material below preserves earlier delegation, decisions and cycle evidence.
+Its statements of current ticket status, remaining gates and publication state
+are dated observations, not a refreshed live queue. Resolve current state with
+`tkt`; this design session did not reconcile or mutate tickets. Historical
+mandate text does not reactivate a paused run.
+
 Updated: 2026-10-30. Owner: Codex Chief of Staff, working with Steve.
 Latest reviewed source cycle: [ac-fd849](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-fd849) (local; not pushed).
 Latest assessment cycle: [ac-5c27d](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-5c27d).
