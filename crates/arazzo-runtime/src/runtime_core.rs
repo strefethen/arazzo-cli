@@ -54,6 +54,7 @@ mod engine_message;
 mod engine_parallel;
 mod engine_trace;
 mod error;
+mod eval_context;
 mod events;
 mod form_body;
 #[cfg(test)]

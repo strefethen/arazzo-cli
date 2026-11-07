@@ -23,7 +23,7 @@ fn evaluator() -> ExpressionEvaluator {
         ("boolean".to_owned(), json!(true)),
     ]);
     ExpressionEvaluator::new(EvalContext {
-        inputs: values.clone(),
+        inputs: values.clone().into(),
         outputs: values.clone(),
         steps: Arc::new(BTreeMap::from([("Step".to_owned(), values.clone())])),
         workflows: BTreeMap::from([(
@@ -32,7 +32,8 @@ fn evaluator() -> ExpressionEvaluator {
                 inputs: values.clone(),
                 outputs: values,
             },
-        )]),
+        )])
+        .into(),
         request_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
         response_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
         request_body: Some(json!({"nil": null, "empty": ""})),

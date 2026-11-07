@@ -316,9 +316,12 @@ fn settlement_and_context_preserve_absence_and_explicit_null() {
     let engine = EngineBuilder::new(spec(json!([]), json!([])))
         .build()
         .expect("engine builds");
-    let absent_eval =
-        step_context::with_message(engine.make_eval_context(&vars, None), Some(&absent));
-    let null_eval = step_context::with_message(engine.make_eval_context(&vars, None), Some(&null));
+    let absent_eval = step_context::with_message(
+        super::eval_context::base(&engine, &vars, None),
+        Some(&absent),
+    );
+    let null_eval =
+        step_context::with_message(super::eval_context::base(&engine, &vars, None), Some(&null));
     assert_eq!(absent_eval.message_payload, None);
     assert_eq!(null_eval.message_payload, Some(Value::Null));
 }

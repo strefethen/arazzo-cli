@@ -723,7 +723,7 @@ mod tests {
 
     fn evaluator_with_inputs(inputs: BTreeMap<String, Value>) -> ExpressionEvaluator {
         ExpressionEvaluator::new(EvalContext {
-            inputs,
+            inputs: inputs.into(),
             ..EvalContext::default()
         })
     }

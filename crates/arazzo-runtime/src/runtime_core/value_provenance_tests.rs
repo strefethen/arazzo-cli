@@ -30,7 +30,9 @@ fn atomic_overwrite_restore_and_snapshot() {
     assert!(vars.step_values("s").provenance.is_empty());
     assert!(snapshot.step_values("s").provenance["x"].unresolved);
     vars.restore_step_outputs("s", None);
-    assert!(!vars.eval_context(None).steps.contains_key("s"));
+    assert!(!super::eval_context::from_vars(&vars, None)
+        .steps
+        .contains_key("s"));
     vars.set_inputs(marked(Value::Null), BTreeSet::new());
     vars.set_input("x", json!(false));
     assert!(vars.input_values().provenance.is_empty());
@@ -42,7 +44,7 @@ fn canonical_aliases_and_conservative_pointer_join() {
     vars.set_inputs(marked(json!({"ok": 2})), BTreeSet::new());
     vars.replace_step_outputs("s", marked(json!({"ok": 2})));
     vars.register_workflow_state("w", marked(json!({"ok": 2})), marked(json!({"ok": 2})));
-    let eval = ExpressionEvaluator::new(vars.eval_context(None));
+    let eval = ExpressionEvaluator::new(super::eval_context::from_vars(&vars, None));
     for source in [
         "$inputs.x#/ok",
         "$steps.s.outputs.x#/ok",
@@ -107,8 +109,35 @@ fn request_projection_omissions_and_ordinary_context() {
         marked(Value::Null),
         BTreeSet::from(["optional".into()]),
     );
-    let ordinary = vars.eval_context(None);
+    let ordinary = super::eval_context::from_vars(&vars, None);
+    let sibling = vars.clone();
     let projected = super::request_admission::request_context(&vars, ordinary.clone(), "DELETE");
+    assert!(!Arc::ptr_eq(&ordinary.inputs, &projected.inputs));
+    assert!(!Arc::ptr_eq(&ordinary.steps, &projected.steps));
+    assert!(!Arc::ptr_eq(&ordinary.workflows, &projected.workflows));
+    assert!(Arc::ptr_eq(
+        &ordinary.source_descriptions,
+        &projected.source_descriptions
+    ));
+    assert_eq!(sibling.input_values(), vars.input_values());
+    assert_eq!(sibling.step_values("s"), vars.step_values("s"));
+    assert_eq!(
+        sibling.workflow_provenance["w"].inputs,
+        vars.workflow_provenance["w"].inputs
+    );
+    assert_eq!(
+        sibling.workflow_provenance["w"].outputs,
+        vars.workflow_provenance["w"].outputs
+    );
+    assert_eq!(
+        sibling.workflow_provenance["w"].optional_omissions,
+        vars.workflow_provenance["w"].optional_omissions
+    );
+    assert!(
+        super::eval_context::from_vars(&sibling, None).workflows["w"]
+            .inputs
+            .contains_key("x")
+    );
     assert_eq!(projected.method.as_deref(), Some("DELETE"));
     assert_eq!(projected.inputs.get("optional"), Some(&Value::Null));
     assert_eq!(projected.inputs.get("real"), Some(&Value::Null));
@@ -126,6 +155,89 @@ fn request_projection_omissions_and_ordinary_context() {
     assert!(!ordinary.inputs.contains_key("optional"));
     assert!(ordinary.steps["s"].contains_key("x"));
     assert!(vars.debug_scopes().inputs.contains_key("x"));
+}
+
+#[test]
+fn no_op_admission_preserves_every_shared_map() {
+    let mut vars = VarStore::default();
+    for populated in [false, true] {
+        if populated {
+            vars.set_inputs(marked(Value::Null), BTreeSet::from(["optional".into()]));
+            vars.set_input("x", Value::Null);
+            vars.set_input("optional", Value::Null);
+            vars.input_provenance.insert(
+                "missing".into(),
+                marked(Value::Null).provenance["x"].clone(),
+            );
+            vars.replace_step_outputs("s", BTreeMap::from([("real".into(), Value::Null)]));
+            Arc::make_mut(&mut vars.step_provenance)
+                .insert("s".into(), marked(Value::Null).provenance);
+            vars.register_workflow_values(
+                "w",
+                marked(Value::Null),
+                marked(Value::Null),
+                BTreeSet::new(),
+            );
+            vars.register_workflow_values(
+                "w",
+                BTreeMap::new().into(),
+                BTreeMap::new().into(),
+                BTreeSet::new(),
+            );
+            let metadata = vars
+                .workflow_provenance
+                .get_mut("w")
+                .unwrap_or_else(|| panic!("workflow"));
+            metadata.inputs = marked(Value::Null).provenance.clone();
+            metadata.outputs = marked(Value::Null).provenance;
+        }
+        let ordinary = super::eval_context::from_vars(&vars, None);
+        let projected = super::request_admission::request_context(&vars, ordinary.clone(), "GET");
+        assert!(Arc::ptr_eq(&ordinary.inputs, &projected.inputs));
+        assert!(Arc::ptr_eq(&ordinary.steps, &projected.steps));
+        assert!(Arc::ptr_eq(&ordinary.workflows, &projected.workflows));
+        assert!(Arc::ptr_eq(
+            &ordinary.source_descriptions,
+            &projected.source_descriptions
+        ));
+    }
+}
+
+#[test]
+fn admission_copies_only_the_changed_map() {
+    for location in ["input", "step", "workflow"] {
+        let mut vars = VarStore::default();
+        match location {
+            "input" => vars.set_inputs(marked(Value::Null), BTreeSet::new()),
+            "step" => {
+                vars.replace_step_outputs("s", marked(Value::Null));
+            }
+            _ => vars.register_workflow_values(
+                "w",
+                marked(Value::Null),
+                BTreeMap::new().into(),
+                BTreeSet::new(),
+            ),
+        }
+        let ordinary = super::eval_context::from_vars(&vars, None);
+        let projected = super::request_admission::request_context(&vars, ordinary.clone(), "GET");
+        assert_eq!(
+            Arc::ptr_eq(&ordinary.inputs, &projected.inputs),
+            location != "input"
+        );
+        assert_eq!(
+            Arc::ptr_eq(&ordinary.steps, &projected.steps),
+            location != "step"
+        );
+        assert_eq!(
+            Arc::ptr_eq(&ordinary.workflows, &projected.workflows),
+            location != "workflow"
+        );
+        assert!(Arc::ptr_eq(
+            &ordinary.source_descriptions,
+            &projected.source_descriptions
+        ));
+    }
 }
 
 #[test]
@@ -151,7 +263,7 @@ fn schema_derived_request_omissions_preserve_required_and_supplied_unknown_absen
         ProvenancedValues::default(),
         omissions,
     );
-    let ordinary = vars.eval_context(None);
+    let ordinary = super::eval_context::from_vars(&vars, None);
     let debug = vars.debug_scopes();
     let projected = super::request_admission::request_context(&vars, ordinary.clone(), "GET");
     for inputs in [&projected.inputs, &projected.workflows["child"].inputs] {
@@ -166,7 +278,7 @@ fn schema_derived_request_omissions_preserve_required_and_supplied_unknown_absen
         assert!(!inputs.contains_key("required"));
         assert!(!inputs.contains_key("undeclared"));
     }
-    let unchanged = vars.eval_context(None);
+    let unchanged = super::eval_context::from_vars(&vars, None);
     assert_eq!(unchanged.inputs, ordinary.inputs);
     assert_eq!(
         unchanged.workflows["child"].inputs,
@@ -582,7 +694,7 @@ fn skipped(value: Value) -> ProvenancedValues {
 fn selector_controls_and_mixed_skipped_failures_keep_both_classes() {
     let mut vars = VarStore::default();
     vars.set_inputs(skipped(json!({"ok":1})), BTreeSet::new());
-    let eval = ExpressionEvaluator::new(vars.eval_context(None));
+    let eval = ExpressionEvaluator::new(super::eval_context::from_vars(&vars, None));
     for (source, unresolved, skipped_count) in [
         (
             json!({"context":"$inputs.x", "selector":"/missing", "type":"jsonpointer"}),
@@ -626,7 +738,7 @@ fn selector_controls_and_mixed_skipped_failures_keep_both_classes() {
         BTreeMap::from([("x".into(), json!({"nil":null}))]).into(),
         BTreeSet::new(),
     );
-    let eval = ExpressionEvaluator::new(vars.eval_context(None));
+    let eval = ExpressionEvaluator::new(super::eval_context::from_vars(&vars, None));
     for source in [
         json!(null),
         json!(""),
@@ -654,8 +766,11 @@ fn skipped_validation_and_request_projection_retain_values() {
     vars.set_inputs(values.clone(), BTreeSet::new());
     vars.register_workflow_state("child", values.clone(), values.clone());
     vars.replace_step_outputs("s", values);
-    let projected =
-        super::request_admission::request_context(&vars, vars.eval_context(None), "POST");
+    let projected = super::request_admission::request_context(
+        &vars,
+        super::eval_context::from_vars(&vars, None),
+        "POST",
+    );
     assert!(projected.inputs.contains_key("x"));
     assert!(projected.steps["s"].contains_key("x"));
     assert!(projected.workflows["child"].inputs.contains_key("x"));
@@ -691,21 +806,28 @@ async fn subworkflow_publication_rolls_back_both_fields_and_records_omissions() 
             .unwrap_or_else(|error| panic!("child: {error}"));
         assert!(!execution.result.success);
         assert_eq!(
-            vars.eval_context(None).steps.contains_key("child"),
+            super::eval_context::from_vars(&vars, None)
+                .steps
+                .contains_key("child"),
             existing.is_some()
         );
         if let Some(previous) = existing {
             assert_eq!(vars.step_values("child"), previous);
         }
-        let projected =
-            super::request_admission::request_context(&vars, vars.eval_context(None), "GET");
+        let projected = super::request_admission::request_context(
+            &vars,
+            super::eval_context::from_vars(&vars, None),
+            "GET",
+        );
         assert_eq!(
             projected.workflows["child"].inputs.get("optional"),
             Some(&Value::Null)
         );
-        assert!(!vars.eval_context(None).workflows["child"]
-            .inputs
-            .contains_key("optional"));
+        assert!(
+            !super::eval_context::from_vars(&vars, None).workflows["child"]
+                .inputs
+                .contains_key("optional")
+        );
         let result = resolve_value_source_with_provenance(
             &ValueSource::from("$workflows.child.outputs.x#/ok"),
             &ExpressionEvaluator::new(projected),
@@ -785,7 +907,7 @@ async fn concrete_repeated_parameter_clears_metadata_and_json_cannot_create_it()
         BTreeMap::from([("x".into(), json!("concrete"))]),
         BTreeMap::new(),
     );
-    let eval = ExpressionEvaluator::new(vars.eval_context(None));
+    let eval = ExpressionEvaluator::new(super::eval_context::from_vars(&vars, None));
     let result = resolve_value_source_with_provenance(
         &ValueSource::from("$workflows.child.inputs.x"),
         &eval,
@@ -808,7 +930,7 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
         content_type: ContentType::Xml,
         redirects: Vec::new(),
     };
-    let eval = ExpressionEvaluator::new(vars.eval_context(Some(&response)));
+    let eval = ExpressionEvaluator::new(super::eval_context::from_vars(&vars, Some(&response)));
     for (expression, unresolved) in [("//id", false), ("//missing", false), ("//*[", true)] {
         let output = OutputValue::RuntimeExpression(expression.into());
         let (value, warnings, metadata) =

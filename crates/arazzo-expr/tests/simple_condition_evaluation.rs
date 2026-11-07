@@ -11,7 +11,8 @@ fn evaluator() -> ExpressionEvaluator {
         inputs: BTreeMap::from([
             ("yes".to_owned(), json!(true)),
             ("dot.name".to_owned(), json!(7)),
-        ]),
+        ])
+        .into(),
         ..EvalContext::default()
     })
 }
@@ -78,7 +79,8 @@ fn inequality_is_negated_equality_including_null_and_missing() {
         inputs: BTreeMap::from([
             ("array".to_owned(), json!([null, 7])),
             ("object".to_owned(), json!({"nil": null})),
-        ]),
+        ])
+        .into(),
         ..EvalContext::default()
     });
     let operands = [
@@ -240,7 +242,8 @@ fn every_ordered_type_pair_and_operator_obeys_the_matrix() {
                 inputs: BTreeMap::from([
                     ("left".to_owned(), left.clone()),
                     ("right".to_owned(), right.clone()),
-                ]),
+                ])
+                .into(),
                 ..EvalContext::default()
             });
             for operator in ["==", "!=", "<", "<=", ">", ">="] {
@@ -431,7 +434,7 @@ fn structural_comparison_visits_only_required_values_in_fixed_order() {
         ),
     ] {
         let evaluator = ExpressionEvaluator::new(EvalContext {
-            inputs: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]),
+            inputs: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]).into(),
             ..EvalContext::default()
         });
         let result = evaluator.evaluate_condition_detailed("!($inputs.left == $inputs.right)");
@@ -449,7 +452,7 @@ fn deeply_nested_runtime_values_compare_without_recursive_equality() {
         right = Value::Array(vec![right]);
     }
     let evaluator = ExpressionEvaluator::new(EvalContext {
-        inputs: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]),
+        inputs: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]).into(),
         ..EvalContext::default()
     });
     decision(&evaluator, "$inputs.left == $inputs.right", true);

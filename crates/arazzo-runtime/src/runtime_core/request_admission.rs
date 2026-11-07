@@ -6,37 +6,60 @@ pub(super) fn request_context(
     method: &str,
 ) -> EvalContext {
     for (name, metadata) in &vars.input_provenance {
-        if metadata.unresolved {
-            context.inputs.remove(name);
+        if metadata.unresolved && context.inputs.contains_key(name) {
+            Arc::make_mut(&mut context.inputs).remove(name);
         }
     }
     for name in &vars.optional_omissions {
-        context.inputs.entry(name.clone()).or_insert(Value::Null);
+        if !context.inputs.contains_key(name) {
+            Arc::make_mut(&mut context.inputs).insert(name.clone(), Value::Null);
+        }
     }
-    let steps = Arc::make_mut(&mut context.steps);
     for (step_id, metadata) in vars.step_provenance.iter() {
-        if let Some(outputs) = steps.get_mut(step_id) {
-            for (name, metadata) in metadata {
-                if metadata.unresolved {
+        for (name, metadata) in metadata {
+            if metadata.unresolved
+                && context
+                    .steps
+                    .get(step_id)
+                    .is_some_and(|outputs| outputs.contains_key(name))
+            {
+                if let Some(outputs) = Arc::make_mut(&mut context.steps).get_mut(step_id) {
                     outputs.remove(name);
                 }
             }
         }
     }
     for (workflow_id, metadata) in &vars.workflow_provenance {
-        if let Some(workflow) = context.workflows.get_mut(workflow_id) {
-            for (name, metadata) in &metadata.inputs {
-                if metadata.unresolved {
-                    workflow.inputs.remove(name);
+        let Some(workflow) = context.workflows.get(workflow_id) else {
+            continue;
+        };
+        let changed = metadata
+            .inputs
+            .iter()
+            .any(|(name, metadata)| metadata.unresolved && workflow.inputs.contains_key(name))
+            || metadata
+                .outputs
+                .iter()
+                .any(|(name, metadata)| metadata.unresolved && workflow.outputs.contains_key(name))
+            || metadata
+                .optional_omissions
+                .iter()
+                .any(|name| !workflow.inputs.contains_key(name));
+        if changed {
+            if let Some(workflow) = Arc::make_mut(&mut context.workflows).get_mut(workflow_id) {
+                for (name, metadata) in &metadata.inputs {
+                    if metadata.unresolved {
+                        workflow.inputs.remove(name);
+                    }
                 }
-            }
-            for (name, metadata) in &metadata.outputs {
-                if metadata.unresolved {
-                    workflow.outputs.remove(name);
+                for (name, metadata) in &metadata.outputs {
+                    if metadata.unresolved {
+                        workflow.outputs.remove(name);
+                    }
                 }
-            }
-            for name in &metadata.optional_omissions {
-                workflow.inputs.entry(name.clone()).or_insert(Value::Null);
+                for name in &metadata.optional_omissions {
+                    workflow.inputs.entry(name.clone()).or_insert(Value::Null);
+                }
             }
         }
     }

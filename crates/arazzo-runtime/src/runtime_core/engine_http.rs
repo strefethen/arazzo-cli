@@ -269,11 +269,7 @@ impl Engine {
             }
         };
         let method = resolved.method;
-        let eval = ExpressionEvaluator::new(request_admission::request_context(
-            vars,
-            self.make_eval_context(vars, None),
-            &method,
-        ));
+        let eval = ExpressionEvaluator::new(super::eval_context::request(self, vars, &method));
         let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
         let admission = if self.inner.dry_run_mode {
             admission.with_presentation(workflow_id)
@@ -437,22 +433,6 @@ impl Engine {
         })
     }
 
-    fn make_post_request_eval_context(
-        &self,
-        vars: &VarStore,
-        response: Option<&Response>,
-        prep: &PreparedRequest,
-    ) -> EvalContext {
-        let mut ctx = self.make_eval_context(vars, response);
-        ctx.method = Some(prep.method.clone());
-        ctx.url = Some(prep.url_result.url.clone());
-        ctx.request_headers = prep.headers.clone();
-        ctx.request_query = prep.url_result.query_params.clone();
-        ctx.request_path = prep.url_result.path_params.clone();
-        ctx.request_body = prep.body_json.clone();
-        ctx
-    }
-
     pub(super) async fn execute_http_step(
         &self,
         exec_ctx: &ExecutionContext,
@@ -549,7 +529,7 @@ impl Engine {
             content_type: ContentType::Json,
             redirects: Vec::new(),
         };
-        let dry_ctx = self.make_post_request_eval_context(vars, Some(&fake), &prep);
+        let dry_ctx = super::eval_context::post_request(self, vars, Some(&fake), &prep);
         let dry_eval = ExpressionEvaluator::new(dry_ctx);
         let mut outputs = ProvenancedValues::default();
         let mut warnings = prep.warnings.clone();
@@ -634,7 +614,7 @@ impl Engine {
         response: &Arc<Response>,
         prep: &PreparedRequest,
     ) -> Result<StepExecution, RuntimeError> {
-        let post_ctx = self.make_post_request_eval_context(vars, Some(response), prep);
+        let post_ctx = super::eval_context::post_request(self, vars, Some(response), prep);
         let eval = ExpressionEvaluator::new(post_ctx);
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
         let mut criteria = Vec::new();
@@ -765,11 +745,7 @@ impl Engine {
         step: &Step,
         vars: &VarStore,
     ) -> Result<UrlBuildResult, RuntimeError> {
-        let eval = ExpressionEvaluator::new(request_admission::request_context(
-            vars,
-            self.make_eval_context(vars, None),
-            "",
-        ));
+        let eval = ExpressionEvaluator::new(super::eval_context::request(self, vars, ""));
         let admission = request_admission::RequestAdmission::new(&step.step_id, vars);
         self.build_url_with_evaluator(op_path, source_base, step, &eval, &admission)
             .map(|pair| pair.0)

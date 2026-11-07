@@ -305,7 +305,7 @@ impl Engine {
         };
 
         let mut eval_ctx = super::step_context::with_message(
-            self.make_eval_context(gate.vars, gate.response),
+            super::eval_context::base(self, gate.vars, gate.response),
             gate.message,
         );
         if !gate.current_outputs.is_empty() {

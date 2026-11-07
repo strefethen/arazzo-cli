@@ -351,7 +351,8 @@ mod tests {
             inputs: BTreeMap::from([(
                 "user".to_string(),
                 json!({"profile": {"email": "alice@example.com"}}),
-            )]),
+            )])
+            .into(),
             ..EvalContext::default()
         });
 

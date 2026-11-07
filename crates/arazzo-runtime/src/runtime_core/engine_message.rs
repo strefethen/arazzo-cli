@@ -242,7 +242,7 @@ impl Engine {
         let host = target.endpoint.identity.host.clone();
         let mut warnings = Vec::new();
         let expected = if let Some(text) = &step.correlation_id {
-            let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
+            let eval = ExpressionEvaluator::new(super::eval_context::base(self, vars, None));
             let (value, diagnostics) = eval.resolve_value_with_diagnostics(text);
             warnings.extend(
                 diagnostics
@@ -403,7 +403,7 @@ impl Engine {
         mut warnings: Vec<String>,
     ) -> Result<StepExecution, RuntimeError> {
         let eval = ExpressionEvaluator::new(with_message(
-            self.make_eval_context(vars, None),
+            super::eval_context::base(self, vars, None),
             Some(&snapshot),
         ));
         let mut checkpoint_outputs = BTreeMap::<String, Value>::new();

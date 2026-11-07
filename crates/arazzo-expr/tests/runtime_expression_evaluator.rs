@@ -16,7 +16,8 @@ fn evaluator() -> ExpressionEvaluator {
             ("dot.name".to_owned(), json!(9)),
             ("body".to_owned(), body.clone()),
             ("number".to_owned(), json!(7)),
-        ]),
+        ])
+        .into(),
         outputs: BTreeMap::from([("dot.name".to_owned(), json!(10))]),
         steps: Arc::new(BTreeMap::from([(
             "s".to_owned(),
@@ -28,7 +29,8 @@ fn evaluator() -> ExpressionEvaluator {
                 inputs: BTreeMap::from([("dot.name".to_owned(), json!(12))]),
                 outputs: BTreeMap::from([("dot.name".to_owned(), json!(13))]),
             },
-        )]),
+        )])
+        .into(),
         status_code: Some(201),
         method: Some("POST".to_owned()),
         url: Some("https://example.test/".to_owned()),
@@ -39,7 +41,8 @@ fn evaluator() -> ExpressionEvaluator {
                 url: "openapi.yaml".to_owned(),
                 type_: "openapi".to_owned(),
             },
-        )]),
+        )])
+        .into(),
         request_headers: BTreeMap::from([("X-Id".to_owned(), "request".to_owned())]),
         response_headers: BTreeMap::from([("X-Id".to_owned(), "response".to_owned())]),
         message_headers: BTreeMap::from([("X-Id".to_owned(), "message".to_owned())]),

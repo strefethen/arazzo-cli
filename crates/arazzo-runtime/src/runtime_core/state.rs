@@ -271,9 +271,9 @@ pub(super) struct StepTraceData {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct VarStore {
-    pub(super) inputs: BTreeMap<String, Value>,
+    pub(super) inputs: Arc<BTreeMap<String, Value>>,
     steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
-    workflow_states: BTreeMap<String, arazzo_expr::WorkflowEvalState>,
+    workflow_states: Arc<BTreeMap<String, arazzo_expr::WorkflowEvalState>>,
     pub(super) input_provenance: BTreeMap<String, ValueProvenance>,
     pub(super) step_provenance: Arc<BTreeMap<String, BTreeMap<String, ValueProvenance>>>,
     pub(super) workflow_provenance: BTreeMap<String, super::value_provenance::WorkflowProvenance>,
@@ -283,7 +283,7 @@ pub(crate) struct VarStore {
 impl VarStore {
     #[cfg(test)]
     pub(crate) fn set_input(&mut self, name: &str, value: Value) {
-        self.inputs.insert(name.to_string(), value);
+        Arc::make_mut(&mut self.inputs).insert(name.to_string(), value);
         self.input_provenance.remove(name);
         self.optional_omissions.remove(name);
     }
@@ -332,14 +332,14 @@ impl VarStore {
     }
 
     pub(super) fn set_inputs(&mut self, inputs: ProvenancedValues, omissions: BTreeSet<String>) {
-        self.inputs = inputs.values;
+        self.inputs = Arc::new(inputs.values);
         self.input_provenance = inputs.provenance;
         self.optional_omissions = omissions;
     }
 
     pub(super) fn input_values(&self) -> ProvenancedValues {
         ProvenancedValues {
-            values: self.inputs.clone(),
+            values: (*self.inputs).clone(),
             provenance: self.input_provenance.clone(),
         }
     }
@@ -381,7 +381,7 @@ impl VarStore {
     pub(crate) fn debug_scopes(&self) -> DebugScopes {
         DebugScopes {
             locals: BTreeMap::new(),
-            inputs: self.inputs.clone(),
+            inputs: (*self.inputs).clone(),
             steps: (*self.steps).clone(),
         }
     }
@@ -411,7 +411,7 @@ impl VarStore {
                 optional_omissions,
             },
         );
-        self.workflow_states.insert(
+        Arc::make_mut(&mut self.workflow_states).insert(
             workflow_id.to_string(),
             arazzo_expr::WorkflowEvalState {
                 inputs: inputs.values,
@@ -420,32 +420,25 @@ impl VarStore {
         );
     }
 
-    pub(crate) fn eval_context(&self, response: Option<&Response>) -> EvalContext {
-        let mut ctx = EvalContext {
-            inputs: self.inputs.clone(),
-            steps: Arc::clone(&self.steps),
-            workflows: self.workflow_states.clone(),
-            ..EvalContext::default()
-        };
-        if let Some(resp) = response {
-            ctx.status_code = Some(resp.status_code);
-            ctx.response_headers = resp.headers.clone();
-            // Prefer parsed JSON; fall back to the raw body as a string so that
-            // $response.body returns the text content for XML / plain-text
-            // responses instead of silently resolving to Null.
-            ctx.response_body = resp
-                .body_json
-                .clone()
-                .or_else(|| String::from_utf8(resp.body.clone()).ok().map(Value::String));
-        }
-        ctx
+    pub(super) fn inputs_snapshot(&self) -> Arc<BTreeMap<String, Value>> {
+        Arc::clone(&self.inputs)
+    }
+
+    pub(super) fn steps_snapshot(&self) -> Arc<BTreeMap<String, BTreeMap<String, Value>>> {
+        Arc::clone(&self.steps)
+    }
+
+    pub(super) fn workflows_snapshot(
+        &self,
+    ) -> Arc<BTreeMap<String, arazzo_expr::WorkflowEvalState>> {
+        Arc::clone(&self.workflow_states)
     }
 }
 
 /// Immutable index built once from the parsed spec.
 pub(crate) struct WorkflowIndex {
     pub spec: ArazzoSpec,
-    pub source_descriptions_map: BTreeMap<String, arazzo_expr::SourceDescriptionContext>,
+    pub source_descriptions_map: Arc<BTreeMap<String, arazzo_expr::SourceDescriptionContext>>,
     /// Effective request base per source name.
     pub(super) source_bases: BTreeMap<String, String>,
     /// Operations indexed from `sourceDescriptions[]` documents at build time.

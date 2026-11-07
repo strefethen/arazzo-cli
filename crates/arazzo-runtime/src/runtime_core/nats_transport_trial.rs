@@ -496,7 +496,7 @@ pub(super) async fn execute(
             let template: ValueSource = serde_yaml_ng::to_value(template)
                 .map(ValueSource::from)
                 .map_err(|err| RuntimeError::unspecified(format!("NATS_TRIAL_TEMPLATE: {err}")))?;
-            let eval = ExpressionEvaluator::new(engine.make_eval_context(vars, None));
+            let eval = ExpressionEvaluator::new(super::eval_context::base(engine, vars, None));
             let (payload, warnings) = resolve_payload_detailed(&template, &eval);
             if !warnings.is_empty() {
                 return Err(RuntimeError::unspecified(format!(
@@ -509,7 +509,7 @@ pub(super) async fn execute(
         StepAction::Receive => Some(trial.receive(ctx).await?),
     };
     let eval = ExpressionEvaluator::new(with_message(
-        engine.make_eval_context(vars, None),
+        super::eval_context::base(engine, vars, None),
         message.as_ref(),
     ));
     let mut success = true;

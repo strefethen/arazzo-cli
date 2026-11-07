@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use arazzo_expr::{EvalContext, ExpressionEvaluator};
 fn bench_evaluator() -> ExpressionEvaluator {
     let ctx = EvalContext {
-        inputs: BTreeMap::from([("userId".to_string(), json!(42))]),
+        inputs: BTreeMap::from([("userId".to_string(), json!(42))]).into(),
         status_code: Some(200),
         method: Some("GET".to_string()),
         response_body: Some(json!({

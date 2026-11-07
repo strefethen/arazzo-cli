@@ -257,7 +257,7 @@ impl EngineBuilder {
                 nats_trial: None,
                 index: WorkflowIndex {
                     spec: self.spec,
-                    source_descriptions_map,
+                    source_descriptions_map: Arc::new(source_descriptions_map),
                     source_bases,
                     source_ops,
                     workflow_index,

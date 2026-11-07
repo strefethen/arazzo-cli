@@ -214,7 +214,7 @@ pub(crate) fn resolve_parsed(
                 unreachable!("canonical input/output syntax has a named form")
             };
             let (values, label) = if expression.namespace() == Namespace::Inputs {
-                (&context.inputs, "input")
+                (context.inputs.as_ref(), "input")
             } else {
                 (&context.outputs, "output")
             };
@@ -415,7 +415,7 @@ mod tests {
             "a/b": {"~key": "escaped"}, "é": "unicode", "": "empty"
         });
         EvalContext {
-            inputs: BTreeMap::from([("user".to_owned(), body.clone())]),
+            inputs: BTreeMap::from([("user".to_owned(), body.clone())]).into(),
             outputs: BTreeMap::from([("data".to_owned(), body.clone())]),
             steps: Arc::new(BTreeMap::from([(
                 "lookup".to_owned(),
@@ -427,7 +427,8 @@ mod tests {
                     inputs: BTreeMap::from([("config".to_owned(), body.clone())]),
                     outputs: BTreeMap::from([("result".to_owned(), body.clone())]),
                 },
-            )]),
+            )])
+            .into(),
             status_code: Some(201),
             method: Some("POST".to_owned()),
             url: Some("https://example.test/items".to_owned()),
@@ -446,7 +447,8 @@ mod tests {
                     url: "https://example.test/openapi.yaml".to_owned(),
                     type_: "openapi".to_owned(),
                 },
-            )]),
+            )])
+            .into(),
         }
     }
 
@@ -567,8 +569,7 @@ mod tests {
     #[test]
     fn dotted_names_are_exact_keys_and_only_pointers_traverse() {
         let mut context = context();
-        context
-            .inputs
+        std::sync::Arc::make_mut(&mut context.inputs)
             .insert("user.items".to_owned(), json!("exact-input"));
         context
             .outputs
@@ -577,7 +578,9 @@ mod tests {
             .get_mut("lookup")
             .expect("step fixture")
             .insert("payload.items".to_owned(), json!("exact-step"));
-        let workflow = context.workflows.get_mut("auth").expect("workflow fixture");
+        let workflow = std::sync::Arc::make_mut(&mut context.workflows)
+            .get_mut("auth")
+            .expect("workflow fixture");
         workflow
             .inputs
             .insert("config.items".to_owned(), json!("exact-workflow-input"));
@@ -608,7 +611,7 @@ mod tests {
                 "{input}"
             );
         }
-        context.inputs.remove("user.items");
+        std::sync::Arc::make_mut(&mut context.inputs).remove("user.items");
         assert_eq!(
             resolve("$inputs.user.items", &context).value,
             ResolvedValue::Missing
@@ -716,13 +719,15 @@ mod tests {
         context.request_body = Some(Value::Null);
         context.response_body = Some(Value::Null);
         context.message_payload = Some(Value::Null);
-        context.inputs.insert("user".to_owned(), Value::Null);
+        std::sync::Arc::make_mut(&mut context.inputs).insert("user".to_owned(), Value::Null);
         context.outputs.insert("data".to_owned(), Value::Null);
         Arc::make_mut(&mut context.steps)
             .get_mut("lookup")
             .expect("step fixture")
             .insert("payload".to_owned(), Value::Null);
-        let workflow = context.workflows.get_mut("auth").expect("workflow fixture");
+        let workflow = std::sync::Arc::make_mut(&mut context.workflows)
+            .get_mut("auth")
+            .expect("workflow fixture");
         workflow.inputs.insert("config".to_owned(), Value::Null);
         workflow.outputs.insert("result".to_owned(), Value::Null);
         for root in [

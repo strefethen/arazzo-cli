@@ -49,8 +49,8 @@ mod tests {
     #[test]
     fn simple_string_comparisons_are_case_insensitive_for_all_normative_operators() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("ascii".to_string(), json!("Alpha"));
-        ctx.inputs.insert("unicode".to_string(), json!("Ångström"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("ascii".to_string(), json!("Alpha"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("unicode".to_string(), json!("Ångström"));
         let eval = ExpressionEvaluator::new(ctx);
 
         for (condition, expected) in [

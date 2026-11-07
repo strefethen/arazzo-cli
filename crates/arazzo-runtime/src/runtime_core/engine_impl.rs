@@ -743,7 +743,7 @@ impl Engine {
         depth: usize,
     ) -> Result<StepExecution, RuntimeError> {
         exec_ctx.check_cancelled()?;
-        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, None));
+        let eval = ExpressionEvaluator::new(super::eval_context::base(self, vars, None));
         let mut sub_inputs = ProvenancedValues::default();
         let mut parameter_warnings = Vec::new();
         for (index, param) in step.parameters.iter().enumerate() {
@@ -795,7 +795,7 @@ impl Engine {
 
         let previous = vars.replace_step_outputs(&step.step_id, outputs.clone());
         let success = {
-            let eval_post = ExpressionEvaluator::new(self.make_eval_context(vars, None));
+            let eval_post = ExpressionEvaluator::new(super::eval_context::base(self, vars, None));
             step.success_criteria.iter().all(|criterion| {
                 evaluate_criterion(criterion, &eval_post, None, &self.inner.regex_cache)
             })
@@ -865,17 +865,6 @@ impl Engine {
         Ok(vars)
     }
 
-    pub(super) fn make_eval_context(
-        &self,
-        vars: &VarStore,
-        response: Option<&Response>,
-    ) -> EvalContext {
-        let mut ctx = vars.eval_context(response);
-        ctx.self_uri = self.inner.index.spec.self_uri.clone();
-        ctx.source_descriptions = self.inner.index.source_descriptions_map.clone();
-        ctx
-    }
-
     pub(crate) fn build_outputs(
         &self,
         workflow: &Workflow,
@@ -884,7 +873,7 @@ impl Engine {
         Result<ProvenancedValues, RuntimeError>,
         Vec<WorkflowOutputWarning>,
     ) {
-        let mut ctx = self.make_eval_context(vars, None);
+        let mut ctx = super::eval_context::base(self, vars, None);
         let mut output_warnings = Vec::new();
         let mut outputs = ProvenancedValues::default();
         for (name, output) in &workflow.outputs {

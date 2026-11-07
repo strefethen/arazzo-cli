@@ -107,11 +107,11 @@ pub struct SourceDescriptionContext {
 /// Evaluation context for expression resolution.
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
-    pub inputs: BTreeMap<String, Value>,
+    pub inputs: Arc<BTreeMap<String, Value>>,
     /// Step outputs, wrapped in `Arc` for cheap cloning during repeated evaluation.
     pub steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     pub outputs: BTreeMap<String, Value>,
-    pub workflows: BTreeMap<String, WorkflowEvalState>,
+    pub workflows: Arc<BTreeMap<String, WorkflowEvalState>>,
     pub status_code: Option<i64>,
     pub method: Option<String>,
     pub url: Option<String>,
@@ -124,7 +124,7 @@ pub struct EvalContext {
     /// Payload from an asynchronous message when message execution is available.
     pub message_payload: Option<Value>,
     pub self_uri: Option<String>,
-    pub source_descriptions: BTreeMap<String, SourceDescriptionContext>,
+    pub source_descriptions: Arc<BTreeMap<String, SourceDescriptionContext>>,
     pub response_headers: BTreeMap<String, String>,
     pub response_body: Option<Value>,
 }
@@ -142,10 +142,6 @@ impl ExpressionEvaluator {
 
     pub fn context(&self) -> &EvalContext {
         &self.ctx
-    }
-
-    pub fn context_mut(&mut self) -> &mut EvalContext {
-        &mut self.ctx
     }
 
     /// Resolve a complete expression with its JSON type, an embedded-expression
@@ -306,8 +302,8 @@ mod tests {
     #[test]
     fn resolve_value_dispatches_correctly() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("name".to_string(), json!("Alice"));
-        ctx.inputs.insert("token".to_string(), json!("xyz"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("name".to_string(), json!("Alice"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("token".to_string(), json!("xyz"));
         let eval = ExpressionEvaluator::new(ctx);
 
         // Full expression → evaluate
@@ -326,7 +322,7 @@ mod tests {
     #[test]
     fn evaluate_inputs_and_step_outputs() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("name".to_string(), json!("Alice"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("name".to_string(), json!("Alice"));
         Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("token".to_string(), json!("abc"))]),
@@ -414,7 +410,7 @@ mod tests {
         let expr = format!("$env.{SENTINEL_NAME}");
 
         let mut ctx = EvalContext::default();
-        ctx.inputs
+        std::sync::Arc::make_mut(&mut ctx.inputs)
             .insert("secret".to_string(), json!("from-inputs"));
         let eval = ExpressionEvaluator::new(ctx);
 
@@ -445,12 +441,12 @@ mod tests {
     #[test]
     fn evaluate_string_coercions() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("s".to_string(), json!("hello"));
-        ctx.inputs.insert("f".to_string(), json!(2.5));
-        ctx.inputs.insert("i".to_string(), json!(42));
-        ctx.inputs.insert("t".to_string(), json!(true));
-        ctx.inputs.insert("f2".to_string(), json!(false));
-        ctx.inputs.insert("arr".to_string(), json!([1, 2]));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("s".to_string(), json!("hello"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("f".to_string(), json!(2.5));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("i".to_string(), json!(42));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("t".to_string(), json!(true));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("f2".to_string(), json!(false));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("arr".to_string(), json!([1, 2]));
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(eval.evaluate_string("$inputs.missing"), "");
@@ -479,9 +475,9 @@ mod tests {
     #[test]
     fn interpolate_string_modes() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("name".to_string(), json!("Alice"));
-        ctx.inputs.insert("age".to_string(), json!(30));
-        ctx.inputs.insert("a".to_string(), json!("X"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("name".to_string(), json!("Alice"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("age".to_string(), json!(30));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("a".to_string(), json!("X"));
         Arc::make_mut(&mut ctx.steps).insert(
             "s1".to_string(),
             BTreeMap::from([("b".to_string(), json!("Y"))]),
@@ -512,7 +508,7 @@ mod tests {
             suffix in "[^$]{0,24}",
         ) {
             let mut ctx = EvalContext::default();
-            ctx.inputs.insert("token".to_string(), json!(value.clone()));
+            std::sync::Arc::make_mut(&mut ctx.inputs).insert("token".to_string(), json!(value.clone()));
             let eval = ExpressionEvaluator::new(ctx);
 
             let expr = format!("{prefix}{{$inputs.token}}{suffix}");
@@ -590,7 +586,7 @@ mod tests {
     #[test]
     fn evaluate_named_value_json_pointers() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert(
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert(
             "user".to_string(),
             json!({"profile": {"email": "alice@example.com"}}),
         );
@@ -598,7 +594,7 @@ mod tests {
             "lookup".to_string(),
             BTreeMap::from([("payload".to_string(), json!({"items": [{"id": "item-1"}]}))]),
         );
-        ctx.workflows.insert(
+        std::sync::Arc::make_mut(&mut ctx.workflows).insert(
             "auth".to_string(),
             super::WorkflowEvalState {
                 inputs: BTreeMap::from([("config".to_string(), json!({"env": "production"}))]),
@@ -657,7 +653,7 @@ mod tests {
     #[test]
     fn missing_json_pointer_returns_null_with_diagnostic() {
         let ctx = EvalContext {
-            inputs: BTreeMap::from([("user".to_string(), json!({"profile": {}}))]),
+            inputs: BTreeMap::from([("user".to_string(), json!({"profile": {}}))]).into(),
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
@@ -735,7 +731,7 @@ mod tests {
     #[test]
     fn diagnostics_valid_expression_no_warnings() {
         let mut ctx = EvalContext::default();
-        ctx.inputs.insert("name".to_string(), json!("Alice"));
+        std::sync::Arc::make_mut(&mut ctx.inputs).insert("name".to_string(), json!("Alice"));
         let eval = ExpressionEvaluator::new(ctx);
         let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.name");
         assert_eq!(value, json!("Alice"));
@@ -785,7 +781,7 @@ mod tests {
     #[test]
     fn source_description_url_and_type_resolve() {
         let mut ctx = EvalContext::default();
-        ctx.source_descriptions.insert(
+        std::sync::Arc::make_mut(&mut ctx.source_descriptions).insert(
             "petstore".to_string(),
             SourceDescriptionContext {
                 url: "https://api.example.com/openapi.yaml".to_string(),
@@ -807,7 +803,7 @@ mod tests {
     #[test]
     fn unsupported_source_description_reference_warns() {
         let mut ctx = EvalContext::default();
-        ctx.source_descriptions.insert(
+        std::sync::Arc::make_mut(&mut ctx.source_descriptions).insert(
             "petstore".to_string(),
             SourceDescriptionContext {
                 url: "https://api.example.com/openapi.yaml".to_string(),
@@ -838,7 +834,7 @@ mod tests {
     #[test]
     fn inputs_dotted_names_are_exact_keys() {
         let ctx = EvalContext {
-            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": {"baz": 42}}))]),
+            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": {"baz": 42}}))]).into(),
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
@@ -852,7 +848,7 @@ mod tests {
     #[test]
     fn inputs_flat_key_still_works() {
         let ctx = EvalContext {
-            inputs: BTreeMap::from([("simple".to_string(), json!("hello"))]),
+            inputs: BTreeMap::from([("simple".to_string(), json!("hello"))]).into(),
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
@@ -862,7 +858,7 @@ mod tests {
     #[test]
     fn inputs_nested_missing_sub_path_returns_null() {
         let ctx = EvalContext {
-            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": 1}))]),
+            inputs: BTreeMap::from([("foo".to_string(), json!({"bar": 1}))]).into(),
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
@@ -874,7 +870,7 @@ mod tests {
     #[test]
     fn workflows_expression_inputs() {
         let mut ctx = EvalContext::default();
-        ctx.workflows.insert(
+        std::sync::Arc::make_mut(&mut ctx.workflows).insert(
             "auth".to_string(),
             super::WorkflowEvalState {
                 inputs: BTreeMap::from([("env".to_string(), json!("production"))]),
@@ -891,7 +887,7 @@ mod tests {
     #[test]
     fn workflows_expression_outputs() {
         let mut ctx = EvalContext::default();
-        ctx.workflows.insert(
+        std::sync::Arc::make_mut(&mut ctx.workflows).insert(
             "auth".to_string(),
             super::WorkflowEvalState {
                 inputs: BTreeMap::new(),
@@ -925,7 +921,7 @@ mod tests {
     #[test]
     fn workflows_invalid_sub_path_warns() {
         let mut ctx = EvalContext::default();
-        ctx.workflows
+        std::sync::Arc::make_mut(&mut ctx.workflows)
             .insert("auth".to_string(), super::WorkflowEvalState::default());
         let eval = ExpressionEvaluator::new(ctx);
         let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth.something.else");

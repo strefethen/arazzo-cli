@@ -77,7 +77,7 @@ mod tests {
             ("object", json!({"nested": [false, "é"], "id": 7})),
             ("pet_id", json!(7)),
         ] {
-            context.inputs.insert(name.to_owned(), value);
+            std::sync::Arc::make_mut(&mut context.inputs).insert(name.to_owned(), value);
         }
         context
             .request_headers
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn exact_expressions_preserve_every_json_type_through_parsed_resolution() {
         let evaluator = evaluator();
-        for (name, expected) in &evaluator.context().inputs {
+        for (name, expected) in evaluator.context().inputs.iter() {
             let input = format!("$inputs.{name}");
             assert_eq!(
                 evaluator.resolve_value_with_diagnostics(&input),

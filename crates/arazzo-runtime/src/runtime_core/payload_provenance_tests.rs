@@ -22,7 +22,8 @@ fn evaluator() -> ExpressionEvaluator {
             ("object".into(), json!({})),
             ("xml".into(), json!("<root><id>7</id></root>")),
             ("badXml".into(), json!("<root>")),
-        ]),
+        ])
+        .into(),
         outputs: BTreeMap::from([("nil".into(), Value::Null)]),
         workflows: BTreeMap::from([(
             "prior".into(),
@@ -30,7 +31,8 @@ fn evaluator() -> ExpressionEvaluator {
                 inputs: BTreeMap::from([("nil".into(), Value::Null)]),
                 outputs: BTreeMap::from([("nil".into(), Value::Null)]),
             },
-        )]),
+        )])
+        .into(),
         ..EvalContext::default()
     };
     context.steps = Arc::new(BTreeMap::from([(
@@ -454,7 +456,8 @@ fn selector_evaluation_and_non_jsonpath_failures_are_hard() {
             ("document".into(), json!({"items": [{"tag": "abc"}]})),
             ("xml".into(), json!("<root/>")),
             ("badXml".into(), json!("<root>")),
-        ]),
+        ])
+        .into(),
         ..EvalContext::default()
     });
     for (object, diagnostic) in [

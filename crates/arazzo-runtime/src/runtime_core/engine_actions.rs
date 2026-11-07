@@ -192,7 +192,7 @@ impl Engine {
         vars: &VarStore,
         response: Option<&Response>,
     ) -> Option<&'a OnAction> {
-        let eval = ExpressionEvaluator::new(self.make_eval_context(vars, response));
+        let eval = ExpressionEvaluator::new(super::eval_context::base(self, vars, response));
         for action in actions {
             if action.criteria.is_empty() {
                 return Some(action);
@@ -231,7 +231,7 @@ impl Engine {
             return Err(control::cancellation_error(ctx.is_timeout));
         }
         let eval = ExpressionEvaluator::new(super::step_context::with_message(
-            self.make_eval_context(ctx.vars, ctx.response),
+            super::eval_context::base(self, ctx.vars, ctx.response),
             ctx.message,
         ));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
@@ -348,7 +348,11 @@ impl Engine {
             }
             ActionType::Goto => {
                 // Resolve expressions in goto targets (e.g. "step_{$inputs.target}").
-                let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
+                let eval = ExpressionEvaluator::new(super::eval_context::base(
+                    self,
+                    ctx.vars,
+                    ctx.response,
+                ));
                 if !action.step_id.is_empty() {
                     let resolved_step_id = eval.interpolate_string(&action.step_id);
                     if let Some(idx) = self.find_step_index(ctx.workflow, &resolved_step_id) {
@@ -379,7 +383,7 @@ impl Engine {
                     let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
-                            self.make_eval_context(ctx.vars, ctx.response),
+                            super::eval_context::base(self, ctx.vars, ctx.response),
                             ctx.message,
                         ));
                     let inputs = map_action_parameters(
@@ -432,7 +436,11 @@ impl Engine {
                 // at the FlowDecision::Retry consumption sites, where `vars`
                 // is mutable, after the retry delay and immediately before the
                 // retried attempt.
-                let eval = ExpressionEvaluator::new(self.make_eval_context(ctx.vars, ctx.response));
+                let eval = ExpressionEvaluator::new(super::eval_context::base(
+                    self,
+                    ctx.vars,
+                    ctx.response,
+                ));
                 let reference = if !action.step_id.is_empty() {
                     Some(RetryReference::Step {
                         step_id: eval.interpolate_string(&action.step_id),
@@ -440,7 +448,7 @@ impl Engine {
                 } else if !action.workflow_id.is_empty() {
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
-                            self.make_eval_context(ctx.vars, ctx.response),
+                            super::eval_context::base(self, ctx.vars, ctx.response),
                             ctx.message,
                         ));
                     Some(RetryReference::Workflow {

@@ -60,10 +60,10 @@ fn rich_context() -> EvalContext {
     response_headers.insert("x-rate-limit-remaining".to_string(), "42".to_string());
 
     EvalContext {
-        inputs,
+        inputs: inputs.into(),
         steps: steps.into(),
         outputs: BTreeMap::new(),
-        workflows: BTreeMap::new(),
+        workflows: BTreeMap::new().into(),
         status_code: Some(200),
         method: Some("GET".to_string()),
         url: Some("https://api.example.com/users/42".to_string()),
@@ -74,7 +74,7 @@ fn rich_context() -> EvalContext {
         message_headers: BTreeMap::new(),
         message_payload: None,
         self_uri: None,
-        source_descriptions: BTreeMap::new(),
+        source_descriptions: BTreeMap::new().into(),
         response_headers,
         response_body: Some(json!({
             "data": {
