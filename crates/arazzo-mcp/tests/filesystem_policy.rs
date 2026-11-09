@@ -106,8 +106,12 @@ fn authored_parents_dot_descendants_and_sibling_prefixes_deny() {
     let sibling = fixture.0.with_extension("sibling");
     fs::create_dir_all(&sibling).unwrap();
     fs::write(sibling.join(CANARY), CANARY).unwrap();
+    let root = fixture.0.to_str().unwrap();
+    let separator = std::path::MAIN_SEPARATOR;
     for path in [
-        fixture.0.join("sub/../report.json"),
+        PathBuf::from(format!(
+            "{root}{separator}sub{separator}..{separator}report.json"
+        )),
         fixture.0.join("../missing"),
         fixture.0.join(".hidden"),
         fixture.0.join(".hidden-dir/api.yaml"),
@@ -255,6 +259,58 @@ fn referenced_openapi_source_outside_the_roots_is_denied_without_echo() {
     );
     assert!(!text.contains(CANARY));
     assert!(!text.contains(outside.to_str().unwrap()));
+}
+
+#[test]
+fn startup_default_roots_admit_a_source_beside_the_spec() {
+    let fixture = Fixture::new();
+    fixture.write("api.openapi.yaml", OPENAPI);
+    let spec_path = fixture.write("spec.arazzo.yaml", source_spec("./api.openapi.yaml"));
+    let state = ServerState::load(&[spec_path.to_str().unwrap().into()], None).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let result = handlers::run_workflow(
+        &state,
+        &json!({"workflow_id": "list", "dry_run": true}),
+        &runtime,
+    )
+    .unwrap();
+    assert_eq!(result["isError"], false, "{result}");
+}
+
+#[cfg(windows)]
+#[test]
+fn verbatim_canonical_roots_match_plain_disk_paths_and_still_contain() {
+    fn plain(path: &Path) -> PathBuf {
+        PathBuf::from(path.to_str().unwrap().strip_prefix(r"\\?\").unwrap())
+    }
+    let fixture = Fixture::new();
+    fixture.write("report.json", OPENAPI);
+    let outside = fixture.0.with_extension("outside-verbatim");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join(CANARY), CANARY).unwrap();
+    let outside_name = outside.file_name().unwrap().to_str().unwrap();
+    let root = fixture.0.to_str().unwrap();
+    let state = fixture.state();
+    for path in [
+        plain(&fixture.0).join("report.json"),
+        fixture.0.join("report.json"),
+        PathBuf::from(format!(r"{root}\.\report.json")),
+    ] {
+        assert_eq!(
+            handlers::describe_openapi(&state, &json!({"file_path": path})).unwrap()["isError"],
+            false,
+            "{}",
+            path.display()
+        );
+    }
+    for path in [
+        plain(&outside).join(CANARY),
+        outside.join(CANARY),
+        PathBuf::from(format!(r"{root}\..\{outside_name}\{CANARY}")),
+        PathBuf::from(format!(r"{root}\x/../../{outside_name}\{CANARY}")),
+    ] {
+        call_all(&state, &path, "MCP_FILE_DENIED");
+    }
 }
 
 #[test]

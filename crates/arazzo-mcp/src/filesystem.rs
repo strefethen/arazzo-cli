@@ -185,7 +185,7 @@ impl FileAccess {
         };
         let mut roots: Vec<RootCapability> = Vec::new();
         for selector in selectors {
-            let authored: PathBuf = cwd.join(selector).components().collect();
+            let authored = without_current_dir(&cwd.join(selector));
             let selector =
                 std::fs::canonicalize(&authored).map_err(|_| STARTUP_DENIED.to_string())?;
             if !std::fs::metadata(&selector)
@@ -201,23 +201,19 @@ impl FileAccess {
             }
             let identity =
                 root_identity(&handle, &metadata).map_err(|_| STARTUP_DENIED.to_string())?;
+            let forms = selector_forms(authored, &selector);
             if let Some(root) = roots
                 .iter_mut()
                 .find(|root| root.identity == identity && identities_available())
             {
-                for selector in [authored, selector] {
-                    if !root.selectors.contains(&selector) {
-                        root.selectors.push(selector);
+                for form in forms {
+                    if !root.selectors.contains(&form) {
+                        root.selectors.push(form);
                     }
                 }
             } else if !roots.iter().any(|root| root.selectors.contains(&selector)) {
-                let selectors = if authored == selector {
-                    vec![selector.clone()]
-                } else {
-                    vec![authored, selector.clone()]
-                };
                 roots.push(RootCapability {
-                    selectors,
+                    selectors: forms,
                     canonical: selector,
                     handle,
                     identity,
@@ -312,7 +308,7 @@ impl FileAccess {
             return Err(FileAccessError::Denied);
         }
         let cwd = self.cwd.as_ref().ok_or(FileAccessError::Denied)?;
-        let absolute: PathBuf = cwd.join(path).components().collect();
+        let absolute = without_current_dir(&cwd.join(path));
         let (root_id, root, selector) = self
             .roots
             .iter()
@@ -343,6 +339,42 @@ impl FileAccess {
             document_name,
         })
     }
+}
+
+fn without_current_dir(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect()
+}
+
+fn selector_forms(authored: PathBuf, canonical: &Path) -> Vec<PathBuf> {
+    let mut forms = Vec::new();
+    for form in [
+        Some(authored),
+        plain_disk_form(canonical),
+        Some(canonical.to_path_buf()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !forms.contains(&form) {
+            forms.push(form);
+        }
+    }
+    forms
+}
+
+fn plain_disk_form(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return None;
+    };
+    let Prefix::VerbatimDisk(disk) = prefix.kind() else {
+        return None;
+    };
+    let mut plain = PathBuf::from(format!("{}:", char::from(disk)));
+    plain.extend(components);
+    Some(plain)
 }
 
 fn unaliased_target(root: &RootCapability, relative: &Path) -> Result<PathBuf, FileAccessError> {
