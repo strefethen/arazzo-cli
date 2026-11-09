@@ -106,8 +106,8 @@ mod tests {
             ),
             (Some(json!("Bearer one ok")), Some(json!("Bearer two no"))),
             (
-                Some(json!("password=x\nusername=alice")),
-                Some(json!("password=x\nusername=bob")),
+                Some(json!("username=alice\npassword=x")),
+                Some(json!("username=bob\npassword=x")),
             ),
         ] {
             for (left, right) in [(&a, &b), (&b, &a)] {
