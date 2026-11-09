@@ -277,6 +277,45 @@ fn startup_default_roots_admit_a_source_beside_the_spec() {
     assert_eq!(result["isError"], false, "{result}");
 }
 
+#[cfg(unix)]
+#[test]
+fn startup_default_roots_follow_the_typed_spec_spelling_only_for_its_real_directory() {
+    use std::os::unix::fs::symlink;
+    let run = |spec_path: &Path| {
+        let state = ServerState::load(&[spec_path.to_str().unwrap().into()], None).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        handlers::run_workflow(
+            &state,
+            &json!({"workflow_id": "list", "dry_run": true}),
+            &runtime,
+        )
+        .unwrap()
+    };
+    let fixture = Fixture::new();
+    fixture.write("api.openapi.yaml", OPENAPI);
+    fixture.write("spec.arazzo.yaml", source_spec("./api.openapi.yaml"));
+    let alias = fixture.0.with_extension("spec-alias");
+    symlink(&fixture.0, &alias).unwrap();
+    let result = run(&alias.join("spec.arazzo.yaml"));
+    assert_eq!(result["isError"], false, "{result}");
+
+    let elsewhere = fixture.0.with_extension("spec-link-dir");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(elsewhere.join("api.openapi.yaml"), OPENAPI).unwrap();
+    symlink(
+        fixture.0.join("spec.arazzo.yaml"),
+        elsewhere.join("spec.arazzo.yaml"),
+    )
+    .unwrap();
+    let result = run(&elsewhere.join("spec.arazzo.yaml"));
+    assert_eq!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(text).unwrap(),
+        json!({"code": "MCP_FILE_DENIED", "message": "File access denied by server policy", "sourceDescription": "api"})
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn verbatim_canonical_roots_match_plain_disk_paths_and_still_contain() {
@@ -308,6 +347,7 @@ fn verbatim_canonical_roots_match_plain_disk_paths_and_still_contain() {
         outside.join(CANARY),
         PathBuf::from(format!(r"{root}\..\{outside_name}\{CANARY}")),
         PathBuf::from(format!(r"{root}\x/../../{outside_name}\{CANARY}")),
+        PathBuf::from(format!(r"{root}\x/../D:/{CANARY}")),
     ] {
         call_all(&state, &path, "MCP_FILE_DENIED");
     }

@@ -173,12 +173,7 @@ impl FileAccess {
             None => {
                 let parents = paths
                     .iter()
-                    .map(|path| {
-                        std::fs::canonicalize(path)
-                            .ok()
-                            .and_then(|path| path.parent().map(Path::to_path_buf))
-                            .ok_or_else(|| STARTUP_DENIED.to_string())
-                    })
+                    .map(|path| startup_root(&cwd, path).ok_or_else(|| STARTUP_DENIED.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
                 (parents, "startup-defaults")
             }
@@ -339,6 +334,13 @@ impl FileAccess {
             document_name,
         })
     }
+}
+
+fn startup_root(cwd: &Path, path: &str) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?.parent()?.to_path_buf();
+    let authored = cwd.join(path).parent()?.to_path_buf();
+    let same_directory = std::fs::canonicalize(&authored).is_ok_and(|real| real == canonical);
+    Some(if same_directory { authored } else { canonical })
 }
 
 fn without_current_dir(path: &Path) -> PathBuf {
