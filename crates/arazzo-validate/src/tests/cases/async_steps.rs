@@ -34,7 +34,19 @@
                     assert!(validate(&spec).is_ok());
                     continue;
                 }
-                let diagnostics = expect_validation_errors(validate(&spec));
+                let targets_operation = matches!(
+                    spec.workflows[0].steps[0].target,
+                    Some(StepTarget::OperationId(_))
+                );
+                let (routing, diagnostics): (Vec<_>, Vec<_>) =
+                    expect_validation_errors(validate(&spec))
+                        .into_iter()
+                        .partition(|diagnostic| diagnostic.path.ends_with(".operationId"));
+                let arazzo_routing = source_type == SourceType::Arazzo && targets_operation;
+                assert_eq!(routing.len(), usize::from(arazzo_routing), "{routing:?}");
+                assert!(routing
+                    .iter()
+                    .all(|diagnostic| diagnostic.kind == ValidationErrorKind::InvalidReference));
                 assert_eq!(diagnostics.len(), fields.len(), "{diagnostics:?}");
                 for (diagnostic, field) in diagnostics.iter().zip(fields) {
                     assert_eq!(diagnostic.kind, ValidationErrorKind::InvalidAsyncStep);

@@ -16,7 +16,7 @@ workflows:
   - workflowId: local
     steps:
       - stepId: operation
-        operationId: ping
+        operationId: $sourceDescriptions.api.ping
 "#
     )
 }

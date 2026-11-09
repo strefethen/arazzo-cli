@@ -14,6 +14,7 @@ include!("cases/sources.rs");
 include!("cases/async_steps.rs");
 include!("cases/dependencies.rs");
 include!("cases/step_targets.rs");
+include!("cases/operation_id_targets.rs");
 include!("cases/expressions.rs");
 include!("cases/workflow_fields.rs");
 include!("cases/action_references_01.rs");

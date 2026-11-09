@@ -5,21 +5,23 @@ use arazzo_spec::{
     WorkflowDependency, SUPPORTED_OPERATION_PATH_FORMS,
 };
 
-use crate::{Diagnostic, Severity, ValidationErrorKind};
+use crate::{operation_id_target, Diagnostic, Severity, ValidationErrorKind};
 
 pub(crate) fn check(
     step: &Step,
     step_path: &str,
-    source_names: &HashSet<&str>,
     workflow_ids: &HashSet<&str>,
     source_types: &HashMap<&str, SourceType>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match &step.target {
+        Some(StepTarget::OperationId(operation_id)) => {
+            operation_id_target::check(operation_id, step_path, source_types, diagnostics);
+        }
         Some(StepTarget::OperationPath(operation_path)) => {
             let classified = classify_operation_path(operation_path);
             if let Some(source_name) = classified.source_name() {
-                if !source_names.contains(source_name) {
+                if !source_types.contains_key(source_name) {
                     diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         kind: ValidationErrorKind::InvalidReference,

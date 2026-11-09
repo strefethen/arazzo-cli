@@ -16,6 +16,7 @@ use iri_string::types::UriReferenceStr;
 
 mod async_applicability;
 mod expressions;
+mod operation_id_target;
 mod step_dependencies;
 mod step_targets;
 mod version;
@@ -1341,7 +1342,6 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
             step_targets::check(
                 step,
                 &step_path,
-                &source_names,
                 &workflow_ids,
                 &source_types,
                 &mut diagnostics,

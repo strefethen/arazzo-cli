@@ -296,29 +296,20 @@ fn dry_run_plans_each_operations_own_declared_server() {
 #[test]
 fn refused_operation_ids_carry_their_stable_code_in_json() {
     let cases: &[(&str, &str)] = &[
-        // Unqualified, with two non-arazzo sources defined.
-        ("getPet", "RUNTIME_OPERATION_ID_AMBIGUOUS"),
-        // Qualified at a source the document does not declare.
-        (
-            "$sourceDescriptions.gamma.getPet",
-            "RUNTIME_SOURCE_DESCRIPTION_NOT_FOUND",
-        ),
+        // Refused by validation before the run starts: unqualified with two
+        // non-arazzo sources defined, and qualified at an undeclared source.
+        ("getPet", "RUN_SPEC_VALIDATION"),
+        ("$sourceDescriptions.gamma.getPet", "RUN_SPEC_VALIDATION"),
         // Qualified at a source that does not define the operation.
         (
             "$sourceDescriptions.alpha.listPets",
             "RUNTIME_OPERATION_ID_NOT_FOUND",
         ),
-        // Reaching for the qualified form without satisfying the
-        // `source-reference` production: no operation segment, and an
-        // operation segment outside the `CHAR` rule.
-        (
-            "$sourceDescriptions.getPet",
-            "RUNTIME_UNSUPPORTED_OPERATION_ID_FORM",
-        ),
-        (
-            "$sourceDescriptions.alpha.get{Pet}",
-            "RUNTIME_UNSUPPORTED_OPERATION_ID_FORM",
-        ),
+        // Refused by validation: reaching for the qualified form without
+        // satisfying the `source-reference` production, with no operation
+        // segment or one outside the `CHAR` rule.
+        ("$sourceDescriptions.getPet", "RUN_SPEC_VALIDATION"),
+        ("$sourceDescriptions.alpha.get{Pet}", "RUN_SPEC_VALIDATION"),
         // A dotted operation name is legal grammar naming a real source, so it
         // reaches lookup and fails there — not at the form.
         (
