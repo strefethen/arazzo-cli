@@ -113,7 +113,7 @@ pub fn redact_trace_request(request: &mut TraceRequest) {
         redact_url(&mut hop.to);
     }
     if let Some(body) = &mut request.body {
-        redact_json_value(body);
+        redact_request_body(body);
     }
 }
 
@@ -121,8 +121,31 @@ pub fn redact_dry_run_request(request: &mut DryRunRequest) {
     redact_headers(&mut request.headers);
     redact_url(&mut request.url);
     if let Some(body) = &mut request.body {
-        redact_json_value(body);
+        redact_request_body(body);
     }
+}
+
+fn redact_request_body(body: &mut Value) {
+    match body {
+        Value::String(text) => *text = redact_text_body(text),
+        structured => redact_json_value(structured),
+    }
+}
+
+fn redact_text_body(text: &str) -> String {
+    text.split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((key, value)) if is_form_pair(key, value) && is_sensitive_query_name(key) => {
+                format!("{key}={REDACTED}")
+            }
+            _ => redact_text_patterns(pair),
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn is_form_pair(key: &str, value: &str) -> bool {
+    !key.is_empty() && !key.chars().chain(value.chars()).any(char::is_whitespace)
 }
 
 pub fn redacted_dry_run_request(mut request: DryRunRequest) -> DryRunRequest {
@@ -376,6 +399,117 @@ mod tests {
                 .and_then(|body| body.pointer("/nested/dbPassword")),
             Some(&json!(REDACTED))
         );
+    }
+
+    fn redacted_string_body(body: &str) -> (Value, Value) {
+        let mut trace = TraceRequest {
+            method: "POST".to_string(),
+            url: "https://example.com/token".to_string(),
+            headers: BTreeMap::new(),
+            body: Some(json!(body)),
+            redirects: Vec::new(),
+        };
+        let mut dry_run = DryRunRequest {
+            step_id: "s1".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/token".to_string(),
+            headers: BTreeMap::new(),
+            body: Some(json!(body)),
+            warnings: Vec::new(),
+        };
+        redact_trace_request(&mut trace);
+        redact_dry_run_request(&mut dry_run);
+        (
+            trace.body.unwrap_or_else(|| panic!("trace body")),
+            dry_run.body.unwrap_or_else(|| panic!("dry-run body")),
+        )
+    }
+
+    #[test]
+    fn form_text_body_redacts_sensitive_field_values() {
+        for (body, expected) in [
+            (
+                "grant_type=password&username=u&password=hunter2",
+                "grant_type=password&username=u&password=[REDACTED]",
+            ),
+            (
+                "client_secret=s3cr3t&scope=read&refresh_token=r1&page=2",
+                "client_secret=[REDACTED]&scope=read&refresh_token=[REDACTED]&page=2",
+            ),
+            (
+                "private%5Fkey=pk&key=visible",
+                "private%5Fkey=[REDACTED]&key=visible",
+            ),
+        ] {
+            let (trace, dry_run) = redacted_string_body(body);
+            assert_eq!(trace, json!(expected), "trace: {body}");
+            assert_eq!(dry_run, json!(expected), "dry-run: {body}");
+        }
+    }
+
+    #[test]
+    fn text_body_redacts_embedded_credentials_like_response_bodies() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl";
+        for body in [
+            format!("Authorization: Bearer {jwt}\nhello world"),
+            format!(
+                "<auth><header>Authorization: Bearer {jwt}</header><name>a&amp;b</name></auth>"
+            ),
+        ] {
+            let expected = redact_text_patterns(&body);
+            assert!(!expected.contains(jwt));
+            assert!(expected.contains(REDACTED));
+            let (trace, dry_run) = redacted_string_body(&body);
+            assert_eq!(trace, json!(expected), "trace: {body}");
+            assert_eq!(dry_run, json!(expected), "dry-run: {body}");
+        }
+    }
+
+    #[test]
+    fn text_body_redacts_only_the_secret_value_on_its_line() {
+        for (body, expected) in [
+            (
+                "password=hunter2\nusername=alice",
+                "password=[REDACTED]\nusername=alice",
+            ),
+            (
+                "token=abc and the rest of the message",
+                "token=[REDACTED] and the rest of the message",
+            ),
+            (
+                "grant_type=password&password=hunter2\nusername=alice",
+                "grant_type=password&password=[REDACTED]\nusername=alice",
+            ),
+        ] {
+            let (trace, dry_run) = redacted_string_body(body);
+            assert_eq!(trace, json!(expected), "trace: {body}");
+            assert_eq!(dry_run, json!(expected), "dry-run: {body}");
+        }
+    }
+
+    #[test]
+    fn string_body_without_secrets_is_written_verbatim() {
+        for body in [
+            "grant_type=client_credentials&username=u&scope=read%20write",
+            "plain text body with no secrets",
+            "<order><item id=\"1\">book</item><note>a &amp; b</note></order>",
+            "",
+        ] {
+            let (trace, dry_run) = redacted_string_body(body);
+            assert_eq!(trace, json!(body));
+            assert_eq!(dry_run, json!(body));
+        }
+    }
+
+    #[test]
+    fn redacted_string_body_is_stable_under_repeated_redaction() {
+        let body = "grant_type=password&password=hunter2&note=Authorization: Bearer abc.def";
+        let (once, _) = redacted_string_body(body);
+        let (twice, _) =
+            redacted_string_body(once.as_str().unwrap_or_else(|| panic!("string body")));
+        assert_eq!(once, twice);
+        assert!(!once.to_string().contains("hunter2"));
+        assert!(!once.to_string().contains("abc.def"));
     }
 
     #[test]

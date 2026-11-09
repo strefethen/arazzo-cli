@@ -100,8 +100,15 @@ mod tests {
             (Some(json!({"a":"[REDACTED]"})), Some(json!({"a":"real"}))),
             (Some(json!("42")), Some(json!(42))),
             (Some(json!("a+b")), Some(json!("a%20b"))),
-            (Some(json!("password=one")), Some(json!("password=two"))),
-            (Some(json!("Bearer one")), Some(json!("Bearer two"))),
+            (
+                Some(json!("password=one&scope=a")),
+                Some(json!("password=two&scope=b")),
+            ),
+            (Some(json!("Bearer one ok")), Some(json!("Bearer two no"))),
+            (
+                Some(json!("password=x\nusername=alice")),
+                Some(json!("password=x\nusername=bob")),
+            ),
         ] {
             for (left, right) in [(&a, &b), (&b, &a)] {
                 assert!(
@@ -116,6 +123,28 @@ mod tests {
                     "{left:?} versus {right:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn string_bodies_differing_only_in_redacted_secrets_replay_alike() {
+        let cfg = config();
+        for (recorded, live) in [
+            ("password=[REDACTED]&scope=a", "password=two&scope=a"),
+            ("password=one&scope=a", "password=two&scope=a"),
+            ("Authorization: Bearer one", "Authorization: Bearer two"),
+        ] {
+            assert!(
+                validate_replay_request(
+                    &expected(&cfg, Some(json!(recorded))),
+                    &cfg,
+                    Some(&json!(live)),
+                    1,
+                    1
+                )
+                .is_ok(),
+                "{recorded} versus {live}"
+            );
         }
     }
 
