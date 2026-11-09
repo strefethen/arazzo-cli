@@ -401,6 +401,75 @@ async fn an_unprovided_reference_is_refused_rather_than_read_from_the_document_d
     );
 }
 
+fn alias_bomb(document: String) -> String {
+    let leaves = vec!["x"; 1500].join(", ");
+    let level = |alias: &str| vec![alias; 40].join(", ");
+    format!(
+        "{document}x-bomb:\n  a: &a [{leaves}]\n  b: &b [{}]\n  c: &c [{}]\n  d: [{}]\n",
+        level("*a"),
+        level("*b"),
+        level("*c"),
+    )
+}
+
+#[tokio::test]
+async fn a_provided_alias_bomb_is_a_document_set_parse_error_not_an_unresolved_reference() {
+    let self_uri = "https://documents.example.com/petstore.openapi.yaml";
+    let bomb = alias_bomb(openapi_document("http://bomb.invalid", Some(self_uri)));
+    assert!(bomb.len() < 8 * 1024, "bomb is {} bytes", bomb.len());
+
+    let err = build_error(
+        spec_with(None, self_uri),
+        None,
+        vec![(bomb.into_bytes(), None)],
+    );
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse);
+    assert_names(&err.message, "provided source document \"#1\"", "document");
+    assert_names(&err.message, "YAML node budget exceeded", "admission rule");
+}
+
+#[tokio::test]
+async fn a_local_alias_bomb_is_a_document_set_parse_error_at_binding() {
+    let dir = TempDir::new();
+    dir.write(
+        "petstore.openapi.yaml",
+        &alias_bomb(openapi_document("http://bomb.invalid", None)),
+    );
+
+    let err = build_error(
+        spec_with(None, "./petstore.openapi.yaml"),
+        Some(dir.path()),
+        vec![],
+    );
+
+    assert_eq!(err.kind, RuntimeErrorKind::SourceDescriptionParse);
+    assert_names(&err.message, SOURCE, "source description");
+    assert_names(&err.message, "YAML node budget exceeded", "admission rule");
+}
+
+#[tokio::test]
+async fn a_document_set_member_with_anchors_within_budget_binds_as_before() {
+    let self_uri = "https://documents.example.com/petstore.openapi.yaml";
+    let anchored = openapi_document("http://anchored.invalid", Some(self_uri)).replace(
+        "    get:\n      operationId: getPet\n",
+        "    get: &op\n      operationId: getPet\n  /alias:\n    x-copy: *op\n",
+    );
+    assert!(
+        anchored.contains("*op"),
+        "fixture must use an alias: {anchored}"
+    );
+
+    let url = resolved_request_url(
+        spec_with(None, self_uri),
+        None,
+        vec![(anchored.into_bytes(), None)],
+    )
+    .await;
+
+    assert_eq!(url, "http://anchored.invalid/pet");
+}
+
 #[tokio::test]
 async fn a_local_reference_that_cannot_be_read_names_the_resolution_it_attempted() {
     let dir = TempDir::new();

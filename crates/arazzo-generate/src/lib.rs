@@ -35,7 +35,9 @@ enum OpenApiParseError {
 }
 
 fn parse_openapi(bytes: &[u8]) -> Result<openapiv3::OpenAPI, OpenApiParseError> {
-    ensure_supported_openapi_version(bytes).map_err(OpenApiParseError::UnsupportedVersion)?;
+    let probe = arazzo_spec::parse_yaml_value(bytes)
+        .map_err(|err| OpenApiParseError::InvalidDocument(err.into()))?;
+    ensure_supported_openapi_value(&probe).map_err(OpenApiParseError::UnsupportedVersion)?;
     serde_yaml_ng::from_slice(bytes).map_err(OpenApiParseError::InvalidDocument)
 }
 
@@ -49,9 +51,13 @@ fn parse_openapi(bytes: &[u8]) -> Result<openapiv3::OpenAPI, OpenApiParseError> 
 pub fn ensure_supported_openapi_version(bytes: &[u8]) -> Result<(), String> {
     // A document that is not even valid YAML/JSON is left to the typed parser,
     // which reports the precise syntax error.
-    let Ok(probe) = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(bytes) else {
-        return Ok(());
-    };
+    match arazzo_spec::parse_yaml_value(bytes) {
+        Ok(probe) => ensure_supported_openapi_value(&probe),
+        Err(_) => Ok(()),
+    }
+}
+
+pub fn ensure_supported_openapi_value(probe: &serde_yaml_ng::Value) -> Result<(), String> {
     let Some(version) = probe.get("openapi").and_then(|value| value.as_str()) else {
         return Ok(());
     };

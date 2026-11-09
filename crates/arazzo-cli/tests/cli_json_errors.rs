@@ -837,3 +837,63 @@ fn sweep_test() {
 fn sweep_usage_error() {
     assert_sweep(&["no-such-subcommand"], "CLI_USAGE");
 }
+
+const BOMB_ARAZZO: &str = "arazzo: 1.1.0\ninfo: {title: Bomb, version: '1'}\nsourceDescriptions:\n  - {name: api, url: ./api.yaml, type: openapi}\nworkflows:\n  - workflowId: wf\n    steps:\n      - {stepId: s, operationId: listItems}\n";
+const BOMB_OPENAPI: &str = "openapi: 3.0.3\ninfo: {title: Bomb, version: '1'}\nservers: [{url: 'http://127.0.0.1:9'}]\npaths:\n  /items:\n    get:\n      operationId: listItems\n      responses: {'200': {description: OK}}\n";
+
+fn alias_bomb(document: &str) -> String {
+    let leaves = vec!["x"; 1500].join(", ");
+    let level = |alias: &str| vec![alias; 40].join(", ");
+    let bomb = format!(
+        "{document}x-bomb:\n  a: &a [{leaves}]\n  b: &b [{}]\n  c: &c [{}]\n  d: [{}]\n",
+        level("*a"),
+        level("*b"),
+        level("*c"),
+    );
+    assert!(bomb.len() < 8 * 1024, "bomb is {} bytes", bomb.len());
+    bomb
+}
+
+fn assert_names_node_budget(message: &str) {
+    assert!(
+        message.contains("YAML node budget exceeded")
+            && message.contains("16 nodes per input byte"),
+        "{message}"
+    );
+}
+
+#[test]
+fn arazzo_alias_bomb_is_a_spec_parse_yaml_error_for_validate_and_run() {
+    let dir = TempDir::new("alias-bomb-arazzo");
+    let file = dir.file("bomb.arazzo.yaml", &alias_bomb(BOMB_ARAZZO));
+
+    let body = assert_validate_failure(&file, &[], "VALIDATE_SPEC_PARSE_YAML");
+    assert_eq!(body["errors"][0]["source"], "parseYaml", "{body}");
+    assert_names_node_budget(body["errors"][0]["message"].as_str().unwrap_or_default());
+
+    let output = run(&["--json", "run", &file, "wf", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_names_node_budget(&assert_error_object(&output, "RUN_SPEC_PARSE_YAML"));
+}
+
+#[test]
+fn openapi_alias_bomb_is_refused_by_run_source_loading_and_generate() {
+    let dir = TempDir::new("alias-bomb-openapi");
+    let spec = dir.file("runner.arazzo.yaml", BOMB_ARAZZO);
+    let openapi = dir.file("api.yaml", &alias_bomb(BOMB_OPENAPI));
+
+    let output = run(&["--json", "run", &spec, "wf", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(1));
+    let body: Value = serde_json::from_str(&stdout(&output))
+        .unwrap_or_else(|err| panic!("stdout is not one JSON value ({err}): {}", stdout(&output)));
+    assert_eq!(body["kind"], "error", "{body}");
+    assert_eq!(body["code"], "RUNTIME_SOURCE_DESCRIPTION_PARSE", "{body}");
+    assert_names_node_budget(body["error"].as_str().unwrap_or_default());
+
+    let generated = run(&["generate", "--spec", &openapi]);
+    assert_eq!(generated.status.code(), Some(1));
+    assert!(stdout(&generated).is_empty(), "{}", stdout(&generated));
+    let message = stderr(&generated);
+    assert!(message.starts_with("parsing OpenAPI spec: "), "{message}");
+    assert_names_node_budget(&message);
+}

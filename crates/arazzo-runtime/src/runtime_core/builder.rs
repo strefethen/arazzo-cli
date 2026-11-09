@@ -200,16 +200,15 @@ impl EngineBuilder {
         let mut source_documents = BTreeMap::new();
         for sd in &self.spec.source_descriptions {
             if let Some(bound) = documents.bind(sd)? {
-                let root: serde_yaml_ng::Value =
-                    serde_yaml_ng::from_slice(&bound.data).map_err(|err| {
-                        RuntimeError::new(
-                            RuntimeErrorKind::SourceDescriptionParse,
-                            format!(
-                                "sourceDescription \"{}\": parsing OpenAPI document \"{}\": {err}",
-                                sd.name, bound.label
-                            ),
-                        )
-                    })?;
+                let root = arazzo_spec::parse_yaml_value(&bound.data).map_err(|err| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::SourceDescriptionParse,
+                        format!(
+                            "sourceDescription \"{}\": parsing OpenAPI document \"{}\": {err}",
+                            sd.name, bound.label
+                        ),
+                    )
+                })?;
                 let base = operation_target::derive_servers_base(&root, sd, &bound.label)?;
                 let origin = OperationOrigin::Source {
                     name: sd.name.clone(),

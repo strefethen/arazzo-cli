@@ -159,3 +159,44 @@ fn file_read_error_keeps_the_supplied_path() -> std::io::Result<()> {
     );
     Ok(())
 }
+
+fn openapi_alias_bomb() -> String {
+    let leaves = vec!["x"; 1500].join(", ");
+    let level = |alias: &str| vec![alias; 40].join(", ");
+    format!(
+        "{}x-bomb:\n  a: &a [{leaves}]\n  b: &b [{}]\n  c: &c [{}]\n  d: [{}]\n",
+        String::from_utf8_lossy(YAML),
+        level("*a"),
+        level("*b"),
+        level("*c"),
+    )
+}
+
+#[test]
+fn alias_bomb_is_rejected_by_bytes_and_file_parsers() -> std::io::Result<()> {
+    let bomb = openapi_alias_bomb();
+    assert!(bomb.len() < 8 * 1024, "bomb is {} bytes", bomb.len());
+    let file = TempSpec::new(bomb.as_bytes())?;
+    for result in [
+        parse_openapi_bytes(bomb.as_bytes()),
+        parse_openapi_file(file.path()),
+    ] {
+        let Err(message) = result else {
+            panic!("alias bomb must be rejected");
+        };
+        assert!(message.contains("YAML node budget exceeded"), "{message}");
+    }
+    assert!(ensure_supported_openapi_version(bomb.as_bytes()).is_ok());
+    Ok(())
+}
+
+#[test]
+fn anchors_within_the_budget_parse_like_their_expansion() -> Result<(), String> {
+    let anchored = "openapi: 3.0.3\ninfo:\n  title: Anchors\n  version: 1.0.0\npaths:\n  /a:\n    get: &op\n      responses:\n        '200':\n          description: ok\n  /b:\n    get: *op\n";
+    let expanded = "openapi: 3.0.3\ninfo:\n  title: Anchors\n  version: 1.0.0\npaths:\n  /a:\n    get:\n      responses:\n        '200':\n          description: ok\n  /b:\n    get:\n      responses:\n        '200':\n          description: ok\n";
+    assert_eq!(
+        parse_openapi_bytes(anchored.as_bytes())?,
+        parse_openapi_bytes(expanded.as_bytes())?
+    );
+    Ok(())
+}

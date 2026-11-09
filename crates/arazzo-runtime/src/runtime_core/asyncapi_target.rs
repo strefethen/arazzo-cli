@@ -251,7 +251,7 @@ pub(super) fn load_local_asyncapi(
         ResolveError::new(kind, target, Some(source_name), location.as_deref(), detail)
     })?;
     let label = document.label;
-    let root: Yaml = serde_yaml_ng::from_slice(&document.data).map_err(|err| {
+    let root: Yaml = arazzo_spec::parse_yaml_value(&document.data).map_err(|err| {
         ResolveError::new(
             ResolveErrorKind::InvalidDocument,
             target,

@@ -13,6 +13,7 @@ mod selector_admission;
 mod source_reference;
 mod step_expression;
 mod workflow_dependency;
+mod yaml_admission;
 
 pub use effective_step::{
     effective_step_parameters, EffectiveParameterOrigin, EffectiveParameterRef,
@@ -29,6 +30,7 @@ pub use step_expression::{
     StepValuePathSegment,
 };
 pub use workflow_dependency::{classify_workflow_dependency, WorkflowDependency};
+pub use yaml_admission::{parse_yaml_value, yaml_node_budget, YamlAdmissionError};
 
 /// Every field left over once an Arazzo object's known fields are matched,
 /// keyed by wire name. This is a superset of the `x-*` prefixed
@@ -983,7 +985,15 @@ impl OnAction {
 
 /// Parses raw YAML bytes into an unvalidated specification model.
 pub fn parse_unvalidated_bytes(data: &[u8]) -> Result<ArazzoSpec, serde_yaml_ng::Error> {
-    serde_yaml_ng::from_slice::<ArazzoSpec>(data)
+    parse_unvalidated_document(data).map(|(_, spec)| spec)
+}
+
+pub fn parse_unvalidated_document(
+    data: &[u8],
+) -> Result<(serde_yaml_ng::Value, ArazzoSpec), serde_yaml_ng::Error> {
+    let raw = parse_yaml_value(data)?;
+    let spec = serde_yaml_ng::from_slice::<ArazzoSpec>(data)?;
+    Ok((raw, spec))
 }
 
 #[cfg(test)]

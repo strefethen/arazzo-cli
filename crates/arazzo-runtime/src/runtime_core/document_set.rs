@@ -50,6 +50,13 @@ pub(super) struct ProvidedDocument {
 }
 
 impl ProvidedDocument {
+    fn label(&self, index: usize) -> String {
+        match &self.retrieval_path {
+            Some(path) => path.display().to_string(),
+            None => format!("#{}", index + 1),
+        }
+    }
+
     pub(super) fn new(data: Vec<u8>, retrieval_path: Option<PathBuf>) -> Self {
         Self {
             data,
@@ -118,15 +125,25 @@ impl DocumentSet {
         };
         let members = provided
             .into_iter()
-            .map(|document| {
-                let identity = document_self_uri(&document.data)
+            .enumerate()
+            .map(|(index, document)| {
+                let identity = document_self_uri(&document)
+                    .map_err(|err| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::SourceDescriptionParse,
+                            format!(
+                                "parsing provided source document \"{}\": {err}",
+                                document.label(index)
+                            ),
+                        )
+                    })?
                     .or_else(|| document.retrieval_path.as_deref().and_then(file_uri));
-                SetMember {
+                Ok(SetMember {
                     identity,
                     data: document.data,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, RuntimeError>>()?;
         Ok(Self {
             had_retrieval_base: retrieval_base.is_some(),
             base: base_uri(spec.self_uri.as_deref(), retrieval_base),
@@ -368,10 +385,19 @@ fn base_uri(self_uri: Option<&str>, retrieval: Option<Url>) -> Option<Url> {
 /// A document's self-assigned URI, when it declares an absolute one. A
 /// document this runtime cannot parse contributes no identity; the parse
 /// failure keeps surfacing where it always has, at indexing.
-fn document_self_uri(data: &[u8]) -> Option<String> {
-    let root: serde_yaml_ng::Value = serde_yaml_ng::from_slice(data).ok()?;
-    let declared = root.get("$self")?.as_str()?;
-    Url::parse(declared).ok().map(|uri| identity_of(&uri))
+fn document_self_uri(
+    document: &ProvidedDocument,
+) -> Result<Option<String>, arazzo_spec::YamlAdmissionError> {
+    let root = match arazzo_spec::parse_yaml_value(&document.data) {
+        Ok(root) => root,
+        Err(err) if err.is_node_budget_exceeded() => return Err(err),
+        Err(_) => return Ok(None),
+    };
+    Ok(root
+        .get("$self")
+        .and_then(serde_yaml_ng::Value::as_str)
+        .and_then(|declared| Url::parse(declared).ok())
+        .map(|uri| identity_of(&uri)))
 }
 
 /// The URI a document is referenced by, which is the resolved URI without its

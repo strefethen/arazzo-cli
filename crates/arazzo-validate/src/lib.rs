@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use arazzo_spec::{
-    classify_workflow_dependency, parse_unvalidated_bytes, unrecognized_fields, ActionType,
+    classify_workflow_dependency, parse_unvalidated_document, unrecognized_fields, ActionType,
     ArazzoSpec, OnAction, ParamLocation, Parameter, SourceType, Step, StepAction, StepTarget,
     ValueSource, VendorExtensions, Workflow, WorkflowDependency,
 };
@@ -252,8 +252,7 @@ pub fn parse_bytes_with_diagnostics(data: &[u8]) -> Result<(ArazzoSpec, Vec<Diag
     // declared `ValueSource` types. It cannot retain whether a defaulted null
     // came from an omitted key or from an explicit Any value, so retain the
     // parsed document only inside this boundary pass.
-    let raw = serde_yaml_ng::from_slice::<serde_yaml_ng::Value>(data).map_err(Error::ParseYaml)?;
-    let mut spec = parse_unvalidated_bytes(data).map_err(Error::ParseYaml)?;
+    let (raw, mut spec) = parse_unvalidated_document(data).map_err(Error::ParseYaml)?;
     let provenance =
         resolve_components(&mut spec, Some(&raw)).map_err(Error::ComponentResolution)?;
 

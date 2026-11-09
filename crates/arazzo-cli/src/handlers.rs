@@ -138,15 +138,17 @@ pub fn generate_workflow(
         )
     })?;
 
-    crate::generate::ensure_supported_openapi_version(&bytes)
-        .map_err(|err| CliError::new("GENERATE_OPENAPI_UNSUPPORTED_VERSION", err))?;
-
-    let openapi: openapiv3::OpenAPI = serde_yaml_ng::from_slice(&bytes).map_err(|err| {
+    let parse_error = |err: serde_yaml_ng::Error| {
         CliError::new(
             "GENERATE_OPENAPI_PARSE",
             format!("parsing OpenAPI spec: {err}"),
         )
-    })?;
+    };
+    let probe = arazzo_spec::parse_yaml_value(&bytes).map_err(|err| parse_error(err.into()))?;
+    crate::generate::ensure_supported_openapi_value(&probe)
+        .map_err(|err| CliError::new("GENERATE_OPENAPI_UNSUPPORTED_VERSION", err))?;
+
+    let openapi: openapiv3::OpenAPI = serde_yaml_ng::from_slice(&bytes).map_err(parse_error)?;
 
     if scenario != "crud" {
         return Err(CliError::new(
