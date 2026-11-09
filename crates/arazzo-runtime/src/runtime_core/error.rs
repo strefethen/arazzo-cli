@@ -145,6 +145,14 @@ impl RuntimeErrorKind {
     pub(crate) fn is_cancellation(self) -> bool {
         matches!(self, Self::ExecutionCancelled | Self::ExecutionTimeout)
     }
+
+    /// Whether a step attempt that fails with an error of this kind ends the
+    /// invocation without consulting the step's failure actions: the
+    /// debugger failed, not the step, so neither a retry nor a goto applies.
+    /// Only `DebugController` qualifies, wherever its checkpoint sits.
+    pub(crate) fn bypasses_failure_routing(self) -> bool {
+        matches!(self, Self::DebugController)
+    }
 }
 
 #[derive(Debug)]

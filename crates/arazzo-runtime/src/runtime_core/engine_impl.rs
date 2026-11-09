@@ -773,11 +773,13 @@ impl Engine {
             return Err(exec_ctx.cancelled_error());
         }
         let outputs = output_result.map_err(|err| {
-            if matches!(
-                err.kind,
-                RuntimeErrorKind::WorkflowDependencyUnsatisfied
-                    | RuntimeErrorKind::UnresolvedRequestValue
-            ) {
+            if err.kind.bypasses_failure_routing()
+                || matches!(
+                    err.kind,
+                    RuntimeErrorKind::WorkflowDependencyUnsatisfied
+                        | RuntimeErrorKind::UnresolvedRequestValue
+                )
+            {
                 err
             } else {
                 let msg = format!("sub-workflow {wf_id}: {}", err.message);

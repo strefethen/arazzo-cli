@@ -148,26 +148,32 @@ impl Engine {
     }
 
     /// Routes a settled attempt through the success or failure actions that
-    /// apply to its step. A cancelled invocation's attempt ends in the
-    /// cancellation, whatever routing chose before it noticed.
+    /// apply to its step. An attempt that failed in the debugger ends the
+    /// invocation with that error unrouted, as the step-entry checkpoint
+    /// does. A cancelled invocation's attempt ends in the cancellation,
+    /// whatever routing chose before it noticed.
     pub(super) async fn route_attempt(
         &self,
         scope: &RouteScope<'_>,
         execution: &StepExecution,
     ) -> RoutedDecision {
-        let routed = self
-            .handle_step_result(StepDecisionContext {
-                workflow_id: scope.workflow_id,
-                workflow: scope.workflow,
-                step_idx: scope.step_idx,
-                result: &execution.result,
-                vars: scope.vars,
-                depth: scope.depth,
-                retry_count: scope.retry_count,
-                cancel: scope.cancel,
-                is_timeout: scope.is_timeout,
-            })
-            .await;
+        let routed = match unroutable_error(&execution.result) {
+            Some(err) => RoutedDecision::error(err),
+            None => {
+                self.handle_step_result(StepDecisionContext {
+                    workflow_id: scope.workflow_id,
+                    workflow: scope.workflow,
+                    step_idx: scope.step_idx,
+                    result: &execution.result,
+                    vars: scope.vars,
+                    depth: scope.depth,
+                    retry_count: scope.retry_count,
+                    cancel: scope.cancel,
+                    is_timeout: scope.is_timeout,
+                })
+                .await
+            }
+        };
         if scope.cancel.is_cancelled() {
             return RoutedDecision::error(cancellation_error(scope.is_timeout));
         }
@@ -301,7 +307,9 @@ impl Engine {
 ///
 /// A runtime error, such as an HTTP timeout or a refused connection, becomes
 /// a failed result that onFailure routes like any other step failure: the
-/// specification's onFailure handles every form of step failure.
+/// specification's onFailure handles every form of step failure. A debugger
+/// failure is settled the same way, so observers and traces still record the
+/// attempt, but [`unroutable_error`] keeps it away from onFailure.
 pub(super) fn settle(run: Result<StepExecution, RuntimeError>) -> StepExecution {
     run.unwrap_or_else(|err| StepExecution {
         result: StepResult {
@@ -315,6 +323,19 @@ pub(super) fn settle(run: Result<StepExecution, RuntimeError>) -> StepExecution 
         dry_run_request: None,
         trace: StepTraceData::default(),
     })
+}
+
+/// The error that ends the invocation instead of being routed, when the
+/// attempt failed with a kind that bypasses failure routing. The settled
+/// message is kept verbatim.
+fn unroutable_error(result: &StepResult) -> Option<RuntimeError> {
+    let kind = result
+        .err_kind
+        .filter(|kind| kind.bypasses_failure_routing())?;
+    Some(RuntimeError::new(
+        kind,
+        result.err.clone().unwrap_or_default(),
+    ))
 }
 
 impl SettledAttempt {
@@ -415,6 +436,33 @@ mod tests {
         assert!(settled.trace.response.is_none());
         assert!(settled.trace.criteria.is_empty());
         assert!(settled.trace.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_settled_debugger_failure_is_unroutable_with_its_message() {
+        let message = "debug controller: invalid breakpoint condition";
+        let settled = settle(Err(RuntimeError::new(
+            RuntimeErrorKind::DebugController,
+            message,
+        )));
+
+        let err = unroutable_error(&settled.result)
+            .unwrap_or_else(|| panic!("a debugger failure must bypass routing"));
+
+        assert_eq!(err.kind, RuntimeErrorKind::DebugController);
+        assert_eq!(err.message, message);
+    }
+
+    #[test]
+    fn other_failures_stay_routable() {
+        let runtime_error = settle(Err(RuntimeError::new(
+            RuntimeErrorKind::HttpRequest,
+            "connection refused",
+        )));
+        let criterion_failure = execution(false, None, BTreeMap::new());
+
+        assert!(unroutable_error(&runtime_error.result).is_none());
+        assert!(unroutable_error(&criterion_failure.result).is_none());
     }
 
     #[test]
