@@ -135,7 +135,7 @@ fn redact_request_body(body: &mut Value) {
 fn redact_text_body(text: &str) -> String {
     text.split('&')
         .map(|pair| match pair.split_once('=') {
-            Some((key, value)) if is_form_pair(key, value) && is_sensitive_query_name(key) => {
+            Some((key, _)) if is_form_field_name(key) && is_sensitive_query_name(key) => {
                 format!("{key}={REDACTED}")
             }
             _ => redact_text_patterns(pair),
@@ -144,8 +144,8 @@ fn redact_text_body(text: &str) -> String {
         .join("&")
 }
 
-fn is_form_pair(key: &str, value: &str) -> bool {
-    !key.is_empty() && !key.chars().chain(value.chars()).any(char::is_whitespace)
+fn is_form_field_name(key: &str) -> bool {
+    !key.is_empty() && !key.chars().any(char::is_whitespace)
 }
 
 pub fn redacted_dry_run_request(mut request: DryRunRequest) -> DryRunRequest {
@@ -472,19 +472,22 @@ mod tests {
     }
 
     #[test]
-    fn text_body_redacts_only_the_secret_value_on_its_line() {
+    fn sensitive_field_masks_its_whole_value_including_whitespace() {
         for (body, expected) in [
+            ("password=hunter2\nusername=alice", "password=[REDACTED]"),
+            ("token=abc and the rest of the message", "token=[REDACTED]"),
+            ("password=correct horse battery staple", "password=[REDACTED]"),
             (
-                "password=hunter2\nusername=alice",
-                "password=[REDACTED]\nusername=alice",
-            ),
-            (
-                "token=abc and the rest of the message",
-                "token=[REDACTED] and the rest of the message",
+                "private_key=-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQ==\n-----END PRIVATE KEY-----",
+                "private_key=[REDACTED]",
             ),
             (
                 "grant_type=password&password=hunter2\nusername=alice",
-                "grant_type=password&password=[REDACTED]\nusername=alice",
+                "grant_type=password&password=[REDACTED]",
+            ),
+            (
+                "note: password=hunter2\nusername=alice",
+                "note: password=[REDACTED]\nusername=alice",
             ),
         ] {
             let (trace, dry_run) = redacted_string_body(body);
