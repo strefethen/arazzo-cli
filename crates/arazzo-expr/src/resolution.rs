@@ -183,6 +183,16 @@ impl Resolution {
         }
     }
 
+    fn from_lookup(
+        expression: &ParsedRuntimeExpression<'_>,
+        lookup: Result<Value, String>,
+    ) -> Self {
+        match lookup {
+            Ok(value) => Self::from_option(Some(value)),
+            Err(message) => Self::missing(expression, message),
+        }
+    }
+
     fn missing(expression: &ParsedRuntimeExpression<'_>, message: String) -> Self {
         Self {
             value: ResolvedValue::Missing,
@@ -202,9 +212,29 @@ pub(crate) fn resolve_parsed(
     use RuntimeExpressionNamespace as Namespace;
 
     match expression.namespace() {
-        Namespace::Url => Resolution::from_option(context.url.clone().map(Value::String)),
-        Namespace::Method => Resolution::from_option(context.method.clone().map(Value::String)),
-        Namespace::StatusCode => Resolution::from_option(context.status_code.map(Value::from)),
+        Namespace::Url => Resolution::from_lookup(
+            expression,
+            context
+                .url
+                .clone()
+                .map(Value::String)
+                .ok_or_else(|| "URL not found in context".to_owned()),
+        ),
+        Namespace::Method => Resolution::from_lookup(
+            expression,
+            context
+                .method
+                .clone()
+                .map(Value::String)
+                .ok_or_else(|| "method not found in context".to_owned()),
+        ),
+        Namespace::StatusCode => Resolution::from_lookup(
+            expression,
+            context
+                .status_code
+                .map(Value::from)
+                .ok_or_else(|| "status code not found in context".to_owned()),
+        ),
         Namespace::SelfUri => match &context.self_uri {
             Some(uri) => Resolution::from_option(Some(Value::String(uri.clone()))),
             None => Resolution::missing(expression, "self URI not found in context".to_owned()),
@@ -307,63 +337,64 @@ fn resolve_message_source(
     use RuntimeExpressionForm as Form;
     use RuntimeExpressionNamespace as Namespace;
 
-    let value = match (expression.namespace(), expression.form()) {
-        (Namespace::Request | Namespace::Response | Namespace::Message, Form::Header(name)) => {
-            let headers = match expression.namespace() {
-                Namespace::Request => &context.request_headers,
-                Namespace::Response => &context.response_headers,
-                _ => &context.message_headers,
+    let lookup = match (expression.namespace(), expression.form()) {
+        (namespace, Form::Header(name)) => {
+            let (headers, label) = match namespace {
+                Namespace::Request => (&context.request_headers, "request"),
+                Namespace::Response => (&context.response_headers, "response"),
+                _ => (&context.message_headers, "message"),
             };
-            let value = get_header_case_insensitive(headers, name)
+            get_header_case_insensitive(headers, name)
                 .cloned()
-                .map(Value::String);
-            if value.is_none() && expression.namespace() == Namespace::Message {
-                return Resolution::missing(
-                    expression,
-                    format!("message header \"{name}\" not found in context"),
-                );
-            }
-            value
+                .map(Value::String)
+                .ok_or_else(|| format!("{label} header \"{name}\" not found in context"))
         }
-        (Namespace::Request, Form::Query(name)) => {
-            context.request_query.get(*name).cloned().map(Value::String)
+        (Namespace::Request, Form::Query(name)) => context
+            .request_query
+            .get(*name)
+            .cloned()
+            .map(Value::String)
+            .ok_or_else(|| format!("request query parameter \"{name}\" not found in context")),
+        (Namespace::Request, Form::Path(name)) => context
+            .request_path
+            .get(*name)
+            .cloned()
+            .map(Value::String)
+            .ok_or_else(|| format!("request path parameter \"{name}\" not found in context")),
+        (Namespace::Request, Form::Body(pointer)) => {
+            select_document(context.request_body.as_ref(), *pointer, "request body")
         }
-        (Namespace::Request, Form::Path(name)) => {
-            context.request_path.get(*name).cloned().map(Value::String)
+        (Namespace::Response, Form::Body(pointer)) => {
+            select_document(context.response_body.as_ref(), *pointer, "response body")
         }
-        (Namespace::Request, Form::Body(pointer)) => context
-            .request_body
-            .as_ref()
-            .and_then(|value| select_pointer(value, *pointer)),
-        (Namespace::Response, Form::Body(pointer)) => context
-            .response_body
-            .as_ref()
-            .and_then(|value| select_pointer(value, *pointer)),
-        (Namespace::Message, Form::Payload(pointer)) => {
-            let Some(payload) = &context.message_payload else {
-                return Resolution::missing(
-                    expression,
-                    "message payload not found in context".to_owned(),
-                );
-            };
-            match select_pointer(payload, *pointer) {
-                Some(value) => Some(value),
-                None => {
-                    return Resolution::missing(
-                        expression,
-                        format!(
-                            "message payload suffix \"{}\" did not resolve",
-                            pointer.map_or("", |pointer| pointer.raw()),
-                        ),
-                    )
-                }
-            }
-        }
-        // These forms have canonical syntax but no corresponding context data.
-        (Namespace::Response, Form::Query(_) | Form::Path(_)) => None,
+        (Namespace::Message, Form::Payload(pointer)) => select_document(
+            context.message_payload.as_ref(),
+            *pointer,
+            "message payload",
+        ),
+        (Namespace::Response, Form::Query(name)) => Err(format!(
+            "response query parameter \"{name}\" is not available in context"
+        )),
+        (Namespace::Response, Form::Path(name)) => Err(format!(
+            "response path parameter \"{name}\" is not available in context"
+        )),
         _ => unreachable!("canonical message sources have namespace-specific forms"),
     };
-    Resolution::from_option(value)
+    Resolution::from_lookup(expression, lookup)
+}
+
+fn select_document(
+    document: Option<&Value>,
+    pointer: Option<RuntimeExpressionPointer<'_>>,
+    label: &str,
+) -> Result<Value, String> {
+    let document = document.ok_or_else(|| format!("{label} not found in context"))?;
+    select_pointer(document, pointer).ok_or_else(|| {
+        format!(
+            "{label} suffix \"{}\" did not resolve",
+            pointer.map_or("", |pointer| pointer.raw()),
+        )
+    })
 }
 
 fn select_pointer(value: &Value, pointer: Option<RuntimeExpressionPointer<'_>>) -> Option<Value> {
@@ -803,21 +834,96 @@ mod tests {
                 (Value::Null, vec![warning(input, message)])
             );
         }
-        for input in [
-            "$url",
-            "$method",
-            "$statusCode",
-            "$request.header.Absent",
-            "$response.header.Absent",
-            "$request.query.absent",
-            "$request.path.absent",
-            "$request.body#/absent",
-            "$response.body#/absent",
+        for (input, message) in [
+            ("$url", "URL not found in context"),
+            ("$method", "method not found in context"),
+            ("$statusCode", "status code not found in context"),
+            ("$request.body", "request body not found in context"),
+            ("$response.body#/x", "response body not found in context"),
         ] {
             let resolution = resolve(input, &EvalContext::default());
             assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
-            assert_eq!(resolution.into_public(), (Value::Null, Vec::new()));
+            assert_eq!(
+                resolution.into_public(),
+                (Value::Null, vec![warning(input, message)])
+            );
         }
+    }
+
+    #[test]
+    fn absent_request_and_response_values_warn_like_inputs_and_message() {
+        let context = context();
+        let evaluator = ExpressionEvaluator::new(context.clone());
+        for (input, message) in [
+            (
+                "$request.header.Absent",
+                "request header \"Absent\" not found in context",
+            ),
+            (
+                "$response.header.Absent",
+                "response header \"Absent\" not found in context",
+            ),
+            (
+                "$request.query.absent",
+                "request query parameter \"absent\" not found in context",
+            ),
+            (
+                "$request.path.absent",
+                "request path parameter \"absent\" not found in context",
+            ),
+            (
+                "$request.body#/absent",
+                "request body suffix \"#/absent\" did not resolve",
+            ),
+            (
+                "$response.body#/absent",
+                "response body suffix \"#/absent\" did not resolve",
+            ),
+            (
+                "$response.query.q",
+                "response query parameter \"q\" is not available in context",
+            ),
+            (
+                "$response.path.id",
+                "response path parameter \"id\" is not available in context",
+            ),
+        ] {
+            let resolution = resolve(input, &context);
+            assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
+            let public = resolution.into_public();
+            assert_eq!(
+                public,
+                (Value::Null, vec![warning(input, message)]),
+                "{input}"
+            );
+            assert_eq!(
+                public,
+                evaluator.evaluate_with_diagnostics(input),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_request_and_response_values_interpolate_as_null_with_warnings() {
+        let evaluator = ExpressionEvaluator::new(context());
+        let (value, warnings) = evaluator
+            .resolve_value_with_diagnostics("^{$response.header.X-Expected}$ {$inputs.absent}");
+        assert_eq!(value, json!("^null$ null"));
+        assert_eq!(
+            warnings,
+            vec![
+                warning(
+                    "$response.header.X-Expected",
+                    "response header \"X-Expected\" not found in context"
+                ),
+                warning("$inputs.absent", "input \"absent\" not found in context"),
+            ]
+        );
+        let (value, warnings) =
+            evaluator.resolve_value_with_diagnostics("^{$response.header.X-Response-Id}$");
+        assert_eq!(value, json!("^response$"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -825,8 +931,6 @@ mod tests {
         let context = context();
         let evaluator = ExpressionEvaluator::new(context.clone());
         for input in [
-            "$response.query.q",
-            "$response.path.id",
             "$components.parameters.foo",
             "$components.successActions.foo",
             "$components.failureActions.foo",

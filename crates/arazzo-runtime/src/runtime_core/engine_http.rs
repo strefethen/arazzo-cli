@@ -548,10 +548,18 @@ impl Engine {
             );
             let producer_warnings =
                 dry_run::output_warnings(workflow_id, &step.step_id, name, expr, &metadata);
-            outputs.insert(name.clone(), value, metadata);
             for warning in expr_warnings {
-                warnings.push(format!("output \"{name}\": {warning}"));
+                if !dry_run::transport_skipped_source(
+                    workflow_id,
+                    &step.step_id,
+                    name,
+                    &metadata,
+                    &warning.expression,
+                ) {
+                    warnings.push(format!("output \"{name}\": {warning}"));
+                }
             }
+            outputs.insert(name.clone(), value, metadata);
             warnings.extend(producer_warnings);
             let gate = DebugGateContext {
                 workflow_id,

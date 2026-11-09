@@ -171,9 +171,13 @@ fn missing_values_keep_existing_warning_identity_and_order() {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].message, message);
     }
+    let (value, warnings) = evaluator.evaluate_with_diagnostics("$request.body#/absent");
+    assert_eq!(value, Value::Null);
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].expression, "$request.body#/absent");
     assert_eq!(
-        evaluator.evaluate_with_diagnostics("$request.body#/absent"),
-        (Value::Null, Vec::new())
+        warnings[0].message,
+        "request body suffix \"#/absent\" did not resolve"
     );
 }
 

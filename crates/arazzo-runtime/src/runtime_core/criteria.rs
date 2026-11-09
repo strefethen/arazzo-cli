@@ -444,19 +444,22 @@ mod tests {
     /// null-context failure.
     #[test]
     fn jsonpath_errors_take_precedence_over_null_context() {
-        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let eval = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(Value::Null),
+            ..EvalContext::default()
+        });
         let over_nested = format!("$[?{}@.a{}]", "@[?".repeat(8), "]".repeat(8));
         let cases = [
             (
-                goessner_criterion("$response.body#/missing", "$.pets[*]"),
+                goessner_criterion("$response.body", "$.pets[*]"),
                 "unsupported JSONPath version \"draft-goessner-dispatch-jsonpath-00\"",
             ),
             (
-                jsonpath_criterion("$response.body#/missing", &over_nested),
+                jsonpath_criterion("$response.body", &over_nested),
                 "JSONPath query bracket nesting depth limit of 8 exceeded",
             ),
             (
-                jsonpath_criterion("$response.body#/missing", "$[?("),
+                jsonpath_criterion("$response.body", "$[?("),
                 "invalid JSONPath syntax",
             ),
         ];
@@ -576,13 +579,75 @@ mod tests {
     /// diagnostic.
     #[test]
     fn jsonpath_null_context_fails() {
-        let criterion = jsonpath_criterion("$response.body#/missing", "$.pets[*]");
-        let eval = ExpressionEvaluator::new(EvalContext::default());
+        let present_null = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(Value::Null),
+            ..EvalContext::default()
+        });
+        let absent = ExpressionEvaluator::new(EvalContext::default());
+        for (eval, context, warned) in [
+            (&present_null, "$response.body", Vec::new()),
+            (
+                &absent,
+                "$response.body#/missing",
+                vec!["$response.body#/missing"],
+            ),
+        ] {
+            let criterion = jsonpath_criterion(context, "$.pets[*]");
+            let evaluation =
+                evaluate_criterion_detailed(&criterion, eval, None, &RegexCache::new());
 
-        let evaluation = evaluate_criterion_detailed(&criterion, &eval, None, &RegexCache::new());
+            assert!(!evaluation.matched, "{context}");
+            assert!(evaluation.context_value.is_null(), "{context}");
+            assert!(evaluation.error.is_none(), "{context}");
+            assert_eq!(
+                evaluation
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.expression.as_str())
+                    .collect::<Vec<_>>(),
+                warned,
+                "{context}"
+            );
+        }
+    }
 
+    #[test]
+    fn typed_criterion_fails_when_an_interpolated_response_header_is_absent() {
+        let criterion = SuccessCriterion {
+            condition: "^{$response.header.X-Expected}$".to_owned(),
+            context: "$response.body".to_owned(),
+            type_: Some(arazzo_spec::CriterionType::Name("regex".to_owned())),
+            ..SuccessCriterion::default()
+        };
+        let absent = ExpressionEvaluator::new(EvalContext {
+            response_body: Some(json!("null")),
+            ..EvalContext::default()
+        });
+        let evaluation = evaluate_criterion_detailed(&criterion, &absent, None, &RegexCache::new());
         assert!(!evaluation.matched);
-        assert!(evaluation.context_value.is_null());
+        let error = match evaluation.error.as_deref() {
+            Some(error) => error,
+            None => panic!("an absent interpolated header must surface an error"),
+        };
+        assert!(
+            error.starts_with("typed condition interpolation failed:"),
+            "{error}"
+        );
+        assert!(error.contains("$response.header.X-Expected"), "{error}");
+        assert_eq!(evaluation.warnings.len(), 1);
+        assert_eq!(
+            evaluation.warnings[0].expression,
+            "$response.header.X-Expected"
+        );
+
+        let present = ExpressionEvaluator::new(EvalContext {
+            response_headers: BTreeMap::from([("X-Expected".to_owned(), "ready".to_owned())]),
+            response_body: Some(json!("ready")),
+            ..EvalContext::default()
+        });
+        let evaluation =
+            evaluate_criterion_detailed(&criterion, &present, None, &RegexCache::new());
+        assert!(evaluation.matched);
         assert!(evaluation.error.is_none());
         assert!(evaluation.warnings.is_empty());
     }

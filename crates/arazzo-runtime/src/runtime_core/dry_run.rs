@@ -108,6 +108,29 @@ fn producer_name(origin: &value_provenance::SkippedOrigin) -> String {
     format!("{}/{}.{site}", origin.workflow_id, origin.step_id)
 }
 
+fn skipped_at_output<'a>(
+    workflow_id: &'a str,
+    step_id: &'a str,
+    name: &'a str,
+    metadata: &'a ValueProvenance,
+) -> impl Iterator<Item = &'a value_provenance::SkippedOrigin> {
+    metadata.skipped.iter().filter(move |origin| {
+        origin.workflow_id == workflow_id
+            && origin.step_id == step_id
+            && matches!(&origin.site, SkippedValueSite::Output(site) if site == name)
+    })
+}
+
+pub(super) fn transport_skipped_source(
+    workflow_id: &str,
+    step_id: &str,
+    name: &str,
+    metadata: &ValueProvenance,
+    source: &str,
+) -> bool {
+    skipped_at_output(workflow_id, step_id, name, metadata).any(|origin| origin.source == source)
+}
+
 pub(super) fn output_warnings(
     workflow_id: &str,
     step_id: &str,
@@ -118,14 +141,7 @@ pub(super) fn output_warnings(
     if !matches!(output, OutputValue::RuntimeExpression(_)) {
         return Vec::new();
     }
-    metadata
-        .skipped
-        .iter()
-        .filter(|origin| {
-            origin.workflow_id == workflow_id
-                && origin.step_id == step_id
-                && origin.site == SkippedValueSite::Output(name.to_owned())
-        })
+    skipped_at_output(workflow_id, step_id, name, metadata)
         .map(|origin| {
             format!(
                 "dry-run unresolved output {}: {} requires a response; transport was skipped",

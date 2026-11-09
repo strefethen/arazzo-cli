@@ -136,7 +136,7 @@ fn stored_values_retain_missing_null_empty_and_all_coordinates() {
 }
 
 #[test]
-fn request_and_response_misses_are_retained_without_warnings() {
+fn request_and_response_misses_warn_and_retain_provenance() {
     for context_present in [false, true] {
         let evaluator = if context_present {
             evaluator()
@@ -162,7 +162,17 @@ fn request_and_response_misses_are_retained_without_warnings() {
                     expected.clone().unwrap_or(Value::Null),
                     "{source}"
                 );
-                assert!(result.warnings.is_empty(), "{source}");
+                let warned: Vec<&str> = result
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.expression.as_str())
+                    .collect();
+                let expected_warned = if expected.is_none() {
+                    vec![source.as_str()]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(warned, expected_warned, "{source}");
                 assert!(!result.syntax_error);
                 assert_eq!(
                     result.expressions,
@@ -214,6 +224,10 @@ fn templates_retain_every_occurrence_and_warning_in_source_order() {
             ExpressionWarning {
                 expression: "$inputs.absent".to_owned(),
                 message: "input \"absent\" not found in context".to_owned()
+            },
+            ExpressionWarning {
+                expression: "$response.body#/absent".to_owned(),
+                message: "response body suffix \"#/absent\" did not resolve".to_owned()
             },
             ExpressionWarning {
                 expression: "$outputs.absent".to_owned(),

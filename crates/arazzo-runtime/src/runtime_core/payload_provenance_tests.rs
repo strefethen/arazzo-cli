@@ -120,7 +120,14 @@ fn direct_values_distinguish_missing_from_present_null_empty_and_literals() {
             failures(&result),
             [("", text, ValueResolutionFailureReason::ExpressionMissing)]
         );
-        assert_eq!(result.warnings.len(), usize::from(text == "$inputs.absent"));
+        assert_eq!(
+            result
+                .warnings
+                .iter()
+                .map(|warning| warning.expression.as_str())
+                .collect::<Vec<_>>(),
+            [text]
+        );
     }
 }
 
@@ -180,7 +187,12 @@ fn recursive_occurrences_and_failures_preserve_order_and_escaped_locations() {
             .iter()
             .map(|warning| warning.expression.as_str())
             .collect::<Vec<_>>(),
-        ["$inputs.absent", "$inputs.absent", "{$inputs.nil"]
+        [
+            "$inputs.absent",
+            "$inputs.absent",
+            "$response.body#/absent",
+            "{$inputs.nil"
+        ]
     );
 }
 
@@ -279,17 +291,23 @@ fn nested_selector_failures_belong_to_the_selected_value_location() {
             ),
         ]
     );
-    assert_eq!(result.warnings.len(), 1);
-    assert_eq!(result.warnings[0].expression, "invalid");
+    assert_eq!(
+        result
+            .warnings
+            .iter()
+            .map(|warning| warning.expression.as_str())
+            .collect::<Vec<_>>(),
+        ["$response.body#/absent", "invalid"]
+    );
 }
 
 #[test]
-fn selector_silent_context_misses_are_unresolved_without_changing_projection() {
+fn selector_request_and_response_context_misses_warn_and_are_unresolved() {
     let eval = evaluator();
     for (context, query, count, unresolved) in [
-        ("$response.body#/absent", "$", 0, true),
+        ("$response.body#/absent", "$", 1, true),
         ("$response.body#/absent", "$.id", 1, true),
-        ("$request.body#/absent", "$", 0, true),
+        ("$request.body#/absent", "$", 1, true),
         ("$inputs.nil", "$", 0, false),
         ("$response.body#/present", "$", 0, false),
     ] {

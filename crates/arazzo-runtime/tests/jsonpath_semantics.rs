@@ -245,9 +245,14 @@ async fn null_context_fails_without_evaluating() {
     );
     let trace = result.trace_steps()[0];
     assert!(
-        !trace.criteria[0].result && trace.criteria[0].warnings.is_empty(),
+        !trace.criteria[0].result,
         "a valid query over a null context is a plain failure: {:?}",
         trace.criteria[0]
+    );
+    assert_eq!(
+        trace.criteria[0].warnings,
+        vec!["$response.body#/absent: response body suffix \"#/absent\" did not resolve"],
+        "only the context lookup warns, never the JSONPath query"
     );
 }
 
