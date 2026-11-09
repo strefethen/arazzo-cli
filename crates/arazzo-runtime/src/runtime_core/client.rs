@@ -478,7 +478,10 @@ impl HttpClient {
         let mut current_url = url_crate::Url::parse(&cfg.url).map_err(|err| {
             RuntimeError::new(
                 RuntimeErrorKind::HttpRequest,
-                format!("executing request: invalid URL \"{}\": {err}", cfg.url),
+                format!(
+                    "executing request: invalid URL \"{}\": {err}",
+                    redaction::redacted_url(&cfg.url)
+                ),
             )
         })?;
 
@@ -538,7 +541,11 @@ impl HttpClient {
             }
             let send_result = await_transport(req.send(), cancel, is_timeout).await?;
             let resp = send_result.map_err(|err| {
-                let mut message = format!("executing request: {err}");
+                let err = err.without_url();
+                let mut message = format!(
+                    "executing request: {err} for url ({})",
+                    redaction::redacted_url(current_url.as_str())
+                );
                 if error_chain_mentions_certificate(&err) {
                     let host = host_port_label(&current_url);
                     message.push_str(&format!(
@@ -576,7 +583,9 @@ impl HttpClient {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RedirectDowngradeRefused,
                         format!(
-                            "refusing https→http downgrade redirect from \"{current_url}\" to \"{next_url}\" (pass --allow-downgrade-redirects to follow it)"
+                            "refusing https→http downgrade redirect from \"{}\" to \"{}\" (pass --allow-downgrade-redirects to follow it)",
+                            redaction::redacted_url(current_url.as_str()),
+                            redaction::redacted_url(next_url.as_str())
                         ),
                     ));
                 }
@@ -584,8 +593,9 @@ impl HttpClient {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RedirectLimitExceeded,
                         format!(
-                            "redirect limit of {} exceeded at \"{next_url}\" (raise --max-redirects to follow further)",
-                            self.max_redirects
+                            "redirect limit of {} exceeded at \"{}\" (raise --max-redirects to follow further)",
+                            self.max_redirects,
+                            redaction::redacted_url(next_url.as_str())
                         ),
                     ));
                 }

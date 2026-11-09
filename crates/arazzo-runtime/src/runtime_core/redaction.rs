@@ -224,6 +224,12 @@ pub fn redact_url(url: &mut String) {
     url.replace_range(query_start + 1..query_end, &redacted_query);
 }
 
+pub(crate) fn redacted_url(url: &str) -> String {
+    let mut redacted = url.to_string();
+    redact_url(&mut redacted);
+    redacted
+}
+
 pub fn redact_url_components(url: &mut String) {
     redact_url(url);
     let (before_fragment, fragment) = match url.split_once('#') {
