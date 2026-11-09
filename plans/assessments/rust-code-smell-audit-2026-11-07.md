@@ -24,6 +24,27 @@ are numbered `N#`.
 
 ---
 
+## Status (2026-11-09)
+
+Six of the seven Highs are closed, one commit each on `main` after `39c8e08`, every one through a
+fresh-context review that passed:
+
+| # | Ticket | Commit |
+|---|---|---|
+| N1 | ac-28be3 (closed) | `e34345f` warn when request/response expressions resolve to Missing |
+| N2 | ac-12c1e (closed) | `06a2037` end the run on debugger gate errors at every checkpoint |
+| N3 | ac-1b0d1 (closed) | `10bd751` redact URLs in transport and redirect error messages; ac-8a804 stays open for the broader contract |
+| N4 | ac-b3ba5 (closed) | `a94f3d2` redact string request bodies, plus `0c85cb0` fail-closed whole-value masking; ac-b30ba tracks JSON-text and `&`-in-value residue |
+| N5 | ac-43b2f (closed) | `cb28a9b` bound YAML alias expansion at every parse entry point; ac-38c60 stays open for the aggregate budget |
+| N6 | ac-fd667 (closed) | `d505233` check operationId source routing at validate time. Its prerequisite on ac-d15a3 was removed: the diagnostics consume `classify_operation_id` and today's `SourceType`, independent of whether `type` becomes optional. A qualified id naming an `asyncapi` source is accepted: §5.8.5 says a step may call an "(AysncAPI Operations Object)" and the spec's own example uses `$sourceDescriptions.asyncOrderApi.placeOrder`. |
+| N7 | ac-d15a3 (paused) | Open. Gated on Steve's public-output choice in ac-bd367 (recommended: JSON `null` for an omitted source `type`, nullable schema). |
+
+**Carried High M2 (`Step.timeout` ignored for HTTP steps) is withdrawn.** In
+`spec/arazzo/v1.1.0.html` the Step Object's `timeout` is defined for message receipt only: "If no
+matching message is received within the `timeout` period, the step fails". `engine_message.rs` reads
+it for receive steps, which is the whole of the spec's requirement; enforcing it on HTTP steps would
+extend the spec. The 10-24 M2 entry and the conformance-audit row stand corrected by this note.
+
 ## Summary
 
 - **Highs: 7.** 3 have no owning ticket (N1, N2, N4), and N2 is the 10-24 M1, still untracked two

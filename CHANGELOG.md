@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Missing request and response values now warn** — `$url`, `$method`,
+  `$statusCode`, `$request.*` and `$response.*` that resolve to nothing still
+  evaluate to `null`, but each absence now reports an expression warning, as
+  `$inputs` and `$message` already did. A typed criterion whose template
+  references an absent response header therefore fails with a diagnostic
+  naming the expression instead of silently matching the text `null`. With
+  `--expr-diagnostics error` such runs now exit with
+  `RUNTIME_EXPRESSION_DIAGNOSTICS`.
+- **`validate` checks `operationId` routing** — a bare `operationId` while two
+  or more non-`arazzo` source descriptions are declared, a qualified
+  `$sourceDescriptions.<name>.<operationId>` naming an undeclared or `arazzo`
+  source, and a malformed qualified form are reported as errors at the step's
+  `operationId` path before any request is sent. `run` refuses these documents
+  with `RUN_SPEC_VALIDATION`; previously the runtime refused them only on
+  reaching the step.
+
+### Fixed
+
+- **Debugger gate errors end the run** — a breakpoint condition that fails to
+  evaluate at a success-criterion, output, or sub-workflow checkpoint now ends
+  the run with the same `DebugController` error as the step-entry gate,
+  instead of being routed through `onFailure`, where a `retry` re-sent the
+  request and a `goto` took the failure branch.
+- **Transport error messages redact URLs** — connection, redirect-downgrade,
+  redirect-limit and invalid-URL errors no longer carry userinfo or sensitive
+  query values into `run` errors, `--json`, stderr or the trace step `error`.
+- **String request bodies are redacted** — form-encoded, plain-text and XML
+  request payloads in `--trace`, `--dry-run` and the MCP dry-run projection
+  now have sensitive `key=value` fields and embedded credentials replaced,
+  as JSON bodies and response bodies already were. A sensitive field masks its
+  whole value, including whitespace and following lines, so passphrases and
+  multi-line keys cannot leak. Replay treats recorded and live string bodies
+  that differ only in a redacted secret as equal.
+- **YAML alias expansion is bounded** — every document parse (`validate`,
+  `run`, `test`, `generate`, the debug adapter, MCP `validate_spec` and
+  `describe_openapi`, and runtime source loading) now counts expanded nodes
+  and refuses a document past 16 nodes per input byte plus 1024, so a few
+  kilobytes of nested anchors can no longer exhaust memory. The refusal is an
+  ordinary parse error (`VALIDATE_SPEC_PARSE_YAML`, `RUN_SPEC_PARSE_YAML`,
+  `RUNTIME_SOURCE_DESCRIPTION_PARSE`) naming the budget. As a consequence
+  `parse_unvalidated_bytes` and `generate` now reject duplicate mapping keys,
+  which `validate` and runtime source binding already rejected.
+
 ## [0.9.0] - 2026-11-06
 
 Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.
