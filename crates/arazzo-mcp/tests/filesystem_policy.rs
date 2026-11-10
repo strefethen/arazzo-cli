@@ -347,7 +347,14 @@ fn verbatim_canonical_roots_match_plain_disk_paths_and_still_contain() {
         outside.join(CANARY),
         PathBuf::from(format!(r"{root}\..\{outside_name}\{CANARY}")),
         PathBuf::from(format!(r"{root}\x/../../{outside_name}\{CANARY}")),
-        PathBuf::from(format!(r"{root}\x/../D:/{CANARY}")),
+        PathBuf::from(format!(
+            r"{root}\x/../{}",
+            plain(&outside)
+                .join(CANARY)
+                .to_str()
+                .unwrap()
+                .replace('\\', "/")
+        )),
     ] {
         call_all(&state, &path, "MCP_FILE_DENIED");
     }

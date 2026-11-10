@@ -107,7 +107,12 @@ fn duplicated_roots_use_one_pinned_identity() {
         ]),
     )
     .unwrap();
-    assert_eq!(state.allowed_dirs.as_ref().unwrap().len(), 1);
+    let selectors = state.allowed_dirs.as_ref().unwrap();
+    let distinct: std::collections::HashSet<_> = selectors.iter().collect();
+    assert_eq!(distinct.len(), selectors.len(), "{selectors:?}");
+    assert!(selectors
+        .iter()
+        .all(|selector| fs::canonicalize(selector).unwrap() == root));
 }
 
 #[test]

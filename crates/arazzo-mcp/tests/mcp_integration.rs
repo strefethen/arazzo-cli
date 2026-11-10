@@ -146,7 +146,8 @@ fn fixture_source_url(base_url: &str) -> String {
     }});
     fs::write(&path, source.to_string())
         .unwrap_or_else(|err| panic!("writing explicit MCP source: {err}"));
-    path.display().to_string()
+    let path = path.to_string_lossy().replace('\\', "/");
+    format!("file:///{}", path.trim_start_matches('/'))
 }
 
 fn make_spec(base_url: &str) -> ArazzoSpec {
@@ -1055,6 +1056,7 @@ fn test_generate_workflow_emits_document_file_name_not_absolute_path() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn test_generate_workflow_guards_colon_bearing_file_name() {
     let openapi_yaml = fs::read_to_string(testdata_path("petstore.openapi.yaml"))

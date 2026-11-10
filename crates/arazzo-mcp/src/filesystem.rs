@@ -197,16 +197,16 @@ impl FileAccess {
             let identity =
                 root_identity(&handle, &metadata).map_err(|_| STARTUP_DENIED.to_string())?;
             let forms = selector_forms(authored, &selector);
-            if let Some(root) = roots
-                .iter_mut()
-                .find(|root| root.identity == identity && identities_available())
-            {
+            if let Some(root) = roots.iter_mut().find(|root| {
+                (root.identity == identity && identities_available())
+                    || root.selectors.contains(&selector)
+            }) {
                 for form in forms {
                     if !root.selectors.contains(&form) {
                         root.selectors.push(form);
                     }
                 }
-            } else if !roots.iter().any(|root| root.selectors.contains(&selector)) {
+            } else {
                 roots.push(RootCapability {
                     selectors: forms,
                     canonical: selector,

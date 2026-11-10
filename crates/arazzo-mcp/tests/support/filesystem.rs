@@ -27,7 +27,13 @@ pub(super) fn rooted_state_from_spec(path: &str, spec: arazzo_spec::ArazzoSpec) 
         .source_descriptions
         .iter()
         .map(|source| {
-            Path::new(&source.url)
+            let path = source.url.strip_prefix("file://").unwrap_or(&source.url);
+            let path = if cfg!(windows) {
+                path.trim_start_matches('/')
+            } else {
+                path
+            };
+            Path::new(path)
                 .parent()
                 .unwrap()
                 .to_string_lossy()
