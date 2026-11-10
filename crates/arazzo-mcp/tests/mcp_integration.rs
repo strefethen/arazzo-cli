@@ -636,7 +636,7 @@ fn test_dry_run() {
 #[test]
 fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
     let spec = make_spec("https://user:prefix@MCP-LEAKED-SECRET@example.com");
-    let source = spec.source_descriptions[0].url.clone();
+    let source = source_file_path(&spec.source_descriptions[0].url).to_string();
     let state = rooted_state_from_spec("multiple-at.arazzo.yaml", spec);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),
@@ -660,7 +660,7 @@ fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
 #[test]
 fn test_dry_run_redacts_url_userinfo() {
     let spec = make_spec("http://user:MCP-USERINFO-PASSWORD@example.com");
-    let source = spec.source_descriptions[0].url.clone();
+    let source = source_file_path(&spec.source_descriptions[0].url).to_string();
     let state = rooted_state_from_spec("userinfo.arazzo.yaml", spec);
     let messages = build_messages(&[
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}),

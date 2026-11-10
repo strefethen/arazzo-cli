@@ -22,18 +22,21 @@ pub(super) fn generation_tool_result(response: &Value) -> Value {
     extract_tool_text(response).unwrap()
 }
 
+pub(super) fn source_file_path(url: &str) -> &str {
+    let path = url.strip_prefix("file://").unwrap_or(url);
+    if cfg!(windows) {
+        path.trim_start_matches('/')
+    } else {
+        path
+    }
+}
+
 pub(super) fn rooted_state_from_spec(path: &str, spec: arazzo_spec::ArazzoSpec) -> ServerState {
     let roots = spec
         .source_descriptions
         .iter()
         .map(|source| {
-            let path = source.url.strip_prefix("file://").unwrap_or(&source.url);
-            let path = if cfg!(windows) {
-                path.trim_start_matches('/')
-            } else {
-                path
-            };
-            Path::new(path)
+            Path::new(source_file_path(&source.url))
                 .parent()
                 .unwrap()
                 .to_string_lossy()
