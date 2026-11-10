@@ -884,7 +884,7 @@ fn test_relative_source_vetting_list_names_the_file_the_engine_reads() {
         Ok(spec) => spec,
         Err(err) => panic!("parsing spec: {err}"),
     };
-    let dir = std::path::PathBuf::from(testdata_path(""));
+    let dir = std::path::PathBuf::from(testdata_path("").trim_start_matches(r"\\?\"));
 
     let vetted = arazzo_runtime::relative_openapi_source_paths(&spec, &dir);
 
@@ -1258,16 +1258,20 @@ fn test_env_directory_does_not_hang_the_server() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lines: Vec<&str> = stderr.lines().collect();
-    assert_eq!(lines.len(), 3, "{stderr}");
-    assert_eq!(lines[2], file_policy_notice().trim_end());
-    assert!(
-        lines[0].starts_with("warning: .env:1: stopped reading: "),
-        "{stderr}"
-    );
-    assert_eq!(
-        lines[1], "loaded .env: set 0, kept 0 already in the environment, ignored 0",
-        "{stderr}"
-    );
+    if cfg!(windows) {
+        assert_eq!(lines, [file_policy_notice().trim_end()], "{stderr}");
+    } else {
+        assert_eq!(lines.len(), 3, "{stderr}");
+        assert_eq!(lines[2], file_policy_notice().trim_end());
+        assert!(
+            lines[0].starts_with("warning: .env:1: stopped reading: "),
+            "{stderr}"
+        );
+        assert_eq!(
+            lines[1], "loaded .env: set 0, kept 0 already in the environment, ignored 0",
+            "{stderr}"
+        );
+    }
     assert_eq!(
         output.stdout, baseline.stdout,
         "stdout framing changed by .env"

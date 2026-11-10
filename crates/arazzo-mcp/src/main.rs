@@ -20,7 +20,7 @@ struct Args {
     dir: Option<String>,
 
     #[arg(
-        help = "Replace default MCP file roots (repeatable); defaults are startup-spec parents; tool reads require Linux and deny dot-prefixed descendants"
+        help = "Replace default MCP file roots (repeatable); defaults are startup-spec parents; tool reads deny dot-prefixed descendants"
     )]
     #[arg(long = "allowed-dir")]
     allowed_dir: Vec<String>,

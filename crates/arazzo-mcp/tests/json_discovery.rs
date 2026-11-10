@@ -23,7 +23,9 @@ impl TempDir {
     }
 
     fn write(&self, relative: &str, content: &str) -> PathBuf {
-        let path = self.0.join(relative);
+        let path = relative
+            .split('/')
+            .fold(self.0.clone(), |path, part| path.join(part));
         fs::create_dir_all(path.parent().unwrap_or_else(|| panic!("fixture parent")))
             .unwrap_or_else(|err| panic!("create fixture parent: {err}"));
         fs::write(&path, content).unwrap_or_else(|err| panic!("write fixture: {err}"));

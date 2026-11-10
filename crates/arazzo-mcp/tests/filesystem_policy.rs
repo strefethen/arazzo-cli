@@ -316,6 +316,28 @@ fn startup_default_roots_follow_the_typed_spec_spelling_only_for_its_real_direct
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn an_alias_listed_after_its_canonical_root_still_selects_that_root() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new();
+    fixture.write("report.json", OPENAPI);
+    let alias = fixture.0.with_extension("root-alias");
+    symlink(&fixture.0, &alias).unwrap();
+    let state = ServerState::load(
+        &[],
+        Some(vec![
+            fixture.0.to_str().unwrap().into(),
+            alias.to_str().unwrap().into(),
+        ]),
+    )
+    .unwrap();
+    let result =
+        handlers::describe_openapi(&state, &json!({"file_path": alias.join("report.json")}))
+            .unwrap();
+    assert_eq!(result["isError"], false, "{result}");
+}
+
 #[cfg(windows)]
 #[test]
 fn verbatim_canonical_roots_match_plain_disk_paths_and_still_contain() {
