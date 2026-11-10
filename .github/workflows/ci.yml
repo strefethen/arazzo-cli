@@ -118,6 +118,33 @@ jobs:
             echo "No performance summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  test-mcp:
+    name: Test MCP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch vendored spec
+        shell: bash
+        run: ./spec/fetch.sh && git diff --exit-code -- spec/SHA256SUMS
+
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@1.98.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Test arazzo-mcp
+        run: cargo test -p arazzo-mcp --locked
+
   # Live Kafka evidence: the ignored `kafka_*` tests against the pinned broker
   # (plain and SASL_SSL listeners) started by scripts/kafka/broker.sh. The
   # ordinary test job never touches a broker.
