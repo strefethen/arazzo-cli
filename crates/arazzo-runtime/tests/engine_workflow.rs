@@ -328,13 +328,14 @@ async fn workflow_level_success_actions_as_default() {
 }
 
 #[tokio::test]
-async fn workflow_level_actions_ignored_when_step_has_own() {
+async fn workflow_level_action_replaced_by_same_named_step_action() {
     let server = start_server(|_m, _u, _h, _b| MockHttpResponse::json(200, r#"{"ok":true}"#));
     let spec = make_spec_with_base(
         &server.base_url,
         vec![Workflow {
             workflow_id: "wf".to_string(),
             success_actions: vec![OnAction {
+                name: "route".to_string(),
                 type_: Some(ActionType::End),
                 ..OnAction::default()
             }],
@@ -348,8 +349,8 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
                         condition: "$statusCode == 200".to_string(),
                         ..SuccessCriterion::default()
                     }],
-                    // Step has its own on_success (goto s2), so workflow-level "end" is ignored
                     on_success: vec![OnAction {
+                        name: "route".to_string(),
                         type_: Some(ActionType::Goto),
                         step_id: "s2".to_string(),
                         ..OnAction::default()
@@ -383,7 +384,6 @@ async fn workflow_level_actions_ignored_when_step_has_own() {
         Ok(r) => r,
         Err(err) => panic!("executing workflow: {err}"),
     };
-    // s2 should execute because s1 has its own on_success, bypassing workflow-level end
     assert_eq!(result.get("s2_reached"), Some(&json!(200)));
 }
 

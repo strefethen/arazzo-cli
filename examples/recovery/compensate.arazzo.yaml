@@ -1,0 +1,48 @@
+arazzo: 1.1.0
+info:
+  title: Explicitly release a reservation after later failure
+  version: 1.0.0
+sourceDescriptions:
+  - name: recoveryApi
+    url: ./recovery.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: purchase
+    steps:
+      - stepId: reserve
+        operationId: reserveInventory
+        successCriteria:
+          - condition: $statusCode == 201
+        outputs:
+          id: $response.body#/id
+      - stepId: charge
+        operationId: chargePayment
+        successCriteria:
+          - condition: $statusCode == 200
+        onFailure:
+          - name: compensateReservation
+            type: goto
+            workflowId: release
+            parameters:
+              - name: reservationId
+                value: $steps.reserve.outputs.id
+  - workflowId: release
+    inputs:
+      type: object
+      required: [reservationId]
+      properties:
+        reservationId: {type: string}
+    steps:
+      - stepId: cleanup
+        operationId: releaseInventory
+        parameters:
+          - name: reservationId
+            in: path
+            value: $inputs.reservationId
+        successCriteria:
+          - condition: $statusCode == 204
+        outputs:
+          status: $statusCode
+    outputs:
+      cleanupStatus: $steps.cleanup.outputs.status
+      reservationId: $inputs.reservationId

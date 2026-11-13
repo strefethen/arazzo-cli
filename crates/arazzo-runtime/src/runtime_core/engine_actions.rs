@@ -23,7 +23,7 @@ impl Engine {
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                     },
-                    success_actions,
+                    &success_actions,
                 )
                 .await
             {
@@ -104,7 +104,7 @@ impl Engine {
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                     },
-                    failure_actions,
+                    &failure_actions,
                     next_action_index,
                     ctx.result.err_kind == Some(RuntimeErrorKind::UnresolvedRequestValue),
                 )
@@ -214,7 +214,7 @@ impl Engine {
     async fn find_matching_action_with_debug<'a>(
         &self,
         ctx: ActionSelectionContext<'_>,
-        actions: &'a [OnAction],
+        actions: &[&'a OnAction],
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
         self.find_matching_action_with_debug_from(ctx, actions, 0, false)
             .await
@@ -223,7 +223,7 @@ impl Engine {
     async fn find_matching_action_with_debug_from<'a>(
         &self,
         ctx: ActionSelectionContext<'_>,
-        actions: &'a [OnAction],
+        actions: &[&'a OnAction],
         start_index: usize,
         skip_retry: bool,
     ) -> Result<Option<MatchedActionRef<'a>>, RuntimeError> {
@@ -815,18 +815,18 @@ struct ExecuteActionContext<'a> {
     original_err_kind: Option<RuntimeErrorKind>,
 }
 
-/// The action list a step's result is routed through: the step's own list
-/// when it declares one, otherwise the workflow's. Parallel levels read the
-/// same list to order a step after the outputs its criteria consult.
 pub(super) fn applicable_actions<'a>(
     step_actions: &'a [OnAction],
     workflow_actions: &'a [OnAction],
-) -> &'a [OnAction] {
-    if step_actions.is_empty() {
-        workflow_actions
-    } else {
-        step_actions
-    }
+) -> Vec<&'a OnAction> {
+    step_actions
+        .iter()
+        .chain(workflow_actions.iter().filter(|inherited| {
+            !step_actions
+                .iter()
+                .any(|local| local.name == inherited.name)
+        }))
+        .collect()
 }
 
 /// Returns the effective Arazzo retry limit for all runtime consumers.

@@ -1,0 +1,57 @@
+arazzo: 1.1.0
+info:
+  title: Reconcile an uncertain create without resubmitting
+  version: 1.0.0
+sourceDescriptions:
+  - name: recoveryApi
+    url: ./recovery.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: submit
+    inputs:
+      type: object
+      required: [businessKey]
+      properties:
+        businessKey: {type: string}
+    steps:
+      - stepId: create
+        operationId: createOperation
+        requestBody:
+          contentType: application/json
+          payload:
+            businessKey: $inputs.businessKey
+        successCriteria:
+          - condition: $statusCode == 201
+        onFailure:
+          - name: reconcileUncertainCreate
+            type: goto
+            workflowId: reconcile
+            parameters:
+              - name: businessKey
+                value: $inputs.businessKey
+        outputs:
+          id: $response.body#/id
+    outputs:
+      id: $steps.create.outputs.id
+  - workflowId: reconcile
+    inputs:
+      type: object
+      required: [businessKey]
+      properties:
+        businessKey: {type: string}
+    steps:
+      - stepId: lookup
+        operationId: lookupOperation
+        parameters:
+          - name: businessKey
+            in: query
+            value: $inputs.businessKey
+        successCriteria:
+          - condition: $statusCode == 200
+          - condition: $response.body#/id != null
+        outputs:
+          id: $response.body#/id
+          status: $statusCode
+    outputs:
+      id: $steps.lookup.outputs.id
+      lookupStatus: $steps.lookup.outputs.status

@@ -1,0 +1,38 @@
+arazzo: 1.1.0
+info:
+  title: Retry a create operation using API idempotency
+  version: 1.0.0
+sourceDescriptions:
+  - name: recoveryApi
+    url: ./recovery.openapi.yaml
+    type: openapi
+workflows:
+  - workflowId: createOnce
+    inputs:
+      type: object
+      required: [key, businessKey]
+      properties:
+        key: {type: string}
+        businessKey: {type: string}
+    steps:
+      - stepId: create
+        operationId: createOperation
+        parameters:
+          - name: Idempotency-Key
+            in: header
+            value: $inputs.key
+        requestBody:
+          contentType: application/json
+          payload:
+            businessKey: $inputs.businessKey
+        successCriteria:
+          - condition: $statusCode == 201
+        onFailure:
+          - name: retryWithSameKey
+            type: retry
+            retryLimit: 1
+            retryAfter: 0
+        outputs:
+          id: $response.body#/id
+    outputs:
+      id: $steps.create.outputs.id

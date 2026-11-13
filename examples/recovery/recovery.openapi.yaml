@@ -1,0 +1,84 @@
+openapi: 3.1.0
+info:
+  title: Recovery demonstration API assumptions
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /operations:
+    post:
+      operationId: createOperation
+      description: Stores one operation; an idempotency key binds its payload and result.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [businessKey]
+              properties:
+                businessKey: {type: string}
+      responses:
+        '201':
+          description: Created, or the stored result for this idempotency key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: {type: string}
+    get:
+      operationId: lookupOperation
+      description: Looks up an existing operation by its unique business key without creating anything.
+      parameters:
+        - name: businessKey
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Found existing operation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: {type: string}
+        '404': {description: No matching operation}
+        '503': {description: Lookup unavailable; no resubmission is safe}
+  /reservations:
+    post:
+      operationId: reserveInventory
+      responses:
+        '201':
+          description: Reservation created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id: {type: string}
+  /charges:
+    post:
+      operationId: chargePayment
+      responses:
+        '200': {description: Payment accepted}
+        '402': {description: Payment rejected without charging}
+  /reservations/{reservationId}:
+    delete:
+      operationId: releaseInventory
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '204': {description: Reservation released}
+        '503': {description: Release failed; reservation remains active}

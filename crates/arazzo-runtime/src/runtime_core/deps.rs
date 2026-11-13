@@ -508,27 +508,32 @@ mod tests {
     }
 
     #[test]
-    fn inherited_workflow_failure_criteria_order_only_inheriting_steps() {
+    fn inherited_workflow_failure_criteria_survive_differently_named_local_actions() {
         let mut own_list = step("c");
         own_list.on_failure = vec![action(ActionType::Retry)];
+        own_list.on_failure[0].name = "local".to_string();
         let mut wf = workflow(vec![step("a"), step("b"), own_list]);
         wf.failure_actions = vec![OnAction {
             criteria: vec![criterion("", "$steps.b.outputs.retryable == true")],
             ..action(ActionType::Retry)
         }];
 
-        // "a" inherits the workflow list, so it waits for "b". "b" inherits it
-        // too, but a step's routing never sees its own outputs, so no self-edge.
         assert_eq!(
             build_levels(&wf).unwrap_or_else(|err| panic!("levels: {err}")),
-            vec![vec![1, 2], vec![0]]
+            vec![vec![1], vec![0, 2]]
         );
 
         wf.failure_actions[0].criteria = vec![criterion("", "$steps.c.outputs.retryable == true")];
-        // "c" routes through its own list, so only "a" and "b" wait for it.
         assert_eq!(
             build_levels(&wf).unwrap_or_else(|err| panic!("levels: {err}")),
             vec![vec![2], vec![0, 1]]
+        );
+
+        wf.failure_actions[0].criteria = vec![criterion("", "$steps.b.outputs.retryable == true")];
+        wf.steps[2].on_failure[0].name = wf.failure_actions[0].name.clone();
+        assert_eq!(
+            build_levels(&wf).unwrap_or_else(|err| panic!("levels: {err}")),
+            vec![vec![1, 2], vec![0]]
         );
     }
 
