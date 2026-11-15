@@ -773,6 +773,61 @@
         }
       }
     },
+    "examples/recovery/compensate.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "purchase": {
+          "outcome": "dryRun",
+          "steps": [
+            {
+              "method": "POST",
+              "stepId": "reserve",
+              "url": "http://127.0.0.1:8080/reservations"
+            },
+            {
+              "method": "POST",
+              "stepId": "charge",
+              "url": "http://127.0.0.1:8080/charges"
+            }
+          ]
+        },
+        "release": {
+          "outcome": "notDryRunnable",
+          "reason": "step cleanup: step \"cleanup\": parameters[0](path:reservationId): $inputs.reservationId did not resolve; request not sent"
+        }
+      }
+    },
+    "examples/recovery/idempotent-retry.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "createOnce": {
+          "outcome": "notDryRunnable",
+          "reason": "step create: step \"create\": requestBody.payload/businessKey: $inputs.businessKey did not resolve; request not sent"
+        }
+      }
+    },
+    "examples/recovery/reconcile.arazzo.yaml": {
+      "validate": {
+        "diagnostics": [],
+        "outcome": "valid"
+      },
+      "workflows": {
+        "reconcile": {
+          "outcome": "notDryRunnable",
+          "reason": "step lookup: step \"lookup\": parameters[0](query:businessKey): $inputs.businessKey did not resolve; request not sent"
+        },
+        "submit": {
+          "outcome": "notDryRunnable",
+          "reason": "step lookup: step \"lookup\": parameters[0](query:businessKey): $inputs.businessKey did not resolve; request not sent"
+        }
+      }
+    },
     "examples/self-base-referencing.arazzo.yaml": {
       "validate": {
         "diagnostics": [],
