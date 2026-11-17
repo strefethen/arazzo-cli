@@ -3758,6 +3758,59 @@ fn run_step_json_with_dependency_resolution() {
 }
 
 #[test]
+fn run_json_keeps_nested_map_order_and_sorts_top_level_outputs() {
+    let server = start_mock_httpbin();
+    let temp = TempDir::new("arazzo-run-map-order");
+    write_file(
+        &temp.path().join("httpbin.openapi.yaml"),
+        &fs::read_to_string(repo_root().join("examples/descriptions/httpbin.openapi.yaml"))
+            .unwrap_or_else(|err| panic!("reading httpbin description: {err}"))
+            .replace("https://httpbin.org", &server.base_url),
+    );
+    let spec = temp.path().join("order.arazzo.yaml");
+    write_file(
+        &spec,
+        r#"arazzo: 1.1.0
+info: {title: map order, version: "1"}
+sourceDescriptions:
+  - {name: httpbin, url: ./httpbin.openapi.yaml, type: openapi}
+workflows:
+  - workflowId: order
+    steps:
+      - stepId: post
+        operationPath: '{$sourceDescriptions.httpbin.url}#/paths/~1post/post'
+        requestBody:
+          contentType: application/json
+          payload:
+            zeta: 1
+            alpha: {yy: 1, bb: 2}
+        outputs:
+          zz_echo: $response.body#/json
+          aa_echo: $response.body#/json
+    outputs:
+      zz_out: $steps.post.outputs.zz_echo
+      aa_out: $steps.post.outputs.aa_echo
+"#,
+    );
+    let output = run(&["--json", "run", &spec.to_string_lossy(), "order"], None);
+    assert!(output.status.success(), "{}", combined_text(&output));
+    let text = stdout_text(&output);
+    let position = |needle: &str, from: usize| match text[from..].find(needle) {
+        Some(offset) => from + offset,
+        None => panic!("{needle} missing from {text}"),
+    };
+    let aa = position("\"aa_out\"", 0);
+    let zz = position("\"zz_out\"", aa);
+    assert!(aa < zz, "top-level outputs stay sorted: {text}");
+    for start in [aa, zz] {
+        let zeta = position("\"zeta\"", start);
+        let alpha = position("\"alpha\"", zeta);
+        let yy = position("\"yy\"", alpha);
+        position("\"bb\"", yy);
+    }
+}
+
+#[test]
 fn run_step_no_deps_succeeds_for_standalone_step() {
     let server = start_mock_httpbin();
     let temp = TempDir::new("arazzo-run-step-standalone");

@@ -35,7 +35,7 @@ rustls-pki-types = { version = "1.14", features = ["std"] }
 # (RUSTSEC-2026-0381).
 webpki-roots = "1.0.10"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
 uppsala = "0.3"

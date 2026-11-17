@@ -7,9 +7,8 @@
       "description": "All specs parsed and workflows executed (some may have failed).",
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "results"
+        "summary": {
+          "$ref": "#/$defs/TestSummary"
         },
         "suites": {
           "type": "array",
@@ -17,15 +16,16 @@
             "$ref": "#/$defs/TestSuiteResult"
           }
         },
-        "summary": {
-          "$ref": "#/$defs/TestSummary"
-        },
         "transportWarnings": {
           "description": "Structured transport-trust warnings (insecure exceptions,\ncleartext credentials, unused exceptions). Present even when\nstderr warning text is squelched.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/TransportWarning"
           }
+        },
+        "kind": {
+          "type": "string",
+          "const": "results"
         }
       },
       "required": [
@@ -38,10 +38,10 @@
       "description": "Could not run tests at all (no specs found, invalid filter regex, etc.)",
       "type": "object",
       "properties": {
-        "code": {
+        "error": {
           "type": "string"
         },
-        "error": {
+        "code": {
           "type": "string"
         },
         "kind": {
@@ -57,13 +57,108 @@
     }
   ],
   "$defs": {
-    "TestCaseResult": {
+    "TestSummary": {
       "type": "object",
       "properties": {
+        "totalSuites": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "totalTests": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "suiteErrors": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
         "durationMs": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        }
+      },
+      "required": [
+        "totalSuites",
+        "totalTests",
+        "passed",
+        "failed",
+        "errors",
+        "suiteErrors",
+        "durationMs"
+      ]
+    },
+    "TestSuiteResult": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestCaseResult"
+          }
+        },
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "file",
+        "name",
+        "tests",
+        "durationMs"
+      ]
+    },
+    "TestCaseResult": {
+      "type": "object",
+      "properties": {
+        "workflowId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TestStatus"
+        },
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestStepResult"
+          }
         },
         "error": {
           "type": [
@@ -76,18 +171,6 @@
             "string",
             "null"
           ]
-        },
-        "status": {
-          "$ref": "#/$defs/TestStatus"
-        },
-        "steps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TestStepResult"
-          }
-        },
-        "workflowId": {
-          "type": "string"
         }
       },
       "required": [
@@ -108,19 +191,16 @@
     "TestStepResult": {
       "type": "object",
       "properties": {
+        "stepId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TestStatus"
+        },
         "durationMs": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/$defs/TestStatus"
         },
         "statusCode": {
           "type": [
@@ -129,8 +209,11 @@
           ],
           "format": "int64"
         },
-        "stepId": {
-          "type": "string"
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -139,102 +222,19 @@
         "durationMs"
       ]
     },
-    "TestSuiteResult": {
-      "type": "object",
-      "properties": {
-        "durationMs": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "file": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "tests": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TestCaseResult"
-          }
-        }
-      },
-      "required": [
-        "file",
-        "name",
-        "tests",
-        "durationMs"
-      ]
-    },
-    "TestSummary": {
-      "type": "object",
-      "properties": {
-        "durationMs": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "errors": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "failed": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "passed": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "suiteErrors": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "totalSuites": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "totalTests": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "totalSuites",
-        "totalTests",
-        "passed",
-        "failed",
-        "errors",
-        "suiteErrors",
-        "durationMs"
-      ]
-    },
     "TransportWarning": {
       "description": "Structured transport-trust warning. Emitted regardless of the\nstderr squelch (`transport_warnings: false` silences only the\nstderr text): degraded-trust facts are audit data.",
       "type": "object",
       "properties": {
+        "kind": {
+          "$ref": "#/$defs/TransportWarningKind"
+        },
         "hosts": {
           "description": "Hosts or `host[:port]` exception entries the warning names.",
           "type": "array",
           "items": {
             "type": "string"
           }
-        },
-        "kind": {
-          "$ref": "#/$defs/TransportWarningKind"
         },
         "message": {
           "description": "Human-readable text (the same line written to stderr).",

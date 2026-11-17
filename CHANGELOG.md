@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Maps keep document order** — request payload maps now serialize in the
+  order the document writes them, so a form payload `{z: 1, a: 2}` is sent as
+  `z=1&a=2` instead of `a=2&z=1`. Nested maps in step outputs and response
+  bodies keep document and response order in `--json` output, and the
+  generated JSON schemas under `docs/schemas/` list properties in definition
+  order. Top-level input, output and step maps stay sorted, and map equality
+  stays order-insensitive, so replay matching is unaffected.
 - **New MCP startup notice** — `serve` and `arazzo-mcp` print the same three
   `notice:` lines on stderr at startup, stating the trust model and that file
   roots are a path restriction, not a sandbox. They replace the three

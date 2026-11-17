@@ -111,6 +111,59 @@ async fn form_wire_matrix() {
 }
 
 #[tokio::test]
+async fn form_fields_follow_document_order() {
+    let document = format!(
+        r#"
+arazzo: 1.1.0
+info: {{title: forms, version: "1"}}
+sourceDescriptions:
+  - {{name: api, url: "{SOURCE}", type: openapi}}
+workflows:
+  - workflowId: main
+    steps:
+      - stepId: send
+        operationId: send
+        requestBody:
+          contentType: {FORM}
+          payload:
+            z: 1
+            a: 2
+            m: {{y: 1, b: 2}}
+            tag: [q, c]
+"#
+    );
+    let spec =
+        arazzo_validate::parse_bytes(document.as_bytes()).unwrap_or_else(|e| panic!("parse: {e}"));
+    let log = new_request_log();
+    let capture = Arc::clone(&log);
+    let server = start_server(move |method, url, headers, body| {
+        record_request(&capture, &method, &url, &headers, &body);
+        MockHttpResponse::json(200, "{}")
+    });
+    let api = json!({"openapi":"3.2.0","$self":SOURCE,"info":{"title":"forms","version":"1"},
+        "servers":[{"url":server.base_url}],"paths":{"/send":{"post":{"operationId":"send",
+        "requestBody":{"content":{FORM:{"schema":{"type":"object"}}}},
+        "responses":{"200":{"description":"ok"}}}}}});
+    let engine = EngineBuilder::new(spec)
+        .openapi_spec(api.to_string().into_bytes(), None)
+        .build()
+        .unwrap_or_else(|e| panic!("build: {e}"));
+    let result = engine.execute_collect("main", BTreeMap::new()).await;
+    drop(server);
+    assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+    let requests = logged_requests(&log);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].body, "z=1&a=2&m=%7B%22y%22%3A1%2C%22b%22%3A2%7D&tag=q&tag=c",
+        "fields must follow document order"
+    );
+    assert_ne!(
+        requests[0].body, "a=2&m=%7B%22b%22%3A2%2C%22y%22%3A1%7D&tag=q&tag=c&z=1",
+        "sorted order must not be produced"
+    );
+}
+
+#[tokio::test]
 async fn refused_shapes_and_unresolved_are_zero_send() {
     for (value, kind) in [
         (json!([]), "array"),

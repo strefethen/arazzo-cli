@@ -286,6 +286,7 @@ async fn replay_logical_json_and_form_preserve_drift() {
         for (body, succeeds) in [
             (logical.clone(),true),
             (json!({"n":42,"nested":[{"password":"changed","safe":"visible"}],"tag":["a",null,"b"]}),true),
+            (json!({"tag":["a",null,"b"],"nested":[{"safe":"visible","password":"changed"}],"n":42}),true),
             (json!({"n":"42","nested":[{"password":"changed","safe":"visible"}],"tag":["a",null,"b"]}),false),
             (json!({"n":42,"nested":[{"password":"changed","safe":"visible"}],"tag":["a","b"]}),false),
             (json!({"n":42,"nested":[{"safe":"visible"}],"tag":["a",null,"b"]}),false),

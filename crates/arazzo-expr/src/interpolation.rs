@@ -164,7 +164,7 @@ mod tests {
             ("boolean", "true"),
             ("null", "null"),
             ("array", r#"[1,"two",null,{"ok":true}]"#),
-            ("object", r#"{"id":7,"nested":[false,"é"]}"#),
+            ("object", r#"{"nested":[false,"é"],"id":7}"#),
         ] {
             let input = format!("{{$inputs.{name}}}");
             assert_eq!(

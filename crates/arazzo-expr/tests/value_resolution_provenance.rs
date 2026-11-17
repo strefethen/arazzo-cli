@@ -261,7 +261,7 @@ fn exact_json_types_and_single_fragment_template_conversions_are_unchanged() {
         ("nil", Value::Null, "null"),
         ("empty", json!(""), ""),
         ("array", json!([1, null, "é"]), "[1,null,\"é\"]"),
-        ("object", json!({"a": 7, "b": true}), "{\"a\":7,\"b\":true}"),
+        ("object", json!({"a": 7, "b": true}), "{\"b\":true,\"a\":7}"),
         ("number", json!(12.5), "12.5"),
         ("boolean", json!(true), "true"),
     ] {

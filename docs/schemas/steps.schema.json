@@ -14,31 +14,28 @@
     }
   ],
   "$defs": {
-    "ErrorObject": {
-      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        },
-        "kind": {
-          "description": "Always `\"error\"`.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "error",
-        "code"
-      ]
-    },
     "StepInfo": {
       "type": "object",
       "properties": {
-        "action": {
+        "stepId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operationId": {
           "type": [
             "string",
             "null"
@@ -49,6 +46,26 @@
             "string",
             "null"
           ]
+        },
+        "referencedWorkflow": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         },
         "correlationId": {
           "type": [
@@ -62,53 +79,36 @@
             "type": "string"
           }
         },
-        "description": {
-          "type": "string"
-        },
-        "method": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "operationId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "position": {
           "type": "integer",
           "format": "uint",
           "minimum": 0
-        },
-        "referencedWorkflow": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "stepId": {
-          "type": "string"
-        },
-        "timeout": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
         "stepId",
         "position"
+      ]
+    },
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
       ]
     }
   }

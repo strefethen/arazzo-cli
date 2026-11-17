@@ -3,6 +3,15 @@
   "title": "RunExport",
   "type": "object",
   "properties": {
+    "schemaVersion": {
+      "$ref": "#/$defs/SchemaVersion"
+    },
+    "tool": {
+      "$ref": "#/$defs/Tool"
+    },
+    "run": {
+      "$ref": "#/$defs/Run"
+    },
     "inputs": {
       "type": "object",
       "additionalProperties": true
@@ -10,15 +19,6 @@
     "outputs": {
       "type": "object",
       "additionalProperties": true
-    },
-    "run": {
-      "$ref": "#/$defs/Run"
-    },
-    "schemaVersion": {
-      "$ref": "#/$defs/SchemaVersion"
-    },
-    "tool": {
-      "$ref": "#/$defs/Tool"
     },
     "workflows": {
       "type": "object",
@@ -36,74 +36,159 @@
     "workflows"
   ],
   "$defs": {
-    "Decision": {
+    "SchemaVersion": {
+      "type": "string",
+      "enum": [
+        "run.v1"
+      ]
+    },
+    "Tool": {
       "type": "object",
       "properties": {
-        "actionType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
+        "name": {
           "type": "string"
         },
-        "retryAfterSeconds": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "retryLimit": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "targetStepId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "targetWorkflowId": {
-          "type": [
-            "string",
-            "null"
-          ]
+        "version": {
+          "type": "string"
         }
       },
       "required": [
-        "path"
+        "name",
+        "version"
       ]
     },
-    "Execution": {
+    "Run": {
       "type": "object",
       "properties": {
-        "attempt": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+        "specPath": {
+          "type": "string"
         },
-        "decision": {
-          "$ref": "#/$defs/Decision"
+        "workflowId": {
+          "type": "string"
+        },
+        "stepId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parallel": {
+          "type": "boolean"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "finishedAt": {
+          "type": "string"
+        },
+        "exportedAt": {
+          "type": "string"
         },
         "durationMs": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
         "error": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExportError"
+            },
+            {
+              "type": "null"
+            }
           ]
+        }
+      },
+      "required": [
+        "specPath",
+        "workflowId",
+        "parallel",
+        "dryRun",
+        "startedAt",
+        "finishedAt",
+        "exportedAt",
+        "durationMs",
+        "status"
+      ]
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failure",
+        "dryRun"
+      ]
+    },
+    "ExportError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "Workflow": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Step"
+          }
+        }
+      },
+      "required": [
+        "steps"
+      ]
+    },
+    "Step": {
+      "type": "object",
+      "properties": {
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          }
+        }
+      },
+      "required": [
+        "executions"
+      ]
+    },
+    "Execution": {
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "attempt": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
         },
         "outcome": {
           "$ref": "#/$defs/StepOutcome"
+        },
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
         },
         "outputs": {
           "type": "object",
@@ -129,10 +214,14 @@
             }
           ]
         },
-        "sequence": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -144,35 +233,28 @@
         "decision"
       ]
     },
-    "ExportError": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "code",
-        "message"
+    "StepOutcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failure",
+        "dryRun"
       ]
     },
     "Request": {
       "type": "object",
       "properties": {
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "method": {
           "type": "string"
         },
         "url": {
           "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -184,16 +266,9 @@
     "Response": {
       "type": "object",
       "properties": {
-        "bodyBytes": {
+        "statusCode": {
           "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "contentType": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "format": "int64"
         },
         "headers": {
           "type": "object",
@@ -201,9 +276,16 @@
             "type": "string"
           }
         },
-        "statusCode": {
+        "contentType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bodyBytes": {
           "type": "integer",
-          "format": "int64"
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "required": [
@@ -212,130 +294,48 @@
         "bodyBytes"
       ]
     },
-    "Run": {
+    "Decision": {
       "type": "object",
       "properties": {
-        "dryRun": {
-          "type": "boolean"
-        },
-        "durationMs": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "error": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExportError"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "exportedAt": {
+        "path": {
           "type": "string"
         },
-        "finishedAt": {
-          "type": "string"
-        },
-        "parallel": {
-          "type": "boolean"
-        },
-        "specPath": {
-          "type": "string"
-        },
-        "startedAt": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/RunStatus"
-        },
-        "stepId": {
+        "actionType": {
           "type": [
             "string",
             "null"
           ]
         },
-        "workflowId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "specPath",
-        "workflowId",
-        "parallel",
-        "dryRun",
-        "startedAt",
-        "finishedAt",
-        "exportedAt",
-        "durationMs",
-        "status"
-      ]
-    },
-    "RunStatus": {
-      "type": "string",
-      "enum": [
-        "success",
-        "failure",
-        "dryRun"
-      ]
-    },
-    "SchemaVersion": {
-      "type": "string",
-      "enum": [
-        "run.v1"
-      ]
-    },
-    "Step": {
-      "type": "object",
-      "properties": {
-        "executions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Execution"
-          }
-        }
-      },
-      "required": [
-        "executions"
-      ]
-    },
-    "StepOutcome": {
-      "type": "string",
-      "enum": [
-        "success",
-        "failure",
-        "dryRun"
-      ]
-    },
-    "Tool": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
+        "targetStepId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
-        "version": {
-          "type": "string"
+        "targetWorkflowId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retryAfterSeconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "retryLimit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "required": [
-        "name",
-        "version"
-      ]
-    },
-    "Workflow": {
-      "type": "object",
-      "properties": {
-        "steps": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Step"
-          }
-        }
-      },
-      "required": [
-        "steps"
+        "path"
       ]
     }
   }

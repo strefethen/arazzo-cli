@@ -11,130 +11,31 @@
     }
   ],
   "$defs": {
-    "ErrorObject": {
-      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        },
-        "kind": {
-          "description": "Always `\"error\"`.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "error",
-        "code"
-      ]
-    },
-    "InputDetail": {
-      "type": "object",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "required": {
-          "type": "boolean"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "required"
-      ]
-    },
-    "SourceInfo": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "url",
-        "type"
-      ]
-    },
-    "StepSummary": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "channelPath": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "correlationId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "dependsOn": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "description": {
-          "type": "string"
-        },
-        "method": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "stepId": {
-          "type": "string"
-        },
-        "timeout": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "stepId"
-      ]
-    },
     "WorkflowDetail": {
       "type": "object",
       "properties": {
+        "id": {
+          "type": "string"
+        },
         "file": {
           "type": "string"
         },
-        "id": {
+        "title": {
           "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "step_count": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StepSummary"
+          }
         },
         "inputs": {
           "type": "object",
@@ -153,23 +54,6 @@
           "items": {
             "$ref": "#/$defs/SourceInfo"
           }
-        },
-        "step_count": {
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "steps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/StepSummary"
-          }
-        },
-        "summary": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
         }
       },
       "required": [
@@ -181,6 +65,122 @@
         "inputs",
         "outputs",
         "sources"
+      ]
+    },
+    "StepSummary": {
+      "type": "object",
+      "properties": {
+        "stepId": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "correlationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "stepId"
+      ]
+    },
+    "InputDetail": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "required"
+      ]
+    },
+    "SourceInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "type"
+      ]
+    },
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
       ]
     }
   }

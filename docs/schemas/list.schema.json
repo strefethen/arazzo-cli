@@ -14,31 +14,13 @@
     }
   ],
   "$defs": {
-    "ErrorObject": {
-      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        },
-        "kind": {
-          "description": "Always `\"error\"`.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "error",
-        "code"
-      ]
-    },
     "WorkflowInfo": {
       "type": "object",
       "properties": {
         "id": {
+          "type": "string"
+        },
+        "summary": {
           "type": "string"
         },
         "inputs": {
@@ -52,15 +34,33 @@
           "items": {
             "type": "string"
           }
-        },
-        "summary": {
-          "type": "string"
         }
       },
       "required": [
         "id",
         "inputs",
         "outputs"
+      ]
+    },
+    "ErrorObject": {
+      "description": "Schema-only description of the shared `--json` error object `main` prints\nfrom a `CliError` that carries no extra fields.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Always `\"error\"`.",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error",
+        "code"
       ]
     }
   }

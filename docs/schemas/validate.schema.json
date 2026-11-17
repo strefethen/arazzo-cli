@@ -11,15 +11,42 @@
     }
   ],
   "$defs": {
-    "ValidateErrorResult": {
-      "description": "Schema-only description of a failing `validate --json` run: the shared\nerror object plus the fields that predate it. `main` prints it from a\n`CliError` built by `validate_error`.",
+    "ValidateResult": {
       "type": "object",
       "properties": {
-        "code": {
+        "valid": {
+          "type": "boolean"
+        },
+        "file": {
           "type": "string"
         },
-        "error": {
-          "type": "string"
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "sources": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
         },
         "errors": {
           "type": "array",
@@ -27,16 +54,72 @@
             "$ref": "#/$defs/ValidateIssue"
           }
         },
-        "file": {
+        "warnings": {
+          "description": "Non-fatal findings. Present alongside `valid: true`; `--strict`\npromotes them into `errors` instead.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidateIssue"
+          }
+        }
+      },
+      "required": [
+        "valid",
+        "file"
+      ]
+    },
+    "ValidateIssue": {
+      "type": "object",
+      "properties": {
+        "source": {
           "type": "string"
         },
         "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "message"
+      ]
+    },
+    "ValidateErrorResult": {
+      "description": "Schema-only description of a failing `validate --json` run: the shared\nerror object plus the fields that predate it. `main` prints it from a\n`CliError` built by `validate_error`.",
+      "type": "object",
+      "properties": {
+        "kind": {
           "description": "Always `\"error\"`.",
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "code": {
           "type": "string"
         },
         "valid": {
           "description": "Always `false`.",
           "type": "boolean"
+        },
+        "file": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidateIssue"
+          }
         },
         "warnings": {
           "type": "array",
@@ -49,89 +132,6 @@
         "kind",
         "error",
         "code",
-        "valid",
-        "file"
-      ]
-    },
-    "ValidateIssue": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "message": {
-          "type": "string"
-        },
-        "path": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "source",
-        "message"
-      ]
-    },
-    "ValidateResult": {
-      "type": "object",
-      "properties": {
-        "errors": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ValidateIssue"
-          }
-        },
-        "file": {
-          "type": "string"
-        },
-        "sources": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "minimum": 0
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "valid": {
-          "type": "boolean"
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "warnings": {
-          "description": "Non-fatal findings. Present alongside `valid: true`; `--strict`\npromotes them into `errors` instead.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ValidateIssue"
-          }
-        },
-        "workflows": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "minimum": 0
-        }
-      },
-      "required": [
         "valid",
         "file"
       ]

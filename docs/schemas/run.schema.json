@@ -6,19 +6,9 @@
     {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "success"
-        },
         "outputs": {
           "type": "object",
           "additionalProperties": true
-        },
-        "transportWarnings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TransportWarning"
-          }
         },
         "warnings": {
           "description": "Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.",
@@ -26,6 +16,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "transportWarnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportWarning"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "success"
         }
       },
       "required": [
@@ -36,21 +36,11 @@
     {
       "type": "object",
       "properties": {
-        "code": {
-          "type": "string"
-        },
         "error": {
           "type": "string"
         },
-        "kind": {
-          "type": "string",
-          "const": "error"
-        },
-        "transportWarnings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TransportWarning"
-          }
+        "code": {
+          "type": "string"
         },
         "warnings": {
           "description": "Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.",
@@ -58,6 +48,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "transportWarnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportWarning"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "error"
         }
       },
       "required": [
@@ -69,20 +69,10 @@
     {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "const": "dryRun"
-        },
         "requests": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/DryRunRequest"
-          }
-        },
-        "transportWarnings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TransportWarning"
           }
         },
         "warnings": {
@@ -91,6 +81,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "transportWarnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportWarning"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "dryRun"
         }
       },
       "required": [
@@ -100,52 +100,19 @@
     }
   ],
   "$defs": {
-    "DryRunRequest": {
-      "description": "Captured request emitted during dry-run mode.",
-      "type": "object",
-      "properties": {
-        "body": true,
-        "headers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "method": {
-          "type": "string"
-        },
-        "stepId": {
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "stepId",
-        "method",
-        "url"
-      ]
-    },
     "TransportWarning": {
       "description": "Structured transport-trust warning. Emitted regardless of the\nstderr squelch (`transport_warnings: false` silences only the\nstderr text): degraded-trust facts are audit data.",
       "type": "object",
       "properties": {
+        "kind": {
+          "$ref": "#/$defs/TransportWarningKind"
+        },
         "hosts": {
           "description": "Hosts or `host[:port]` exception entries the warning names.",
           "type": "array",
           "items": {
             "type": "string"
           }
-        },
-        "kind": {
-          "$ref": "#/$defs/TransportWarningKind"
         },
         "message": {
           "description": "Human-readable text (the same line written to stderr).",
@@ -180,6 +147,39 @@
           "type": "string",
           "const": "unusedInsecureHosts"
         }
+      ]
+    },
+    "DryRunRequest": {
+      "description": "Captured request emitted during dry-run mode.",
+      "type": "object",
+      "properties": {
+        "stepId": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "body": true,
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "stepId",
+        "method",
+        "url"
       ]
     }
   }
