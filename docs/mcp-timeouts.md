@@ -42,7 +42,19 @@ the reader stops reading until the dispatcher catches up. A tool result over
 response body over `--max-response-body-bytes` fails the workflow with
 `RUNTIME_RESPONSE_TOO_LARGE`.
 
-The dispatcher remains serial. Completed workflows stop their owned watchdog;
+The dispatcher runs one tool call at a time but stays responsive while a
+`run_workflow` is in flight: `ping`, `initialize`, `tools/list` and other
+non-tool requests are answered immediately, and up to `--max-pending-requests`
+further `tools/call` requests wait in order until the active run finishes.
+Once that queue is full, the server waits for the active run to finish before
+reading more input, so a `ping`, a cancellation notice or a closed input is not
+seen until then.
+`notifications/cancelled` naming the active run's request id cancels it, and
+no response is written for that id. Closing the input, or a rejected frame that
+ends the session, cancels the active run before the server returns, and the
+run gets no response.
+
+Completed workflows stop their owned watchdog;
 deadline expiry and cancellation follow the synchronized runtime cancellation
 contract described in [Runtime cancellation](runtime-cancellation.md).
 These limits do not claim to stop detached broker tasks.

@@ -12,6 +12,10 @@ use std::time::Duration;
 use arazzo_mcp::{run_mcp_stdio_configured, McpLimits, McpServerConfig};
 use serde_json::{json, Value};
 
+#[path = "support/eof_after_responses.rs"]
+mod eof_support;
+use eof_support::eof_after_responses;
+
 const FRAME_LIMIT: usize = 256;
 
 fn frame_limits() -> McpLimits {
@@ -36,7 +40,21 @@ where
         },
     )
     .unwrap();
-    String::from_utf8(output)
+    responses(&output)
+}
+
+fn serve_answered(input: Vec<u8>, specs: &[String], limits: McpLimits) -> Vec<Value> {
+    let (reader, mut output) = eof_after_responses(input);
+    let config = McpServerConfig {
+        allowed_dirs: None,
+        limits,
+    };
+    run_mcp_stdio_configured(reader, &mut output, specs, config).unwrap();
+    responses(&output)
+}
+
+fn responses(output: &[u8]) -> Vec<Value> {
+    std::str::from_utf8(output)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -206,8 +224,8 @@ fn response_bodies_over_the_body_limit_fail_the_workflow() {
     fs::write(root.join("api.json"), openapi.to_string()).unwrap();
     let spec = root.join("body.arazzo.yaml");
     fs::write(&spec, "arazzo: 1.1.0\ninfo: {title: Body, version: '1'}\nsourceDescriptions: [{name: api, url: ./api.json, type: openapi}]\nworkflows: [{workflowId: fetch, steps: [{stepId: fetch, operationId: getData}]}]\n").unwrap();
-    let responses = serve(
-        tool_call("run_workflow", json!({"workflow_id":"fetch"})),
+    let responses = serve_answered(
+        tool_call("run_workflow", json!({"workflow_id":"fetch"})).into_inner(),
         &[spec.to_str().unwrap().to_string()],
         McpLimits {
             max_response_body_bytes: 1024,

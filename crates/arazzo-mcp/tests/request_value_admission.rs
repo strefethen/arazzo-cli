@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,6 +9,10 @@ use std::time::Duration;
 
 use arazzo_mcp::{protocol, state::ServerState};
 use serde_json::{json, Value};
+
+#[path = "support/eof_after_responses.rs"]
+mod eof_support;
+use eof_support::eof_after_responses;
 
 struct Fixture {
     directory: PathBuf,
@@ -124,10 +127,10 @@ impl Fixture {
                 format!("Content-Length: {}\r\n\r\n{payload}", payload.len()).as_bytes(),
             );
         }
-        let mut output = Vec::new();
-        protocol::serve(Cursor::new(input), &mut output, &state)
+        let (reader, mut output) = eof_after_responses(input);
+        protocol::serve(reader, &mut output, &state)
             .unwrap_or_else(|error| panic!("serve MCP messages: {error}"));
-        let responses: Vec<Value> = String::from_utf8(output)
+        let responses: Vec<Value> = String::from_utf8(output.to_vec())
             .unwrap_or_else(|error| panic!("UTF-8 MCP output: {error}"))
             .lines()
             .filter(|line| !line.trim().is_empty())

@@ -2,12 +2,16 @@
 //!
 //! Adapted from the DAP adapter (`arazzo-debug-adapter/src/dap.rs`).
 
+use std::collections::VecDeque;
 use std::io::{BufRead, Read, Write};
-use std::sync::mpsc;
 use std::thread;
 
+use arazzo_runtime::ExecutionCancellation;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
+use tokio::task::{JoinError, JoinHandle};
 
 use crate::framing;
 use crate::handlers;
@@ -32,6 +36,55 @@ enum ReaderMsg {
     Request(JsonRpcRequest),
     Rejected(&'static str),
     Eof,
+}
+
+struct ActiveCall {
+    id: Value,
+    cancellation: ExecutionCancellation,
+    task: JoinHandle<Value>,
+}
+
+impl ActiveCall {
+    fn cancel(self, runtime: &Runtime) {
+        self.cancellation.cancel();
+        let _settled = runtime.block_on(self.task);
+    }
+
+    fn response(&self, outcome: Result<Value, JoinError>, state: &ServerState) -> Value {
+        let content = outcome.unwrap_or_else(|err| {
+            handlers::capped_error(state, &format!("workflow task failed: {err}"))
+        });
+        jsonrpc_result(&self.id, content)
+    }
+
+    fn is_cancelled_by(&self, req: &JsonRpcRequest) -> bool {
+        req.id.is_none()
+            && req.method == "notifications/cancelled"
+            && req
+                .params
+                .as_ref()
+                .and_then(|params| params.get("requestId"))
+                == Some(&self.id)
+    }
+}
+
+enum Wake {
+    Finished(Result<Value, JoinError>),
+    Message(ReaderMsg),
+}
+
+async fn next_wake(call: &mut ActiveCall, rx: &mut mpsc::Receiver<ReaderMsg>) -> Wake {
+    tokio::select! {
+        biased;
+        outcome = &mut call.task => Wake::Finished(outcome),
+        message = rx.recv() => Wake::Message(message.unwrap_or(ReaderMsg::Eof)),
+    }
+}
+
+enum Dispatched {
+    Reply(Value),
+    Silent,
+    Started(ActiveCall),
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +125,7 @@ where
     W: Write,
 {
     let limits = state.limits();
-    let (tx, rx) = mpsc::sync_channel::<ReaderMsg>(limits.max_pending_requests);
+    let (tx, mut rx) = mpsc::channel::<ReaderMsg>(limits.max_pending_requests);
 
     thread::spawn(move || {
         let mut reader = reader;
@@ -91,7 +144,7 @@ where
                     .map_or(ReaderMsg::Eof, ReaderMsg::Rejected),
             };
             let last = !matches!(message, ReaderMsg::Request(_));
-            if tx.send(message).is_err() || last {
+            if tx.blocking_send(message).is_err() || last {
                 break;
             }
         }
@@ -103,35 +156,79 @@ where
         .map_err(|err| format!("creating tokio runtime: {err}"))?;
 
     let mut initialized = false;
+    let mut active: Option<ActiveCall> = None;
+    let mut queued: VecDeque<JsonRpcRequest> = VecDeque::new();
 
-    while let Ok(msg) = rx.recv() {
-        match msg {
-            ReaderMsg::Eof => break,
+    loop {
+        let message = match active.take() {
+            None => match queued.pop_front() {
+                Some(request) => ReaderMsg::Request(request),
+                None => runtime.block_on(rx.recv()).unwrap_or(ReaderMsg::Eof),
+            },
+            Some(mut call) => {
+                let wake = if queued.len() < limits.max_pending_requests {
+                    runtime.block_on(next_wake(&mut call, &mut rx))
+                } else {
+                    Wake::Finished(runtime.block_on(&mut call.task))
+                };
+                match wake {
+                    Wake::Finished(outcome) => {
+                        framing::write_frame(writer, &call.response(outcome, state))?;
+                        continue;
+                    }
+                    Wake::Message(message) => {
+                        active = Some(call);
+                        message
+                    }
+                }
+            }
+        };
+
+        let req = match message {
+            ReaderMsg::Request(req) => req,
+            ReaderMsg::Eof => {
+                if let Some(call) = active.take() {
+                    call.cancel(&runtime);
+                }
+                break;
+            }
             ReaderMsg::Rejected(message) => {
+                if let Some(call) = active.take() {
+                    call.cancel(&runtime);
+                }
                 framing::write_frame(writer, &jsonrpc_error(&Value::Null, -32600, message))?;
                 break;
             }
-            ReaderMsg::Request(req) => {
-                let response = dispatch(&req, state, &runtime, &mut initialized);
-                if let Some(resp) = response {
-                    framing::write_frame(writer, &resp)?;
-                }
+        };
+
+        if let Some(call) = active.take() {
+            if call.is_cancelled_by(&req) {
+                call.cancel(&runtime);
+                continue;
             }
+            active = Some(call);
+            if req.id.is_some() && req.method == "tools/call" {
+                queued.push_back(req);
+                continue;
+            }
+        }
+
+        match dispatch(&req, state, &runtime, &mut initialized) {
+            Dispatched::Reply(response) => framing::write_frame(writer, &response)?,
+            Dispatched::Silent => {}
+            Dispatched::Started(call) => active = Some(call),
         }
     }
 
     Ok(())
 }
 
-/// Dispatch a single JSON-RPC request and return the response (if any).
-///
-/// Notifications (requests without an `id`) return `None`.
 fn dispatch(
     req: &JsonRpcRequest,
     state: &ServerState,
-    runtime: &tokio::runtime::Runtime,
+    runtime: &Runtime,
     initialized: &mut bool,
-) -> Option<Value> {
+) -> Dispatched {
     let method = req.method.as_str();
 
     // Notifications (no id) get no response.
@@ -140,7 +237,7 @@ fn dispatch(
         if method == "notifications/initialized" {
             *initialized = true;
         }
-        return None;
+        return Dispatched::Silent;
     };
 
     match method {
@@ -155,12 +252,12 @@ fn dispatch(
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             });
-            Some(jsonrpc_result(id, result))
+            Dispatched::Reply(jsonrpc_result(id, result))
         }
 
         "tools/list" => {
             let tools = tools::definitions(state);
-            Some(jsonrpc_result(id, json!({ "tools": tools })))
+            Dispatched::Reply(jsonrpc_result(id, json!({ "tools": tools })))
         }
 
         "tools/call" => {
@@ -177,7 +274,16 @@ fn dispatch(
             let content = match tool_name {
                 "list_workflows" => handlers::list_workflows(state),
                 "describe_workflow" => handlers::describe_workflow(state, &arguments),
-                "run_workflow" => handlers::run_workflow(state, &arguments, runtime),
+                "run_workflow" => match handlers::start_workflow(state, &arguments, runtime) {
+                    Ok(started) => {
+                        return Dispatched::Started(ActiveCall {
+                            id: id.clone(),
+                            cancellation: started.cancellation,
+                            task: started.task,
+                        })
+                    }
+                    Err(result) => Ok(result),
+                },
                 "validate_spec" => handlers::validate_spec(state, &arguments),
                 "generate_workflow" => handlers::generate_workflow(state, &arguments),
                 "describe_openapi" => handlers::describe_openapi(state, &arguments),
@@ -186,12 +292,12 @@ fn dispatch(
             }
             .unwrap_or_else(|err| handlers::capped_error(state, &err));
 
-            Some(jsonrpc_result(id, content))
+            Dispatched::Reply(jsonrpc_result(id, content))
         }
 
-        "ping" => Some(jsonrpc_result(id, json!({}))),
+        "ping" => Dispatched::Reply(jsonrpc_result(id, json!({}))),
 
-        _ => Some(jsonrpc_error(
+        _ => Dispatched::Reply(jsonrpc_error(
             id,
             -32601,
             &format!("method not found: {method}"),

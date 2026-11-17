@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `operationId` path before any request is sent. `run` refuses these documents
   with `RUN_SPEC_VALIDATION`; previously the runtime refused them only on
   reaching the step.
+- **MCP `run_workflow` can be cancelled** — closing stdin during `run_workflow`
+  now cancels the run and writes no response, as does `notifications/cancelled`
+  naming its request id. The server answers other requests while a run is in
+  flight; tool calls still run one at a time.
 
 ### Fixed
 

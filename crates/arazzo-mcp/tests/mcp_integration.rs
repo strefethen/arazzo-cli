@@ -14,6 +14,9 @@ use std::time::Duration;
 #[path = "support/filesystem.rs"]
 mod filesystem_support;
 use filesystem_support::*;
+#[path = "support/eof_after_responses.rs"]
+mod eof_support;
+use eof_support::eof_after_responses;
 
 use arazzo_mcp::protocol;
 use arazzo_mcp::state::ServerState;
@@ -296,8 +299,7 @@ fn test_full_flow() {
         json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data"}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -509,8 +511,7 @@ fn test_run_workflow_error() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data"}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -550,8 +551,7 @@ fn test_run_workflow_preserves_nested_dependency_error_code() {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"parent"}}}),
     ]);
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
     let responses = parse_responses(&output);
     assert!(responses.len() >= 2);
@@ -619,8 +619,7 @@ fn test_dry_run() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data","dry_run":true}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -643,8 +642,8 @@ fn test_dry_run_redacts_userinfo_with_multiple_at_signs() {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data","dry_run":true}}}),
     ]);
-    let mut output = Vec::new();
-    protocol::serve(Cursor::new(messages), &mut output, &state)
+    let (reader, mut output) = eof_after_responses(messages);
+    protocol::serve(reader, &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
     assert!(!is_tool_error(&responses[1]), "{responses:?}");
@@ -667,8 +666,8 @@ fn test_dry_run_redacts_url_userinfo() {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"get-data","dry_run":true}}}),
     ]);
-    let mut output = Vec::new();
-    protocol::serve(Cursor::new(messages), &mut output, &state)
+    let (reader, mut output) = eof_after_responses(messages);
+    protocol::serve(reader, &mut output, &state)
         .unwrap_or_else(|err| panic!("serving MCP: {err:?}"));
     let responses = parse_responses(&output);
     assert!(!is_tool_error(&responses[1]), "{responses:?}");
@@ -697,8 +696,7 @@ fn test_dry_run_redacts_sensitive_request_parts() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"send-secret","dry_run":true}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -794,8 +792,7 @@ fn test_run_workflow_relative_source_dry_run() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"list-pets","dry_run":true}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -1081,8 +1078,7 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"generate_workflow","arguments":{"file_path": file_path}}}),
     ]);
 
-    let reader = Cursor::new(messages);
-    let mut output = Vec::new();
+    let (reader, mut output) = eof_after_responses(messages);
     protocol::serve(reader, &mut output, &state).ok();
 
     let responses = parse_responses(&output);
@@ -1114,8 +1110,7 @@ fn test_generate_workflow_guards_colon_bearing_file_name() {
         json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"crud-pets","dry_run":true,"inputs":{"ApiKeyAuth":"secret"}}}}),
     ]);
-    let run_reader = Cursor::new(run_messages);
-    let mut run_output = Vec::new();
+    let (run_reader, mut run_output) = eof_after_responses(run_messages);
     protocol::serve(run_reader, &mut run_output, &run_state).ok();
     let run_responses = parse_responses(&run_output);
     assert!(

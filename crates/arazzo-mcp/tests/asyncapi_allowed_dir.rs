@@ -4,13 +4,16 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)] // Fixture setup and assertions.
 
 use std::fs;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arazzo_mcp::protocol;
 use arazzo_mcp::state::ServerState;
 use serde_json::{json, Value};
+
+#[path = "support/eof_after_responses.rs"]
+mod eof_support;
+use eof_support::eof_after_responses;
 
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -75,8 +78,8 @@ fn run_workflow_text(state: &ServerState) -> (bool, String) {
         &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
     ));
     input.extend(frame(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run_workflow","arguments":{"workflow_id":"await-order","dry_run":true}}})));
-    let mut output = Vec::new();
-    protocol::serve(Cursor::new(input), &mut output, state).ok();
+    let (reader, mut output) = eof_after_responses(input);
+    protocol::serve(reader, &mut output, state).ok();
     let responses = responses(&output);
     assert!(
         responses.len() >= 2,

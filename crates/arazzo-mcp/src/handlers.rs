@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
+use arazzo_runtime::{
+    redacted_dry_run_request, ClientConfig, EngineBuilder, ExecutionCancellation, ExecutionResult,
+};
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
@@ -15,7 +17,11 @@ use crate::state::ServerState;
 // ---------------------------------------------------------------------------
 
 fn tool_ok(state: &ServerState, value: &Value) -> Result<Value, String> {
-    match limits::pretty_text(value, state.limits().max_result_bytes)? {
+    capped_ok(state.limits().max_result_bytes, value)
+}
+
+fn capped_ok(max_result_bytes: usize, value: &Value) -> Result<Value, String> {
+    match limits::pretty_text(value, max_result_bytes)? {
         CappedText::Within(text) => Ok(tool_text(text, false)),
         CappedText::Exceeded => Ok(limits::exceeded_tool_result()),
     }
@@ -26,7 +32,11 @@ fn tool_err(state: &ServerState, message: &str) -> Result<Value, String> {
 }
 
 pub(crate) fn capped_error(state: &ServerState, message: &str) -> Value {
-    if message.len() > state.limits().max_result_bytes {
+    capped_error_within(state.limits().max_result_bytes, message)
+}
+
+fn capped_error_within(max_result_bytes: usize, message: &str) -> Value {
+    if message.len() > max_result_bytes {
         return limits::exceeded_tool_result();
     }
     tool_text(message.to_string(), true)
@@ -213,34 +223,36 @@ pub fn describe_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
 // Handler: run_workflow
 // ---------------------------------------------------------------------------
 
-pub fn run_workflow(
+#[derive(Debug)]
+pub struct StartedWorkflow {
+    pub cancellation: ExecutionCancellation,
+    pub task: tokio::task::JoinHandle<Value>,
+}
+
+pub fn start_workflow(
     state: &ServerState,
     args: &Value,
     runtime: &tokio::runtime::Runtime,
-) -> Result<Value, String> {
+) -> Result<StartedWorkflow, Value> {
     let workflow_id = args
         .get("workflow_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| "missing required argument: workflow_id".to_string())?;
+        .ok_or_else(|| capped_error(state, "missing required argument: workflow_id"))?;
 
-    let (http_timeout, execution_timeout) = match state.timeouts().parse(args) {
-        Ok(timeouts) => timeouts,
-        Err(message) => {
-            return tool_err(
-                state,
-                &json!({
-                    "code": "MCP_INVALID_ARGUMENT",
-                    "message": message,
-                })
-                .to_string(),
-            )
-        }
-    };
+    let (http_timeout, execution_timeout) = state.timeouts().parse(args).map_err(|message| {
+        capped_error(
+            state,
+            &json!({
+                "code": "MCP_INVALID_ARGUMENT",
+                "message": message,
+            })
+            .to_string(),
+        )
+    })?;
 
-    let (loaded, _wf) = match state.find_workflow(workflow_id) {
-        Ok(found) => found,
-        Err(err) => return tool_err(state, &err),
-    };
+    let (loaded, _wf) = state
+        .find_workflow(workflow_id)
+        .map_err(|err| capped_error(state, &err))?;
 
     let inputs: BTreeMap<String, Value> = args
         .get("inputs")
@@ -268,9 +280,9 @@ pub fn run_workflow(
     for (source_name, resolved) in
         arazzo_runtime::relative_openapi_source_paths(&loaded.spec, &spec_dir)
     {
-        if let Err(error) = state.authorize_document(&resolved.to_string_lossy()) {
-            return Ok(error.source_tool_result(&source_name));
-        }
+        state
+            .authorize_document(&resolved.to_string_lossy())
+            .map_err(|error| error.source_tool_result(&source_name))?;
     }
 
     // Clone the spec because EngineBuilder takes ownership.
@@ -281,7 +293,7 @@ pub fn run_workflow(
         ..ClientConfig::default()
     };
 
-    let engine = match EngineBuilder::new(spec)
+    let engine = EngineBuilder::new(spec)
         .client_config(cfg)
         .max_response_bytes(state.limits().max_response_body_bytes)
         .parallel(parallel)
@@ -290,19 +302,33 @@ pub fn run_workflow(
         .source_base_dir(spec_dir)
         .source_document_loader(state.source_document_loader())
         .build()
-    {
-        Ok(e) => e,
-        Err(err) => return tool_err(state, &format!("building engine: {err}")),
-    };
+        .map_err(|err| capped_error(state, &format!("building engine: {err}")))?;
 
-    let result = runtime.block_on(async {
-        engine
-            .execute_with_timeout(workflow_id, inputs, execution_timeout)
-            .collect()
-            .await
+    let max_result_bytes = state.limits().max_result_bytes;
+    let _runtime_context = runtime.enter();
+    let handle = engine.execute_with_timeout(workflow_id, inputs, execution_timeout);
+    let cancellation = handle.cancel_token().clone();
+    let task = runtime.spawn(async move {
+        project_run_result(&handle.collect().await, dry_run, max_result_bytes)
     });
+    Ok(StartedWorkflow { cancellation, task })
+}
 
-    match result.outputs {
+pub fn run_workflow(
+    state: &ServerState,
+    args: &Value,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<Value, String> {
+    match start_workflow(state, args, runtime) {
+        Ok(started) => runtime
+            .block_on(started.task)
+            .map_err(|err| format!("workflow task failed: {err}")),
+        Err(result) => Ok(result),
+    }
+}
+
+fn project_run_result(result: &ExecutionResult, dry_run: bool, max_result_bytes: usize) -> Value {
+    let projected = match result.outputs {
         Ok(ref outputs) => {
             if dry_run {
                 let dry_run_reqs: Vec<_> = result
@@ -323,21 +349,28 @@ pub fn run_workflow(
                         })
                     })
                     .collect();
-                tool_ok(state, &json!({ "kind": "dryRun", "requests": reqs_json }))
+                capped_ok(
+                    max_result_bytes,
+                    &json!({ "kind": "dryRun", "requests": reqs_json }),
+                )
             } else {
-                tool_ok(state, &json!({ "kind": "success", "outputs": outputs }))
+                capped_ok(
+                    max_result_bytes,
+                    &json!({ "kind": "success", "outputs": outputs }),
+                )
             }
         }
-        Err(err) => {
+        Err(ref err) => {
             let error_json = json!({
                 "error": err.message,
                 "code": err.code(),
             });
             let text = serde_json::to_string(&error_json)
                 .unwrap_or_else(|_| format!("{{\"error\":\"{}\"}}", err.code()));
-            tool_err(state, &text)
+            Ok(capped_error_within(max_result_bytes, &text))
         }
-    }
+    };
+    projected.unwrap_or_else(|err| capped_error_within(max_result_bytes, &err))
 }
 
 // ---------------------------------------------------------------------------
