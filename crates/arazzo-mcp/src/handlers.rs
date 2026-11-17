@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use arazzo_runtime::{
-    redacted_dry_run_request, ClientConfig, EngineBuilder, ExecutionCancellation, ExecutionResult,
+    redact_text_patterns, redact_url_components, redacted_dry_run_request, ClientConfig,
+    EngineBuilder, ExecutionCancellation, ExecutionResult, MessageTransportOptions, Secret,
 };
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
@@ -32,7 +33,55 @@ fn tool_err(state: &ServerState, message: &str) -> Result<Value, String> {
 }
 
 pub(crate) fn capped_error(state: &ServerState, message: &str) -> Value {
-    capped_error_within(state.limits().max_result_bytes, message)
+    capped_error_within(
+        state.limits().max_result_bytes,
+        &project_failure_text(message),
+    )
+}
+
+fn project_failure_text(text: &str) -> String {
+    let mut projected = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(separator) = rest.find("://") {
+        let start = rest[..separator]
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| is_url_scheme_char(c))
+            .last()
+            .map_or(separator, |(index, _)| index);
+        let end = rest[separator..]
+            .find(ends_url_token)
+            .map_or(rest.len(), |offset| separator + offset);
+        projected.push_str(&rest[..start]);
+        let mut url = rest[start..end].to_string();
+        redact_url_components(&mut url);
+        projected.push_str(&url);
+        rest = &rest[end..];
+    }
+    projected.push_str(rest);
+    redact_text_patterns(&projected)
+}
+
+fn is_url_scheme_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+}
+
+fn ends_url_token(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>')
+}
+
+const KAFKA_USERNAME_ENV: &str = "ARAZZO_KAFKA_USERNAME";
+const KAFKA_PASSWORD_ENV: &str = "ARAZZO_KAFKA_PASSWORD";
+
+fn message_transport_from_env() -> MessageTransportOptions {
+    MessageTransportOptions {
+        username: std::env::var(KAFKA_USERNAME_ENV)
+            .ok()
+            .filter(|username| !username.is_empty()),
+        password: std::env::var_os(KAFKA_PASSWORD_ENV)
+            .map(|raw| Secret::new(raw.to_string_lossy().into_owned())),
+        ..MessageTransportOptions::default()
+    }
 }
 
 fn capped_error_within(max_result_bytes: usize, message: &str) -> Value {
@@ -240,11 +289,11 @@ pub fn start_workflow(
         .ok_or_else(|| capped_error(state, "missing required argument: workflow_id"))?;
 
     let (http_timeout, execution_timeout) = state.timeouts().parse(args).map_err(|message| {
-        capped_error(
-            state,
+        capped_error_within(
+            state.limits().max_result_bytes,
             &json!({
                 "code": "MCP_INVALID_ARGUMENT",
-                "message": message,
+                "message": project_failure_text(&message),
             })
             .to_string(),
         )
@@ -301,6 +350,7 @@ pub fn start_workflow(
         .strict_inputs(true)
         .source_base_dir(spec_dir)
         .source_document_loader(state.source_document_loader())
+        .message_transport(message_transport_from_env())
         .build()
         .map_err(|err| capped_error(state, &format!("building engine: {err}")))?;
 
@@ -362,7 +412,7 @@ fn project_run_result(result: &ExecutionResult, dry_run: bool, max_result_bytes:
         }
         Err(ref err) => {
             let error_json = json!({
-                "error": err.message,
+                "error": project_failure_text(&err.message),
                 "code": err.code(),
             });
             let text = serde_json::to_string(&error_json)
@@ -370,7 +420,8 @@ fn project_run_result(result: &ExecutionResult, dry_run: bool, max_result_bytes:
             Ok(capped_error_within(max_result_bytes, &text))
         }
     };
-    projected.unwrap_or_else(|err| capped_error_within(max_result_bytes, &err))
+    projected
+        .unwrap_or_else(|err| capped_error_within(max_result_bytes, &project_failure_text(&err)))
 }
 
 // ---------------------------------------------------------------------------
@@ -429,7 +480,7 @@ fn build_validate_warnings(warnings: &[arazzo_validate::Diagnostic]) -> Vec<Valu
             json!({
                 "source": "validation",
                 "path": if item.path.is_empty() { Value::Null } else { Value::String(item.path.clone()) },
-                "message": item.message,
+                "message": project_failure_text(&item.message),
             })
         })
         .collect()
@@ -444,18 +495,18 @@ fn build_validate_errors(err: &arazzo_validate::Error) -> Vec<Value> {
                 json!({
                     "source": "validation",
                     "path": if item.path.is_empty() { Value::Null } else { Value::String(item.path.clone()) },
-                    "message": item.message,
+                    "message": project_failure_text(&item.message),
                 })
             })
             .collect(),
         arazzo_validate::Error::ReadFile(inner) => {
-            vec![json!({ "source": "readFile", "message": format!("{inner}") })]
+            vec![json!({ "source": "readFile", "message": project_failure_text(&inner.to_string()) })]
         }
         arazzo_validate::Error::ParseYaml(inner) => {
-            vec![json!({ "source": "parseYaml", "message": format!("{inner}") })]
+            vec![json!({ "source": "parseYaml", "message": project_failure_text(&inner.to_string()) })]
         }
         arazzo_validate::Error::ComponentResolution(msg) => {
-            vec![json!({ "source": "componentResolution", "message": msg })]
+            vec![json!({ "source": "componentResolution", "message": project_failure_text(msg) })]
         }
     }
 }

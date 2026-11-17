@@ -222,8 +222,8 @@ plaintext, no credentials, bundled roots, 30 s.
 
 | Flag or variable | Commands | Meaning |
 | --- | --- | --- |
-| `--kafka-username <USER>` / `ARAZZO_KAFKA_USERNAME` | `run`, `test` | SASL username, when the selected server declares a supported scheme |
-| `ARAZZO_KAFKA_PASSWORD` | `run`, `test` | SASL password. **Environment only** — there is no flag, so the secret is never a process argument visible to other users. An inline `VAR=value command` assignment can still land in your shell's history; load it from a protected source (a secret manager, or `export` from a file your shell does not record) instead. |
+| `--kafka-username <USER>` / `ARAZZO_KAFKA_USERNAME` | `run`, `test`, MCP `run_workflow` (variable only) | SASL username, when the selected server declares a supported scheme |
+| `ARAZZO_KAFKA_PASSWORD` | `run`, `test`, MCP `run_workflow` | SASL password. **Environment only** — there is no flag, so the secret is never a process argument visible to other users. An inline `VAR=value command` assignment can still land in your shell's history; load it from a protected source (a secret manager, or `export` from a file your shell does not record) instead. |
 | `--kafka-tls` | `run`, `test` | Use TLS for a plain `kafka` server (`kafka-secure` servers always use TLS) |
 | `--kafka-ca-cert <PEM>` | `run`, `test` | Additional CA certificate(s) trusted for broker verification, on top of the bundled Mozilla roots |
 | `--kafka-connect-timeout <DURATION>` | `run`, `test` | Preparation deadline for one arming pass (default `30s`) |

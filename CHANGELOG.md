@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now cancels the run and writes no response, as does `notifications/cancelled`
   naming its request id. The server answers other requests while a run is in
   flight; tool calls still run one at a time.
+- **MCP failure text is redacted** — `run_workflow` errors, tool errors, and
+  `validate_spec` diagnostics pass through the runtime's URL and secret-pattern
+  redaction before they reach the client. Successful results are unchanged.
+- **MCP `run_workflow` uses Kafka credentials from the environment** —
+  `ARAZZO_KAFKA_USERNAME` and `ARAZZO_KAFKA_PASSWORD` set on the server now
+  reach Kafka receive steps, as they do for `run` and `test`.
 
 ### Fixed
 

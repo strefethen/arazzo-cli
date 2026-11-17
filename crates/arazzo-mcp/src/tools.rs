@@ -33,7 +33,7 @@ pub fn definitions(state: &ServerState) -> Vec<Value> {
         }),
         json!({
             "name": "run_workflow",
-            "description": "Execute an Arazzo workflow with the given inputs and return its outputs. Use list_workflows or describe_workflow first to discover available workflows and their required inputs.",
+            "description": "Execute an Arazzo workflow with the given inputs and return its outputs. Use list_workflows or describe_workflow first to discover available workflows and their required inputs. Kafka SASL credentials come from the server's ARAZZO_KAFKA_USERNAME and ARAZZO_KAFKA_PASSWORD environment variables, never from tool arguments.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
