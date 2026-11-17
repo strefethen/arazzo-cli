@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "Fixture setup and assertions")]
 
 use super::{extract_tool_text, is_tool_error};
-use arazzo_mcp::state::ServerState;
+use arazzo_mcp::{state::ServerState, McpLimits};
 use serde_json::Value;
 use std::path::Path;
 
@@ -52,5 +52,8 @@ pub(super) fn rooted_state_from_spec(path: &str, spec: arazzo_spec::ArazzoSpec) 
 }
 
 pub(super) fn file_policy_notice() -> String {
-    "arazzo-mcp: file policy mode=denied, roots=0\n".to_string()
+    format!(
+        "arazzo-mcp: file policy mode=denied, roots=0; {}\n",
+        McpLimits::default()
+    )
 }

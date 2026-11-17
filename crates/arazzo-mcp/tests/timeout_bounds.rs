@@ -1,15 +1,29 @@
 #![allow(clippy::unwrap_used)]
 
-use arazzo_mcp::{handlers, state::ServerState, tools};
+use std::time::Duration;
+
+use arazzo_mcp::{handlers, state::ServerState, tools, McpLimits};
 use serde_json::{json, Value};
 
 #[test]
 fn rejects_invalid_values_before_workflow_lookup() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let state = ServerState::empty();
-    for (field, max) in [
-        ("http_timeout_seconds", 30),
-        ("execution_timeout_seconds", 300),
+    let configured = ServerState::load_configured(
+        &[],
+        Some(vec![]),
+        McpLimits {
+            max_http_timeout: Duration::from_secs(5),
+            max_execution_timeout: Duration::from_millis(20_900),
+            ..McpLimits::default()
+        },
+    )
+    .unwrap();
+    let empty = ServerState::empty();
+    for (state, field, max) in [
+        (&empty, "http_timeout_seconds", 30),
+        (&empty, "execution_timeout_seconds", 300),
+        (&configured, "http_timeout_seconds", 5),
+        (&configured, "execution_timeout_seconds", 20),
     ] {
         for value in [
             Value::Null,
@@ -27,7 +41,7 @@ fn rejects_invalid_values_before_workflow_lookup() {
         ] {
             let mut args = json!({"workflow_id":"missing"});
             args[field] = value;
-            let result = handlers::run_workflow(&state, &args, &runtime).unwrap();
+            let result = handlers::run_workflow(state, &args, &runtime).unwrap();
             assert_eq!(result["isError"], true);
             let text = result["content"][0]["text"].as_str().unwrap();
             let error: Value = serde_json::from_str(text).unwrap();
@@ -40,10 +54,10 @@ fn rejects_invalid_values_before_workflow_lookup() {
             if let Some(value) = value {
                 args[field] = value;
             }
-            let result = handlers::run_workflow(&state, &args, &runtime).unwrap();
+            let result = handlers::run_workflow(state, &args, &runtime).unwrap();
             assert_eq!(result["content"][0]["text"], "workflow not found: missing");
         }
-        let definitions = tools::definitions(&state);
+        let definitions = tools::definitions(state);
         let run = definitions
             .iter()
             .find(|d| d["name"] == "run_workflow")

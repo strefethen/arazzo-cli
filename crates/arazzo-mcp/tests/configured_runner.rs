@@ -46,8 +46,10 @@ fn legacy_and_configured_runners_share_default_explicit_empty_semantics() {
                     .is_some_and(|roots| roots.contains(&root.to_str().unwrap().to_string()));
             let mut output = Vec::new();
             if configured {
-                let mut config = McpServerConfig::default();
-                config.allowed_dirs = roots;
+                let config = McpServerConfig {
+                    allowed_dirs: roots,
+                    ..McpServerConfig::default()
+                };
                 run_mcp_stdio_configured(
                     input(startup.to_str().unwrap()),
                     &mut output,

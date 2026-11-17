@@ -2,39 +2,45 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-#[derive(Default)]
-pub(crate) struct TimeoutPolicy;
+use crate::limits::McpLimits;
+
+pub(crate) struct TimeoutPolicy {
+    pub(crate) http_seconds: u64,
+    pub(crate) execution_seconds: u64,
+}
+
+impl From<&McpLimits> for TimeoutPolicy {
+    fn from(limits: &McpLimits) -> Self {
+        Self {
+            http_seconds: limits.max_http_timeout.as_secs(),
+            execution_seconds: limits.max_execution_timeout.as_secs(),
+        }
+    }
+}
 
 impl TimeoutPolicy {
-    pub(crate) const HTTP_SECONDS: u64 = 30;
-    pub(crate) const EXECUTION_SECONDS: u64 = 300;
-
-    pub(crate) fn parse(&self, args: &Value) -> Result<(Duration, Duration), &'static str> {
+    pub(crate) fn parse(&self, args: &Value) -> Result<(Duration, Duration), String> {
         Ok((
             Self::seconds(
                 args.get("http_timeout_seconds"),
-                Self::HTTP_SECONDS,
-                "http_timeout_seconds must be an integer from 1 to 30",
+                self.http_seconds,
+                "http_timeout_seconds",
             )?,
             Self::seconds(
                 args.get("execution_timeout_seconds"),
-                Self::EXECUTION_SECONDS,
-                "execution_timeout_seconds must be an integer from 1 to 300",
+                self.execution_seconds,
+                "execution_timeout_seconds",
             )?,
         ))
     }
 
-    fn seconds(
-        value: Option<&Value>,
-        maximum: u64,
-        message: &'static str,
-    ) -> Result<Duration, &'static str> {
+    fn seconds(value: Option<&Value>, maximum: u64, field: &str) -> Result<Duration, String> {
         let seconds = match value {
             None => maximum,
             Some(value) => value
                 .as_u64()
                 .filter(|n| (1..=maximum).contains(n))
-                .ok_or(message)?,
+                .ok_or_else(|| format!("{field} must be an integer from 1 to {maximum}"))?,
         };
         Ok(Duration::from_secs(seconds))
     }
@@ -47,7 +53,7 @@ mod tests {
 
     #[test]
     fn defaults_and_boundaries_reach_exact_durations() {
-        let policy = TimeoutPolicy;
+        let policy = TimeoutPolicy::from(&McpLimits::default());
         for (args, http, execution) in [
             (json!({}), 30, 300),
             (

@@ -185,6 +185,7 @@ dependencies = [
  "arazzo-spec",
  "arazzo-validate",
  "clap",
+ "humantime",
  "rustix",
  "serde",
  "serde_json",

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use arazzo_mcp::{handlers, state::ServerState};
+use arazzo_mcp::{handlers, state::ServerState, McpLimits};
 use serde_json::{json, Value};
 
 const CANARY: &str = "CANARY_private_filename_source_452ce";
@@ -139,14 +139,23 @@ fn trusted_dot_root_and_literal_native_percent_text_are_not_descendants() {
 
 #[test]
 fn document_limit_boundaries_are_enforced_by_every_direct_tool() {
+    const LIMIT: usize = 64 * 1024;
     let fixture = Fixture::new();
-    let state = fixture.state();
-    for length in [4 * 1024 * 1024 - 1, 4 * 1024 * 1024, 4 * 1024 * 1024 + 1] {
+    let state = ServerState::load_configured(
+        &[],
+        Some(vec![fixture.0.to_str().unwrap().into()]),
+        McpLimits {
+            max_document_bytes: LIMIT,
+            ..McpLimits::default()
+        },
+    )
+    .unwrap();
+    for length in [LIMIT - 1, LIMIT, LIMIT + 1] {
         let mut content = OPENAPI.as_bytes().to_vec();
         content.extend_from_slice(b"#");
         content.resize(length, b' ');
         let path = fixture.write(&format!("boundary-{length}.yaml"), content);
-        if length <= 4 * 1024 * 1024 {
+        if length <= LIMIT {
             for tool in [
                 handlers::validate_spec,
                 handlers::generate_workflow,

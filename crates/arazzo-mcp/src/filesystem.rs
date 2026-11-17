@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-const DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+use crate::limits::{DEFAULT_DOCUMENT_BYTES, LIMIT_CODE, LIMIT_MESSAGE};
+
 const SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const SOURCE_ATTEMPTS: usize = 16;
 const STARTUP_DENIED: &str = "Invalid server file access configuration";
@@ -20,14 +21,14 @@ impl FileAccessError {
     fn code(self) -> &'static str {
         match self {
             Self::Denied => "MCP_FILE_DENIED",
-            Self::Limit => "MCP_LIMIT_EXCEEDED",
+            Self::Limit => LIMIT_CODE,
         }
     }
 
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Denied => "File access denied by server policy",
-            Self::Limit => "Operation exceeded a server resource limit",
+            Self::Limit => LIMIT_MESSAGE,
         }
     }
 
@@ -51,17 +52,30 @@ fn error_tool_result(payload: &Value) -> Value {
     })
 }
 
-#[derive(Default)]
 pub(crate) struct SourceReadBudget {
     attempts: usize,
     bytes: usize,
+    document_bytes: usize,
+}
+
+impl Default for SourceReadBudget {
+    fn default() -> Self {
+        Self {
+            attempts: 0,
+            bytes: 0,
+            document_bytes: DEFAULT_DOCUMENT_BYTES,
+        }
+    }
 }
 
 pub(crate) type SharedSourceReadBudget = Arc<Mutex<SourceReadBudget>>;
 
 impl SourceReadBudget {
-    pub(crate) fn shared() -> SharedSourceReadBudget {
-        Arc::new(Mutex::new(Self::default()))
+    pub(crate) fn shared(document_bytes: usize) -> SharedSourceReadBudget {
+        Arc::new(Mutex::new(Self {
+            document_bytes,
+            ..Self::default()
+        }))
     }
 
     fn reserve_attempt(&mut self) -> Result<(), FileAccessError> {
@@ -74,7 +88,7 @@ impl SourceReadBudget {
     }
 
     fn allowance(&self) -> Result<usize, FileAccessError> {
-        Ok(DOCUMENT_BYTES.min(
+        Ok(self.document_bytes.min(
             SOURCE_BYTES
                 .checked_sub(self.bytes)
                 .ok_or(FileAccessError::Limit)?,
@@ -607,6 +621,8 @@ mod tests {
     use super::*;
     use std::io::{self, Cursor};
 
+    const DOCUMENT_BYTES: usize = DEFAULT_DOCUMENT_BYTES;
+
     #[test]
     fn source_byte_and_attempt_boundaries_do_not_refund() {
         for length in [DOCUMENT_BYTES - 1, DOCUMENT_BYTES, DOCUMENT_BYTES + 1] {
@@ -676,7 +692,7 @@ mod tests {
 
     #[test]
     fn poisoned_shared_budget_denies() {
-        let budget = SourceReadBudget::shared();
+        let budget = SourceReadBudget::shared(DOCUMENT_BYTES);
         let _ = std::panic::catch_unwind(|| {
             let _guard = budget.lock().unwrap();
             panic!("poison");

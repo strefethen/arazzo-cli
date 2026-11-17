@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 use crate::state::ServerState;
 
 /// Returns the tool definitions for the MCP `tools/list` response.
-pub fn definitions(_state: &ServerState) -> Vec<Value> {
+pub fn definitions(state: &ServerState) -> Vec<Value> {
+    let timeouts = state.timeouts();
     vec![
         json!({
             "name": "list_workflows",
@@ -55,16 +56,16 @@ pub fn definitions(_state: &ServerState) -> Vec<Value> {
                     "http_timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": crate::timeout_policy::TimeoutPolicy::HTTP_SECONDS,
-                        "default": crate::timeout_policy::TimeoutPolicy::HTTP_SECONDS,
-                        "description": "Per-request HTTP timeout in seconds (default: 30)"
+                        "maximum": timeouts.http_seconds,
+                        "default": timeouts.http_seconds,
+                        "description": format!("Per-request HTTP timeout in seconds (default: {})", timeouts.http_seconds)
                     },
                     "execution_timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": crate::timeout_policy::TimeoutPolicy::EXECUTION_SECONDS,
-                        "default": crate::timeout_policy::TimeoutPolicy::EXECUTION_SECONDS,
-                        "description": "Overall workflow execution timeout in seconds (default: 300)"
+                        "maximum": timeouts.execution_seconds,
+                        "default": timeouts.execution_seconds,
+                        "description": format!("Overall workflow execution timeout in seconds (default: {})", timeouts.execution_seconds)
                     }
                 },
                 "required": ["workflow_id"]

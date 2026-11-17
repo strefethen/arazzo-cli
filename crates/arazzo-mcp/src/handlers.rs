@@ -7,26 +7,36 @@ use arazzo_runtime::{redacted_dry_run_request, ClientConfig, EngineBuilder};
 use arazzo_spec::{presented_method_and_target, ArazzoSpec, Step, StepTarget, Workflow};
 use serde_json::{json, Value};
 
+use crate::limits::{self, CappedText};
 use crate::state::ServerState;
 
 // ---------------------------------------------------------------------------
 // Tool result helpers
 // ---------------------------------------------------------------------------
 
-fn tool_ok(value: &Value) -> Result<Value, String> {
-    let text =
-        serde_json::to_string_pretty(value).map_err(|err| format!("serializing result: {err}"))?;
-    Ok(json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": false,
-    }))
+fn tool_ok(state: &ServerState, value: &Value) -> Result<Value, String> {
+    match limits::pretty_text(value, state.limits().max_result_bytes)? {
+        CappedText::Within(text) => Ok(tool_text(text, false)),
+        CappedText::Exceeded => Ok(limits::exceeded_tool_result()),
+    }
 }
 
-fn tool_err(message: &str) -> Result<Value, String> {
-    Ok(json!({
-        "content": [{ "type": "text", "text": message }],
-        "isError": true,
-    }))
+fn tool_err(state: &ServerState, message: &str) -> Result<Value, String> {
+    Ok(capped_error(state, message))
+}
+
+pub(crate) fn capped_error(state: &ServerState, message: &str) -> Value {
+    if message.len() > state.limits().max_result_bytes {
+        return limits::exceeded_tool_result();
+    }
+    tool_text(message.to_string(), true)
+}
+
+fn tool_text(text: String, is_error: bool) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +156,7 @@ pub fn list_workflows(state: &ServerState) -> Result<Value, String> {
         .iter()
         .map(|(loaded, wf)| build_workflow_info(wf, &loaded.file_path))
         .collect();
-    tool_ok(&json!(workflows))
+    tool_ok(state, &json!(workflows))
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +171,7 @@ pub fn describe_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
 
     let (loaded, wf) = match state.find_workflow(workflow_id) {
         Ok(found) => found,
-        Err(err) => return tool_err(&err),
+        Err(err) => return tool_err(state, &err),
     };
 
     let mut inputs = BTreeMap::new();
@@ -196,7 +206,7 @@ pub fn describe_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
         "sources": sources,
     });
 
-    tool_ok(&detail)
+    tool_ok(state, &detail)
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +227,7 @@ pub fn run_workflow(
         Ok(timeouts) => timeouts,
         Err(message) => {
             return tool_err(
+                state,
                 &json!({
                     "code": "MCP_INVALID_ARGUMENT",
                     "message": message,
@@ -228,7 +239,7 @@ pub fn run_workflow(
 
     let (loaded, _wf) = match state.find_workflow(workflow_id) {
         Ok(found) => found,
-        Err(err) => return tool_err(&err),
+        Err(err) => return tool_err(state, &err),
     };
 
     let inputs: BTreeMap<String, Value> = args
@@ -272,6 +283,7 @@ pub fn run_workflow(
 
     let engine = match EngineBuilder::new(spec)
         .client_config(cfg)
+        .max_response_bytes(state.limits().max_response_body_bytes)
         .parallel(parallel)
         .dry_run(dry_run)
         .strict_inputs(true)
@@ -280,7 +292,7 @@ pub fn run_workflow(
         .build()
     {
         Ok(e) => e,
-        Err(err) => return tool_err(&format!("building engine: {err}")),
+        Err(err) => return tool_err(state, &format!("building engine: {err}")),
     };
 
     let result = runtime.block_on(async {
@@ -311,9 +323,9 @@ pub fn run_workflow(
                         })
                     })
                     .collect();
-                tool_ok(&json!({ "kind": "dryRun", "requests": reqs_json }))
+                tool_ok(state, &json!({ "kind": "dryRun", "requests": reqs_json }))
             } else {
-                tool_ok(&json!({ "kind": "success", "outputs": outputs }))
+                tool_ok(state, &json!({ "kind": "success", "outputs": outputs }))
             }
         }
         Err(err) => {
@@ -323,7 +335,7 @@ pub fn run_workflow(
             });
             let text = serde_json::to_string(&error_json)
                 .unwrap_or_else(|_| format!("{{\"error\":\"{}\"}}", err.code()));
-            tool_err(&text)
+            tool_err(state, &text)
         }
     }
 }
@@ -344,27 +356,33 @@ pub fn validate_spec(state: &ServerState, args: &Value) -> Result<Value, String>
     };
 
     match arazzo_validate::parse_bytes_with_diagnostics(&document.bytes) {
-        Ok((spec, warnings)) => tool_ok(&json!({
-            "valid": true,
-            "file": file_path,
-            "version": spec.arazzo,
-            "title": spec.info.title,
-            "workflows": spec.workflows.len(),
-            "sources": spec.source_descriptions.len(),
-            "warnings": build_validate_warnings(&warnings),
-        })),
+        Ok((spec, warnings)) => tool_ok(
+            state,
+            &json!({
+                "valid": true,
+                "file": file_path,
+                "version": spec.arazzo,
+                "title": spec.info.title,
+                "workflows": spec.workflows.len(),
+                "sources": spec.source_descriptions.len(),
+                "warnings": build_validate_warnings(&warnings),
+            }),
+        ),
         Err(err) => {
             let errors = build_validate_errors(&err);
             let warnings = match &err {
                 arazzo_validate::Error::Validation(report) => report.warnings.clone(),
                 _ => Vec::new(),
             };
-            tool_ok(&json!({
-                "valid": false,
-                "file": file_path,
-                "errors": errors,
-                "warnings": build_validate_warnings(&warnings),
-            }))
+            tool_ok(
+                state,
+                &json!({
+                    "valid": false,
+                    "file": file_path,
+                    "errors": errors,
+                    "warnings": build_validate_warnings(&warnings),
+                }),
+            )
         }
     }
 }
@@ -426,7 +444,7 @@ pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
 
     let openapi = match arazzo_generate::parse_openapi_bytes(&document.bytes) {
         Ok(spec) => spec,
-        Err(err) => return tool_err(&err),
+        Err(err) => return tool_err(state, &err),
     };
 
     // This tool returns YAML as a string with no output path — there is no
@@ -441,18 +459,21 @@ pub fn generate_workflow(state: &ServerState, args: &Value) -> Result<Value, Str
 
     let result = match arazzo_generate::crud::generate_crud(&openapi, file_path, &document_name) {
         Ok(r) => r,
-        Err(err) => return tool_err(&err),
+        Err(err) => return tool_err(state, &err),
     };
 
     let yaml = serde_yaml_ng::to_string(&result.spec)
         .map_err(|err| format!("serializing Arazzo spec: {err}"))?;
 
-    tool_ok(&json!({
-        "yaml": yaml,
-        "warnings": result.warnings,
-        "resources": result.resources,
-        "auth_type": result.auth_type,
-    }))
+    tool_ok(
+        state,
+        &json!({
+            "yaml": yaml,
+            "warnings": result.warnings,
+            "resources": result.resources,
+            "auth_type": result.auth_type,
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -472,18 +493,18 @@ pub fn describe_openapi(state: &ServerState, args: &Value) -> Result<Value, Stri
 
     let openapi = match arazzo_generate::parse_openapi_bytes(&document.bytes) {
         Ok(spec) => spec,
-        Err(err) => return tool_err(&err),
+        Err(err) => return tool_err(state, &err),
     };
 
     let description = arazzo_generate::openapi_describe::describe(&openapi);
-    tool_ok(&description)
+    tool_ok(state, &description)
 }
 
 // ---------------------------------------------------------------------------
 // Handler: generate_example
 // ---------------------------------------------------------------------------
 
-pub fn generate_example(args: &Value) -> Result<Value, String> {
+pub fn generate_example(state: &ServerState, args: &Value) -> Result<Value, String> {
     let schema = args
         .get("schema")
         .ok_or_else(|| "missing required argument: schema".to_string())?;
@@ -495,7 +516,7 @@ pub fn generate_example(args: &Value) -> Result<Value, String> {
 
     let schema = serde_yaml_ng::to_value(schema).map_err(|e| e.to_string())?;
     let example = arazzo_generate::examples::generate_example(&schema, &schema, field_name)?;
-    tool_ok(&example.value)
+    tool_ok(state, &example.value)
 }
 
 #[cfg(test)]

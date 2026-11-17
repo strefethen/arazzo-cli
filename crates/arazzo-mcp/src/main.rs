@@ -5,7 +5,9 @@
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter};
 use std::path::Path;
+use std::time::Duration;
 
+use arazzo_mcp::{McpLimits, McpServerConfig};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -24,6 +26,57 @@ struct Args {
     )]
     #[arg(long = "allowed-dir")]
     allowed_dir: Vec<String>,
+
+    /// Largest inbound JSON-RPC frame in bytes [default: 262144]
+    #[arg(long)]
+    max_request_bytes: Option<usize>,
+
+    /// Decoded requests that may wait for the dispatcher [default: 16]
+    #[arg(long)]
+    max_pending_requests: Option<usize>,
+
+    /// Largest serialized tool result text in bytes [default: 1048576]
+    #[arg(long)]
+    max_result_bytes: Option<usize>,
+
+    /// Largest HTTP response body in bytes [default: 4194304]
+    #[arg(long)]
+    max_response_body_bytes: Option<usize>,
+
+    /// Largest file read by a tool in bytes [default: 4194304]
+    #[arg(long)]
+    max_document_bytes: Option<usize>,
+
+    /// Ceiling and default for http_timeout_seconds, e.g. 30s [default: 30s]
+    #[arg(long, value_parser = humantime::parse_duration)]
+    max_http_timeout: Option<Duration>,
+
+    /// Ceiling and default for execution_timeout_seconds, e.g. 5m [default: 300s]
+    #[arg(long, value_parser = humantime::parse_duration)]
+    max_execution_timeout: Option<Duration>,
+}
+
+impl Args {
+    fn limits(&self) -> McpLimits {
+        let defaults = McpLimits::default();
+        McpLimits {
+            max_request_bytes: self.max_request_bytes.unwrap_or(defaults.max_request_bytes),
+            max_pending_requests: self
+                .max_pending_requests
+                .unwrap_or(defaults.max_pending_requests),
+            max_result_bytes: self.max_result_bytes.unwrap_or(defaults.max_result_bytes),
+            max_response_body_bytes: self
+                .max_response_body_bytes
+                .unwrap_or(defaults.max_response_body_bytes),
+            max_document_bytes: self
+                .max_document_bytes
+                .unwrap_or(defaults.max_document_bytes),
+            max_http_timeout: self.max_http_timeout.unwrap_or(defaults.max_http_timeout),
+            max_execution_timeout: self
+                .max_execution_timeout
+                .unwrap_or(defaults.max_execution_timeout),
+        }
+    }
 }
 
 fn main() {
@@ -43,13 +96,17 @@ fn main() {
     let reader = BufReader::new(io::stdin());
     let mut writer = BufWriter::new(io::stdout().lock());
 
-    let allowed = if args.allowed_dir.is_empty() {
-        None
-    } else {
-        Some(args.allowed_dir)
+    let config = McpServerConfig {
+        limits: args.limits(),
+        allowed_dirs: if args.allowed_dir.is_empty() {
+            None
+        } else {
+            Some(args.allowed_dir)
+        },
     };
 
-    if let Err(err) = arazzo_mcp::run_mcp_stdio(reader, &mut writer, &spec_paths, allowed) {
+    if let Err(err) = arazzo_mcp::run_mcp_stdio_configured(reader, &mut writer, &spec_paths, config)
+    {
         eprintln!("error: {err}");
         std::process::exit(1);
     }

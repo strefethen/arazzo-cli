@@ -9,6 +9,8 @@ use arazzo_spec::{ArazzoSpec, Workflow};
 use crate::filesystem::{
     AcquiredDocument, FileAccess, FileAccessError, SharedSourceReadBudget, SourceReadBudget,
 };
+use crate::limits::McpLimits;
+use crate::timeout_policy::TimeoutPolicy;
 
 /// A parsed spec with its source file path.
 pub struct LoadedSpec {
@@ -21,15 +23,29 @@ pub struct ServerState {
     pub specs: Vec<LoadedSpec>,
     pub allowed_dirs: Option<Vec<PathBuf>>,
     pub(crate) file_access: Arc<FileAccess>,
+    pub(crate) limits: McpLimits,
 }
 
 impl ServerState {
-    pub(crate) fn timeouts(&self) -> crate::timeout_policy::TimeoutPolicy {
-        Default::default()
+    pub(crate) fn timeouts(&self) -> TimeoutPolicy {
+        TimeoutPolicy::from(&self.limits)
+    }
+
+    pub(crate) fn limits(&self) -> McpLimits {
+        self.limits
     }
 
     /// Parse and load specs from the given file paths.
     pub fn load(paths: &[String], allowed_dirs: Option<Vec<String>>) -> Result<Self, String> {
+        Self::load_configured(paths, allowed_dirs, McpLimits::default())
+    }
+
+    pub fn load_configured(
+        paths: &[String],
+        allowed_dirs: Option<Vec<String>>,
+        limits: McpLimits,
+    ) -> Result<Self, String> {
+        limits.validate()?;
         let mut specs = Vec::with_capacity(paths.len());
         for path in paths {
             let spec =
@@ -45,6 +61,7 @@ impl ServerState {
             specs,
             allowed_dirs: allowed,
             file_access,
+            limits,
         })
     }
 
@@ -54,6 +71,7 @@ impl ServerState {
             specs: Vec::new(),
             allowed_dirs: Some(Vec::new()),
             file_access: Arc::new(FileAccess::deny_all()),
+            limits: McpLimits::default(),
         }
     }
 
@@ -66,6 +84,7 @@ impl ServerState {
             }],
             allowed_dirs: Some(Vec::new()),
             file_access: Arc::new(FileAccess::deny_all()),
+            limits: McpLimits::default(),
         }
     }
 
@@ -74,8 +93,7 @@ impl ServerState {
     }
 
     pub(crate) fn acquire_document(&self, path: &str) -> Result<AcquiredDocument, FileAccessError> {
-        self.file_access
-            .acquire_shared(path, &SourceReadBudget::shared())
+        self.file_access.acquire_shared(path, &self.source_budget())
     }
 
     pub(crate) fn authorize_document(&self, path: &str) -> Result<(), FileAccessError> {
@@ -85,8 +103,12 @@ impl ServerState {
     pub(crate) fn source_document_loader(&self) -> Arc<dyn SourceDocumentLoader> {
         Arc::new(RootedSourceLoader {
             file_access: Arc::clone(&self.file_access),
-            budget: SourceReadBudget::shared(),
+            budget: self.source_budget(),
         })
+    }
+
+    fn source_budget(&self) -> SharedSourceReadBudget {
+        SourceReadBudget::shared(self.limits.max_document_bytes)
     }
 
     /// Find a workflow by ID across all loaded specs.

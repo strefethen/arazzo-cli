@@ -9,7 +9,11 @@ use arazzo_mcp::state::ServerState;
 use serde_json::{json, Value};
 
 fn example(schema: Value) -> Value {
-    let response = generate_example(&json!({"schema": schema, "field_name": "phone"})).unwrap();
+    let response = generate_example(
+        &ServerState::empty(),
+        &json!({"schema": schema, "field_name": "phone"}),
+    )
+    .unwrap();
     assert_eq!(response["isError"], false);
     assert_eq!(response["content"].as_array().unwrap().len(), 1);
     assert_eq!(response["content"][0]["type"], "text");
@@ -88,10 +92,14 @@ fn handler_bounds_oversized_values_without_changing_the_envelope() {
 #[test]
 fn handler_preserves_missing_argument_error_and_default_field_name() {
     assert_eq!(
-        generate_example(&json!({})),
+        generate_example(&ServerState::empty(), &json!({})),
         Err("missing required argument: schema".into())
     );
-    let response = generate_example(&json!({"schema": {"type": "string"}})).unwrap();
+    let response = generate_example(
+        &ServerState::empty(),
+        &json!({"schema": {"type": "string"}}),
+    )
+    .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(response["content"][0]["text"].as_str().unwrap()).unwrap(),
         json!("example-value")
@@ -102,10 +110,13 @@ fn handler_preserves_missing_argument_error_and_default_field_name() {
 fn handler_reports_unrepresentable_numeric_bounds_through_the_tool_error_path() {
     let message = "cannot synthesize a JSON number for \"price\" satisfying exclusiveMinimum 1.7976931348623157e308";
     assert_eq!(
-        generate_example(&json!({
-            "schema": {"type": "number", "exclusiveMinimum": f64::MAX},
-            "field_name": "price"
-        })),
+        generate_example(
+            &ServerState::empty(),
+            &json!({
+                "schema": {"type": "number", "exclusiveMinimum": f64::MAX},
+                "field_name": "price"
+            })
+        ),
         Err(message.to_owned())
     );
     let call = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {

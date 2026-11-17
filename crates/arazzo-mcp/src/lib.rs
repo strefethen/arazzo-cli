@@ -6,16 +6,20 @@
 //! over JSON-RPC 2.0 stdio transport with Content-Length framing.
 
 mod filesystem;
+mod framing;
 pub mod handlers;
+mod limits;
 pub mod protocol;
 pub mod state;
 mod timeout_policy;
 pub mod tools;
 
+pub use limits::McpLimits;
+
 #[derive(Default)]
 pub struct McpServerConfig {
     pub allowed_dirs: Option<Vec<String>>,
-    pub(crate) timeouts: timeout_policy::TimeoutPolicy,
+    pub limits: McpLimits,
 }
 
 use std::io::{BufRead, Read, Write};
@@ -59,10 +63,10 @@ where
     R: BufRead + Read + Send + 'static,
     W: Write,
 {
-    let server_state = state::ServerState::load(spec_paths, config.allowed_dirs)?;
-    let _ = config.timeouts;
+    let server_state =
+        state::ServerState::load_configured(spec_paths, config.allowed_dirs, config.limits)?;
 
-    eprintln!("{}", server_state.file_notice());
+    eprintln!("{}; {}", server_state.file_notice(), server_state.limits());
 
     // Diagnostics go to stderr only when specs are loaded (not in bare MCP mode).
     if !spec_paths.is_empty() {
