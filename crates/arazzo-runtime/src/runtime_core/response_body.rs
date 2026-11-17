@@ -32,7 +32,9 @@ impl Response {
         let body_value = if body.is_empty() {
             BodySlot::Absent
         } else {
-            match decode(declared, media_type.as_ref(), &body) {
+            match undecoded_coding(&headers)
+                .map_or_else(|| decode(declared, media_type.as_ref(), &body), Err)
+            {
                 Ok(value) => BodySlot::present(value),
                 Err(reason) => BodySlot::Unavailable { reason },
             }
@@ -60,7 +62,9 @@ impl Response {
             }
             (None, Some(_)) => {
                 let reason = recorded.body_error.unwrap_or_else(|| {
-                    bytes_reason(content_type_header(&recorded.headers), media_type.as_ref())
+                    undecoded_coding(&recorded.headers).unwrap_or_else(|| {
+                        bytes_reason(content_type_header(&recorded.headers), media_type.as_ref())
+                    })
                 });
                 (Vec::new(), BodySlot::Unavailable { reason })
             }
@@ -120,11 +124,28 @@ pub(crate) fn truncate_with_ellipsis(text: &mut String, max_bytes: usize) {
     }
 }
 
-fn content_type_header(headers: &BTreeMap<String, String>) -> Option<&str> {
+fn header<'a>(headers: &'a BTreeMap<String, String>, wanted: &str) -> Option<&'a str> {
     headers
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
         .map(|(_, value)| value.as_str())
+}
+
+fn content_type_header(headers: &BTreeMap<String, String>) -> Option<&str> {
+    header(headers, "content-type")
+}
+
+fn undecoded_coding(headers: &BTreeMap<String, String>) -> Option<String> {
+    let coding = header(headers, "content-encoding")?.trim();
+    coding
+        .split(',')
+        .map(str::trim)
+        .any(|token| !token.is_empty() && !token.eq_ignore_ascii_case("identity"))
+        .then(|| {
+            format!(
+                "response Content-Encoding {coding:?} is not a coding the runtime decodes, so its body is bytes, {NOT_YET_A_VALUE}"
+            )
+        })
 }
 
 fn is_textual(media_type: &MediaType) -> bool {
@@ -431,6 +452,65 @@ mod tests {
         assert_eq!(
             reason(Some("json"), b"{}"),
             "response Content-Type \"json\" is not a valid media type, so its body is bytes, which is not yet a readable value"
+        );
+    }
+
+    fn with_coding(content_type: &str, coding: &str, body: &[u8]) -> BodySlot {
+        let headers = BTreeMap::from([
+            ("Content-Type".to_owned(), content_type.to_owned()),
+            ("Content-Encoding".to_owned(), coding.to_owned()),
+        ]);
+        Response::decoded(200, headers, body.to_vec(), Vec::new()).body_value
+    }
+
+    #[test]
+    fn a_remaining_content_coding_makes_the_body_unavailable_whatever_the_type() {
+        for content_type in ["application/json", "text/plain", "image/png"] {
+            assert_eq!(
+                with_coding(content_type, "compress", b"{}"),
+                BodySlot::Unavailable {
+                    reason: "response Content-Encoding \"compress\" is not a coding the runtime decodes, so its body is bytes, which is not yet a readable value".to_owned()
+                },
+                "{content_type}"
+            );
+        }
+        assert!(matches!(
+            with_coding("application/json", "identity, x-custom", b"{}"),
+            BodySlot::Unavailable { reason } if reason.contains("\"identity, x-custom\"")
+        ));
+        for coding in ["identity", " Identity ", ""] {
+            assert_eq!(
+                with_coding("application/json", coding, b"{\"a\":1}"),
+                BodySlot::present(json!({"a": 1})),
+                "{coding:?}"
+            );
+        }
+        assert_eq!(
+            with_coding("application/json", "gzip", b""),
+            BodySlot::Absent
+        );
+    }
+
+    #[test]
+    fn replay_names_a_recorded_content_coding_when_no_error_was_recorded() {
+        let mut coded = recorded(Some("application/octet-stream"), None);
+        coded.headers = BTreeMap::from([
+            (
+                "content-type".to_owned(),
+                "application/octet-stream".to_owned(),
+            ),
+            ("content-encoding".to_owned(), "compress".to_owned()),
+        ]);
+        coded.body_blob = Some(BytesDescriptor::of(
+            b"\x1f\x9d",
+            Some("application/octet-stream".into()),
+            None,
+        ));
+        assert_eq!(
+            Response::replayed(coded, Vec::new()).body_value,
+            BodySlot::Unavailable {
+                reason: "response Content-Encoding \"compress\" is not a coding the runtime decodes, so its body is bytes, which is not yet a readable value".to_owned()
+            }
         );
     }
 

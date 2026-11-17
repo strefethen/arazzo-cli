@@ -67,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that only contains the text `json` (such as `application/x-ndjson`) no longer
   JSON-serializes a string payload; `application/json` and `+json` types are
   unchanged.
+- **gzip and brotli responses are decoded** — requests now offer
+  `Accept-Encoding: gzip,br`, and a `gzip` or `br` response body is
+  decompressed before its media type is read. `--max-response-size` counts the
+  decompressed bytes, so a small body that expands past the limit fails with
+  `RUNTIME_RESPONSE_TOO_LARGE`. A decoded response no longer shows its
+  `Content-Encoding` or `Content-Length` in `$response.header` or the trace.
+  A body still carrying another coding (such as `compress`) is bytes: reading
+  it fails with `RUNTIME_VALUE_UNAVAILABLE` naming the coding. Traced request
+  headers and replay matching are unchanged; the transport adds
+  `Accept-Encoding` below them.
 - **Traces move to `trace.v2`** — `run --trace` writes
   `schemaVersion: "trace.v2"`, described in
   [docs/trace-schema-v2.md](docs/trace-schema-v2.md) and
