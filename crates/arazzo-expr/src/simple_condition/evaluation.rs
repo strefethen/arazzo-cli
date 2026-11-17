@@ -51,7 +51,7 @@ struct Execution<'a, 'input> {
 }
 
 impl Execution<'_, '_> {
-    fn node(&mut self, syntax: &Syntax<'_>) -> Result<ResolvedValue, ConditionError> {
+    fn node(&mut self, syntax: &Syntax<'_>) -> Result<Option<Value>, ConditionError> {
         use SyntaxKind as Kind;
         let value = match &syntax.kind {
             Kind::Or(children) | Kind::And(children) => {
@@ -60,7 +60,7 @@ impl Execution<'_, '_> {
                     let value = self.node(child)?;
                     let boolean = truth(&value, child.span.start)?;
                     if boolean == is_or {
-                        return Ok(ResolvedValue::Present(Value::Bool(boolean)));
+                        return Ok(Some(Value::Bool(boolean)));
                     }
                 }
                 Value::Bool(!is_or)
@@ -93,23 +93,15 @@ impl Execution<'_, '_> {
                 let mut value = self.node(primary)?;
                 for access in accesses {
                     value = match (value, &access.kind) {
-                        (ResolvedValue::Missing, _) => ResolvedValue::Missing,
-                        (
-                            ResolvedValue::Present(Value::Object(mut object)),
-                            AccessKind::Property(name),
-                        ) => object
-                            .remove(*name)
-                            .map_or(ResolvedValue::Missing, ResolvedValue::Present),
-                        (
-                            ResolvedValue::Present(Value::Array(mut array)),
-                            AccessKind::Index(raw),
-                        ) => raw
+                        (None, _) => None,
+                        (Some(Value::Object(mut object)), AccessKind::Property(name)) => {
+                            object.remove(*name)
+                        }
+                        (Some(Value::Array(mut array)), AccessKind::Index(raw)) => raw
                             .parse::<usize>()
                             .ok()
                             .filter(|index| *index < array.len())
-                            .map_or(ResolvedValue::Missing, |index| {
-                                ResolvedValue::Present(array.swap_remove(index))
-                            }),
+                            .map(|index| array.swap_remove(index)),
                         (_, AccessKind::Property(_)) => {
                             return Err(invalid(
                                 access.span.start,
@@ -130,7 +122,15 @@ impl Execution<'_, '_> {
                 let resolution =
                     resolve_parsed(&self.parsed.runtime_expressions()[*index], self.context);
                 self.warnings.extend(resolution.warnings);
-                return Ok(resolution.value);
+                return match resolution.value {
+                    ResolvedValue::Present(value) => Ok(Some(value)),
+                    ResolvedValue::Missing => Ok(None),
+                    ResolvedValue::Unavailable(unavailable) => Err(ConditionError {
+                        kind: ConditionErrorKind::ValueUnavailable,
+                        byte_offset: syntax.span.start,
+                        message: unavailable.to_string(),
+                    }),
+                };
             }
             Kind::Boolean(raw) => Value::Bool(*raw == "true"),
             Kind::Null => Value::Null,
@@ -139,7 +139,7 @@ impl Execution<'_, '_> {
             ),
             Kind::String(raw) => Value::String(raw[1..raw.len() - 1].replace("''", "'")),
         };
-        Ok(ResolvedValue::Present(value))
+        Ok(Some(value))
     }
 }
 
@@ -151,22 +151,19 @@ fn invalid(offset: usize, message: impl Into<String>) -> ConditionError {
     }
 }
 
-fn truth(value: &ResolvedValue, offset: usize) -> Result<bool, ConditionError> {
+fn truth(value: &Option<Value>, offset: usize) -> Result<bool, ConditionError> {
     match value {
-        ResolvedValue::Missing | ResolvedValue::Present(Value::Null) => Ok(false),
-        ResolvedValue::Present(Value::Bool(value)) => Ok(*value),
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
         _ => Err(invalid(offset, "boolean or null required")),
     }
 }
 
-fn public_value(value: &ResolvedValue) -> &Value {
-    match value {
-        ResolvedValue::Missing => &Value::Null,
-        ResolvedValue::Present(value) => value,
-    }
+fn public_value(value: &Option<Value>) -> &Value {
+    value.as_ref().unwrap_or(&Value::Null)
 }
 
-fn compare(left: &ResolvedValue, right: &ResolvedValue, operator: &str) -> Result<bool, String> {
+fn compare(left: &Option<Value>, right: &Option<Value>, operator: &str) -> Result<bool, String> {
     let (left, right) = (public_value(left), public_value(right));
     if matches!(operator, "==" | "!=") {
         let equal = structural_equal(left, right)?;

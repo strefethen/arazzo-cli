@@ -4,13 +4,16 @@ use serde_json::Value;
 
 use crate::{
     classify_value_string, resolution::resolve_parsed_with_provenance, EvalContext,
-    ExpressionWarning, ValueResolution, ValueStringSyntax,
+    ExpressionWarning, ValueResolution, ValueStringSyntax, ValueUnavailable,
 };
 
-pub(crate) fn resolve_value(value: &str, context: &EvalContext) -> ValueResolution {
-    match classify_value_string(value) {
+pub(crate) fn resolve_value(
+    value: &str,
+    context: &EvalContext,
+) -> Result<ValueResolution, ValueUnavailable> {
+    Ok(match classify_value_string(value) {
         Ok(ValueStringSyntax::Expression(expression)) => {
-            resolve_parsed_with_provenance(&expression, context)
+            resolve_parsed_with_provenance(&expression, context)?
         }
         Ok(ValueStringSyntax::Template(expressions)) => {
             let mut rendered = String::with_capacity(value.len());
@@ -20,7 +23,7 @@ pub(crate) fn resolve_value(value: &str, context: &EvalContext) -> ValueResoluti
             for embedded in expressions {
                 let range = embedded.full_range();
                 rendered.push_str(&value[cursor..range.start]);
-                let mut resolved = resolve_parsed_with_provenance(embedded.expression(), context);
+                let mut resolved = resolve_parsed_with_provenance(embedded.expression(), context)?;
                 match resolved.value {
                     Value::String(text) => rendered.push_str(&text),
                     other => rendered.push_str(&other.to_string()),
@@ -52,10 +55,11 @@ pub(crate) fn resolve_value(value: &str, context: &EvalContext) -> ValueResoluti
             expressions: Vec::new(),
             syntax_error: true,
         },
-    }
+    })
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use serde_json::json;
 
@@ -64,7 +68,9 @@ mod tests {
 
     fn evaluator() -> ExpressionEvaluator {
         let mut context = EvalContext {
-            response_body: Some(json!({"items": [{"id": 7}], "status": "ready"})),
+            response_body: crate::BodySlot::Present(
+                json!({"items": [{"id": 7}], "status": "ready"}),
+            ),
             ..EvalContext::default()
         };
         for (name, value) in [
@@ -91,18 +97,26 @@ mod tests {
         for (name, expected) in evaluator.context().inputs.iter() {
             let input = format!("$inputs.{name}");
             assert_eq!(
-                evaluator.resolve_value_with_diagnostics(&input),
+                evaluator.resolve_value_with_diagnostics(&input).unwrap(),
                 (expected.clone(), Vec::new()),
                 "{input}"
             );
-            assert_eq!(evaluator.resolve_value(&input), *expected, "{input}");
+            assert_eq!(
+                evaluator.resolve_value(&input).unwrap(),
+                *expected,
+                "{input}"
+            );
         }
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics("$REQUEST.HEADER.x-custom"),
+            evaluator
+                .resolve_value_with_diagnostics("$REQUEST.HEADER.x-custom")
+                .unwrap(),
             (json!("header"), Vec::new())
         );
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics("$inputs.absent"),
+            evaluator
+                .resolve_value_with_diagnostics("$inputs.absent")
+                .unwrap(),
             (
                 Value::Null,
                 vec![ExpressionWarning {
@@ -133,7 +147,7 @@ mod tests {
             "前🙂 {name} $USD 後",
         ] {
             assert_eq!(
-                evaluator.resolve_value_with_diagnostics(input),
+                evaluator.resolve_value_with_diagnostics(input).unwrap(),
                 (Value::String(input.to_owned()), Vec::new()),
                 "{input}"
             );
@@ -154,7 +168,7 @@ mod tests {
         ] {
             let input = format!("{{$inputs.{name}}}");
             assert_eq!(
-                evaluator.resolve_value_with_diagnostics(&input),
+                evaluator.resolve_value_with_diagnostics(&input).unwrap(),
                 (Value::String(expected.to_owned()), Vec::new()),
                 "{input}"
             );
@@ -178,7 +192,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                evaluator.resolve_value_with_diagnostics(input),
+                evaluator.resolve_value_with_diagnostics(input).unwrap(),
                 (json!(expected), Vec::new()),
                 "{input}"
             );
@@ -200,7 +214,7 @@ mod tests {
             message: message.to_owned(),
         });
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics(input),
+            evaluator.resolve_value_with_diagnostics(input).unwrap(),
             (json!("null|null|null|null|7"), expected_warnings.to_vec())
         );
     }
@@ -229,7 +243,7 @@ mod tests {
             assert_eq!(error.kind, expected_kind);
             // A missing prefix would emit its own lookup warning if evaluated.
             assert_eq!(
-                evaluator.resolve_value_with_diagnostics(input),
+                evaluator.resolve_value_with_diagnostics(input).unwrap(),
                 (
                     Value::String(input.to_owned()),
                     vec![ExpressionWarning {
@@ -239,7 +253,7 @@ mod tests {
                 ),
                 "{input}"
             );
-            assert_eq!(evaluator.resolve_value(input), json!(input));
+            assert_eq!(evaluator.resolve_value(input).unwrap(), json!(input));
         }
     }
 
@@ -248,13 +262,13 @@ mod tests {
         let evaluator = evaluator();
         let literal = "前🙂 {name} $USD 後".repeat(4096);
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics(&literal),
+            evaluator.resolve_value_with_diagnostics(&literal).unwrap(),
             (json!(literal), Vec::new())
         );
         let template = "前🙂{{$inputs.pet_id}}$USD終".repeat(2048);
         let expected = "前🙂{7}$USD終".repeat(2048);
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics(&template),
+            evaluator.resolve_value_with_diagnostics(&template).unwrap(),
             (json!(expected), Vec::new())
         );
     }
@@ -272,15 +286,19 @@ mod tests {
                 "{condition}"
             );
         }
-        let (value, warnings) = evaluator.evaluate_with_diagnostics("$response.body.items[0].id");
+        let (value, warnings) = evaluator
+            .evaluate_with_diagnostics("$response.body.items[0].id")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("invalid Runtime Expression"));
         assert_eq!(
-            evaluator.evaluate_with_diagnostics("$response.body#/items/0/id"),
+            evaluator
+                .evaluate_with_diagnostics("$response.body#/items/0/id")
+                .unwrap(),
             (json!(7), Vec::new())
         );
-        assert_eq!(evaluator.evaluate("$USD"), Value::Null);
-        assert_eq!(evaluator.resolve_value("$USD"), json!("$USD"));
+        assert_eq!(evaluator.evaluate("$USD").unwrap(), Value::Null);
+        assert_eq!(evaluator.resolve_value("$USD").unwrap(), json!("$USD"));
     }
 }

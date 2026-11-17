@@ -747,8 +747,13 @@ impl Engine {
         let mut sub_inputs = ProvenancedValues::default();
         let mut parameter_warnings = Vec::new();
         for (index, param) in step.parameters.iter().enumerate() {
-            let resolution =
-                super::payload::resolve_value_source_with_provenance(&param.value, &eval);
+            let resolution = super::payload::resolve_value_source_with_provenance(
+                &param.value,
+                &eval,
+            )
+            .map_err(|unavailable| {
+                RuntimeError::value_unavailable(&format!("parameters[{index}].value"), unavailable)
+            })?;
             let metadata = vars.value_provenance(&resolution, &ProvenancedValues::default(), None);
             let value = resolution.value;
             let warnings = resolution.warnings;
@@ -796,12 +801,24 @@ impl Engine {
         vars.register_workflow_values(wf_id, sub_inputs, outputs.clone(), omissions);
 
         let previous = vars.replace_step_outputs(&step.step_id, outputs.clone());
-        let success = {
+        let failed = {
             let eval_post = ExpressionEvaluator::new(super::eval_context::base(self, vars, None));
-            step.success_criteria.iter().all(|criterion| {
-                evaluate_criterion(criterion, &eval_post, None, &self.inner.regex_cache)
-            })
+            step.success_criteria
+                .iter()
+                .enumerate()
+                .find_map(|(index, criterion)| {
+                    let evaluation = evaluate_criterion_detailed(
+                        criterion,
+                        &eval_post,
+                        None,
+                        &self.inner.regex_cache,
+                    );
+                    (!evaluation.matched)
+                        .then(|| evaluation.unavailable_error(&format!("successCriteria[{index}]")))
+                })
         };
+        let success = failed.is_none();
+        let unavailable = failed.flatten();
         // The post evaluator must release its snapshot before a restore, too.
         if !success {
             vars.restore_step_outputs(&step.step_id, previous);
@@ -812,8 +829,8 @@ impl Engine {
                 success,
                 response: None,
                 message: None,
-                err: None,
-                err_kind: None,
+                err_kind: unavailable.as_ref().map(|error| error.kind),
+                err: unavailable.map(|error| error.message),
             },
             outputs: if success {
                 outputs
@@ -893,16 +910,30 @@ impl Engine {
                 }
             }
             let eval = ExpressionEvaluator::new(ctx.clone());
-            let (value, warnings, metadata) = match output {
-                OutputValue::RuntimeExpression(expression) => {
-                    let result = eval.resolve_value_with_provenance(expression);
-                    let metadata = vars.expression_provenance(&result, &outputs, None);
-                    (result.value, result.warnings, metadata)
-                }
+            let resolved = match output {
+                OutputValue::RuntimeExpression(expression) => eval
+                    .resolve_value_with_provenance(expression)
+                    .map(|result| {
+                        let metadata = vars.expression_provenance(&result, &outputs, None);
+                        (result.value, result.warnings, metadata)
+                    }),
                 OutputValue::Selector(selector) => {
-                    let result = super::payload::resolve_selector_with_provenance(selector, &eval);
-                    let metadata = vars.value_provenance(&result, &outputs, None);
-                    (result.value, result.warnings, metadata)
+                    super::payload::resolve_selector_with_provenance(selector, &eval).map(
+                        |result| {
+                            let metadata = vars.value_provenance(&result, &outputs, None);
+                            (result.value, result.warnings, metadata)
+                        },
+                    )
+                }
+            };
+            let (value, warnings, metadata) = match resolved {
+                Ok(resolved) => resolved,
+                Err(unavailable) => {
+                    let site = format!("workflow {:?}: output {name:?}", workflow.workflow_id);
+                    return (
+                        Err(RuntimeError::value_unavailable(&site, unavailable)),
+                        output_warnings,
+                    );
                 }
             };
             output_warnings.extend(

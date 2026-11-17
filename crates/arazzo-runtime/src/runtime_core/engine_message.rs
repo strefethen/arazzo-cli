@@ -243,7 +243,14 @@ impl Engine {
         let mut warnings = Vec::new();
         let expected = if let Some(text) = &step.correlation_id {
             let eval = ExpressionEvaluator::new(super::eval_context::base(self, vars, None));
-            let (value, diagnostics) = eval.resolve_value_with_diagnostics(text);
+            let (value, diagnostics) =
+                eval.resolve_value_with_diagnostics(text)
+                    .map_err(|unavailable| {
+                        RuntimeError::value_unavailable(
+                            &format!("step {:?}: correlationId", step.step_id),
+                            unavailable,
+                        )
+                    })?;
             warnings.extend(
                 diagnostics
                     .iter()
@@ -453,13 +460,15 @@ impl Engine {
             self.debug_gate_success_criterion(&gate, index, &evaluation)
                 .await?;
             if !evaluation.matched {
+                let unavailable =
+                    evaluation.unavailable_error(&format!("successCriteria[{index}]"));
                 return Ok(StepExecution {
                     result: StepResult {
                         success: false,
                         response: None,
                         message: Some(snapshot),
-                        err: None,
-                        err_kind: None,
+                        err_kind: unavailable.as_ref().map(|error| error.kind),
+                        err: unavailable.map(|error| error.message),
                     },
                     outputs: ProvenancedValues::default(),
                     dry_run_request: None,
@@ -482,8 +491,12 @@ impl Engine {
                 site: super::ValueProducerSite::Output(name),
                 transport: super::ValueProducerTransport::Message,
             });
-            let (value, expr_warnings, metadata) =
-                evaluate_provenanced_output(expr, &eval, None, vars, producer);
+            let (value, expr_warnings, metadata) = evaluate_provenanced_output(
+                expr, &eval, None, vars, producer,
+            )
+            .map_err(|unavailable| {
+                RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
+            })?;
             outputs.insert(name.clone(), value.clone(), metadata);
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {

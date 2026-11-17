@@ -6,9 +6,10 @@
 #![allow(unused_imports)]
 
 pub(super) use super::control::{sleep_with_cancel, step_result_error};
+#[cfg(test)]
+pub(super) use super::criteria::evaluate_criterion;
 pub(super) use super::criteria::{
-    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_expression_detailed,
-    CriterionEvaluation,
+    evaluate_criterion_detailed, evaluate_output_expression_detailed, CriterionEvaluation,
 };
 pub(super) use super::deps::{
     build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker,

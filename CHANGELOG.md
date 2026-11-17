@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An unreadable response body is an error, not `null`** — a response body
+  that is neither JSON nor valid UTF-8 used to resolve `$response.body` to
+  `null` with a warning. Any expression that reads it now fails the step with
+  the new `RUNTIME_VALUE_UNAVAILABLE` code, naming the step, the expression and
+  the reason: a whole reference or a pointer, `{}` interpolation, a criterion
+  or Selector Object context, a `simple` condition operand, an output, an
+  action criterion, target or parameter, and debugger evaluate, watch and
+  breakpoint-condition requests. A request whose preparation reads such a
+  value is not sent. Checks that never read the body, such as
+  `$statusCode == 200`, still pass. Missing values are unchanged: `null` plus
+  a warning.
+- **The default criterion context is `$response.body`** — a `regex`,
+  `jsonpath` or `xpath` criterion with no `context` now evaluates over exactly
+  what `$response.body` resolves to, so an undecodable body fails the criterion
+  with `RUNTIME_VALUE_UNAVAILABLE` instead of matching lossily decoded text,
+  and an empty body is the empty string rather than `null`. A `simple`
+  criterion no longer builds a default context: the debugger's
+  `criterionContextValue` is `null` for it, and the body stays available as
+  `responseBodyRaw`.
 - **Missing request and response values now warn** — `$url`, `$method`,
   `$statusCode`, `$request.*` and `$response.*` that resolve to nothing still
   evaluate to `null`, but each absence now reports an expression warning, as

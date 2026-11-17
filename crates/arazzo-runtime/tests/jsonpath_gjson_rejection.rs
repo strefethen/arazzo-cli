@@ -501,7 +501,7 @@ async fn gjson_replacement_targets_and_values_leave_the_body_unchanged() {
 #[test]
 fn runtime_expression_gjson_dot_path_extension_is_unchanged() {
     let evaluator = arazzo_expr::ExpressionEvaluator::new(arazzo_expr::EvalContext {
-        response_body: Some(parse_json(BODY)),
+        response_body: arazzo_expr::BodySlot::Present(parse_json(BODY)),
         ..Default::default()
     });
     for expression in [
@@ -509,11 +509,18 @@ fn runtime_expression_gjson_dot_path_extension_is_unchanged() {
         r#"$response.body.items.#(sku=="A").q"#,
         r#"$response.body.items.#(sku=="A")#.q"#,
     ] {
-        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression);
+        let (value, warnings) = evaluator
+            .evaluate_with_diagnostics(expression)
+            .unwrap_or_else(|unavailable| panic!("{unavailable}"));
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].expression, expression);
         assert!(warnings[0].message.contains("invalid Runtime Expression"));
     }
-    assert_eq!(evaluator.evaluate("$response.body#/items/0/q"), json!(1));
+    assert_eq!(
+        evaluator
+            .evaluate("$response.body#/items/0/q")
+            .unwrap_or_else(|unavailable| panic!("{unavailable}")),
+        json!(1)
+    );
 }

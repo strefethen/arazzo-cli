@@ -167,6 +167,15 @@ fn breakpoint_condition_matches(
     let evaluation =
         ExpressionEvaluator::new(eval_ctx.clone()).evaluate_condition_detailed(trimmed);
     if let Some(error) = evaluation.error {
+        if error.kind == arazzo_expr::ConditionErrorKind::ValueUnavailable {
+            return Err(format!(
+                "{}: breakpoint condition: {trimmed:?} in workflow: {:?}, step: {:?}: {}",
+                crate::RuntimeErrorKind::ValueUnavailable.code(),
+                breakpoint.workflow_id,
+                breakpoint.step_id,
+                error.message
+            ));
+        }
         return Err(format!(
             "invalid breakpoint condition: {trimmed:?} in workflow: {:?}, step: {:?}: {} (byte {})",
             breakpoint.workflow_id, breakpoint.step_id, error.message, error.byte_offset

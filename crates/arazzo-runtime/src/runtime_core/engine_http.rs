@@ -283,7 +283,7 @@ impl Engine {
         let mut projected_body = None;
         let body_json = if let Some(req_body) = &step.request_body {
             if let Some(payload) = &req_body.payload {
-                let resolution = payload::resolve_value_source_with_provenance(payload, &eval);
+                let resolution = admission.resolve(payload, &eval, "requestBody.payload")?;
                 let mut projection = admission.project(&resolution, "requestBody.payload")?;
                 let mut body = resolution.value;
                 let payload_warnings = resolution.warnings;
@@ -361,11 +361,10 @@ impl Engine {
         let mut projected_cookies = Vec::new();
         for (index, param) in step.parameters.iter().enumerate() {
             if param.in_ == Some(ParamLocation::Header) {
-                let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
-                let projection = admission.project(
-                    &resolution,
-                    &request_admission::RequestAdmission::parameter_location(index, param),
-                )?;
+                let location =
+                    request_admission::RequestAdmission::parameter_location(index, param);
+                let resolution = admission.resolve(&param.value, &eval, &location)?;
+                let projection = admission.project(&resolution, &location)?;
                 let value = resolution.value;
                 let warnings = resolution.warnings;
                 prep_warnings.extend(
@@ -377,11 +376,10 @@ impl Engine {
                 headers.insert(param.name.clone(), resolved);
                 projected_headers.insert(param.name.clone(), value_to_string(&projection));
             } else if param.in_ == Some(ParamLocation::Cookie) {
-                let resolution = payload::resolve_value_source_with_provenance(&param.value, &eval);
-                let projection = admission.project(
-                    &resolution,
-                    &request_admission::RequestAdmission::parameter_location(index, param),
-                )?;
+                let location =
+                    request_admission::RequestAdmission::parameter_location(index, param);
+                let resolution = admission.resolve(&param.value, &eval, &location)?;
+                let projection = admission.project(&resolution, &location)?;
                 let value = resolution.value;
                 let warnings = resolution.warnings;
                 prep_warnings.extend(
@@ -545,7 +543,10 @@ impl Engine {
                     site: ValueProducerSite::Output(name),
                     transport: ValueProducerTransport::Http,
                 }),
-            );
+            )
+            .map_err(|unavailable| {
+                RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
+            })?;
             let producer_warnings =
                 dry_run::output_warnings(workflow_id, &step.step_id, name, expr, &metadata);
             for warning in expr_warnings {
@@ -675,32 +676,34 @@ impl Engine {
             self.debug_gate_success_criterion(&gate, index, &evaluation)
                 .await?;
             if !evaluation.matched {
-                let trace_response = build_trace_response(response);
-                return Ok(StepExecution {
-                    result: StepResult {
-                        success: false,
-                        response: Some(Arc::clone(response)),
-                        message: None,
-                        err: None,
-                        err_kind: None,
-                    },
-                    outputs: ProvenancedValues::default(),
-                    dry_run_request: None,
-                    trace: StepTraceData {
-                        request: Some(trace_request),
-                        response: Some(trace_response),
-                        criteria,
-                        warnings: step_warnings,
-                        message: None,
-                    },
-                });
+                return Ok(Self::failed_exchange(
+                    response,
+                    trace_request,
+                    criteria,
+                    step_warnings,
+                    evaluation.unavailable_error(&format!("successCriteria[{index}]")),
+                ));
             }
         }
 
         let mut outputs = ProvenancedValues::default();
         for (name, expr) in &step.outputs {
             let (value, expr_warnings, metadata) =
-                evaluate_provenanced_output(expr, &eval, Some(response), vars, None);
+                match evaluate_provenanced_output(expr, &eval, Some(response), vars, None) {
+                    Ok(output) => output,
+                    Err(unavailable) => {
+                        return Ok(Self::failed_exchange(
+                            response,
+                            trace_request,
+                            criteria,
+                            step_warnings,
+                            Some(RuntimeError::value_unavailable(
+                                &format!("output {name:?}"),
+                                unavailable,
+                            )),
+                        ));
+                    }
+                };
             outputs.insert(name.clone(), value.clone(), metadata);
             checkpoint_outputs.insert(name.clone(), value);
             for warning in expr_warnings {
@@ -742,6 +745,33 @@ impl Engine {
         })
     }
 
+    fn failed_exchange(
+        response: &Arc<Response>,
+        request: TraceRequest,
+        criteria: Vec<TraceCriterionResult>,
+        warnings: Vec<String>,
+        unavailable: Option<RuntimeError>,
+    ) -> StepExecution {
+        StepExecution {
+            result: StepResult {
+                success: false,
+                response: Some(Arc::clone(response)),
+                message: None,
+                err_kind: unavailable.as_ref().map(|error| error.kind),
+                err: unavailable.map(|error| error.message),
+            },
+            outputs: ProvenancedValues::default(),
+            dry_run_request: None,
+            trace: StepTraceData {
+                request: Some(request),
+                response: Some(build_trace_response(response)),
+                criteria,
+                warnings,
+                message: None,
+            },
+        }
+    }
+
     /// Builds the request URL for a step's already-resolved target.
     ///
     /// Both target forms have already selected an actual bound operation.
@@ -769,12 +799,10 @@ impl Engine {
     ) -> Result<(UrlBuildResult, UrlBuildResult), RuntimeError> {
         let mut projected = BTreeMap::new();
         let ordinary = self.build_url_resolved(op_path, source_base, step, |index, param| {
-            let resolution = payload::resolve_value_source_with_provenance(&param.value, eval);
+            let location = request_admission::RequestAdmission::parameter_location(index, param);
+            let resolution = admission.resolve(&param.value, eval, &location)?;
             if param.in_.is_some() {
-                let mut projection = admission.project(
-                    &resolution,
-                    &request_admission::RequestAdmission::parameter_location(index, param),
-                )?;
+                let mut projection = admission.project(&resolution, &location)?;
                 if param.in_ == Some(ParamLocation::Querystring) && projection != resolution.value {
                     if let Value::String(marker) = &projection {
                         projection = Value::String(

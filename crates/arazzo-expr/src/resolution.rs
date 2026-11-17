@@ -6,10 +6,26 @@ use serde_json::Value;
 
 use crate::runtime_expression::RuntimeExpressionForm;
 use crate::{
-    body_pointer_migration_hint, get_header_case_insensitive, parse_runtime_expression,
+    body_pointer_migration_hint, get_header_case_insensitive, parse_runtime_expression, BodySlot,
     EvalContext, ExpressionWarning, ParsedRuntimeExpression, RuntimeExpressionNamespace,
     RuntimeExpressionPointer,
 };
+
+/// A referenced value exists but cannot be read as a JSON value. No conversion
+/// to a JSON value exists: every resolution entry point returns it as an error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValueUnavailable {
+    pub expression: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ValueUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.expression, self.reason)
+    }
+}
+
+impl std::error::Error for ValueUnavailable {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValueResolution {
@@ -113,7 +129,10 @@ impl StoredValueReference {
     }
 }
 
-pub(crate) fn evaluate_with_provenance(expression: &str, context: &EvalContext) -> ValueResolution {
+pub(crate) fn evaluate_with_provenance(
+    expression: &str,
+    context: &EvalContext,
+) -> Result<ValueResolution, ValueUnavailable> {
     match parse_runtime_expression(expression) {
         Ok(parsed) => resolve_parsed_with_provenance(&parsed, context),
         Err(error) => {
@@ -122,7 +141,7 @@ pub(crate) fn evaluate_with_provenance(expression: &str, context: &EvalContext) 
                 message.push_str("; ");
                 message.push_str(&hint);
             }
-            ValueResolution {
+            Ok(ValueResolution {
                 value: Value::Null,
                 warnings: vec![ExpressionWarning {
                     expression: expression.to_owned(),
@@ -130,7 +149,7 @@ pub(crate) fn evaluate_with_provenance(expression: &str, context: &EvalContext) 
                 }],
                 expressions: Vec::new(),
                 syntax_error: true,
-            }
+            })
         }
     }
 }
@@ -138,7 +157,7 @@ pub(crate) fn evaluate_with_provenance(expression: &str, context: &EvalContext) 
 pub(crate) fn resolve_parsed_with_provenance(
     expression: &ParsedRuntimeExpression<'_>,
     context: &EvalContext,
-) -> ValueResolution {
+) -> Result<ValueResolution, ValueUnavailable> {
     let resolution = resolve_parsed(expression, context);
     let occurrence = ExpressionResolution {
         expression: expression.raw().to_owned(),
@@ -146,19 +165,20 @@ pub(crate) fn resolve_parsed_with_provenance(
         reference: StoredValueReference::from_parsed(expression),
         missing: matches!(resolution.value, ResolvedValue::Missing),
     };
-    let (value, warnings) = resolution.into_public();
-    ValueResolution {
+    let (value, warnings) = resolution.into_public()?;
+    Ok(ValueResolution {
         value,
         warnings,
         expressions: vec![occurrence],
         syntax_error: false,
-    }
+    })
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ResolvedValue {
     Present(Value),
     Missing,
+    Unavailable(ValueUnavailable),
 }
 
 #[derive(Debug, PartialEq)]
@@ -168,12 +188,12 @@ pub(crate) struct Resolution {
 }
 
 impl Resolution {
-    pub(crate) fn into_public(self) -> (Value, Vec<ExpressionWarning>) {
-        let value = match self.value {
-            ResolvedValue::Present(value) => value,
-            ResolvedValue::Missing => Value::Null,
-        };
-        (value, self.warnings)
+    pub(crate) fn into_public(self) -> Result<(Value, Vec<ExpressionWarning>), ValueUnavailable> {
+        match self.value {
+            ResolvedValue::Present(value) => Ok((value, self.warnings)),
+            ResolvedValue::Missing => Ok((Value::Null, self.warnings)),
+            ResolvedValue::Unavailable(unavailable) => Err(unavailable),
+        }
     }
 
     fn from_option(value: Option<Value>) -> Self {
@@ -200,6 +220,16 @@ impl Resolution {
                 expression: expression.raw().to_owned(),
                 message,
             }],
+        }
+    }
+
+    fn unavailable(expression: &ParsedRuntimeExpression<'_>, reason: &str) -> Self {
+        Self {
+            value: ResolvedValue::Unavailable(ValueUnavailable {
+                expression: expression.raw().to_owned(),
+                reason: reason.to_owned(),
+            }),
+            warnings: Vec::new(),
         }
     }
 }
@@ -362,10 +392,15 @@ fn resolve_message_source(
             .map(Value::String)
             .ok_or_else(|| format!("request path parameter \"{name}\" not found in context")),
         (Namespace::Request, Form::Body(pointer)) => {
-            select_document(context.request_body.as_ref(), *pointer, "request body")
+            return resolve_body(expression, &context.request_body, *pointer, "request body")
         }
         (Namespace::Response, Form::Body(pointer)) => {
-            select_document(context.response_body.as_ref(), *pointer, "response body")
+            return resolve_body(
+                expression,
+                &context.response_body,
+                *pointer,
+                "response body",
+            )
         }
         (Namespace::Message, Form::Payload(pointer)) => select_document(
             context.message_payload.as_ref(),
@@ -381,6 +416,20 @@ fn resolve_message_source(
         _ => unreachable!("canonical message sources have namespace-specific forms"),
     };
     Resolution::from_lookup(expression, lookup)
+}
+
+fn resolve_body(
+    expression: &ParsedRuntimeExpression<'_>,
+    slot: &BodySlot,
+    pointer: Option<RuntimeExpressionPointer<'_>>,
+    label: &str,
+) -> Resolution {
+    let document = match slot {
+        BodySlot::Absent => None,
+        BodySlot::Present(document) => Some(document),
+        BodySlot::Unavailable { reason } => return Resolution::unavailable(expression, reason),
+    };
+    Resolution::from_lookup(expression, select_document(document, pointer, label))
 }
 
 fn select_document(
@@ -428,7 +477,7 @@ fn resolve_named(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)] // Valid syntax and initialized fixtures precede lookup assertions.
+#[allow(clippy::expect_used, clippy::unwrap_used)] // Valid syntax and initialized fixtures precede lookup assertions.
 mod tests {
     use std::sync::Arc;
 
@@ -466,9 +515,9 @@ mod tests {
             request_headers: BTreeMap::from([("x-request-id".to_owned(), "request".to_owned())]),
             request_query: BTreeMap::from([("q".to_owned(), "search".to_owned())]),
             request_path: BTreeMap::from([("id".to_owned(), "path-id".to_owned())]),
-            request_body: Some(body.clone()),
+            request_body: crate::BodySlot::Present(body.clone()),
             response_headers: BTreeMap::from([("x-response-id".to_owned(), "response".to_owned())]),
-            response_body: Some(body.clone()),
+            response_body: crate::BodySlot::Present(body.clone()),
             message_headers: BTreeMap::from([("x-message-id".to_owned(), "message".to_owned())]),
             message_payload: Some(body),
             self_uri: Some("workflows/example.yaml".to_owned()),
@@ -500,7 +549,9 @@ mod tests {
     #[test]
     fn supported_forms_preserve_values_and_public_behavior() {
         let context = context();
-        let body = context.request_body.clone().expect("body fixture");
+        let BodySlot::Present(body) = context.request_body.clone() else {
+            panic!("body fixture")
+        };
         let cases = [
             ("$url", json!("https://example.test/items")),
             ("$method", json!("POST")),
@@ -547,8 +598,8 @@ mod tests {
             );
             assert!(resolution.warnings.is_empty(), "{input}");
             assert_eq!(
-                resolution.into_public(),
-                evaluator.evaluate_with_diagnostics(input),
+                resolution.into_public().unwrap(),
+                evaluator.evaluate_with_diagnostics(input).unwrap(),
                 "{input}"
             );
         }
@@ -676,8 +727,10 @@ mod tests {
                 "{input}"
             );
             assert_eq!(
-                resolution.into_public(),
-                ExpressionEvaluator::new(context.clone()).evaluate_with_diagnostics(input),
+                resolution.into_public().unwrap(),
+                ExpressionEvaluator::new(context.clone())
+                    .evaluate_with_diagnostics(input)
+                    .unwrap(),
                 "{input}"
             );
         }
@@ -704,8 +757,10 @@ mod tests {
                 let resolution = resolve(&input, &context);
                 assert_eq!(resolution.value, ResolvedValue::Present(json!(expected)));
                 assert_eq!(
-                    resolution.into_public(),
-                    ExpressionEvaluator::new(context.clone()).evaluate_with_diagnostics(&input)
+                    resolution.into_public().unwrap(),
+                    ExpressionEvaluator::new(context.clone())
+                        .evaluate_with_diagnostics(&input)
+                        .unwrap()
                 );
             }
         }
@@ -729,7 +784,7 @@ mod tests {
             assert!(present.warnings.is_empty());
             let missing = resolve(&format!("{root}#/missing"), &context);
             assert_eq!(missing.value, ResolvedValue::Missing, "{root}");
-            assert_eq!(missing.into_public().0, Value::Null);
+            assert_eq!(missing.into_public().unwrap().0, Value::Null);
             assert_eq!(
                 resolve(&format!("{root}#/items/1"), &context).value,
                 ResolvedValue::Missing,
@@ -747,8 +802,8 @@ mod tests {
             );
         }
         let mut context = context;
-        context.request_body = Some(Value::Null);
-        context.response_body = Some(Value::Null);
+        context.request_body = BodySlot::Present(Value::Null);
+        context.response_body = BodySlot::Present(Value::Null);
         context.message_payload = Some(Value::Null);
         std::sync::Arc::make_mut(&mut context.inputs).insert("user".to_owned(), Value::Null);
         context.outputs.insert("data".to_owned(), Value::Null);
@@ -779,7 +834,7 @@ mod tests {
                     "{input}"
                 );
                 assert!(resolution.warnings.is_empty());
-                assert_eq!(resolution.into_public(), (Value::Null, Vec::new()));
+                assert_eq!(resolution.into_public().unwrap(), (Value::Null, Vec::new()));
             }
         }
     }
@@ -811,10 +866,10 @@ mod tests {
         for (input, message) in cases {
             let resolution = resolve(input, &context);
             assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
-            let (value, warnings) = resolution.into_public();
+            let (value, warnings) = resolution.into_public().unwrap();
             assert_eq!(
                 (value.clone(), warnings.clone()),
-                evaluator.evaluate_with_diagnostics(input),
+                evaluator.evaluate_with_diagnostics(input).unwrap(),
                 "{input}"
             );
             assert_eq!(value, Value::Null);
@@ -830,7 +885,9 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                resolve(input, &EvalContext::default()).into_public(),
+                resolve(input, &EvalContext::default())
+                    .into_public()
+                    .unwrap(),
                 (Value::Null, vec![warning(input, message)])
             );
         }
@@ -844,7 +901,7 @@ mod tests {
             let resolution = resolve(input, &EvalContext::default());
             assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
             assert_eq!(
-                resolution.into_public(),
+                resolution.into_public().unwrap(),
                 (Value::Null, vec![warning(input, message)])
             );
         }
@@ -890,7 +947,7 @@ mod tests {
         ] {
             let resolution = resolve(input, &context);
             assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
-            let public = resolution.into_public();
+            let public = resolution.into_public().unwrap();
             assert_eq!(
                 public,
                 (Value::Null, vec![warning(input, message)]),
@@ -898,7 +955,7 @@ mod tests {
             );
             assert_eq!(
                 public,
-                evaluator.evaluate_with_diagnostics(input),
+                evaluator.evaluate_with_diagnostics(input).unwrap(),
                 "{input}"
             );
         }
@@ -908,7 +965,8 @@ mod tests {
     fn absent_request_and_response_values_interpolate_as_null_with_warnings() {
         let evaluator = ExpressionEvaluator::new(context());
         let (value, warnings) = evaluator
-            .resolve_value_with_diagnostics("^{$response.header.X-Expected}$ {$inputs.absent}");
+            .resolve_value_with_diagnostics("^{$response.header.X-Expected}$ {$inputs.absent}")
+            .unwrap();
         assert_eq!(value, json!("^null$ null"));
         assert_eq!(
             warnings,
@@ -920,8 +978,9 @@ mod tests {
                 warning("$inputs.absent", "input \"absent\" not found in context"),
             ]
         );
-        let (value, warnings) =
-            evaluator.resolve_value_with_diagnostics("^{$response.header.X-Response-Id}$");
+        let (value, warnings) = evaluator
+            .resolve_value_with_diagnostics("^{$response.header.X-Response-Id}$")
+            .unwrap();
         assert_eq!(value, json!("^response$"));
         assert!(warnings.is_empty());
     }
@@ -938,8 +997,8 @@ mod tests {
             let resolution = resolve(input, &context);
             assert_eq!(resolution.value, ResolvedValue::Missing, "{input}");
             assert_eq!(
-                resolution.into_public(),
-                evaluator.evaluate_with_diagnostics(input),
+                resolution.into_public().unwrap(),
+                evaluator.evaluate_with_diagnostics(input).unwrap(),
                 "{input}"
             );
         }
@@ -956,24 +1015,30 @@ mod tests {
             assert!(evaluator.evaluate_condition(condition), "{condition}");
         }
         assert_eq!(
-            evaluator.evaluate("$response.body.items[0].id"),
+            evaluator.evaluate("$response.body.items[0].id").unwrap(),
             Value::Null
         );
         assert_eq!(
-            evaluator.resolve_value("ordinary text"),
+            evaluator.resolve_value("ordinary text").unwrap(),
             json!("ordinary text")
         );
-        assert_eq!(evaluator.resolve_value("$USD"), json!("$USD"));
+        assert_eq!(evaluator.resolve_value("$USD").unwrap(), json!("$USD"));
         assert_eq!(
-            evaluator.resolve_value("id={$inputs.user#/items/0/id}"),
+            evaluator
+                .resolve_value("id={$inputs.user#/items/0/id}")
+                .unwrap(),
             json!("id=7")
         );
         assert_eq!(
-            evaluator.interpolate_string("id={$response.body.items[0].id}"),
+            evaluator
+                .interpolate_string("id={$response.body.items[0].id}")
+                .unwrap(),
             "id="
         );
         assert_eq!(
-            evaluator.interpolate_string("id={$response.body#/items/0/id}"),
+            evaluator
+                .interpolate_string("id={$response.body#/items/0/id}")
+                .unwrap(),
             "id=7"
         );
         for invalid in [
@@ -989,6 +1054,170 @@ mod tests {
             "$message.path.id",
         ] {
             assert!(parse_runtime_expression(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    fn unreadable() -> EvalContext {
+        EvalContext {
+            status_code: Some(200),
+            request_body: BodySlot::Unavailable {
+                reason: "request body is unreadable".to_owned(),
+            },
+            response_body: BodySlot::Unavailable {
+                reason: "response body is unreadable".to_owned(),
+            },
+            ..EvalContext::default()
+        }
+    }
+
+    #[test]
+    fn unavailable_never_becomes_null_through_any_resolution_entry_point() {
+        let context = unreadable();
+        let evaluator = ExpressionEvaluator::new(context.clone());
+        for (input, reason) in [
+            ("$response.body", "response body is unreadable"),
+            ("$response.body#", "response body is unreadable"),
+            ("$response.body#/items/0/id", "response body is unreadable"),
+            ("$RESPONSE.BODY#/items", "response body is unreadable"),
+            ("$request.body", "request body is unreadable"),
+            ("$request.body#/items/0/id", "request body is unreadable"),
+        ] {
+            let unavailable = ValueUnavailable {
+                expression: input.to_owned(),
+                reason: reason.to_owned(),
+            };
+            assert_eq!(unavailable.to_string(), format!("{input}: {reason}"));
+            let resolution = resolve(input, &context);
+            assert_eq!(
+                resolution.value,
+                ResolvedValue::Unavailable(unavailable.clone()),
+                "{input}"
+            );
+            assert!(resolution.warnings.is_empty(), "{input}");
+            assert_eq!(
+                resolution.into_public(),
+                Err(unavailable.clone()),
+                "{input}"
+            );
+            let template = format!("before {{{input}}} after");
+            assert_eq!(evaluator.evaluate(input), Err(unavailable.clone()));
+            assert_eq!(evaluator.evaluate_resolved(input), Err(unavailable.clone()));
+            assert_eq!(
+                evaluator.evaluate_with_diagnostics(input),
+                Err(unavailable.clone())
+            );
+            assert_eq!(
+                evaluator.evaluate_with_provenance(input),
+                Err(unavailable.clone())
+            );
+            assert_eq!(evaluator.evaluate_string(input), Err(unavailable.clone()));
+            for value in [input, template.as_str()] {
+                assert_eq!(evaluator.resolve_value(value), Err(unavailable.clone()));
+                assert_eq!(
+                    evaluator.resolve_value_with_diagnostics(value),
+                    Err(unavailable.clone())
+                );
+                assert_eq!(
+                    evaluator.resolve_value_with_provenance(value),
+                    Err(unavailable.clone())
+                );
+                assert_eq!(
+                    evaluator
+                        .interpolate_string(value)
+                        .map_err(|unavailable| unavailable.reason),
+                    Err(reason.to_owned())
+                );
+            }
+        }
+        assert_eq!(evaluator.evaluate("$statusCode"), Ok(json!(200)));
+        assert_eq!(
+            evaluator.resolve_value("{$statusCode} then {$response.body}"),
+            Err(ValueUnavailable {
+                expression: "$response.body".to_owned(),
+                reason: "response body is unreadable".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_unavailable_mark_travels_with_every_copy_of_its_slot() {
+        let context = unreadable();
+        let copied = EvalContext {
+            response_body: context.response_body.clone(),
+            ..EvalContext::default()
+        };
+        for context in [context.clone(), copied] {
+            assert_eq!(
+                resolve("$response.body", &context).into_public(),
+                Err(ValueUnavailable {
+                    expression: "$response.body".to_owned(),
+                    reason: "response body is unreadable".to_owned(),
+                })
+            );
+        }
+        assert_eq!(BodySlot::from(None), BodySlot::Absent);
+        assert_eq!(
+            BodySlot::from(Some(Value::Null)),
+            BodySlot::Present(Value::Null)
+        );
+        assert_eq!(BodySlot::from(json!(1)), BodySlot::Present(json!(1)));
+        assert_eq!(
+            resolve("$response.body", &EvalContext::default()).value,
+            ResolvedValue::Missing
+        );
+    }
+
+    #[test]
+    fn unavailable_condition_operands_fail_closed_and_untouched_operands_still_decide() {
+        let evaluator = ExpressionEvaluator::new(unreadable());
+        for (condition, byte_offset, message) in [
+            (
+                "$response.body == null",
+                0,
+                "$response.body: response body is unreadable",
+            ),
+            (
+                "$response.body#/a == 1",
+                0,
+                "$response.body#/a: response body is unreadable",
+            ),
+            (
+                "!($response.body == 1)",
+                2,
+                "$response.body: response body is unreadable",
+            ),
+            (
+                "$response.body.items[0].id == 7",
+                0,
+                "$response.body: response body is unreadable",
+            ),
+            (
+                "$statusCode == 500 || $request.body == 1",
+                22,
+                "$request.body: request body is unreadable",
+            ),
+        ] {
+            let evaluation = evaluator.evaluate_condition_detailed(condition);
+            assert!(!evaluation.result, "{condition}");
+            assert_eq!(
+                evaluation.error,
+                Some(crate::ConditionError {
+                    kind: crate::ConditionErrorKind::ValueUnavailable,
+                    byte_offset,
+                    message: message.to_owned(),
+                }),
+                "{condition}"
+            );
+            assert!(evaluation.warnings.is_empty(), "{condition}");
+            assert!(!evaluator.evaluate_condition(condition), "{condition}");
+        }
+        for condition in [
+            "$statusCode == 200",
+            "$statusCode == 200 || $response.body == 1",
+        ] {
+            let evaluation = evaluator.evaluate_condition_detailed(condition);
+            assert!(evaluation.result, "{condition}");
+            assert_eq!(evaluation.error, None, "{condition}");
         }
     }
 }

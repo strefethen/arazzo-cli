@@ -137,10 +137,11 @@ impl DebugController {
         let evaluator = ExpressionEvaluator::new(context.clone());
         let unresolved = match output {
             OutputValue::RuntimeExpression(expression) => {
-                let (_, warnings) = evaluator.resolve_value_with_diagnostics(expression);
-                !warnings.is_empty()
+                evaluator
+                    .resolve_value_with_diagnostics(expression)
+                    .is_ok_and(|(_, warnings)| !warnings.is_empty())
                     || (expression.starts_with('$')
-                        && evaluator.evaluate_resolved(expression).is_none())
+                        && matches!(evaluator.evaluate_resolved(expression), Ok(None)))
             }
             _ => output_is_unresolved(output, &evaluator),
         };
@@ -261,7 +262,9 @@ impl DebugController {
             .state
             .lock()
             .map_err(|_| "debug controller lock poisoned".to_string())?;
-        Ok(ExpressionEvaluator::new(guard.current_eval_ctx.clone()).evaluate(expression))
+        ExpressionEvaluator::new(guard.current_eval_ctx.clone())
+            .evaluate(expression)
+            .map_err(|unavailable| unavailable_message(&guard, &unavailable))
     }
 
     pub fn evaluate_watch_expression(&self, expression: &str) -> Result<Value, String> {
@@ -282,7 +285,8 @@ impl DebugController {
         if let OutputValue::RuntimeExpression(expression) = output {
             return evaluate_watch_expression_from_state(&guard, expression);
         }
-        let (value, warnings) = evaluate_output_value_detailed(output, &evaluator, None);
+        let (value, warnings) = evaluate_output_value_detailed(output, &evaluator, None)
+            .map_err(|unavailable| unavailable_message(&guard, &unavailable))?;
         if !warnings.is_empty() {
             return Err(warnings
                 .into_iter()
@@ -301,7 +305,7 @@ impl DebugController {
         let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
             .evaluate_condition_detailed(condition);
         match evaluation.error {
-            Some(error) => Err(format_condition_error(&error)),
+            Some(error) => Err(condition_error_message(&guard, &error)),
             None => Ok(evaluation.result),
         }
     }
@@ -332,7 +336,7 @@ impl DebugController {
         let evaluation = ExpressionEvaluator::new(guard.current_eval_ctx.clone())
             .evaluate_condition_detailed(trimmed);
         match evaluation.error {
-            Some(error) => Err(format_condition_error(&error)),
+            Some(error) => Err(condition_error_message(&guard, &error)),
             None => Ok(Some(evaluation.result)),
         }
     }
@@ -530,11 +534,10 @@ impl DebugController {
 fn output_is_unresolved(output: &OutputValue, evaluator: &ExpressionEvaluator) -> bool {
     match output {
         OutputValue::RuntimeExpression(expression) if expression.starts_with('$') => {
-            evaluator.evaluate_resolved(expression).is_none()
+            matches!(evaluator.evaluate_resolved(expression), Ok(None))
         }
-        OutputValue::Selector(_) => !evaluate_output_value_detailed(output, evaluator, None)
-            .1
-            .is_empty(),
+        OutputValue::Selector(_) => evaluate_output_value_detailed(output, evaluator, None)
+            .is_ok_and(|(_, warnings)| !warnings.is_empty()),
         // Legacy non-runtime forms retain their existing evaluation behavior.
         _ => false,
     }
@@ -583,10 +586,14 @@ fn evaluate_watch_expression_from_state(
         ));
     }
     let evaluator = ExpressionEvaluator::new(guard.current_eval_ctx.clone());
-    if let Some(value) = evaluator.evaluate_resolved(trimmed) {
+    let unavailable =
+        |unavailable: arazzo_expr::ValueUnavailable| unavailable_message(guard, &unavailable);
+    if let Some(value) = evaluator.evaluate_resolved(trimmed).map_err(unavailable)? {
         return Ok(value);
     }
-    let (_, warnings) = evaluator.evaluate_with_diagnostics(trimmed);
+    let (_, warnings) = evaluator
+        .evaluate_with_diagnostics(trimmed)
+        .map_err(unavailable)?;
     let detail = warnings
         .into_iter()
         .map(|warning| warning.message)
@@ -604,6 +611,22 @@ fn format_condition_error(error: &ConditionError) -> String {
         "invalid simple condition at byte {}: {}",
         error.byte_offset, error.message
     )
+}
+
+fn condition_error_message(guard: &ControllerState, error: &ConditionError) -> String {
+    if error.kind == ConditionErrorKind::ValueUnavailable {
+        unavailable_message(guard, &error.message)
+    } else {
+        format_condition_error(error)
+    }
+}
+
+fn unavailable_message(guard: &ControllerState, unavailable: impl std::fmt::Display) -> String {
+    let code = crate::RuntimeErrorKind::ValueUnavailable.code();
+    match guard.current_stack.last() {
+        Some(frame) => format!("{code}: step {}: {unavailable}", frame.step_id),
+        None => format!("{code}: {unavailable}"),
+    }
 }
 
 fn should_stop_for_step_mode(run_mode: RunMode, candidate_seq: u64, depth: usize) -> bool {
@@ -693,7 +716,7 @@ mod output_diagnostic_tests {
                 .locals
                 .insert("outputExpression".into(), json!(expression));
             let context = EvalContext {
-                response_body: Some(json!({"features": []})),
+                response_body: arazzo_expr::BodySlot::Present(json!({"features": []})),
                 ..Default::default()
             };
             worker_controller.gate_step(
@@ -737,7 +760,7 @@ mod output_diagnostic_tests {
             .locals
             .insert("outputExpression".to_owned(), json!(expression));
         let mut context = EvalContext {
-            response_body: Some(json!({"features": []})),
+            response_body: arazzo_expr::BodySlot::Present(json!({"features": []})),
             ..Default::default()
         };
         controller
@@ -773,7 +796,9 @@ mod output_diagnostic_tests {
             .unwrap_or_else(|err| panic!("preview failed: {err}")));
 
         for value in [Value::Null, json!("Flood Warning")] {
-            context.response_body = Some(json!({"features": [{"properties": {"event": value}}]}));
+            context.response_body = arazzo_expr::BodySlot::Present(
+                json!({"features": [{"properties": {"event": value}}]}),
+            );
             controller
                 .gate_step(
                     "forecast",

@@ -19,7 +19,9 @@ mod runtime_expression;
 mod simple_condition;
 mod step_output_reference;
 
-pub use resolution::{ExpressionResolution, StoredValueReference, ValueResolution};
+pub use resolution::{
+    ExpressionResolution, StoredValueReference, ValueResolution, ValueUnavailable,
+};
 
 pub use step_output_reference::{
     local_step_output_references, LocalStepOutputReference, StepReferenceError, StepReferenceSyntax,
@@ -104,6 +106,33 @@ pub struct SourceDescriptionContext {
     pub type_: String,
 }
 
+/// What a `$request.body` or `$response.body` reference finds. The unavailable
+/// mark is the slot's own value, so every copy of a context carries it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum BodySlot {
+    /// No body exists; a reference resolves missing.
+    #[default]
+    Absent,
+    Present(Value),
+    /// A body exists but cannot be read as a JSON value; every reference to it,
+    /// whole or through a pointer, is a [`ValueUnavailable`] error.
+    Unavailable {
+        reason: String,
+    },
+}
+
+impl From<Value> for BodySlot {
+    fn from(value: Value) -> Self {
+        Self::Present(value)
+    }
+}
+
+impl From<Option<Value>> for BodySlot {
+    fn from(value: Option<Value>) -> Self {
+        value.map_or(Self::Absent, Self::Present)
+    }
+}
+
 /// Evaluation context for expression resolution.
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
@@ -118,7 +147,7 @@ pub struct EvalContext {
     pub request_headers: BTreeMap<String, String>,
     pub request_query: BTreeMap<String, String>,
     pub request_path: BTreeMap<String, String>,
-    pub request_body: Option<Value>,
+    pub request_body: BodySlot,
     /// Headers from an asynchronous message when message execution is available.
     pub message_headers: BTreeMap<String, String>,
     /// Payload from an asynchronous message when message execution is available.
@@ -126,7 +155,7 @@ pub struct EvalContext {
     pub self_uri: Option<String>,
     pub source_descriptions: Arc<BTreeMap<String, SourceDescriptionContext>>,
     pub response_headers: BTreeMap<String, String>,
-    pub response_body: Option<Value>,
+    pub response_body: BodySlot,
 }
 
 /// Evaluates expressions and conditions using an [`EvalContext`].
@@ -146,17 +175,27 @@ impl ExpressionEvaluator {
 
     /// Resolve a complete expression with its JSON type, an embedded-expression
     /// template as a string, or literal text unchanged.
-    pub fn resolve_value(&self, value: &str) -> Value {
-        self.resolve_value_with_diagnostics(value).0
+    ///
+    /// Like every resolution entry point here, a reference to a value that
+    /// exists but cannot be read is the [`ValueUnavailable`] error, never
+    /// `null`; missing values still resolve to `null` with a warning.
+    pub fn resolve_value(&self, value: &str) -> Result<Value, ValueUnavailable> {
+        Ok(self.resolve_value_with_diagnostics(value)?.0)
     }
 
     /// Resolve a value string while retaining ordered expression diagnostics.
     /// Malformed templates return their original text and one syntax warning.
-    pub fn resolve_value_with_diagnostics(&self, value: &str) -> (Value, Vec<ExpressionWarning>) {
-        self.resolve_value_with_provenance(value).into_public()
+    pub fn resolve_value_with_diagnostics(
+        &self,
+        value: &str,
+    ) -> Result<(Value, Vec<ExpressionWarning>), ValueUnavailable> {
+        Ok(self.resolve_value_with_provenance(value)?.into_public())
     }
 
-    pub fn resolve_value_with_provenance(&self, value: &str) -> ValueResolution {
+    pub fn resolve_value_with_provenance(
+        &self,
+        value: &str,
+    ) -> Result<ValueResolution, ValueUnavailable> {
         interpolation::resolve_value(value, self.context())
     }
 
@@ -165,38 +204,47 @@ impl ExpressionEvaluator {
     /// Missing keys and unknown namespaces silently return `Value::Null`.
     /// Use [`evaluate_with_diagnostics`](Self::evaluate_with_diagnostics) to
     /// collect warnings about unresolved expressions.
-    pub fn evaluate(&self, expr: &str) -> Value {
-        self.evaluate_with_diagnostics(expr).0
+    pub fn evaluate(&self, expr: &str) -> Result<Value, ValueUnavailable> {
+        Ok(self.evaluate_with_diagnostics(expr)?.0)
     }
 
     /// Resolve a runtime expression without collapsing absence into JSON null.
     /// Invalid or unresolved expressions return `None`; an explicit JSON null
     /// returns `Some(Value::Null)`. Intended for diagnostic consumers.
-    pub fn evaluate_resolved(&self, expr: &str) -> Option<Value> {
-        let parsed = parse_runtime_expression(expr).ok()?;
+    pub fn evaluate_resolved(&self, expr: &str) -> Result<Option<Value>, ValueUnavailable> {
+        let Ok(parsed) = parse_runtime_expression(expr) else {
+            return Ok(None);
+        };
         match resolution::resolve_parsed(&parsed, self.context()).value {
-            resolution::ResolvedValue::Present(value) => Some(value),
-            resolution::ResolvedValue::Missing => None,
+            resolution::ResolvedValue::Present(value) => Ok(Some(value)),
+            resolution::ResolvedValue::Missing => Ok(None),
+            resolution::ResolvedValue::Unavailable(unavailable) => Err(unavailable),
         }
     }
 
     /// Evaluate an expression, returning both the value and any diagnostic
     /// warnings produced when resolution falls back to `Null`.
-    pub fn evaluate_with_diagnostics(&self, expr: &str) -> (Value, Vec<ExpressionWarning>) {
-        self.evaluate_with_provenance(expr).into_public()
+    pub fn evaluate_with_diagnostics(
+        &self,
+        expr: &str,
+    ) -> Result<(Value, Vec<ExpressionWarning>), ValueUnavailable> {
+        Ok(self.evaluate_with_provenance(expr)?.into_public())
     }
 
-    pub fn evaluate_with_provenance(&self, expression: &str) -> ValueResolution {
+    pub fn evaluate_with_provenance(
+        &self,
+        expression: &str,
+    ) -> Result<ValueResolution, ValueUnavailable> {
         resolution::evaluate_with_provenance(expression, self.context())
     }
 
     /// Evaluate an expression and convert to string with Go-compatible coercions.
-    pub fn evaluate_string(&self, expr: &str) -> String {
-        to_string_value(&self.evaluate(expr)).into_owned()
+    pub fn evaluate_string(&self, expr: &str) -> Result<String, ValueUnavailable> {
+        Ok(to_string_value(&self.evaluate(expr)?).into_owned())
     }
 
     /// Interpolate `{$expr}` and `$inputs.foo` style segments in a string.
-    pub fn interpolate_string(&self, input: &str) -> String {
+    pub fn interpolate_string(&self, input: &str) -> Result<String, ValueUnavailable> {
         let mut out = String::with_capacity(input.len());
         let mut cursor = 0usize;
 
@@ -212,12 +260,12 @@ impl ExpressionEvaluator {
             } else {
                 full.as_str()
             };
-            out.push_str(&self.evaluate_string(expr));
+            out.push_str(&self.evaluate_string(expr)?);
             cursor = full.end();
         }
 
         out.push_str(&input[cursor..]);
-        out
+        Ok(out)
     }
 }
 
@@ -254,28 +302,38 @@ pub fn is_truthy(value: &Value) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     #[test]
     fn resolved_evaluation_preserves_absence_and_explicit_null() {
         let evaluator = super::ExpressionEvaluator::new(super::EvalContext {
-            response_body: Some(
+            response_body: super::BodySlot::Present(
                 serde_json::json!({"features": [], "explicitNull": null, "value": 7}),
             ),
             ..Default::default()
         });
         assert_eq!(
-            evaluator.evaluate_resolved("$response.body#/features/0/properties/event"),
+            evaluator
+                .evaluate_resolved("$response.body#/features/0/properties/event")
+                .unwrap(),
             None
         );
         assert_eq!(
-            evaluator.evaluate_resolved("$response.body#/explicitNull"),
+            evaluator
+                .evaluate_resolved("$response.body#/explicitNull")
+                .unwrap(),
             Some(serde_json::Value::Null)
         );
         assert_eq!(
-            evaluator.evaluate_resolved("$response.body#/value"),
+            evaluator
+                .evaluate_resolved("$response.body#/value")
+                .unwrap(),
             Some(serde_json::json!(7))
         );
-        assert_eq!(evaluator.evaluate_resolved("not an expression"), None);
+        assert_eq!(
+            evaluator.evaluate_resolved("not an expression").unwrap(),
+            None
+        );
     }
 
     use std::sync::Arc;
@@ -295,8 +353,8 @@ mod tests {
     #[test]
     fn evaluate_literal_and_unknown_expression() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("hello"), Value::Null);
-        assert_eq!(eval.evaluate("$unknown.thing"), Value::Null);
+        assert_eq!(eval.evaluate("hello").unwrap(), Value::Null);
+        assert_eq!(eval.evaluate("$unknown.thing").unwrap(), Value::Null);
     }
 
     #[test]
@@ -307,16 +365,16 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         // Full expression → evaluate
-        assert_eq!(eval.resolve_value("$inputs.name"), json!("Alice"));
+        assert_eq!(eval.resolve_value("$inputs.name").unwrap(), json!("Alice"));
 
         // Interpolated → interpolate_string
         assert_eq!(
-            eval.resolve_value("Bearer {$inputs.token}"),
+            eval.resolve_value("Bearer {$inputs.token}").unwrap(),
             json!("Bearer xyz")
         );
 
         // Literal → as-is string
-        assert_eq!(eval.resolve_value("literal"), json!("literal"));
+        assert_eq!(eval.resolve_value("literal").unwrap(), json!("literal"));
     }
 
     #[test]
@@ -329,18 +387,24 @@ mod tests {
         );
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$inputs.name"), json!("Alice"));
-        assert_eq!(eval.evaluate("$inputs.missing"), Value::Null);
-        assert_eq!(eval.evaluate("$steps.s1.outputs.token"), json!("abc"));
-        assert_eq!(eval.evaluate("$steps.nope.outputs.token"), Value::Null);
-        assert_eq!(eval.evaluate("$steps.s1.token"), Value::Null);
+        assert_eq!(eval.evaluate("$inputs.name").unwrap(), json!("Alice"));
+        assert_eq!(eval.evaluate("$inputs.missing").unwrap(), Value::Null);
+        assert_eq!(
+            eval.evaluate("$steps.s1.outputs.token").unwrap(),
+            json!("abc")
+        );
+        assert_eq!(
+            eval.evaluate("$steps.nope.outputs.token").unwrap(),
+            Value::Null
+        );
+        assert_eq!(eval.evaluate("$steps.s1.token").unwrap(), Value::Null);
     }
 
     #[test]
     fn evaluate_response_fields() {
         let mut ctx = EvalContext {
             status_code: Some(404),
-            response_body: Some(json!({
+            response_body: super::BodySlot::Present(json!({
                 "user": {"name": "Bob"},
                 "arr": [{"id": 7}],
                 "users": [
@@ -355,17 +419,17 @@ mod tests {
             .insert("X-Request-Id".to_string(), "req-1".to_string());
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$statusCode"), json!(404));
+        assert_eq!(eval.evaluate("$statusCode").unwrap(), json!(404));
         assert_eq!(
-            eval.evaluate("$response.header.X-Request-Id"),
+            eval.evaluate("$response.header.X-Request-Id").unwrap(),
             json!("req-1")
         );
         assert_eq!(
-            eval.evaluate("$response.header.x-request-id"),
+            eval.evaluate("$response.header.x-request-id").unwrap(),
             json!("req-1")
         );
         assert_eq!(
-            eval.evaluate("$response.body"),
+            eval.evaluate("$response.body").unwrap(),
             json!({
                 "user": {"name": "Bob"},
                 "arr": [{"id": 7}],
@@ -376,8 +440,11 @@ mod tests {
                 ]
             })
         );
-        assert_eq!(eval.evaluate("$response.body#/user/name"), json!("Bob"));
-        assert_eq!(eval.evaluate("$response.body#/arr/0/id"), json!(7));
+        assert_eq!(
+            eval.evaluate("$response.body#/user/name").unwrap(),
+            json!("Bob")
+        );
+        assert_eq!(eval.evaluate("$response.body#/arr/0/id").unwrap(), json!(7));
         for invalid in [
             "$response.body.user.name",
             "$response.body.arr[0].id",
@@ -386,7 +453,7 @@ mod tests {
             "$response.body.users.#(id==2).name",
             "$response.body.users[?(@.group=='a')].id",
         ] {
-            let (value, warnings) = eval.evaluate_with_diagnostics(invalid);
+            let (value, warnings) = eval.evaluate_with_diagnostics(invalid).unwrap();
             assert_eq!(value, Value::Null);
             assert_eq!(warnings.len(), 1);
         }
@@ -395,9 +462,15 @@ mod tests {
     #[test]
     fn evaluate_response_fields_without_response() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("$statusCode"), Value::Null);
-        assert_eq!(eval.evaluate("$response.header.X-Foo"), Value::Null);
-        assert_eq!(eval.evaluate("$response.body.user.name"), Value::Null);
+        assert_eq!(eval.evaluate("$statusCode").unwrap(), Value::Null);
+        assert_eq!(
+            eval.evaluate("$response.header.X-Foo").unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            eval.evaluate("$response.body.user.name").unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
@@ -415,10 +488,12 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         std::env::set_var(SENTINEL_NAME, SENTINEL_VALUE);
-        let present = eval.evaluate_with_diagnostics(&expr);
-        let present_interpolated = eval.interpolate_string(&format!("token={{{expr}}}"));
+        let present = eval.evaluate_with_diagnostics(&expr).unwrap();
+        let present_interpolated = eval
+            .interpolate_string(&format!("token={{{expr}}}"))
+            .unwrap();
         std::env::remove_var(SENTINEL_NAME);
-        let absent = eval.evaluate_with_diagnostics(&expr);
+        let absent = eval.evaluate_with_diagnostics(&expr).unwrap();
 
         for (value, warnings) in [&present, &absent] {
             assert_eq!(*value, Value::Null);
@@ -431,8 +506,11 @@ mod tests {
 
         // Controls: explicit inputs remain the supported route, and an unknown
         // non-env namespace takes the same rejection path.
-        assert_eq!(eval.evaluate("$inputs.secret"), json!("from-inputs"));
-        let (value, warnings) = eval.evaluate_with_diagnostics("$notaspace.secret");
+        assert_eq!(
+            eval.evaluate("$inputs.secret").unwrap(),
+            json!("from-inputs")
+        );
+        let (value, warnings) = eval.evaluate_with_diagnostics("$notaspace.secret").unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("unknown namespace"));
@@ -449,13 +527,13 @@ mod tests {
         std::sync::Arc::make_mut(&mut ctx.inputs).insert("arr".to_string(), json!([1, 2]));
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate_string("$inputs.missing"), "");
-        assert_eq!(eval.evaluate_string("$inputs.s"), "hello");
-        assert_eq!(eval.evaluate_string("$inputs.f"), "2.5");
-        assert_eq!(eval.evaluate_string("$inputs.i"), "42");
-        assert_eq!(eval.evaluate_string("$inputs.t"), "true");
-        assert_eq!(eval.evaluate_string("$inputs.f2"), "false");
-        assert_eq!(eval.evaluate_string("$inputs.arr"), "");
+        assert_eq!(eval.evaluate_string("$inputs.missing").unwrap(), "");
+        assert_eq!(eval.evaluate_string("$inputs.s").unwrap(), "hello");
+        assert_eq!(eval.evaluate_string("$inputs.f").unwrap(), "2.5");
+        assert_eq!(eval.evaluate_string("$inputs.i").unwrap(), "42");
+        assert_eq!(eval.evaluate_string("$inputs.t").unwrap(), "true");
+        assert_eq!(eval.evaluate_string("$inputs.f2").unwrap(), "false");
+        assert_eq!(eval.evaluate_string("$inputs.arr").unwrap(), "");
     }
 
     #[test]
@@ -465,11 +543,11 @@ mod tests {
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
-        assert_eq!(eval.evaluate("$method"), json!("GET"));
+        assert_eq!(eval.evaluate("$method").unwrap(), json!("GET"));
 
         let ctx_no_method = EvalContext::default();
         let eval_no_method = ExpressionEvaluator::new(ctx_no_method);
-        assert_eq!(eval_no_method.evaluate("$method"), Value::Null);
+        assert_eq!(eval_no_method.evaluate("$method").unwrap(), Value::Null);
     }
 
     #[test]
@@ -485,17 +563,21 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(
-            eval.interpolate_string("Hello {$inputs.name}!"),
+            eval.interpolate_string("Hello {$inputs.name}!").unwrap(),
             "Hello Alice!"
         );
-        assert_eq!(eval.interpolate_string("Age: $inputs.age"), "Age: 30");
         assert_eq!(
-            eval.interpolate_string("{$inputs.a}-$steps.s1.outputs.b"),
+            eval.interpolate_string("Age: $inputs.age").unwrap(),
+            "Age: 30"
+        );
+        assert_eq!(
+            eval.interpolate_string("{$inputs.a}-$steps.s1.outputs.b")
+                .unwrap(),
             "X-Y"
         );
-        assert_eq!(eval.interpolate_string("plain text"), "plain text");
+        assert_eq!(eval.interpolate_string("plain text").unwrap(), "plain text");
         assert_eq!(
-            eval.interpolate_string("Bearer {$inputs.name}"),
+            eval.interpolate_string("Bearer {$inputs.name}").unwrap(),
             "Bearer Alice"
         );
     }
@@ -512,7 +594,7 @@ mod tests {
             let eval = ExpressionEvaluator::new(ctx);
 
             let expr = format!("{prefix}{{$inputs.token}}{suffix}");
-            let rendered = eval.interpolate_string(&expr);
+            let rendered = eval.interpolate_string(&expr).unwrap();
             prop_assert_eq!(rendered, format!("{prefix}{value}{suffix}"));
         }
 
@@ -522,11 +604,11 @@ mod tests {
             idx in 0usize..25usize,
         ) {
             let eval = ExpressionEvaluator::new(EvalContext {
-                response_body: Some(json!({"arr": values.clone()})),
+                response_body: super::BodySlot::Present(json!({"arr": values.clone()})),
                 ..EvalContext::default()
             });
 
-            let at_value = eval.evaluate(&format!("$response.body#/arr/{idx}"));
+            let at_value = eval.evaluate(&format!("$response.body#/arr/{idx}")).unwrap();
             if idx < values.len() {
                 prop_assert_eq!(at_value, json!(values[idx]));
             } else {
@@ -563,10 +645,10 @@ mod tests {
             .insert("nested".to_string(), json!({"a": {"b": "deep"}}));
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$outputs.total"), json!(42));
-        assert_eq!(eval.evaluate("$outputs.missing"), Value::Null);
+        assert_eq!(eval.evaluate("$outputs.total").unwrap(), json!(42));
+        assert_eq!(eval.evaluate("$outputs.missing").unwrap(), Value::Null);
         assert_eq!(
-            eval.evaluate("$outputs.nested"),
+            eval.evaluate("$outputs.nested").unwrap(),
             json!({"a": {"b": "deep"}})
         );
     }
@@ -578,9 +660,18 @@ mod tests {
             .insert("data".to_string(), json!({"items": [{"id": 1}, {"id": 2}]}));
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$outputs.data#/items/0/id"), json!(1));
-        assert_eq!(eval.evaluate("$outputs.data#/items/1/id"), json!(2));
-        assert_eq!(eval.evaluate("$outputs.data#/missing"), Value::Null);
+        assert_eq!(
+            eval.evaluate("$outputs.data#/items/0/id").unwrap(),
+            json!(1)
+        );
+        assert_eq!(
+            eval.evaluate("$outputs.data#/items/1/id").unwrap(),
+            json!(2)
+        );
+        assert_eq!(
+            eval.evaluate("$outputs.data#/missing").unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
@@ -607,19 +698,21 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(
-            eval.evaluate("$inputs.user#/profile/email"),
+            eval.evaluate("$inputs.user#/profile/email").unwrap(),
             json!("alice@example.com")
         );
         assert_eq!(
-            eval.evaluate("$steps.lookup.outputs.payload#/items/0/id"),
+            eval.evaluate("$steps.lookup.outputs.payload#/items/0/id")
+                .unwrap(),
             json!("item-1")
         );
         assert_eq!(
-            eval.evaluate("$workflows.auth.outputs.tokenPayload#/token"),
+            eval.evaluate("$workflows.auth.outputs.tokenPayload#/token")
+                .unwrap(),
             json!("abc-123")
         );
         assert_eq!(
-            eval.evaluate("$workflows.auth.inputs.config#/env"),
+            eval.evaluate("$workflows.auth.inputs.config#/env").unwrap(),
             json!("production")
         );
     }
@@ -637,15 +730,15 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(
-            eval.evaluate("$message.header.X-Request-Id"),
+            eval.evaluate("$message.header.X-Request-Id").unwrap(),
             json!("request-123")
         );
         assert_eq!(
-            eval.evaluate("$message.payload"),
+            eval.evaluate("$message.payload").unwrap(),
             json!({"order": {"id": "order-42"}})
         );
         assert_eq!(
-            eval.evaluate("$message.payload#/order/id"),
+            eval.evaluate("$message.payload#/order/id").unwrap(),
             json!("order-42")
         );
     }
@@ -658,7 +751,9 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(ctx);
 
-        let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.user#/profile/email");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$inputs.user#/profile/email")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("JSON Pointer"));
@@ -669,14 +764,16 @@ mod tests {
     fn missing_message_context_returns_null_with_diagnostics() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
 
-        let (header, header_warnings) =
-            eval.evaluate_with_diagnostics("$message.header.X-Request-Id");
+        let (header, header_warnings) = eval
+            .evaluate_with_diagnostics("$message.header.X-Request-Id")
+            .unwrap();
         assert_eq!(header, Value::Null);
         assert_eq!(header_warnings.len(), 1);
         assert!(header_warnings[0].message.contains("message header"));
 
-        let (payload, payload_warnings) =
-            eval.evaluate_with_diagnostics("$message.payload#/order/id");
+        let (payload, payload_warnings) = eval
+            .evaluate_with_diagnostics("$message.payload#/order/id")
+            .unwrap();
         assert_eq!(payload, Value::Null);
         assert_eq!(payload_warnings.len(), 1);
         assert!(payload_warnings[0].message.contains("message payload"));
@@ -685,7 +782,7 @@ mod tests {
     #[test]
     fn evaluate_response_body_json_pointer() {
         let ctx = EvalContext {
-            response_body: Some(json!({
+            response_body: super::BodySlot::Present(json!({
                 "data": [{"name": "Alice"}, {"name": "Bob"}],
                 "meta": {"total": 2}
             })),
@@ -693,22 +790,39 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$response.body#/data/0/name"), json!("Alice"));
-        assert_eq!(eval.evaluate("$response.body#/data/1/name"), json!("Bob"));
-        assert_eq!(eval.evaluate("$response.body#/meta/total"), json!(2));
-        assert_eq!(eval.evaluate("$response.body#/nonexistent"), Value::Null);
+        assert_eq!(
+            eval.evaluate("$response.body#/data/0/name").unwrap(),
+            json!("Alice")
+        );
+        assert_eq!(
+            eval.evaluate("$response.body#/data/1/name").unwrap(),
+            json!("Bob")
+        );
+        assert_eq!(
+            eval.evaluate("$response.body#/meta/total").unwrap(),
+            json!(2)
+        );
+        assert_eq!(
+            eval.evaluate("$response.body#/nonexistent").unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
     fn evaluate_response_body_json_pointer_without_body() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("$response.body#/data/0"), Value::Null);
+        assert_eq!(
+            eval.evaluate("$response.body#/data/0").unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
     fn diagnostics_missing_step_warns() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$steps.missing.outputs.x");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$steps.missing.outputs.x")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("step \"missing\" not found"));
@@ -722,7 +836,9 @@ mod tests {
             BTreeMap::from([("a".to_string(), json!(1))]),
         );
         let eval = ExpressionEvaluator::new(ctx);
-        let (value, warnings) = eval.evaluate_with_diagnostics("$steps.s1.outputs.nope");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$steps.s1.outputs.nope")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("output \"nope\" not found"));
@@ -733,7 +849,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         std::sync::Arc::make_mut(&mut ctx.inputs).insert("name".to_string(), json!("Alice"));
         let eval = ExpressionEvaluator::new(ctx);
-        let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.name");
+        let (value, warnings) = eval.evaluate_with_diagnostics("$inputs.name").unwrap();
         assert_eq!(value, json!("Alice"));
         assert!(warnings.is_empty());
     }
@@ -741,7 +857,7 @@ mod tests {
     #[test]
     fn diagnostics_unknown_namespace_warns() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$foo.bar");
+        let (value, warnings) = eval.evaluate_with_diagnostics("$foo.bar").unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("unknown namespace"));
@@ -750,7 +866,9 @@ mod tests {
     #[test]
     fn diagnostics_missing_source_description_warns() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$sourceDescriptions.missing.url");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$sourceDescriptions.missing.url")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0]
@@ -764,7 +882,7 @@ mod tests {
             self_uri: Some("workflows/purchase.arazzo.yaml".to_string()),
             ..EvalContext::default()
         });
-        let (value, warnings) = eval.evaluate_with_diagnostics("$self");
+        let (value, warnings) = eval.evaluate_with_diagnostics("$self").unwrap();
         assert_eq!(value, json!("workflows/purchase.arazzo.yaml"));
         assert!(warnings.is_empty());
     }
@@ -772,7 +890,7 @@ mod tests {
     #[test]
     fn self_expression_without_uri_warns() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$self");
+        let (value, warnings) = eval.evaluate_with_diagnostics("$self").unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("self URI not found"));
@@ -791,11 +909,11 @@ mod tests {
         let eval = ExpressionEvaluator::new(ctx);
 
         assert_eq!(
-            eval.evaluate("$sourceDescriptions.petstore.url"),
+            eval.evaluate("$sourceDescriptions.petstore.url").unwrap(),
             json!("https://api.example.com/openapi.yaml")
         );
         assert_eq!(
-            eval.evaluate("$sourceDescriptions.petstore.type"),
+            eval.evaluate("$sourceDescriptions.petstore.type").unwrap(),
             json!("openapi")
         );
     }
@@ -811,8 +929,9 @@ mod tests {
             },
         );
         let eval = ExpressionEvaluator::new(ctx);
-        let (value, warnings) =
-            eval.evaluate_with_diagnostics("$sourceDescriptions.petstore.getPetById");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$sourceDescriptions.petstore.getPetById")
+            .unwrap();
 
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
@@ -825,8 +944,11 @@ mod tests {
     #[test]
     fn evaluate_backward_compat_still_returns_null() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        assert_eq!(eval.evaluate("$steps.missing.outputs.x"), Value::Null);
-        assert_eq!(eval.evaluate("$foo.bar"), Value::Null);
+        assert_eq!(
+            eval.evaluate("$steps.missing.outputs.x").unwrap(),
+            Value::Null
+        );
+        assert_eq!(eval.evaluate("$foo.bar").unwrap(), Value::Null);
     }
 
     // ── Bug #14: $inputs nested traversal ─────────────────────────
@@ -839,10 +961,13 @@ mod tests {
         };
         let eval = ExpressionEvaluator::new(ctx);
 
-        assert_eq!(eval.evaluate("$inputs.foo.bar.baz"), Value::Null);
-        assert_eq!(eval.evaluate("$inputs.foo#/bar/baz"), json!(42));
+        assert_eq!(eval.evaluate("$inputs.foo.bar.baz").unwrap(), Value::Null);
+        assert_eq!(eval.evaluate("$inputs.foo#/bar/baz").unwrap(), json!(42));
         // Top-level (flat key) still works
-        assert_eq!(eval.evaluate("$inputs.foo"), json!({"bar": {"baz": 42}}));
+        assert_eq!(
+            eval.evaluate("$inputs.foo").unwrap(),
+            json!({"bar": {"baz": 42}})
+        );
     }
 
     #[test]
@@ -852,7 +977,7 @@ mod tests {
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
-        assert_eq!(eval.evaluate("$inputs.simple"), json!("hello"));
+        assert_eq!(eval.evaluate("$inputs.simple").unwrap(), json!("hello"));
     }
 
     #[test]
@@ -862,7 +987,7 @@ mod tests {
             ..EvalContext::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
-        assert_eq!(eval.evaluate("$inputs.foo.missing"), Value::Null);
+        assert_eq!(eval.evaluate("$inputs.foo.missing").unwrap(), Value::Null);
     }
 
     // ── Phase 3: $workflows expression root ─────────────────────────
@@ -879,7 +1004,7 @@ mod tests {
         );
         let eval = ExpressionEvaluator::new(ctx);
         assert_eq!(
-            eval.evaluate("$workflows.auth.inputs.env"),
+            eval.evaluate("$workflows.auth.inputs.env").unwrap(),
             json!("production")
         );
     }
@@ -896,7 +1021,7 @@ mod tests {
         );
         let eval = ExpressionEvaluator::new(ctx);
         assert_eq!(
-            eval.evaluate("$workflows.auth.outputs.token"),
+            eval.evaluate("$workflows.auth.outputs.token").unwrap(),
             json!("abc-123")
         );
     }
@@ -904,7 +1029,9 @@ mod tests {
     #[test]
     fn workflows_unknown_id_is_null() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.unknown.outputs.x");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$workflows.unknown.outputs.x")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert!(!warnings.is_empty());
         assert!(warnings[0].message.contains("\"unknown\" not found"));
@@ -913,7 +1040,7 @@ mod tests {
     #[test]
     fn workflows_missing_sub_path_warns() {
         let eval = ExpressionEvaluator::new(EvalContext::default());
-        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth");
+        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth").unwrap();
         assert_eq!(value, Value::Null);
         assert!(!warnings.is_empty());
     }
@@ -924,7 +1051,9 @@ mod tests {
         std::sync::Arc::make_mut(&mut ctx.workflows)
             .insert("auth".to_string(), super::WorkflowEvalState::default());
         let eval = ExpressionEvaluator::new(ctx);
-        let (value, warnings) = eval.evaluate_with_diagnostics("$workflows.auth.something.else");
+        let (value, warnings) = eval
+            .evaluate_with_diagnostics("$workflows.auth.something.else")
+            .unwrap();
         assert_eq!(value, Value::Null);
         assert!(!warnings.is_empty());
         assert!(warnings[0].message.contains("invalid"));

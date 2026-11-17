@@ -622,10 +622,12 @@ fn insert_criterion_locals(locals: &mut BTreeMap<String, Value>, evaluation: &Cr
             Value::String(version.clone()),
         );
     }
-    locals.insert(
-        "criterionContextValue".to_string(),
-        evaluation.context_value.clone(),
-    );
+    if evaluation.unavailable.is_none() {
+        locals.insert(
+            "criterionContextValue".to_string(),
+            evaluation.context_value.clone(),
+        );
+    }
     if let Some(error) = &evaluation.error {
         locals.insert("criterionError".to_string(), Value::String(error.clone()));
     }

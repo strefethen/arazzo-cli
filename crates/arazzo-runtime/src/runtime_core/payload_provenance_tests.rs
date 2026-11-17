@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use arazzo_expr::{ExpressionResolution, StoredValueReference};
 use arazzo_spec::{ExpressionType, Replacement, SelectorType};
 
@@ -9,8 +11,8 @@ use super::*;
 
 fn evaluator() -> ExpressionEvaluator {
     let mut context = EvalContext {
-        request_body: Some(json!({"present": null})),
-        response_body: Some(json!({"present": null})),
+        request_body: arazzo_expr::BodySlot::Present(json!({"present": null})),
+        response_body: arazzo_expr::BodySlot::Present(json!({"present": null})),
         inputs: BTreeMap::from([
             (
                 "document".into(),
@@ -97,7 +99,7 @@ fn direct_values_distinguish_missing_from_present_null_empty_and_literals() {
         ("$response.body.id", json!("$response.body.id"), 0),
         ("plain", json!("plain"), 0),
     ] {
-        let result = resolve_value_source_with_provenance(&source(json!(text)), &eval);
+        let result = resolve_value_source_with_provenance(&source(json!(text)), &eval).unwrap();
         assert_eq!(result.value, value, "{text}");
         assert!(result.warnings.is_empty(), "{text}: {:?}", result.warnings);
         assert_eq!(result.expressions.len(), count, "{text}");
@@ -112,7 +114,7 @@ fn direct_values_distinguish_missing_from_present_null_empty_and_literals() {
         "$request.body#/absent",
         "$response.body#/absent",
     ] {
-        let result = resolve_value_source_with_provenance(&source(json!(text)), &eval);
+        let result = resolve_value_source_with_provenance(&source(json!(text)), &eval).unwrap();
         assert_eq!(result.value, Value::Null);
         assert_eq!(result.expressions.len(), 1);
         assert!(result.expressions[0].resolution.missing);
@@ -137,7 +139,7 @@ fn recursive_occurrences_and_failures_preserve_order_and_escaped_locations() {
         "'a/b~c':\n  - '{$inputs.nil}:{$inputs.absent}:{$inputs.absent}'\n  - '$response.body#/absent'\n'':\n  '$outputs.nil'\nlast: '{$inputs.nil'\n",
     ).unwrap_or_else(|error| panic!("parsing test value: {error}"));
     let eval = evaluator();
-    let result = resolve_value_source_with_provenance(&value.into(), &eval);
+    let result = resolve_value_source_with_provenance(&value.into(), &eval).unwrap();
     assert_eq!(
         result.value,
         json!({"a/b~c": ["null:null:null", null], "": null, "last": "{$inputs.nil"})
@@ -208,7 +210,8 @@ fn selectors_retain_successful_aliases_at_the_selected_value_location() {
             {"context": "$workflows.prior.outputs.nil", "selector": "$", "type": "jsonpath"}
         ])),
         &eval,
-    );
+    )
+    .unwrap();
     assert_eq!(result.value, json!([1, null, null, null, null]));
     assert!(result.warnings.is_empty());
     assert!(result.failures.is_empty());
@@ -267,7 +270,8 @@ fn nested_selector_failures_belong_to_the_selected_value_location() {
             {"context": "$inputs.document", "selector": "invalid", "type": "jsonpointer"}
         ]})),
         &eval,
-    );
+    )
+    .unwrap();
     assert_eq!(result.value, json!({"nested": [null, null]}));
     assert_eq!(
         occurrences(&result)
@@ -312,7 +316,7 @@ fn selector_request_and_response_context_misses_warn_and_are_unresolved() {
         ("$response.body#/present", "$", 0, false),
     ] {
         let object = selector(context, query, "jsonpath");
-        let result = resolve_selector_with_provenance(&object, &eval);
+        let result = resolve_selector_with_provenance(&object, &eval).unwrap();
         assert_eq!(result.value, Value::Null);
         assert_eq!(result.warnings.len(), count, "{context} {query}");
         assert_eq!(result.expressions.len(), 1);
@@ -328,7 +332,7 @@ fn selector_request_and_response_context_misses_warn_and_are_unresolved() {
         };
         assert_eq!(failures(&result), expected);
         assert_eq!(
-            resolve_selector(&object, &eval),
+            resolve_selector(&object, &eval).unwrap(),
             (result.value, result.warnings)
         );
     }
@@ -343,7 +347,8 @@ fn selector_context_requires_complete_expression_and_retains_noisy_misses() {
         "$response.body.id",
         "{$inputs.nil}",
     ] {
-        let result = resolve_selector_with_provenance(&selector(context, "$", "jsonpath"), &eval);
+        let result =
+            resolve_selector_with_provenance(&selector(context, "$", "jsonpath"), &eval).unwrap();
         assert_eq!(result.value, Value::Null);
         assert_eq!(result.warnings.len(), 1);
         assert_eq!(
@@ -373,7 +378,8 @@ fn selector_zero_one_many_and_selected_null_are_sound() {
         let result = resolve_selector_with_provenance(
             &selector("$inputs.document", query, "jsonpath"),
             &eval,
-        );
+        )
+        .unwrap();
         assert_eq!(result.value, expected);
         assert_eq!(result.warnings.len(), warnings);
         assert!(result.failures.is_empty(), "{query}: {:?}", result.failures);
@@ -402,7 +408,7 @@ fn selector_zero_one_many_and_selected_null_are_sound() {
             0,
         ),
     ] {
-        let result = resolve_selector_with_provenance(&object, &eval);
+        let result = resolve_selector_with_provenance(&object, &eval).unwrap();
         assert_eq!(result.value, expected);
         assert_eq!(result.warnings.len(), warnings);
         assert!(
@@ -442,7 +448,7 @@ fn jsonpath_admission_failures_precede_context_and_retain_one_hard_failure() {
             "query bytes limit",
         ),
     ] {
-        let result = resolve_selector_with_provenance(&object, &eval);
+        let result = resolve_selector_with_provenance(&object, &eval).unwrap();
         assert_eq!(result.value, Value::Null);
         assert!(result.expressions.is_empty());
         assert_eq!(result.warnings.len(), 1);
@@ -520,7 +526,7 @@ fn selector_evaluation_and_non_jsonpath_failures_are_hard() {
             "unsupported selector type",
         ),
     ] {
-        let result = resolve_selector_with_provenance(&object, &eval);
+        let result = resolve_selector_with_provenance(&object, &eval).unwrap();
         assert_eq!(result.value, Value::Null);
         assert_eq!(result.warnings.len(), 1, "{object:?}");
         assert!(
@@ -549,7 +555,7 @@ fn mappings_missing_selector_discriminators_remain_literal() {
         json!({"context": "$inputs.nil", "type": "jsonpath"}),
         json!({"context": "$inputs.nil", "selector": "$"}),
     ] {
-        let result = resolve_value_source_with_provenance(&source(value.clone()), &eval);
+        let result = resolve_value_source_with_provenance(&source(value.clone()), &eval).unwrap();
         assert!(result.value.is_object());
         assert!(result.failures.is_empty());
         assert!(result.warnings.is_empty());

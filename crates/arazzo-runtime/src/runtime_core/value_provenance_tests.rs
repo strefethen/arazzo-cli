@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use super::payload::resolve_value_source_with_provenance;
 use super::value_provenance::{ProvenancedValues, ValueProducer, ValueProvenance};
 use super::*;
@@ -51,7 +53,8 @@ fn canonical_aliases_and_conservative_pointer_join() {
         "$workflows.w.inputs.x#/ok",
         "$workflows.w.outputs.x#/ok",
     ] {
-        let resolution = resolve_value_source_with_provenance(&ValueSource::from(source), &eval);
+        let resolution =
+            resolve_value_source_with_provenance(&ValueSource::from(source), &eval).unwrap();
         assert_eq!(resolution.value, json!(2));
         assert!(
             vars.value_provenance(&resolution, &ProvenancedValues::default(), None)
@@ -66,7 +69,7 @@ fn dry_producer_mixed_failures_and_outgoing_response() {
     let vars = VarStore::default();
     let eval = ExpressionEvaluator::new(EvalContext {
         status_code: Some(200),
-        response_body: Some(json!({})),
+        response_body: arazzo_expr::BodySlot::Present(json!({})),
         ..Default::default()
     });
     let producer = ValueProducer {
@@ -76,7 +79,8 @@ fn dry_producer_mixed_failures_and_outgoing_response() {
         transport: ValueProducerTransport::Http,
     };
     for source in ["$statusCode", "$response.body", "$response.body#/absent"] {
-        let result = resolve_value_source_with_provenance(&ValueSource::from(source), &eval);
+        let result =
+            resolve_value_source_with_provenance(&ValueSource::from(source), &eval).unwrap();
         let metadata =
             vars.value_provenance(&result, &ProvenancedValues::default(), Some(producer));
         assert!(!metadata.unresolved, "{source}");
@@ -85,13 +89,15 @@ fn dry_producer_mixed_failures_and_outgoing_response() {
     let result = resolve_value_source_with_provenance(
         &ValueSource::from("{$response.body#/absent}-{$inputs.absent}"),
         &eval,
-    );
+    )
+    .unwrap();
     let metadata = vars.value_provenance(&result, &ProvenancedValues::default(), Some(producer));
     assert!(metadata.unresolved);
     assert_eq!(metadata.skipped.len(), 1);
     let outgoing = ExpressionEvaluator::new(EvalContext::default());
     let result =
-        resolve_value_source_with_provenance(&ValueSource::from("$response.body"), &outgoing);
+        resolve_value_source_with_provenance(&ValueSource::from("$response.body"), &outgoing)
+            .unwrap();
     let metadata = vars.value_provenance(&result, &ProvenancedValues::default(), None);
     assert!(metadata.unresolved);
     assert!(metadata.skipped.is_empty());
@@ -541,7 +547,7 @@ async fn production_strict_child_defers_unknown_validation_to_request_consumptio
 fn skipped_producers_classify_only_their_transport_and_preserve_live_misses() {
     let vars = VarStore::default();
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: Some(json!({})),
+        response_body: arazzo_expr::BodySlot::Present(json!({})),
         message_payload: Some(json!({})),
         ..EvalContext::default()
     });
@@ -562,7 +568,8 @@ fn skipped_producers_classify_only_their_transport_and_preserve_live_misses() {
             "$message.header.missing",
             "$inputs.missing",
         ] {
-            let result = resolve_value_source_with_provenance(&ValueSource::from(source), &eval);
+            let result =
+                resolve_value_source_with_provenance(&ValueSource::from(source), &eval).unwrap();
             let metadata =
                 vars.value_provenance(&result, &ProvenancedValues::default(), Some(producer));
             let skipped = match transport {
@@ -580,7 +587,8 @@ fn skipped_producers_classify_only_their_transport_and_preserve_live_misses() {
         let mixed = resolve_value_source_with_provenance(
             &ValueSource::from("{$message.payload#/missing}-{$inputs.missing}"),
             &eval,
-        );
+        )
+        .unwrap();
         assert!(
             vars.value_provenance(&mixed, &ProvenancedValues::default(), Some(producer))
                 .unresolved
@@ -729,7 +737,7 @@ fn selector_controls_and_mixed_skipped_failures_keep_both_classes() {
         ),
     ] {
         let source: ValueSource = parse(source);
-        let result = resolve_value_source_with_provenance(&source, &eval);
+        let result = resolve_value_source_with_provenance(&source, &eval).unwrap();
         let metadata = vars.value_provenance(&result, &ProvenancedValues::default(), None);
         assert_eq!(metadata.unresolved, unresolved, "{source:?}");
         assert_eq!(metadata.skipped.len(), skipped_count, "{source:?}");
@@ -746,7 +754,7 @@ fn selector_controls_and_mixed_skipped_failures_keep_both_classes() {
         json!({"context":"$inputs.x", "selector":"/absent", "type":"jsonpointer"}),
     ] {
         let source: ValueSource = parse(source);
-        let result = resolve_value_source_with_provenance(&source, &eval);
+        let result = resolve_value_source_with_provenance(&source, &eval).unwrap();
         assert_eq!(
             vars.value_provenance(&result, &ProvenancedValues::default(), None),
             ValueProvenance::default()
@@ -831,7 +839,8 @@ async fn subworkflow_publication_rolls_back_both_fields_and_records_omissions() 
         let result = resolve_value_source_with_provenance(
             &ValueSource::from("$workflows.child.outputs.x#/ok"),
             &ExpressionEvaluator::new(projected),
-        );
+        )
+        .unwrap();
         assert_eq!(result.value, json!(1));
         assert_eq!(
             vars.value_provenance(&result, &ProvenancedValues::default(), None)
@@ -911,7 +920,8 @@ async fn concrete_repeated_parameter_clears_metadata_and_json_cannot_create_it()
     let result = resolve_value_source_with_provenance(
         &ValueSource::from("$workflows.child.inputs.x"),
         &eval,
-    );
+    )
+    .unwrap();
     assert_eq!(
         vars.value_provenance(&result, &ProvenancedValues::default(), None),
         ValueProvenance::default()
@@ -934,13 +944,13 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
     for (expression, unresolved) in [("//id", false), ("//missing", false), ("//*[", true)] {
         let output = OutputValue::RuntimeExpression(expression.into());
         let (value, warnings, metadata) =
-            evaluate_provenanced_output(&output, &eval, Some(&response), &vars, None);
-        let ordinary = evaluate_output_value_detailed(&output, &eval, Some(&response));
+            evaluate_provenanced_output(&output, &eval, Some(&response), &vars, None).unwrap();
+        let ordinary = evaluate_output_value_detailed(&output, &eval, Some(&response)).unwrap();
         assert_eq!((value, warnings), ordinary);
         assert_eq!(metadata.unresolved, unresolved, "{expression}");
     }
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: Some(json!({"id":3})),
+        response_body: arazzo_expr::BodySlot::Present(json!({"id":3})),
         ..Default::default()
     });
     let output = OutputValue::RuntimeExpression("id".into());
@@ -955,7 +965,8 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
             site: ValueProducerSite::Output("out"),
             transport: ValueProducerTransport::Http,
         }),
-    );
+    )
+    .unwrap();
     assert!(metadata.unresolved);
     assert!(metadata.skipped.is_empty());
 }

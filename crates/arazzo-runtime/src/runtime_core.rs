@@ -87,6 +87,8 @@ mod url;
 mod value_provenance;
 #[cfg(test)]
 mod value_provenance_tests;
+#[cfg(test)]
+mod value_unavailable_tests;
 mod xml_admission;
 mod xpath;
 
@@ -98,10 +100,11 @@ pub use client::{
     RedirectDecision, RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
 };
 use control::{sleep_with_cancel, step_result_error};
+#[cfg(test)]
+pub(crate) use criteria::evaluate_criterion;
 use criteria::evaluate_provenanced_output;
 pub(crate) use criteria::{
-    evaluate_criterion, evaluate_criterion_detailed, evaluate_output_value_detailed,
-    CriterionEvaluation,
+    evaluate_criterion_detailed, evaluate_output_value_detailed, CriterionEvaluation,
 };
 pub(crate) use deps::{build_levels, compute_transitive_deps, extract_step_refs, parallel_blocker};
 use engine_actions::{

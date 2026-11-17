@@ -15,6 +15,9 @@ pub enum ConditionErrorKind {
     NestingLimit,
     /// Reserved for evaluation; never returned by the syntax parser.
     InvalidEvaluation,
+    /// An operand references a value that exists but cannot be read. Reserved
+    /// for evaluation; the message is the `ValueUnavailable` text.
+    ValueUnavailable,
 }
 
 /// An owned error at a UTF-8 byte boundary in the original condition.

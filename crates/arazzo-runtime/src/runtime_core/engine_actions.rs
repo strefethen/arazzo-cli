@@ -289,6 +289,13 @@ impl Engine {
                 if ctx.cancel.is_cancelled() {
                     return Err(control::cancellation_error(ctx.is_timeout));
                 }
+                if let Some(unavailable) = evaluation.unavailable_error(&format!(
+                    "step {}: {}[{action_index}].criteria[{criterion_index}]",
+                    ctx.step.step_id,
+                    ctx.branch.label()
+                )) {
+                    return Err(unavailable);
+                }
                 if !evaluation.matched {
                     all_match = false;
                     break;
@@ -353,8 +360,13 @@ impl Engine {
                     ctx.vars,
                     ctx.response,
                 ));
+                let source_step_id = &ctx.workflow.steps[ctx.current_idx].step_id;
                 if !action.step_id.is_empty() {
-                    let resolved_step_id = eval.interpolate_string(&action.step_id);
+                    let resolved_step_id =
+                        match action_target(&eval, source_step_id, "stepId", &action.step_id) {
+                            Ok(resolved) => resolved,
+                            Err(err) => return RoutedDecision::error(err).into(),
+                        };
                     if let Some(idx) = self.find_step_index(ctx.workflow, &resolved_step_id) {
                         return RoutedDecision {
                             flow: FlowDecision::Next(idx),
@@ -380,16 +392,25 @@ impl Engine {
                     .into();
                 }
                 if !action.workflow_id.is_empty() {
-                    let resolved_workflow_id = eval.interpolate_string(&action.workflow_id);
+                    let resolved_workflow_id = match action_target(
+                        &eval,
+                        source_step_id,
+                        "workflowId",
+                        &action.workflow_id,
+                    ) {
+                        Ok(resolved) => resolved,
+                        Err(err) => return RoutedDecision::error(err).into(),
+                    };
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
                             super::eval_context::base(self, ctx.vars, ctx.response),
                             ctx.message,
                         ));
-                    let inputs = map_action_parameters(
+                    let inputs = match map_action_parameters(
                         action,
                         &parameter_eval,
                         ctx.vars,
+                        source_step_id,
                         (self.inner.dry_run_mode
                             && (ctx.response.is_some() || ctx.message.is_some()))
                         .then_some(ValueProducer {
@@ -402,7 +423,10 @@ impl Engine {
                                 ValueProducerTransport::Http
                             },
                         }),
-                    );
+                    ) {
+                        Ok(inputs) => inputs,
+                        Err(err) => return RoutedDecision::error(err).into(),
+                    };
                     return RoutedDecision {
                         flow: FlowDecision::GotoWorkflow {
                             workflow_id: resolved_workflow_id.clone(),
@@ -441,35 +465,51 @@ impl Engine {
                     ctx.vars,
                     ctx.response,
                 ));
+                let source_step_id = &ctx.workflow.steps[ctx.current_idx].step_id;
                 let reference = if !action.step_id.is_empty() {
-                    Some(RetryReference::Step {
-                        step_id: eval.interpolate_string(&action.step_id),
-                    })
+                    match action_target(&eval, source_step_id, "stepId", &action.step_id) {
+                        Ok(step_id) => Some(RetryReference::Step { step_id }),
+                        Err(err) => return RoutedDecision::error(err).into(),
+                    }
                 } else if !action.workflow_id.is_empty() {
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
                             super::eval_context::base(self, ctx.vars, ctx.response),
                             ctx.message,
                         ));
+                    let workflow_id = match action_target(
+                        &eval,
+                        source_step_id,
+                        "workflowId",
+                        &action.workflow_id,
+                    ) {
+                        Ok(workflow_id) => workflow_id,
+                        Err(err) => return RoutedDecision::error(err).into(),
+                    };
+                    let inputs = match map_action_parameters(
+                        action,
+                        &parameter_eval,
+                        ctx.vars,
+                        source_step_id,
+                        (self.inner.dry_run_mode
+                            && (ctx.response.is_some() || ctx.message.is_some()))
+                        .then_some(ValueProducer {
+                            workflow_id: &ctx.workflow.workflow_id,
+                            step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
+                            site: ValueProducerSite::ActionParameter(""),
+                            transport: if ctx.message.is_some() {
+                                ValueProducerTransport::Message
+                            } else {
+                                ValueProducerTransport::Http
+                            },
+                        }),
+                    ) {
+                        Ok(inputs) => inputs,
+                        Err(err) => return RoutedDecision::error(err).into(),
+                    };
                     Some(RetryReference::Workflow {
-                        workflow_id: eval.interpolate_string(&action.workflow_id),
-                        inputs: map_action_parameters(
-                            action,
-                            &parameter_eval,
-                            ctx.vars,
-                            (self.inner.dry_run_mode
-                                && (ctx.response.is_some() || ctx.message.is_some()))
-                            .then_some(ValueProducer {
-                                workflow_id: &ctx.workflow.workflow_id,
-                                step_id: &ctx.workflow.steps[ctx.current_idx].step_id,
-                                site: ValueProducerSite::ActionParameter(""),
-                                transport: if ctx.message.is_some() {
-                                    ValueProducerTransport::Message
-                                } else {
-                                    ValueProducerTransport::Http
-                                },
-                            }),
-                        ),
+                        workflow_id,
+                        inputs,
                     })
                 } else {
                     None
@@ -671,18 +711,36 @@ pub(super) enum RetryReference {
 /// value/Selector resolver, they become the callee's input map. An action
 /// without parameters returns `None`, which keeps forwarding the caller's
 /// inputs.
+fn action_target(
+    eval: &ExpressionEvaluator,
+    step_id: &str,
+    field: &str,
+    template: &str,
+) -> Result<String, RuntimeError> {
+    eval.interpolate_string(template).map_err(|unavailable| {
+        RuntimeError::value_unavailable(&format!("step {step_id}: action {field}"), unavailable)
+    })
+}
+
 fn map_action_parameters(
     action: &OnAction,
     eval: &ExpressionEvaluator,
     vars: &VarStore,
+    step_id: &str,
     producer: Option<ValueProducer<'_>>,
-) -> Option<ProvenancedValues> {
+) -> Result<Option<ProvenancedValues>, RuntimeError> {
     if action.parameters.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut mapped = ProvenancedValues::default();
     for param in &action.parameters {
-        let result = super::payload::resolve_value_source_with_provenance(&param.value, eval);
+        let result = super::payload::resolve_value_source_with_provenance(&param.value, eval)
+            .map_err(|unavailable| {
+                RuntimeError::value_unavailable(
+                    &format!("step {step_id}: action parameter {:?}", param.name),
+                    unavailable,
+                )
+            })?;
         let producer = producer.map(|producer| ValueProducer {
             site: ValueProducerSite::ActionParameter(&param.name),
             ..producer
@@ -695,7 +753,7 @@ fn map_action_parameters(
         }
         mapped.insert(param.name.clone(), value, metadata);
     }
-    Some(mapped)
+    Ok(Some(mapped))
 }
 
 #[derive(Debug)]

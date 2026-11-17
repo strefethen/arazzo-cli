@@ -278,6 +278,11 @@ pub(crate) struct VarStore {
     pub(super) step_provenance: Arc<BTreeMap<String, BTreeMap<String, ValueProvenance>>>,
     pub(super) workflow_provenance: BTreeMap<String, super::value_provenance::WorkflowProvenance>,
     pub(super) optional_omissions: BTreeSet<String>,
+    /// Stands in for a stored value that exists but cannot be read, which no
+    /// workflow can produce before a response exists; see
+    /// `value_unavailable_tests`.
+    #[cfg(test)]
+    pub(super) unreadable_response_body: Option<String>,
 }
 
 impl VarStore {

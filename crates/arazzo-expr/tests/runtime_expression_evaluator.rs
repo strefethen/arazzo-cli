@@ -48,8 +48,8 @@ fn evaluator() -> ExpressionEvaluator {
         message_headers: BTreeMap::from([("X-Id".to_owned(), "message".to_owned())]),
         request_query: BTreeMap::from([("q".to_owned(), "query".to_owned())]),
         request_path: BTreeMap::from([("id".to_owned(), "path".to_owned())]),
-        request_body: Some(body.clone()),
-        response_body: Some(body.clone()),
+        request_body: arazzo_expr::BodySlot::Present(body.clone()),
+        response_body: arazzo_expr::BodySlot::Present(body.clone()),
         message_payload: Some(body),
     })
 }
@@ -77,16 +77,16 @@ fn supported_namespaces_exact_names_pointers_and_caseless_keywords() {
         ("$inputs.body#/items/0/id", json!(7)),
     ] {
         assert_eq!(
-            evaluator.evaluate_with_diagnostics(expression),
+            evaluator.evaluate_with_diagnostics(expression).unwrap(),
             (expected, Vec::new()),
             "{expression}"
         );
     }
     for base in ["$request.body", "$response.body", "$message.payload"] {
-        assert!(evaluator.evaluate(base).is_object());
+        assert!(evaluator.evaluate(base).unwrap().is_object());
         assert_eq!(
-            evaluator.evaluate(&format!("{base}#")),
-            evaluator.evaluate(base)
+            evaluator.evaluate(&format!("{base}#")).unwrap(),
+            evaluator.evaluate(base).unwrap()
         );
         for (pointer, expected) in [
             ("/a.b", json!(1)),
@@ -94,7 +94,9 @@ fn supported_namespaces_exact_names_pointers_and_caseless_keywords() {
             ("/a~1b/~0key", json!(3)),
         ] {
             assert_eq!(
-                evaluator.evaluate_with_diagnostics(&format!("{base}#{pointer}")),
+                evaluator
+                    .evaluate_with_diagnostics(&format!("{base}#{pointer}"))
+                    .unwrap(),
                 (expected, Vec::new())
             );
         }
@@ -107,7 +109,7 @@ fn supported_namespaces_exact_names_pointers_and_caseless_keywords() {
         "$components.successActions.x",
         "$components.failureActions.x",
     ] {
-        assert_eq!(evaluator.evaluate(expression), Value::Null);
+        assert_eq!(evaluator.evaluate(expression).unwrap(), Value::Null);
     }
 }
 
@@ -130,7 +132,7 @@ fn invalid_standalone_calls_project_one_structured_error_and_only_safe_hints() {
         "$response.body.items[?(@.x==1)]",
     ] {
         let error = parse_runtime_expression(expression).unwrap_err();
-        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression);
+        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression).unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1, "{expression}");
         let expected = match body_pointer_migration_hint(expression, &error) {
@@ -166,12 +168,14 @@ fn missing_values_keep_existing_warning_identity_and_order() {
             "JSON Pointer \"/absent\" did not resolve in value \"body\"",
         ),
     ] {
-        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression);
+        let (value, warnings) = evaluator.evaluate_with_diagnostics(expression).unwrap();
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].message, message);
     }
-    let (value, warnings) = evaluator.evaluate_with_diagnostics("$request.body#/absent");
+    let (value, warnings) = evaluator
+        .evaluate_with_diagnostics("$request.body#/absent")
+        .unwrap();
     assert_eq!(value, Value::Null);
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].expression, "$request.body#/absent");
@@ -186,18 +190,24 @@ fn literal_renderer_and_conformant_legacy_interpolation_survive_cutover() {
     let evaluator = evaluator();
     for literal in ["$USD", "$env.X", "$response.body.items", "ordinary text"] {
         assert_eq!(
-            evaluator.resolve_value_with_diagnostics(literal),
+            evaluator.resolve_value_with_diagnostics(literal).unwrap(),
             (json!(literal), Vec::new())
         );
     }
-    assert_eq!(evaluator.resolve_value("$inputs.number"), json!(7));
-    assert_eq!(evaluator.resolve_value("{$inputs.number}"), json!("7"));
+    assert_eq!(evaluator.resolve_value("$inputs.number").unwrap(), json!(7));
     assert_eq!(
-        evaluator.resolve_value("id={$response.body#/items/0/id}"),
+        evaluator.resolve_value("{$inputs.number}").unwrap(),
+        json!("7")
+    );
+    assert_eq!(
+        evaluator
+            .resolve_value("id={$response.body#/items/0/id}")
+            .unwrap(),
         json!("id=7")
     );
-    let (_, warnings) =
-        evaluator.resolve_value_with_diagnostics("{$inputs.first}/{$inputs.second}");
+    let (_, warnings) = evaluator
+        .resolve_value_with_diagnostics("{$inputs.first}/{$inputs.second}")
+        .unwrap();
     assert_eq!(
         warnings
             .iter()
@@ -206,14 +216,21 @@ fn literal_renderer_and_conformant_legacy_interpolation_survive_cutover() {
         ["$inputs.first", "$inputs.second"]
     );
     assert_eq!(
-        evaluator.interpolate_string("id={$response.body#/items/0/id}"),
+        evaluator
+            .interpolate_string("id={$response.body#/items/0/id}")
+            .unwrap(),
         "id=7"
     );
     assert_eq!(
-        evaluator.interpolate_string("id={$response.body.items[0].id}"),
+        evaluator
+            .interpolate_string("id={$response.body.items[0].id}")
+            .unwrap(),
         "id="
     );
-    assert_eq!(evaluator.interpolate_string("n=$inputs.number"), "n=7");
+    assert_eq!(
+        evaluator.interpolate_string("n=$inputs.number").unwrap(),
+        "n=7"
+    );
     assert!(evaluator.evaluate_condition("$response.body.items[0].id == 7"));
 }
 

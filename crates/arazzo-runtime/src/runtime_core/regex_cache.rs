@@ -102,7 +102,7 @@ mod tests {
             ..SuccessCriterion::default()
         };
         let evaluator = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!({"text": "ready"})),
+            response_body: arazzo_expr::BodySlot::Present(json!({"text": "ready"})),
             ..EvalContext::default()
         });
         let expected = format!(

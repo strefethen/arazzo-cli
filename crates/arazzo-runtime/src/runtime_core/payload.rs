@@ -26,7 +26,9 @@ pub(super) fn resolve_value_source(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    resolve_value_source_with_provenance(value, eval).into_parts()
+    resolve_value_source_with_provenance(value, eval)
+        .unwrap_or_else(|unavailable| panic!("{unavailable}"))
+        .into_parts()
 }
 
 #[derive(Debug)]
@@ -129,7 +131,7 @@ impl ResolvedValueSource {
 pub(crate) fn resolve_value_source_with_provenance(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
-) -> ResolvedValueSource {
+) -> Result<ResolvedValueSource, arazzo_expr::ValueUnavailable> {
     resolve_value_checked(value, eval, "")
 }
 
@@ -137,7 +139,7 @@ fn resolve_value_checked(
     value: &ValueSource,
     eval: &ExpressionEvaluator,
     pointer: &str,
-) -> ResolvedValueSource {
+) -> Result<ResolvedValueSource, arazzo_expr::ValueUnavailable> {
     match value {
         ValueSource::Selector(selector) => resolve_selector_checked(selector, eval, pointer),
         ValueSource::Literal(value) => resolve_literal_checked(value, eval, pointer),
@@ -152,8 +154,8 @@ fn resolve_literal_checked(
     value: &serde_yaml_ng::Value,
     eval: &ExpressionEvaluator,
     pointer: &str,
-) -> ResolvedValueSource {
-    match value {
+) -> Result<ResolvedValueSource, arazzo_expr::ValueUnavailable> {
+    Ok(match value {
         serde_yaml_ng::Value::Null => ResolvedValueSource::sound(Value::Null, Vec::new()),
         serde_yaml_ng::Value::Bool(v) => ResolvedValueSource::sound(Value::Bool(*v), Vec::new()),
         serde_yaml_ng::Value::Number(v) => {
@@ -169,7 +171,7 @@ fn resolve_literal_checked(
             ResolvedValueSource::sound(value, Vec::new())
         }
         serde_yaml_ng::Value::String(v) => {
-            ResolvedValueSource::expression(eval.resolve_value_with_provenance(v), v, pointer)
+            ResolvedValueSource::expression(eval.resolve_value_with_provenance(v)?, v, pointer)
         }
         serde_yaml_ng::Value::Sequence(seq) => {
             let mut out = Vec::with_capacity(seq.len());
@@ -179,7 +181,7 @@ fn resolve_literal_checked(
                     &item.clone().into(),
                     eval,
                     &child_pointer(pointer, &index.to_string()),
-                );
+                )?;
                 out.push(result.absorb(item));
             }
             result.value = Value::Array(out);
@@ -191,14 +193,14 @@ fn resolve_literal_checked(
             for (k, v) in map {
                 let key = k.as_str().unwrap_or_default().to_string();
                 let item =
-                    resolve_value_checked(&v.clone().into(), eval, &child_pointer(pointer, &key));
+                    resolve_value_checked(&v.clone().into(), eval, &child_pointer(pointer, &key))?;
                 out.insert(key, result.absorb(item));
             }
             result.value = Value::Object(out);
             result
         }
         _ => ResolvedValueSource::sound(Value::Null, Vec::new()),
-    }
+    })
 }
 
 /// Resolve a Selector Object for ordinary readers: the projected value and
@@ -207,14 +209,14 @@ fn resolve_literal_checked(
 pub(super) fn resolve_selector(
     selector: &SelectorObject,
     eval: &ExpressionEvaluator,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
-    resolve_selector_with_provenance(selector, eval).into_parts()
+) -> Result<(Value, Vec<arazzo_expr::ExpressionWarning>), arazzo_expr::ValueUnavailable> {
+    Ok(resolve_selector_with_provenance(selector, eval)?.into_parts())
 }
 
 pub(crate) fn resolve_selector_with_provenance(
     selector: &SelectorObject,
     eval: &ExpressionEvaluator,
-) -> ResolvedValueSource {
+) -> Result<ResolvedValueSource, arazzo_expr::ValueUnavailable> {
     resolve_selector_checked(selector, eval, "")
 }
 
@@ -222,7 +224,7 @@ fn resolve_selector_checked(
     selector: &SelectorObject,
     eval: &ExpressionEvaluator,
     pointer: &str,
-) -> ResolvedValueSource {
+) -> Result<ResolvedValueSource, arazzo_expr::ValueUnavailable> {
     let type_name = selector.type_.resolved_name();
     let version = selector.type_.declared_version();
 
@@ -232,14 +234,14 @@ fn resolve_selector_checked(
             Err(error) => {
                 let mut result = ResolvedValueSource::sound(Value::Null, Vec::new());
                 result.fail_selector(selector, pointer, &error.to_string());
-                return result;
+                return Ok(result);
             }
         },
         _ => None,
     };
 
     let mut result = ResolvedValueSource::expression(
-        eval.evaluate_with_provenance(&selector.context),
+        eval.evaluate_with_provenance(&selector.context)?,
         &selector.context,
         pointer,
     );
@@ -255,7 +257,7 @@ fn resolve_selector_checked(
     }
     if !result.warnings.is_empty() {
         result.value = Value::Null;
-        return result;
+        return Ok(result);
     }
 
     let selected = if let Some(query) = jsonpath {
@@ -263,7 +265,7 @@ fn resolve_selector_checked(
             Ok(selection) => Ok((selection.value, selection.match_count)),
             Err(error) => {
                 result.fail_selector(selector, pointer, &error.to_string());
-                return result;
+                return Ok(result);
             }
         }
     } else {
@@ -282,7 +284,7 @@ fn resolve_selector_checked(
             result.fail_selector(selector, pointer, &message);
         }
     }
-    result
+    Ok(result)
 }
 
 fn resolve_non_jsonpath_selector(
@@ -362,11 +364,9 @@ pub(super) fn apply_replacements(
         replacements,
         JsonPathTargets::Select,
         |index, replacement| {
-            let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
-            admission.check(
-                &resolution,
-                &format!("requestBody.replacements[{index}].value"),
-            )?;
+            let location = format!("requestBody.replacements[{index}].value");
+            let resolution = admission.resolve(&replacement.value, eval, &location)?;
+            admission.check(&resolution, &location)?;
             let warnings = resolution
                 .warnings
                 .iter()
@@ -393,8 +393,8 @@ pub(super) fn apply_replacements_projected(
         replacements,
         JsonPathTargets::Record(&mut targets),
         |index, replacement| {
-            let resolution = resolve_value_source_with_provenance(&replacement.value, eval);
             let location = format!("requestBody.replacements[{index}].value");
+            let resolution = admission.resolve(&replacement.value, eval, &location)?;
             let value = admission.project(&resolution, &location)?;
             projected.insert(index, value);
             let warnings = resolution
@@ -1439,7 +1439,8 @@ mod tests {
             ("$.a[", name_type("jsonpath"), "invalid JSONPath syntax"),
         ] {
             let object = jsonpath_selector_object("$inputs.absent", selector, type_);
-            let (value, warnings) = resolve_selector(&object, &eval);
+            let (value, warnings) = resolve_selector(&object, &eval)
+                .unwrap_or_else(|unavailable| panic!("{unavailable}"));
             assert_eq!(value, Value::Null);
             assert_eq!(warnings.len(), 1, "{selector}: {warnings:?}");
             assert!(
@@ -1450,7 +1451,8 @@ mod tests {
 
         // A valid query over a missing context keeps the context diagnostic.
         let valid = jsonpath_selector_object("$inputs.absent", "$.a", name_type("jsonpath"));
-        let (value, warnings) = resolve_selector(&valid, &eval);
+        let (value, warnings) =
+            resolve_selector(&valid, &eval).unwrap_or_else(|unavailable| panic!("{unavailable}"));
         assert_eq!(value, Value::Null);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
@@ -1477,7 +1479,8 @@ mod tests {
         ] {
             let object =
                 jsonpath_selector_object("$inputs.document", selector, name_type("jsonpath"));
-            let (value, warnings) = resolve_selector(&object, &eval);
+            let (value, warnings) = resolve_selector(&object, &eval)
+                .unwrap_or_else(|unavailable| panic!("{unavailable}"));
             assert_eq!(value, expected, "{selector}");
             assert_eq!(warnings.len(), warning_count, "{selector}: {warnings:?}");
         }

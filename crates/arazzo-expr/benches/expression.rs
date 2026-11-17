@@ -70,13 +70,13 @@ fn rich_context() -> EvalContext {
         request_headers: BTreeMap::new(),
         request_query: BTreeMap::new(),
         request_path: BTreeMap::new(),
-        request_body: None,
+        request_body: arazzo_expr::BodySlot::Absent,
         message_headers: BTreeMap::new(),
         message_payload: None,
         self_uri: None,
         source_descriptions: BTreeMap::new().into(),
         response_headers,
-        response_body: Some(json!({
+        response_body: arazzo_expr::BodySlot::Present(json!({
             "data": {
                 "user": {
                     "id": 42,
@@ -95,18 +95,23 @@ fn bench_evaluate(c: &mut Criterion) {
 
     // Simple namespace lookups (fast path)
     group.bench_function("inputs_simple", |b| {
-        b.iter(|| eval.evaluate(black_box("$inputs.userId")))
+        b.iter(|| eval.evaluate(black_box("$inputs.userId")).unwrap())
     });
 
     group.bench_function("statusCode", |b| {
-        b.iter(|| eval.evaluate(black_box("$statusCode")))
+        b.iter(|| eval.evaluate(black_box("$statusCode")).unwrap())
     });
 
-    group.bench_function("method", |b| b.iter(|| eval.evaluate(black_box("$method"))));
+    group.bench_function("method", |b| {
+        b.iter(|| eval.evaluate(black_box("$method")).unwrap())
+    });
 
     // Step output lookup (common hot path)
     group.bench_function("steps_output", |b| {
-        b.iter(|| eval.evaluate(black_box("$steps.getUser.outputs.body")))
+        b.iter(|| {
+            eval.evaluate(black_box("$steps.getUser.outputs.body"))
+                .unwrap()
+        })
     });
 
     // Deep nested path traversal (exercises tokenize_path)
@@ -115,22 +120,32 @@ fn bench_evaluate(c: &mut Criterion) {
             eval.evaluate(black_box(
                 "$steps.getUser.outputs.body#/data/user/profile/bio",
             ))
+            .unwrap()
         })
     });
 
     // Array index access
     group.bench_function("array_index", |b| {
-        b.iter(|| eval.evaluate(black_box("$steps.getUser.outputs.body#/data/items/0/name")))
+        b.iter(|| {
+            eval.evaluate(black_box("$steps.getUser.outputs.body#/data/items/0/name"))
+                .unwrap()
+        })
     });
 
     // Response body access
     group.bench_function("response_body", |b| {
-        b.iter(|| eval.evaluate(black_box("$response.body#/data/user/name")))
+        b.iter(|| {
+            eval.evaluate(black_box("$response.body#/data/user/name"))
+                .unwrap()
+        })
     });
 
     // Response header access
     group.bench_function("response_header", |b| {
-        b.iter(|| eval.evaluate(black_box("$response.header.x-request-id")))
+        b.iter(|| {
+            eval.evaluate(black_box("$response.header.x-request-id"))
+                .unwrap()
+        })
     });
 
     // Missing key (worst case — full traversal then null)
@@ -139,6 +154,7 @@ fn bench_evaluate(c: &mut Criterion) {
             eval.evaluate(black_box(
                 "$steps.getUser.outputs.body#/data/user/nonexistent",
             ))
+            .unwrap()
         })
     });
 
@@ -152,17 +168,20 @@ fn bench_resolve_value(c: &mut Criterion) {
 
     // Literal string (no-op fast path)
     group.bench_function("literal", |b| {
-        b.iter(|| eval.resolve_value(black_box("hello world")))
+        b.iter(|| eval.resolve_value(black_box("hello world")).unwrap())
     });
 
     // Full expression dispatch
     group.bench_function("expression", |b| {
-        b.iter(|| eval.resolve_value(black_box("$inputs.userId")))
+        b.iter(|| eval.resolve_value(black_box("$inputs.userId")).unwrap())
     });
 
     // String interpolation
     group.bench_function("interpolation_single", |b| {
-        b.iter(|| eval.resolve_value(black_box("User {$inputs.userId}")))
+        b.iter(|| {
+            eval.resolve_value(black_box("User {$inputs.userId}"))
+                .unwrap()
+        })
     });
 
     group.bench_function("interpolation_multiple", |b| {
@@ -170,6 +189,7 @@ fn bench_resolve_value(c: &mut Criterion) {
             eval.resolve_value(black_box(
                 "User {$inputs.userId} with key {$inputs.apiKey} (verbose={$inputs.verbose})",
             ))
+            .unwrap()
         })
     });
 
@@ -208,17 +228,26 @@ fn bench_interpolate_string(c: &mut Criterion) {
 
     // No expressions (fast scan)
     group.bench_function("no_expressions", |b| {
-        b.iter(|| eval.interpolate_string(black_box("plain text with no expressions")))
+        b.iter(|| {
+            eval.interpolate_string(black_box("plain text with no expressions"))
+                .unwrap()
+        })
     });
 
     // Single expression
     group.bench_function("single_expr", |b| {
-        b.iter(|| eval.interpolate_string(black_box("Hello {$inputs.userId}")))
+        b.iter(|| {
+            eval.interpolate_string(black_box("Hello {$inputs.userId}"))
+                .unwrap()
+        })
     });
 
     // Multiple expressions
     group.bench_function("three_exprs", |b| {
-        b.iter(|| eval.interpolate_string(black_box("{$method} {$url} => {$statusCode}")))
+        b.iter(|| {
+            eval.interpolate_string(black_box("{$method} {$url} => {$statusCode}"))
+                .unwrap()
+        })
     });
 
     group.finish();
@@ -248,13 +277,13 @@ fn bench_path_depth_scaling(c: &mut Criterion) {
         let expr = format!("$response.body#/{path}");
 
         let ctx = EvalContext {
-            response_body: Some(nested),
+            response_body: arazzo_expr::BodySlot::Present(nested),
             ..Default::default()
         };
         let eval = ExpressionEvaluator::new(ctx);
 
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
-            b.iter(|| eval.evaluate(black_box(&expr)))
+            b.iter(|| eval.evaluate(black_box(&expr)).unwrap())
         });
     }
     group.finish();

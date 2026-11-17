@@ -57,13 +57,18 @@ async fn step_over_enters_success_criteria_and_outputs_with_locals() {
         scopes_at_criterion.locals.get("criterionConditionResult"),
         Some(&json!(true))
     );
+    assert_eq!(
+        scopes_at_criterion.locals.get("criterionContextValue"),
+        Some(&serde_json::Value::Null),
+        "a simple criterion with no context never builds the default context"
+    );
     assert!(
         scopes_at_criterion
             .locals
-            .get("criterionContextValue")
+            .get("responseBodyRaw")
             .and_then(|value| value.as_str())
             .is_some(),
-        "criterion context value should be available at criteria checkpoint"
+        "the response body stays inspectable at the criteria checkpoint"
     );
 
     if let Err(err) = controller.step_over() {

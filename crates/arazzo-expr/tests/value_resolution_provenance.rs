@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -36,32 +38,40 @@ fn evaluator() -> ExpressionEvaluator {
         .into(),
         request_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
         response_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
-        request_body: Some(json!({"nil": null, "empty": ""})),
-        response_body: Some(json!({"nil": null, "empty": ""})),
+        request_body: arazzo_expr::BodySlot::Present(json!({"nil": null, "empty": ""})),
+        response_body: arazzo_expr::BodySlot::Present(json!({"nil": null, "empty": ""})),
         status_code: Some(200),
         ..EvalContext::default()
     })
 }
 
 fn assert_value_projection(evaluator: &ExpressionEvaluator, source: &str) -> ValueResolution {
-    let result = evaluator.resolve_value_with_provenance(source);
+    let result = evaluator.resolve_value_with_provenance(source).unwrap();
     assert_eq!(
         (result.value.clone(), result.warnings.clone()),
-        evaluator.resolve_value_with_diagnostics(source),
+        evaluator.resolve_value_with_diagnostics(source).unwrap(),
         "{source}"
     );
-    assert_eq!(result.value, evaluator.resolve_value(source), "{source}");
+    assert_eq!(
+        result.value,
+        evaluator.resolve_value(source).unwrap(),
+        "{source}"
+    );
     result
 }
 
 fn assert_expression_projection(evaluator: &ExpressionEvaluator, source: &str) -> ValueResolution {
-    let result = evaluator.evaluate_with_provenance(source);
+    let result = evaluator.evaluate_with_provenance(source).unwrap();
     assert_eq!(
         (result.value.clone(), result.warnings.clone()),
-        evaluator.evaluate_with_diagnostics(source),
+        evaluator.evaluate_with_diagnostics(source).unwrap(),
         "{source}"
     );
-    assert_eq!(result.value, evaluator.evaluate(source), "{source}");
+    assert_eq!(
+        result.value,
+        evaluator.evaluate(source).unwrap(),
+        "{source}"
+    );
     assert_eq!(
         result,
         assert_value_projection(evaluator, source),
@@ -127,7 +137,7 @@ fn stored_values_retain_missing_null_empty_and_all_coordinates() {
             };
             assert_eq!(occurrence.reference, Some(reference), "{source}");
             assert_eq!(
-                evaluator.evaluate_resolved(&source),
+                evaluator.evaluate_resolved(&source).unwrap(),
                 if missing { None } else { Some(expected) },
                 "{source}"
             );
@@ -183,7 +193,7 @@ fn request_and_response_misses_warn_and_retain_provenance() {
                         missing: expected.is_none(),
                     }]
                 );
-                assert_eq!(evaluator.evaluate_resolved(&source), expected);
+                assert_eq!(evaluator.evaluate_resolved(&source).unwrap(), expected);
             }
         }
     }
@@ -215,7 +225,10 @@ fn templates_retain_every_occurrence_and_warning_in_source_order() {
         assert_eq!(actual.missing, missing);
         assert_eq!(
             actual,
-            &evaluator.evaluate_with_provenance(expression).expressions[0]
+            &evaluator
+                .evaluate_with_provenance(expression)
+                .unwrap()
+                .expressions[0]
         );
     }
     assert_eq!(
@@ -351,19 +364,20 @@ fn invalid_templates_are_atomic_and_literals_have_no_provenance() {
         assert!(!result.syntax_error, "{source}");
         assert!(result.expressions.is_empty());
         assert!(result.warnings.is_empty());
-        let standalone = evaluator.evaluate_with_provenance(source);
+        let standalone = evaluator.evaluate_with_provenance(source).unwrap();
         assert!(standalone.syntax_error, "{source}");
         assert_eq!(standalone.value, Value::Null);
         assert!(standalone.expressions.is_empty());
         assert_eq!(standalone.warnings.len(), 1);
         assert_eq!(
             (standalone.value, standalone.warnings),
-            evaluator.evaluate_with_diagnostics(source)
+            evaluator.evaluate_with_diagnostics(source).unwrap()
         );
-        assert_eq!(evaluator.evaluate_resolved(source), None);
+        assert_eq!(evaluator.evaluate_resolved(source).unwrap(), None);
     }
     assert!(evaluator
         .evaluate_with_provenance("$response.body.status")
+        .unwrap()
         .warnings[0]
         .message
         .contains("use '$response.body#/status'"));

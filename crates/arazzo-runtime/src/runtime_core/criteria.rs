@@ -1,4 +1,5 @@
 use super::*;
+use arazzo_expr::BodySlot;
 use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
@@ -11,9 +12,30 @@ pub(crate) struct CriterionEvaluation {
     pub context_expr: String,
     pub context_value: Value,
     pub error: Option<String>,
+    /// The criterion read a value that exists but cannot be read. It fails,
+    /// and its step fails with this text under `RUNTIME_VALUE_UNAVAILABLE`
+    /// rather than the generic criteria failure.
+    pub unavailable: Option<String>,
     pub warnings: Vec<arazzo_expr::ExpressionWarning>,
 }
 
+impl CriterionEvaluation {
+    pub(crate) fn unavailable_error(&self, site: &str) -> Option<RuntimeError> {
+        self.unavailable
+            .as_ref()
+            .map(|unavailable| RuntimeError::value_unavailable(site, unavailable))
+    }
+}
+
+struct Unreadable(String);
+
+impl From<arazzo_expr::ValueUnavailable> for Unreadable {
+    fn from(unavailable: arazzo_expr::ValueUnavailable) -> Self {
+        Self(unavailable.to_string())
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn evaluate_criterion(
     criterion: &SuccessCriterion,
     eval: &ExpressionEvaluator,
@@ -29,10 +51,41 @@ pub(crate) fn evaluate_criterion_detailed(
     response: Option<&Response>,
     regex_cache: &RegexCache,
 ) -> CriterionEvaluation {
-    let type_name = criterion.resolved_type_name();
-    let mut expr_warnings = Vec::new();
-    let prepared_condition = if matches!(type_name.as_str(), "regex" | "jsonpath" | "xpath") {
-        prepare_typed_condition(&criterion.condition, eval, &mut expr_warnings)
+    let mut evaluation = CriterionEvaluation {
+        type_name: criterion.resolved_type_name(),
+        type_version: criterion.declared_type_version().map(ToString::to_string),
+        condition: criterion.condition.clone(),
+        condition_result: false,
+        matched: false,
+        context_expr: criterion.context.clone(),
+        context_value: Value::Null,
+        error: None,
+        unavailable: None,
+        warnings: Vec::new(),
+    };
+    match criterion_holds(criterion, eval, response, regex_cache, &mut evaluation) {
+        Ok(holds) => {
+            evaluation.condition_result = holds;
+            evaluation.matched = holds;
+        }
+        Err(Unreadable(unavailable)) => {
+            evaluation.error = Some(unavailable.clone());
+            evaluation.unavailable = Some(unavailable);
+        }
+    }
+    evaluation
+}
+
+fn criterion_holds(
+    criterion: &SuccessCriterion,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+    regex_cache: &RegexCache,
+    record: &mut CriterionEvaluation,
+) -> Result<bool, Unreadable> {
+    let typed = matches!(record.type_name.as_str(), "regex" | "jsonpath" | "xpath");
+    let prepared_condition = if typed {
+        prepare_typed_condition(&criterion.condition, eval, &mut record.warnings)?
     } else {
         Ok(Cow::Borrowed(criterion.condition.as_str()))
     };
@@ -42,32 +95,33 @@ pub(crate) fn evaluate_criterion_detailed(
     // reported even when the context turns out to be null, and a predicate
     // that would short-circuit cannot hide a malformed remainder.
     let prepared_jsonpath = prepared_condition.as_ref().ok().and_then(|condition| {
-        (type_name == "jsonpath").then(|| {
+        (record.type_name == "jsonpath").then(|| {
             arazzo_expr::JsonPathQuery::parse(condition, criterion.declared_type_version())
         })
     });
-    let mut context_value = if criterion.context.trim().is_empty() {
-        default_criterion_context(response)
+    record.context_value = if !criterion.context.trim().is_empty() {
+        let (value, warnings) = eval.evaluate_with_diagnostics(&criterion.context)?;
+        record.warnings.extend(warnings);
+        value
+    } else if typed {
+        default_criterion_context(response)?
     } else {
-        let (val, warnings) = eval.evaluate_with_diagnostics(&criterion.context);
-        expr_warnings.extend(warnings);
-        val
+        Value::Null
     };
-    let mut error = None;
 
-    let condition_result = match (prepared_condition, prepared_jsonpath) {
+    Ok(match (prepared_condition, prepared_jsonpath) {
         (Err(message), _) => {
-            error = Some(message);
+            record.error = Some(message);
             false
         }
         (Ok(_), Some(prepared)) => {
             let decision = prepared.and_then(|query| {
                 // §5.8.11.4.3: a null or undefined context MUST fail. This is the
                 // spec's own rule, not an error, so it carries no diagnostic.
-                if context_value.is_null() {
+                if record.context_value.is_null() {
                     Ok(false)
                 } else {
-                    jsonpath_condition_holds(&query, &context_value)
+                    jsonpath_condition_holds(&query, &record.context_value)
                 }
             });
             match decision {
@@ -77,11 +131,11 @@ pub(crate) fn evaluate_criterion_detailed(
                     // The detailed error feeds the debugger locals; the single
                     // warning rides the existing nested/enclosing trace channels.
                     let message = err.to_string();
-                    expr_warnings.push(arazzo_expr::ExpressionWarning {
+                    record.warnings.push(arazzo_expr::ExpressionWarning {
                         expression: criterion.condition.clone(),
                         message: message.clone(),
                     });
-                    error = Some(message);
+                    record.error = Some(message);
                     false
                 }
             }
@@ -89,16 +143,16 @@ pub(crate) fn evaluate_criterion_detailed(
         (Ok(condition), None) => {
             // `prepared_jsonpath` is `Some` for every jsonpath criterion, so no
             // "jsonpath" arm belongs here.
-            match type_name.as_str() {
+            match record.type_name.as_str() {
                 "regex" => {
-                    if context_value.is_null() {
+                    if record.context_value.is_null() {
                         false
                     } else {
-                        let context_text = value_to_string(&context_value);
+                        let context_text = value_to_string(&record.context_value);
                         match regex_cache.is_match(&condition, &context_text) {
                             Ok(matched) => matched,
                             Err(err) => {
-                                error = Some(format!("invalid regex: {err}"));
+                                record.error = Some(format!("invalid regex: {err}"));
                                 false
                             }
                         }
@@ -107,18 +161,17 @@ pub(crate) fn evaluate_criterion_detailed(
                 "xpath" => {
                     // §5.8.11.4.4: a null/undefined context MUST fail the criterion,
                     // same as the jsonpath arm. No fallback to the raw response body:
-                    // eval_context resolves $response.body to the raw text for
-                    // XML/non-JSON responses (strict UTF-8 — an undecodable body
-                    // yields null and fails closed here), so a null context means the
-                    // expression resolved to nothing to evaluate against.
-                    if context_value.is_null() {
+                    // a null context means the expression resolved to nothing to
+                    // evaluate against, and a body that cannot be read as text has
+                    // already failed the criterion as unavailable.
+                    if record.context_value.is_null() {
                         false
                     } else {
-                        let xml_text = match &context_value {
+                        let xml_text = match &record.context_value {
                             Value::String(text) => text.clone(),
                             other => other.to_string(),
                         };
-                        context_value = Value::String(xml_text.clone());
+                        record.context_value = Value::String(xml_text.clone());
                         // The declared version routes the evaluation (ac-46638): only
                         // explicit `xpath-10` reaches the engine; the omitted form and
                         // every other version fail the criterion with an error before
@@ -134,38 +187,34 @@ pub(crate) fn evaluate_criterion_detailed(
                             // non-empty strings and must still fail.
                             Ok(selection) => selection.truthy,
                             Err(message) => {
-                                error = Some(message);
+                                record.error = Some(message);
                                 false
                             }
                         }
                     }
                 }
                 _ => {
-                    let evaluation = eval.evaluate_condition_detailed(&criterion.condition);
-                    expr_warnings.extend(evaluation.warnings);
-                    error = evaluation.error.map(|error| {
-                        format!(
-                            "invalid simple condition at byte {}: {}",
-                            error.byte_offset, error.message
-                        )
-                    });
-                    evaluation.result
+                    let outcome = eval.evaluate_condition_detailed(&criterion.condition);
+                    record.warnings.extend(outcome.warnings);
+                    match outcome.error {
+                        Some(error)
+                            if error.kind == arazzo_expr::ConditionErrorKind::ValueUnavailable =>
+                        {
+                            return Err(Unreadable(error.message));
+                        }
+                        Some(error) => {
+                            record.error = Some(format!(
+                                "invalid simple condition at byte {}: {}",
+                                error.byte_offset, error.message
+                            ));
+                        }
+                        None => {}
+                    }
+                    outcome.result
                 }
             }
         }
-    };
-
-    CriterionEvaluation {
-        type_name,
-        type_version: criterion.declared_type_version().map(ToString::to_string),
-        condition: criterion.condition.clone(),
-        condition_result,
-        matched: condition_result,
-        context_expr: criterion.context.clone(),
-        context_value,
-        error,
-        warnings: expr_warnings,
-    }
+    })
 }
 
 /// Typed conditions use brace-only interpolation; native dollar syntax and
@@ -174,11 +223,11 @@ fn prepare_typed_condition<'a>(
     condition: &'a str,
     eval: &ExpressionEvaluator,
     warnings: &mut Vec<arazzo_expr::ExpressionWarning>,
-) -> Result<Cow<'a, str>, String> {
+) -> Result<Result<Cow<'a, str>, String>, Unreadable> {
     if !condition.contains("{$") {
-        return Ok(Cow::Borrowed(condition));
+        return Ok(Ok(Cow::Borrowed(condition)));
     }
-    let (value, substitution_warnings) = eval.resolve_value_with_diagnostics(condition);
+    let (value, substitution_warnings) = eval.resolve_value_with_diagnostics(condition)?;
     if !substitution_warnings.is_empty() {
         let details = substitution_warnings
             .iter()
@@ -186,27 +235,29 @@ fn prepare_typed_condition<'a>(
             .collect::<Vec<_>>()
             .join("; ");
         warnings.extend(substitution_warnings);
-        return Err(format!("typed condition interpolation failed: {details}"));
+        return Ok(Err(format!(
+            "typed condition interpolation failed: {details}"
+        )));
     }
-    match value {
+    Ok(match value {
         Value::String(text) => Ok(Cow::Owned(text)),
         _ => Err("typed condition interpolation did not produce a string".to_owned()),
-    }
+    })
 }
 
 pub(crate) fn evaluate_output_expression_detailed(
     expr: &str,
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+) -> Result<(Value, Vec<arazzo_expr::ExpressionWarning>), arazzo_expr::ValueUnavailable> {
     let (value, warnings, _) = evaluate_provenanced_output(
         &OutputValue::RuntimeExpression(expr.to_owned()),
         eval,
         response,
         &VarStore::default(),
         None,
-    );
-    (value, warnings)
+    )?;
+    Ok((value, warnings))
 }
 
 fn evaluate_xpath_output(
@@ -262,7 +313,7 @@ pub(crate) fn evaluate_output_value_detailed(
     output: &OutputValue,
     eval: &ExpressionEvaluator,
     response: Option<&Response>,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>) {
+) -> Result<(Value, Vec<arazzo_expr::ExpressionWarning>), arazzo_expr::ValueUnavailable> {
     match output {
         OutputValue::RuntimeExpression(expression) => {
             evaluate_output_expression_detailed(expression, eval, response)
@@ -277,10 +328,21 @@ pub(super) fn evaluate_provenanced_output(
     response: Option<&Response>,
     vars: &VarStore,
     producer: Option<ValueProducer<'_>>,
-) -> (Value, Vec<arazzo_expr::ExpressionWarning>, ValueProvenance) {
+) -> Result<
+    (Value, Vec<arazzo_expr::ExpressionWarning>, ValueProvenance),
+    arazzo_expr::ValueUnavailable,
+> {
     let empty = ProvenancedValues::default();
-    match output {
+    Ok(match output {
         OutputValue::RuntimeExpression(expression) if expression.starts_with('/') => {
+            if let Some(BodySlot::Unavailable { reason }) =
+                response.map(super::eval_context::response_body)
+            {
+                return Err(arazzo_expr::ValueUnavailable {
+                    expression: expression.clone(),
+                    reason,
+                });
+            }
             let (value, warnings, unresolved) = evaluate_xpath_output(expression, response);
             let mut metadata = ValueProvenance {
                 unresolved,
@@ -304,7 +366,7 @@ pub(super) fn evaluate_provenanced_output(
             } else {
                 format!("$response.body.{}", to_json_path(expression))
             };
-            let result = eval.evaluate_with_provenance(&source);
+            let result = eval.evaluate_with_provenance(&source)?;
             let mut metadata = vars.expression_provenance(&result, &empty, producer);
             if !expression.starts_with('$') {
                 for origin in &mut metadata.skipped {
@@ -314,25 +376,22 @@ pub(super) fn evaluate_provenanced_output(
             (result.value, result.warnings, metadata)
         }
         OutputValue::Selector(selector) => {
-            let result = super::payload::resolve_selector_with_provenance(selector, eval);
+            let result = super::payload::resolve_selector_with_provenance(selector, eval)?;
             let metadata = vars.value_provenance(&result, &empty, producer);
             (result.value, result.warnings, metadata)
         }
-    }
+    })
 }
 
-fn default_criterion_context(response: Option<&Response>) -> Value {
-    match response {
-        Some(resp) => {
-            if let Some(json) = &resp.body_json {
-                json.clone()
-            } else if !resp.body.is_empty() {
-                Value::String(String::from_utf8_lossy(&resp.body).to_string())
-            } else {
-                Value::Null
-            }
+fn default_criterion_context(response: Option<&Response>) -> Result<Value, Unreadable> {
+    match response.map(super::eval_context::response_body) {
+        None | Some(BodySlot::Absent) => Ok(Value::Null),
+        Some(BodySlot::Present(value)) => Ok(value),
+        Some(BodySlot::Unavailable { reason }) => Err(arazzo_expr::ValueUnavailable {
+            expression: "$response.body".to_owned(),
+            reason,
         }
-        None => Value::Null,
+        .into()),
     }
 }
 
@@ -357,7 +416,8 @@ mod tests {
         });
 
         let (value, warnings) =
-            evaluate_output_expression_detailed("$inputs.user#/profile/email", &eval, None);
+            evaluate_output_expression_detailed("$inputs.user#/profile/email", &eval, None)
+                .unwrap_or_else(|unavailable| panic!("{unavailable}"));
 
         assert_eq!(value, json!("alice@example.com"));
         assert!(warnings.is_empty());
@@ -420,7 +480,7 @@ mod tests {
     #[test]
     fn jsonpath_syntax_error_fails_with_error_and_one_warning() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!({"a": true, "b": true})),
+            response_body: arazzo_expr::BodySlot::Present(json!({"a": true, "b": true})),
             ..EvalContext::default()
         });
         for condition in [
@@ -445,7 +505,7 @@ mod tests {
     #[test]
     fn jsonpath_errors_take_precedence_over_null_context() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(Value::Null),
+            response_body: arazzo_expr::BodySlot::Present(Value::Null),
             ..EvalContext::default()
         });
         let over_nested = format!("$[?{}@.a{}]", "@[?".repeat(8), "]".repeat(8));
@@ -477,7 +537,7 @@ mod tests {
     #[test]
     fn jsonpath_operational_failure_fails_under_negation_with_error() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!([{"value": "a"}])),
+            response_body: arazzo_expr::BodySlot::Present(json!([{"value": "a"}])),
             ..EvalContext::default()
         });
         let control = jsonpath_criterion("$response.body", "$[?match(@.value, 'a')]");
@@ -514,7 +574,7 @@ mod tests {
             redirects: Vec::new(),
         };
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!(xml)),
+            response_body: arazzo_expr::BodySlot::Present(json!(xml)),
             ..EvalContext::default()
         });
         let criterion = SuccessCriterion {
@@ -533,10 +593,10 @@ mod tests {
         assert!(evaluation.context_value.is_null());
     }
 
-    /// A body that is not valid UTF-8 never reaches `$response.body`
-    /// (eval_context decodes strictly), so an explicit context over it
-    /// resolves to null and the criterion fails closed per §5.8.11.4.4 —
-    /// it must not fall back to lossy-decoding the raw bytes.
+    /// A body that is neither JSON nor valid UTF-8 exists but cannot be read,
+    /// so `$response.body` is unavailable rather than null. An explicit
+    /// context over it and the default context both fail the criterion with
+    /// the unavailable diagnostic; nothing lossy-decodes the raw bytes.
     #[test]
     fn xpath_explicit_context_over_non_utf8_body_fails_closed() {
         // ISO-8859-1 XML: 0xE9 is `é` in Latin-1 but is not valid UTF-8.
@@ -551,26 +611,38 @@ mod tests {
             content_type: ContentType::Xml,
             redirects: Vec::new(),
         };
-        // Mirror engine wiring (state.rs eval_context): strict UTF-8
-        // decoding fails, so no $response.body value exists.
-        let decoded = String::from_utf8(response.body.clone()).ok();
-        assert!(decoded.is_none());
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: decoded.map(Value::String),
+            response_body: crate::runtime_core::eval_context::response_body(&response),
             ..EvalContext::default()
         });
-        let criterion = SuccessCriterion {
-            context: "$response.body".to_string(),
-            condition: "count(//pet)".to_string(),
-            type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
-            ..SuccessCriterion::default()
-        };
+        for context in ["$response.body", "$response.body#/pet", ""] {
+            let criterion = SuccessCriterion {
+                context: context.to_string(),
+                condition: "count(//pet)".to_string(),
+                type_: Some(arazzo_spec::CriterionType::Name("xpath".to_string())),
+                ..SuccessCriterion::default()
+            };
 
-        let evaluation =
-            evaluate_criterion_detailed(&criterion, &eval, Some(&response), &RegexCache::new());
+            let evaluation =
+                evaluate_criterion_detailed(&criterion, &eval, Some(&response), &RegexCache::new());
 
-        assert!(!evaluation.matched);
-        assert!(evaluation.context_value.is_null());
+            let expression = if context.is_empty() {
+                "$response.body"
+            } else {
+                context
+            };
+            let unavailable = format!("{expression}: response body is not valid UTF-8 text");
+            assert!(!evaluation.matched, "{context:?}");
+            assert!(!evaluation.condition_result, "{context:?}");
+            assert!(evaluation.warnings.is_empty(), "{context:?}");
+            assert_eq!(evaluation.unavailable.as_ref(), Some(&unavailable));
+            assert_eq!(evaluation.error.as_ref(), Some(&unavailable));
+            let Some(error) = evaluation.unavailable_error("successCriteria[0]") else {
+                panic!("{context:?}: an unavailable context must be a runtime error");
+            };
+            assert_eq!(error.code(), "RUNTIME_VALUE_UNAVAILABLE");
+            assert_eq!(error.message, format!("successCriteria[0]: {unavailable}"));
+        }
     }
 
     /// §5.8.11.4.3 states the same null-context rule for JSONPath; the
@@ -580,7 +652,7 @@ mod tests {
     #[test]
     fn jsonpath_null_context_fails() {
         let present_null = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(Value::Null),
+            response_body: arazzo_expr::BodySlot::Present(Value::Null),
             ..EvalContext::default()
         });
         let absent = ExpressionEvaluator::new(EvalContext::default());
@@ -620,7 +692,7 @@ mod tests {
             ..SuccessCriterion::default()
         };
         let absent = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!("null")),
+            response_body: arazzo_expr::BodySlot::Present(json!("null")),
             ..EvalContext::default()
         });
         let evaluation = evaluate_criterion_detailed(&criterion, &absent, None, &RegexCache::new());
@@ -642,7 +714,7 @@ mod tests {
 
         let present = ExpressionEvaluator::new(EvalContext {
             response_headers: BTreeMap::from([("X-Expected".to_owned(), "ready".to_owned())]),
-            response_body: Some(json!("ready")),
+            response_body: arazzo_expr::BodySlot::Present(json!("ready")),
             ..EvalContext::default()
         });
         let evaluation =
@@ -655,7 +727,7 @@ mod tests {
     #[test]
     fn typed_interpolation_failures_preserve_detailed_errors_and_warnings() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!("ready")),
+            response_body: arazzo_expr::BodySlot::Present(json!("ready")),
             ..EvalContext::default()
         });
         for kind in ["regex", "jsonpath", "xpath"] {
@@ -703,7 +775,7 @@ mod tests {
     fn xpath_criteria_follow_the_spec_truth_table() {
         let xml = "<root><pets><pet>dog</pet></pets><empty/></root>";
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!(xml)),
+            response_body: arazzo_expr::BodySlot::Present(json!(xml)),
             ..EvalContext::default()
         });
         let cache = RegexCache::new();
@@ -743,7 +815,7 @@ mod tests {
     #[test]
     fn xpath_criterion_without_explicit_version_10_fails_with_error() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!("<root><pet>dog</pet></root>")),
+            response_body: arazzo_expr::BodySlot::Present(json!("<root><pet>dog</pet></root>")),
             ..EvalContext::default()
         });
         let criterion = SuccessCriterion {
@@ -775,7 +847,7 @@ mod simple_condition_adapter_tests {
     #[test]
     fn detailed_simple_errors_have_exact_text_and_no_synthetic_warning() {
         let evaluator = ExpressionEvaluator::new(EvalContext {
-            response_body: Some(json!({"nil":null})),
+            response_body: arazzo_expr::BodySlot::Present(json!({"nil":null})),
             ..EvalContext::default()
         });
         let cache = RegexCache::new();

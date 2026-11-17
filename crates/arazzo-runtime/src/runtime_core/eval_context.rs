@@ -1,3 +1,5 @@
+use arazzo_expr::BodySlot;
+
 use super::*;
 
 pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalContext {
@@ -10,12 +12,27 @@ pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalCon
     if let Some(resp) = response {
         ctx.status_code = Some(resp.status_code);
         ctx.response_headers = resp.headers.clone();
-        ctx.response_body = resp
-            .body_json
-            .clone()
-            .or_else(|| String::from_utf8(resp.body.clone()).ok().map(Value::String));
+        ctx.response_body = response_body(resp);
+    }
+    #[cfg(test)]
+    if let Some(reason) = &vars.unreadable_response_body {
+        ctx.response_body = BodySlot::Unavailable {
+            reason: reason.clone(),
+        };
     }
     ctx
+}
+
+pub(super) fn response_body(response: &Response) -> BodySlot {
+    if let Some(json) = &response.body_json {
+        return BodySlot::Present(json.clone());
+    }
+    match std::str::from_utf8(&response.body) {
+        Ok(text) => BodySlot::Present(Value::String(text.to_owned())),
+        Err(_) => BodySlot::Unavailable {
+            reason: "response body is not valid UTF-8 text".to_owned(),
+        },
+    }
 }
 
 pub(super) fn base(engine: &Engine, vars: &VarStore, response: Option<&Response>) -> EvalContext {
@@ -41,7 +58,7 @@ pub(super) fn post_request(
     ctx.request_headers = prep.headers.clone();
     ctx.request_query = prep.url_result.query_params.clone();
     ctx.request_path = prep.url_result.path_params.clone();
-    ctx.request_body = prep.body_json.clone();
+    ctx.request_body = prep.body_json.clone().into();
     ctx
 }
 
@@ -68,17 +85,27 @@ mod tests {
     }
 
     #[test]
-    fn response_overlay_preserves_absence_json_text_and_invalid_utf8() {
+    fn response_overlay_preserves_absence_json_text_and_marks_invalid_utf8_unavailable() {
         let engine = engine();
         let vars = VarStore::default();
         let absent = base(&engine, &vars, None);
         assert_eq!(absent.status_code, None);
-        assert_eq!(absent.response_body, None);
+        assert_eq!(absent.response_body, BodySlot::Absent);
         assert!(absent.response_headers.is_empty());
         for (body, body_json, expected) in [
-            (b"raw".to_vec(), Some(Value::Null), Some(Value::Null)),
-            (b"<xml/>".to_vec(), None, Some(json!("<xml/>"))),
-            (vec![255], None, None),
+            (
+                b"raw".to_vec(),
+                Some(Value::Null),
+                BodySlot::Present(Value::Null),
+            ),
+            (b"<xml/>".to_vec(), None, BodySlot::Present(json!("<xml/>"))),
+            (
+                vec![255],
+                None,
+                BodySlot::Unavailable {
+                    reason: "response body is not valid UTF-8 text".to_owned(),
+                },
+            ),
         ] {
             let response = Response {
                 status_code: 201,

@@ -87,6 +87,23 @@ impl<'a> RequestAdmission<'a> {
         self
     }
 
+    pub(super) fn resolve(
+        &self,
+        value: &ValueSource,
+        eval: &ExpressionEvaluator,
+        location: &str,
+    ) -> Result<payload::ResolvedValueSource, RuntimeError> {
+        payload::resolve_value_source_with_provenance(value, eval).map_err(|unavailable| {
+            RuntimeError::new(
+                RuntimeErrorKind::ValueUnavailable,
+                format!(
+                    "step {:?}: {location}: {unavailable}; request not sent",
+                    self.step_id
+                ),
+            )
+        })
+    }
+
     pub(super) fn project(
         &self,
         result: &payload::ResolvedValueSource,

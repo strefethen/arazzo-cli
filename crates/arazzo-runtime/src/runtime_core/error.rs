@@ -82,6 +82,10 @@ pub enum RuntimeErrorKind {
     /// A received record could not become `$message.*`: its value is not
     /// JSON or a header value is not UTF-8.
     MessageMalformed,
+    /// An expression references a value that exists but cannot be read where
+    /// it is used. The reference is never resolved to `null`: the step fails,
+    /// and a request whose preparation reads the value is not sent.
+    ValueUnavailable,
 }
 
 impl RuntimeErrorKind {
@@ -135,6 +139,7 @@ impl RuntimeErrorKind {
             Self::MessageTransport => "RUNTIME_MESSAGE_TRANSPORT",
             Self::MessageReceiveTimeout => "RUNTIME_MESSAGE_RECEIVE_TIMEOUT",
             Self::MessageMalformed => "RUNTIME_MESSAGE_MALFORMED",
+            Self::ValueUnavailable => "RUNTIME_VALUE_UNAVAILABLE",
         }
     }
 
@@ -185,6 +190,13 @@ impl RuntimeError {
 
     pub fn unspecified(message: impl Into<String>) -> Self {
         Self::new(RuntimeErrorKind::Unspecified, message)
+    }
+
+    pub(crate) fn value_unavailable(site: &str, unavailable: impl std::fmt::Display) -> Self {
+        Self::new(
+            RuntimeErrorKind::ValueUnavailable,
+            format!("{site}: {unavailable}"),
+        )
     }
 
     pub fn code(&self) -> &'static str {
