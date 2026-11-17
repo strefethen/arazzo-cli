@@ -690,8 +690,14 @@ pub(super) fn insert_response_locals(locals: &mut BTreeMap<String, Value>, respo
     locals.insert("responseHeaders".to_string(), json!(response.headers));
 
     if !response.body.is_empty() {
-        let raw = String::from_utf8_lossy(&response.body).to_string();
-        locals.insert("responseBodyRaw".to_string(), Value::String(raw.clone()));
+        let raw = match &response.body_value {
+            arazzo_expr::BodySlot::Present(value) => match value.as_ref() {
+                Value::String(text) => text.clone(),
+                _ => String::from_utf8_lossy(&response.body).into_owned(),
+            },
+            _ => String::from_utf8_lossy(&response.body).into_owned(),
+        };
+        locals.insert("responseBodyRaw".to_string(), Value::String(raw));
 
         let max = TRACE_BODY_PREVIEW_MAX_BYTES.min(response.body.len());
         let mut preview = String::from_utf8_lossy(&response.body[..max]).to_string();

@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod effective_step;
+pub mod media_type;
 mod operation_id;
 mod operation_path;
 mod selector_admission;

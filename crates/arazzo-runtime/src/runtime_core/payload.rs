@@ -1,4 +1,5 @@
 use arazzo_expr::JsonPathQuery;
+use arazzo_spec::media_type;
 
 use super::*;
 
@@ -314,7 +315,7 @@ fn resolve_non_jsonpath_selector(
             if let Some(rejection) = xpath_version_rejection(version) {
                 Err(rejection)
             } else if let Value::String(xml) = context {
-                select_xpath(xml.as_bytes(), &selector.selector, version).and_then(|selection| {
+                select_xpath(xml, &selector.selector, version).and_then(|selection| {
                     selection.value.map(|value| (value, selection.match_count))
                 })
             } else {
@@ -605,10 +606,9 @@ fn apply_replacements_resolved(
 /// project rule (ac-bd441) they keep the pre-existing behavior — string
 /// payloads dispatch to XPath, structured payloads to JSON Pointer.
 fn infer_target_kind(body: &Value, content_type: &str) -> TargetKind {
-    let normalized = content_type.to_ascii_lowercase();
-    if normalized.contains("json") {
+    if media_type::is_json(content_type) {
         TargetKind::JsonPointer
-    } else if normalized.contains("xml") || matches!(body, Value::String(_)) {
+    } else if media_type::is_xml(content_type) || matches!(body, Value::String(_)) {
         TargetKind::XPath
     } else {
         TargetKind::JsonPointer

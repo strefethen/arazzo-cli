@@ -237,7 +237,7 @@ mod tests {
             status_code: 429,
             headers: BTreeMap::new(),
             body: Vec::new(),
-            body_json: None,
+            body_value: arazzo_expr::BodySlot::Absent,
             content_type: ContentType::Json,
             redirects: Vec::new(),
         };
@@ -267,7 +267,7 @@ mod tests {
             status_code: 200,
             headers: BTreeMap::new(),
             body: br#"{"pets":[{"id":1}]}"#.to_vec(),
-            body_json: Some(json!({"pets":[{"id":1}]})),
+            body_value: arazzo_expr::BodySlot::present(json!({"pets":[{"id":1}]})),
             content_type: ContentType::Json,
             redirects: Vec::new(),
         };

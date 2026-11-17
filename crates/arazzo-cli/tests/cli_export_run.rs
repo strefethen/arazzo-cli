@@ -893,7 +893,10 @@ fn retries_nested_workflows_and_redaction_keep_order_and_identity() {
             (
                 if n == 0 { 503 } else { 200 },
                 "{\"token\":\"secret\",\"value\":7}".into(),
-                vec![("X-Api-Key", "server-secret".into())],
+                vec![
+                    ("X-Api-Key", "server-secret".into()),
+                    ("Content-Type", "application/json".into()),
+                ],
             )
         } else {
             (200, "{}".into(), vec![])

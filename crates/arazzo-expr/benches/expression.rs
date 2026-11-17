@@ -76,7 +76,7 @@ fn rich_context() -> EvalContext {
         self_uri: None,
         source_descriptions: BTreeMap::new().into(),
         response_headers,
-        response_body: arazzo_expr::BodySlot::Present(json!({
+        response_body: arazzo_expr::BodySlot::present(json!({
             "data": {
                 "user": {
                     "id": 42,
@@ -277,7 +277,7 @@ fn bench_path_depth_scaling(c: &mut Criterion) {
         let expr = format!("$response.body#/{path}");
 
         let ctx = EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(nested),
+            response_body: arazzo_expr::BodySlot::present(nested),
             ..Default::default()
         };
         let eval = ExpressionEvaluator::new(ctx);

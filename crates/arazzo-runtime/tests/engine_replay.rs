@@ -61,7 +61,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
         response: Some(TraceResponse {
             status_code: 200,
             content_type: ContentType::Json,
-            headers: BTreeMap::new(),
+            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body_bytes: 14,
             body_preview: Some(r#"{"value":"ok"}"#.to_string()),
             body: Some(r#"{"value":"ok"}"#.to_string()),
@@ -93,6 +93,44 @@ async fn replay_executes_without_live_network() {
     };
 
     assert_eq!(outputs.get("final"), Some(&json!("ok")));
+}
+
+#[tokio::test]
+async fn replay_classifies_the_recorded_body_like_a_live_response() {
+    let mut untyped = replay_trace("https://replay.invalid/items");
+    let mut lossy = replay_trace("https://replay.invalid/items");
+    if let Some(response) = untyped[0].response.as_mut() {
+        response.headers.clear();
+    }
+    if let Some(response) = lossy[0].response.as_mut() {
+        response.body_lossy = true;
+    }
+    let cases = [
+        (
+            untyped,
+            "response has no Content-Type header, so its body is bytes, which is not yet a readable value",
+        ),
+        (
+            lossy,
+            "replay trace recorded the response body lossily at seq 1, so its exact text is unknown",
+        ),
+    ];
+    for (trace, reason) in cases {
+        let engine = match common::fixture_engine_builder(replay_spec())
+            .trace(true)
+            .replay_trace_steps(trace)
+            .build()
+        {
+            Ok(engine) => engine,
+            Err(err) => panic!("building replay engine: {err}"),
+        };
+        let err = match engine.execute_collect("wf", BTreeMap::new()).await.outputs {
+            Ok(outputs) => panic!("expected an unavailable body, got outputs: {outputs:?}"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind, RuntimeErrorKind::ValueUnavailable, "{err}");
+        assert!(err.message.ends_with(reason), "{err}");
+    }
 }
 
 #[tokio::test]
@@ -167,7 +205,7 @@ async fn replay_uses_full_body_not_truncated_preview() {
         response: Some(TraceResponse {
             status_code: 200,
             content_type: ContentType::Json,
-            headers: BTreeMap::new(),
+            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body_bytes: full_body.len() as u64,
             body_preview: Some(preview),
             body: Some(full_body.clone()),

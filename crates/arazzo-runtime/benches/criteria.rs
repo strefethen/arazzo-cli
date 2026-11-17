@@ -11,7 +11,7 @@ fn bench_evaluator() -> ExpressionEvaluator {
         inputs: BTreeMap::from([("userId".to_string(), json!(42))]).into(),
         status_code: Some(200),
         method: Some("GET".to_string()),
-        response_body: arazzo_expr::BodySlot::Present(json!({
+        response_body: arazzo_expr::BodySlot::present(json!({
             "data": { "id": 42, "name": "Alice", "active": true }
         })),
         response_headers: BTreeMap::from([(

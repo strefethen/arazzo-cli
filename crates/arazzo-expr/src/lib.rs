@@ -113,7 +113,7 @@ pub enum BodySlot {
     /// No body exists; a reference resolves missing.
     #[default]
     Absent,
-    Present(Value),
+    Present(Arc<Value>),
     /// A body exists but cannot be read as a JSON value; every reference to it,
     /// whole or through a pointer, is a [`ValueUnavailable`] error.
     Unavailable {
@@ -121,15 +121,21 @@ pub enum BodySlot {
     },
 }
 
+impl BodySlot {
+    pub fn present(value: Value) -> Self {
+        Self::Present(Arc::new(value))
+    }
+}
+
 impl From<Value> for BodySlot {
     fn from(value: Value) -> Self {
-        Self::Present(value)
+        Self::present(value)
     }
 }
 
 impl From<Option<Value>> for BodySlot {
     fn from(value: Option<Value>) -> Self {
-        value.map_or(Self::Absent, Self::Present)
+        value.map_or(Self::Absent, Self::present)
     }
 }
 
@@ -307,7 +313,7 @@ mod tests {
     #[test]
     fn resolved_evaluation_preserves_absence_and_explicit_null() {
         let evaluator = super::ExpressionEvaluator::new(super::EvalContext {
-            response_body: super::BodySlot::Present(
+            response_body: super::BodySlot::present(
                 serde_json::json!({"features": [], "explicitNull": null, "value": 7}),
             ),
             ..Default::default()
@@ -404,7 +410,7 @@ mod tests {
     fn evaluate_response_fields() {
         let mut ctx = EvalContext {
             status_code: Some(404),
-            response_body: super::BodySlot::Present(json!({
+            response_body: super::BodySlot::present(json!({
                 "user": {"name": "Bob"},
                 "arr": [{"id": 7}],
                 "users": [
@@ -604,7 +610,7 @@ mod tests {
             idx in 0usize..25usize,
         ) {
             let eval = ExpressionEvaluator::new(EvalContext {
-                response_body: super::BodySlot::Present(json!({"arr": values.clone()})),
+                response_body: super::BodySlot::present(json!({"arr": values.clone()})),
                 ..EvalContext::default()
             });
 
@@ -782,7 +788,7 @@ mod tests {
     #[test]
     fn evaluate_response_body_json_pointer() {
         let ctx = EvalContext {
-            response_body: super::BodySlot::Present(json!({
+            response_body: super::BodySlot::present(json!({
                 "data": [{"name": "Alice"}, {"name": "Bob"}],
                 "meta": {"total": 2}
             })),

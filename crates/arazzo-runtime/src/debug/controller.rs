@@ -560,7 +560,7 @@ fn evaluate_watch_expression_from_state(
             .ok_or_else(|| {
                 format!("cannot evaluate XPath {trimmed:?}: this frame has no response body")
             })?;
-        let selection = select_xpath(body.as_bytes(), trimmed, Some("xpath-10"))
+        let selection = select_xpath(body, trimmed, Some("xpath-10"))
             .map_err(|err| format!("cannot evaluate XPath {trimmed:?}: {err}"))?;
         if selection.match_count == 0 {
             return Err(format!(
@@ -716,7 +716,7 @@ mod output_diagnostic_tests {
                 .locals
                 .insert("outputExpression".into(), json!(expression));
             let context = EvalContext {
-                response_body: arazzo_expr::BodySlot::Present(json!({"features": []})),
+                response_body: arazzo_expr::BodySlot::present(json!({"features": []})),
                 ..Default::default()
             };
             worker_controller.gate_step(
@@ -760,7 +760,7 @@ mod output_diagnostic_tests {
             .locals
             .insert("outputExpression".to_owned(), json!(expression));
         let mut context = EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!({"features": []})),
+            response_body: arazzo_expr::BodySlot::present(json!({"features": []})),
             ..Default::default()
         };
         controller
@@ -796,7 +796,7 @@ mod output_diagnostic_tests {
             .unwrap_or_else(|err| panic!("preview failed: {err}")));
 
         for value in [Value::Null, json!("Flood Warning")] {
-            context.response_body = arazzo_expr::BodySlot::Present(
+            context.response_body = arazzo_expr::BodySlot::present(
                 json!({"features": [{"properties": {"event": value}}]}),
             );
             controller

@@ -11,8 +11,8 @@ use super::*;
 
 fn evaluator() -> ExpressionEvaluator {
     let mut context = EvalContext {
-        request_body: arazzo_expr::BodySlot::Present(json!({"present": null})),
-        response_body: arazzo_expr::BodySlot::Present(json!({"present": null})),
+        request_body: arazzo_expr::BodySlot::present(json!({"present": null})),
+        response_body: arazzo_expr::BodySlot::present(json!({"present": null})),
         inputs: BTreeMap::from([
             (
                 "document".into(),

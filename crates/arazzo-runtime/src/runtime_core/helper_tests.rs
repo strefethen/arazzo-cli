@@ -55,7 +55,7 @@ fn evaluate_criterion_modes() {
     let cache = RegexCache::new();
     let eval = ExpressionEvaluator::new(EvalContext {
         status_code: Some(200),
-        response_body: arazzo_expr::BodySlot::Present(json!({
+        response_body: arazzo_expr::BodySlot::present(json!({
             "name":"alice",
             "ok":true,
             "pets":[{"id":1}],
@@ -120,7 +120,7 @@ fn evaluate_criterion_xpath_uses_context_and_condition() {
         status_code: 200,
         headers: BTreeMap::new(),
         body: xml.as_bytes().to_vec(),
-        body_json: None,
+        body_value: arazzo_expr::BodySlot::present(Value::String(xml.to_string())),
         content_type: ContentType::Xml,
         redirects: Vec::new(),
     };
@@ -128,7 +128,7 @@ fn evaluate_criterion_xpath_uses_context_and_condition() {
     // $response.body as raw text. A null context must fail per §5.8.11.4.4,
     // so the context expression has to resolve for this criterion to pass.
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(Value::String(xml.to_string())),
+        response_body: arazzo_expr::BodySlot::present(Value::String(xml.to_string())),
         ..EvalContext::default()
     });
 
@@ -215,7 +215,7 @@ fn extract_step_refs_and_control_flow() {
 fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
     let cache = RegexCache::new();
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(json!({"items": [{"type": "foo)bar"}]})),
+        response_body: arazzo_expr::BodySlot::present(json!({"items": [{"type": "foo)bar"}]})),
         ..EvalContext::default()
     });
 
@@ -237,7 +237,7 @@ fn evaluate_jsonpath_count_predicate_handles_quotes_bug() {
 fn evaluate_jsonpath_count_predicate_counts_nodelist_cardinality() {
     let cache = RegexCache::new();
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(json!({
+        response_body: arazzo_expr::BodySlot::present(json!({
             "items": [
                 {"type": "match", "name": "kept", "extra": true},
                 {"type": "other", "name": "skipped"}

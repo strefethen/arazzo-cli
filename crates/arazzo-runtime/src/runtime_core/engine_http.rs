@@ -337,7 +337,7 @@ impl Engine {
                 if super::form_body::is_form(ct) {
                     return super::form_body::encode(value);
                 }
-                if !ct.contains("json") {
+                if !arazzo_spec::media_type::is_json(ct) {
                     if let Value::String(s) = value {
                         return Ok(s.as_bytes().to_vec());
                     }
@@ -523,7 +523,7 @@ impl Engine {
             status_code: 200,
             headers: BTreeMap::new(),
             body: b"{}".to_vec(),
-            body_json: Some(json!({})),
+            body_value: arazzo_expr::BodySlot::present(json!({})),
             content_type: ContentType::Json,
             redirects: Vec::new(),
         };

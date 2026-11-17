@@ -48,8 +48,8 @@ fn evaluator() -> ExpressionEvaluator {
         message_headers: BTreeMap::from([("X-Id".to_owned(), "message".to_owned())]),
         request_query: BTreeMap::from([("q".to_owned(), "query".to_owned())]),
         request_path: BTreeMap::from([("id".to_owned(), "path".to_owned())]),
-        request_body: arazzo_expr::BodySlot::Present(body.clone()),
-        response_body: arazzo_expr::BodySlot::Present(body.clone()),
+        request_body: arazzo_expr::BodySlot::present(body.clone()),
+        response_body: arazzo_expr::BodySlot::present(body.clone()),
         message_payload: Some(body),
     })
 }

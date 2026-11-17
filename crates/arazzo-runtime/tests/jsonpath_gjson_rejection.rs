@@ -501,7 +501,7 @@ async fn gjson_replacement_targets_and_values_leave_the_body_unchanged() {
 #[test]
 fn runtime_expression_gjson_dot_path_extension_is_unchanged() {
     let evaluator = arazzo_expr::ExpressionEvaluator::new(arazzo_expr::EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(parse_json(BODY)),
+        response_body: arazzo_expr::BodySlot::present(parse_json(BODY)),
         ..Default::default()
     });
     for expression in [

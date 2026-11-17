@@ -68,7 +68,7 @@ mod tests {
 
     fn evaluator() -> ExpressionEvaluator {
         let mut context = EvalContext {
-            response_body: crate::BodySlot::Present(
+            response_body: crate::BodySlot::present(
                 json!({"items": [{"id": 7}], "status": "ready"}),
             ),
             ..EvalContext::default()

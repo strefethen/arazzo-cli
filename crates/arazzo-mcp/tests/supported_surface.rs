@@ -209,7 +209,13 @@ fn start_api() -> Api {
                 .map(|header| header.value.as_str().to_string())
                 .unwrap_or_default();
             seen.lock().unwrap().push(authorization);
-            let _ = request.respond(tiny_http::Response::from_string(r#"{"name":"widget"}"#));
+            let _ = request.respond(
+                tiny_http::Response::from_string(r#"{"name":"widget"}"#).with_header(
+                    "Content-Type: application/json"
+                        .parse::<tiny_http::Header>()
+                        .unwrap_or_else(|()| panic!("content type header")),
+                ),
+            );
         }
     });
     Api {

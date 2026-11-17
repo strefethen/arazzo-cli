@@ -69,7 +69,7 @@ fn dry_producer_mixed_failures_and_outgoing_response() {
     let vars = VarStore::default();
     let eval = ExpressionEvaluator::new(EvalContext {
         status_code: Some(200),
-        response_body: arazzo_expr::BodySlot::Present(json!({})),
+        response_body: arazzo_expr::BodySlot::present(json!({})),
         ..Default::default()
     });
     let producer = ValueProducer {
@@ -463,6 +463,11 @@ async fn retry_workflow_and_live_http_outputs_keep_metadata() {
                     request
                         .respond(
                             tiny_http::Response::from_string("{\"nil\":null}")
+                                .with_header(
+                                    "Content-Type: application/json"
+                                        .parse::<tiny_http::Header>()
+                                        .unwrap_or_else(|()| panic!("header")),
+                                )
                                 .with_status_code(status),
                         )
                         .unwrap_or_else(|error| panic!("response: {error}"));
@@ -547,7 +552,7 @@ async fn production_strict_child_defers_unknown_validation_to_request_consumptio
 fn skipped_producers_classify_only_their_transport_and_preserve_live_misses() {
     let vars = VarStore::default();
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(json!({})),
+        response_body: arazzo_expr::BodySlot::present(json!({})),
         message_payload: Some(json!({})),
         ..EvalContext::default()
     });
@@ -936,7 +941,7 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
         status_code: 200,
         headers: BTreeMap::new(),
         body: b"<root><id>1</id></root>".to_vec(),
-        body_json: None,
+        body_value: arazzo_expr::BodySlot::present(json!("<root><id>1</id></root>")),
         content_type: ContentType::Xml,
         redirects: Vec::new(),
     };
@@ -950,7 +955,7 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
         assert_eq!(metadata.unresolved, unresolved, "{expression}");
     }
     let eval = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(json!({"id":3})),
+        response_body: arazzo_expr::BodySlot::present(json!({"id":3})),
         ..Default::default()
     });
     let output = OutputValue::RuntimeExpression("id".into());

@@ -35,11 +35,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value is not sent. Checks that never read the body, such as
   `$statusCode == 200`, still pass. Missing values are unchanged: `null` plus
   a warning.
+- **`$response.body` follows the response's declared media type** — the
+  `Content-Type` is parsed once, case-insensitively, and decides how the body
+  is read. Nothing is sniffed from the content and nothing is decoded lossily.
+  `application/json` and every `+json` type (such as
+  `application/problem+json`) parse as JSON, read as UTF-8 with a leading byte
+  order mark ignored. XML types and `+xml` are a string decoded by `charset`,
+  else a byte order mark, else the XML declaration's `encoding`, else UTF-8.
+  `text/*`, `application/x-www-form-urlencoded` and any type carrying a
+  `charset` are a string decoded by that charset, UTF-8 if absent: `text/plain`
+  `123` stays the string `"123"`, and `text/plain; charset=iso-8859-1` decodes
+  correctly. Every other type, a missing `Content-Type` and an unparseable one
+  are bytes, which no expression can read yet. Reading a JSON body that does
+  not parse, a body in an unknown charset or with bytes invalid for it, or a
+  bytes body fails with `RUNTIME_VALUE_UNAVAILABLE` and the reason; checks that
+  never read the body, such as `$statusCode == 200`, still pass. An empty body,
+  including a 204, is missing (`null` with a warning). Charset labels resolve
+  through the WHATWG Encoding Standard table; its `replacement` labels (such as
+  `iso-2022-kr`) are rejected, a byte order mark that contradicts the charset
+  is an error, and `utf-16` without `le`/`be` needs a byte order mark. Replay
+  classifies recorded bodies the same way from the recorded headers, and a body
+  the trace stored lossily is unavailable. Traces and run exports record
+  `contentType` as the declared type, so a response without one is `""`, not
+  `json`. **Upgrade note:** an API that sends JSON without a `Content-Type`, or
+  labelled `text/plain`, no longer exposes it as JSON. A request `contentType`
+  that only contains the text `json` (such as `application/x-ndjson`) no longer
+  JSON-serializes a string payload; `application/json` and `+json` types are
+  unchanged.
 - **The default criterion context is `$response.body`** — a `regex`,
   `jsonpath` or `xpath` criterion with no `context` now evaluates over exactly
   what `$response.body` resolves to, so an undecodable body fails the criterion
-  with `RUNTIME_VALUE_UNAVAILABLE` instead of matching lossily decoded text,
-  and an empty body is the empty string rather than `null`. A `simple`
+  with `RUNTIME_VALUE_UNAVAILABLE` instead of matching lossily decoded text.
+  A `simple`
   criterion no longer builds a default context: the debugger's
   `criterionContextValue` is `null` for it, and the body stays available as
   `responseBodyRaw`.

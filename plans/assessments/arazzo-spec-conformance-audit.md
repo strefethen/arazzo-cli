@@ -834,6 +834,31 @@ charset) or lossy for undecodable bodies — lossy would extend degraded-mode
 decoding to every expression position, which is barred without explicit
 approval.
 
+**Follow-up closed — charset-aware, fail-closed decoding (2026-11-17,
+[ac-88a70](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-88a70)).**
+`$response.body` is now charset-aware and stays fail-closed; it never becomes
+lossy. One media-type parser (`arazzo_spec::media_type`) classifies every
+response (`runtime_core/response_body.rs`): JSON and `+json` parse as UTF-8;
+XML and `+xml` decode by `charset`, else a byte order mark, else the XML
+declaration's `encoding`, else UTF-8; `text/*`, form and any `charset`-bearing
+type decode by `charset`, UTF-8 if absent; everything else, including a
+missing or unparseable `Content-Type`, is bytes. An unknown label, bytes
+invalid for the charset, a JSON parse failure or a bytes body is unavailable
+(`RUNTIME_VALUE_UNAVAILABLE`) when referenced. Each row is a repository choice
+within §5.9's *"Whether a value is stored as a string or parsed structure
+depends on its content type. JSON responses and inputs are typically parsed
+into structures, while XML and plain text are typically stored as strings."*
+(`spec/arazzo/v1.1.0.html`); classifying an untyped body as bytes follows OAS
+3.2's *"Implementations MAY choose to offer media type sniffing ([SNIFF]) as an
+alternative, but this MUST NOT be the default behavior"*
+(`spec/oas/v3.2.0.html`). Default-context and explicit-context XPath criteria,
+and bare `//` outputs, select over the same decoded string, so ISO-8859-1 XML that
+declares its encoding (in `charset` or the XML declaration) now matches
+`count(//pet)` instead of failing.
+`xpath_explicit_context_over_non_utf8_body_fails_closed` still pins the
+fail-closed case: Latin-1 bytes under `application/xml` with no charset, BOM
+or declaration are invalid UTF-8 and unavailable.
+
 ### F23. Regex criterion null context coerced to `""`
 
 **Spec** (§5.8.11.4.2 Regex Conditions): *"If the `context` evaluates to

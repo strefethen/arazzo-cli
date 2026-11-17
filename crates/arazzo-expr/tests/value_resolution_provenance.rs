@@ -38,8 +38,8 @@ fn evaluator() -> ExpressionEvaluator {
         .into(),
         request_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
         response_headers: BTreeMap::from([("X-Empty".to_owned(), String::new())]),
-        request_body: arazzo_expr::BodySlot::Present(json!({"nil": null, "empty": ""})),
-        response_body: arazzo_expr::BodySlot::Present(json!({"nil": null, "empty": ""})),
+        request_body: arazzo_expr::BodySlot::present(json!({"nil": null, "empty": ""})),
+        response_body: arazzo_expr::BodySlot::present(json!({"nil": null, "empty": ""})),
         status_code: Some(200),
         ..EvalContext::default()
     })

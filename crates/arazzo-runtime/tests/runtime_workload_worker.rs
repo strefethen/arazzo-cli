@@ -548,9 +548,16 @@ fn completion_modes_preserve_outputs_and_result_only_has_no_fabricated_events() 
                 assert_eq!(request.url(), format!("/s0/op{i}"));
                 std::thread::park_timeout(std::time::Duration::from_millis(5));
                 request
-                    .respond(tiny_http::Response::from_data(
-                        fixtures::payload_bytes(i, 1024, 12).unwrap(),
-                    ))
+                    .respond(
+                        tiny_http::Response::from_data(
+                            fixtures::payload_bytes(i, 1024, 12).unwrap(),
+                        )
+                        .with_header(
+                            "Content-Type: application/json"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        ),
+                    )
                     .unwrap();
             }
         });

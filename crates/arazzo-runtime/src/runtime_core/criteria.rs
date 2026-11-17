@@ -176,11 +176,8 @@ fn criterion_holds(
                         // explicit `xpath-10` reaches the engine; the omitted form and
                         // every other version fail the criterion with an error before
                         // evaluation.
-                        match select_xpath(
-                            xml_text.as_bytes(),
-                            &condition,
-                            criterion.declared_type_version(),
-                        ) {
+                        match select_xpath(&xml_text, &condition, criterion.declared_type_version())
+                        {
                             // §5.8.11.4.4: the criterion passes on the effective boolean
                             // value of the raw XPath result, not on the truthiness of the
                             // normalized selection value — `false` and `0` stringify to
@@ -265,9 +262,14 @@ fn evaluate_xpath_output(
     response: Option<&Response>,
 ) -> (Value, Vec<arazzo_expr::ExpressionWarning>, bool) {
     if let Some(resp) = response {
-        // Bare `//…` outputs are a repository extension routed
-        // explicitly to XPath 1.0 (ac-46638).
-        return match select_xpath(&resp.body, expr, Some("xpath-10")) {
+        let selection = match &resp.body_value {
+            BodySlot::Present(body) => match body.as_ref() {
+                Value::String(xml) => select_xpath(xml, expr, Some("xpath-10")),
+                _ => Err("XPath output needs an XML text response body".to_owned()),
+            },
+            _ => Err("XPath output needs an XML text response body".to_owned()),
+        };
+        return match selection {
             Ok(selection) => {
                 let warnings = if selection.match_count > 0 {
                     Vec::new()
@@ -335,12 +337,10 @@ pub(super) fn evaluate_provenanced_output(
     let empty = ProvenancedValues::default();
     Ok(match output {
         OutputValue::RuntimeExpression(expression) if expression.starts_with('/') => {
-            if let Some(BodySlot::Unavailable { reason }) =
-                response.map(super::eval_context::response_body)
-            {
+            if let Some(BodySlot::Unavailable { reason }) = response.map(|resp| &resp.body_value) {
                 return Err(arazzo_expr::ValueUnavailable {
                     expression: expression.clone(),
-                    reason,
+                    reason: reason.clone(),
                 });
             }
             let (value, warnings, unresolved) = evaluate_xpath_output(expression, response);
@@ -384,12 +384,12 @@ pub(super) fn evaluate_provenanced_output(
 }
 
 fn default_criterion_context(response: Option<&Response>) -> Result<Value, Unreadable> {
-    match response.map(super::eval_context::response_body) {
+    match response.map(|resp| &resp.body_value) {
         None | Some(BodySlot::Absent) => Ok(Value::Null),
-        Some(BodySlot::Present(value)) => Ok(value),
+        Some(BodySlot::Present(value)) => Ok(value.as_ref().clone()),
         Some(BodySlot::Unavailable { reason }) => Err(arazzo_expr::ValueUnavailable {
             expression: "$response.body".to_owned(),
-            reason,
+            reason: reason.clone(),
         }
         .into()),
     }
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn jsonpath_syntax_error_fails_with_error_and_one_warning() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!({"a": true, "b": true})),
+            response_body: arazzo_expr::BodySlot::present(json!({"a": true, "b": true})),
             ..EvalContext::default()
         });
         for condition in [
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn jsonpath_errors_take_precedence_over_null_context() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(Value::Null),
+            response_body: arazzo_expr::BodySlot::present(Value::Null),
             ..EvalContext::default()
         });
         let over_nested = format!("$[?{}@.a{}]", "@[?".repeat(8), "]".repeat(8));
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn jsonpath_operational_failure_fails_under_negation_with_error() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!([{"value": "a"}])),
+            response_body: arazzo_expr::BodySlot::present(json!([{"value": "a"}])),
             ..EvalContext::default()
         });
         let control = jsonpath_criterion("$response.body", "$[?match(@.value, 'a')]");
@@ -569,12 +569,12 @@ mod tests {
             status_code: 200,
             headers: BTreeMap::new(),
             body: xml.as_bytes().to_vec(),
-            body_json: None,
+            body_value: arazzo_expr::BodySlot::present(json!(xml)),
             content_type: ContentType::Xml,
             redirects: Vec::new(),
         };
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!(xml)),
+            response_body: arazzo_expr::BodySlot::present(json!(xml)),
             ..EvalContext::default()
         });
         let criterion = SuccessCriterion {
@@ -603,16 +603,14 @@ mod tests {
         let mut body = b"<root><pet>caf".to_vec();
         body.push(0xE9);
         body.extend_from_slice(b"</pet></root>");
-        let response = Response {
-            status_code: 200,
-            headers: BTreeMap::new(),
+        let response = Response::decoded(
+            200,
+            BTreeMap::from([("content-type".to_owned(), "application/xml".to_owned())]),
             body,
-            body_json: None,
-            content_type: ContentType::Xml,
-            redirects: Vec::new(),
-        };
+            Vec::new(),
+        );
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: crate::runtime_core::eval_context::response_body(&response),
+            response_body: response.body_value.clone(),
             ..EvalContext::default()
         });
         for context in ["$response.body", "$response.body#/pet", ""] {
@@ -652,7 +650,7 @@ mod tests {
     #[test]
     fn jsonpath_null_context_fails() {
         let present_null = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(Value::Null),
+            response_body: arazzo_expr::BodySlot::present(Value::Null),
             ..EvalContext::default()
         });
         let absent = ExpressionEvaluator::new(EvalContext::default());
@@ -692,7 +690,7 @@ mod tests {
             ..SuccessCriterion::default()
         };
         let absent = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!("null")),
+            response_body: arazzo_expr::BodySlot::present(json!("null")),
             ..EvalContext::default()
         });
         let evaluation = evaluate_criterion_detailed(&criterion, &absent, None, &RegexCache::new());
@@ -714,7 +712,7 @@ mod tests {
 
         let present = ExpressionEvaluator::new(EvalContext {
             response_headers: BTreeMap::from([("X-Expected".to_owned(), "ready".to_owned())]),
-            response_body: arazzo_expr::BodySlot::Present(json!("ready")),
+            response_body: arazzo_expr::BodySlot::present(json!("ready")),
             ..EvalContext::default()
         });
         let evaluation =
@@ -727,7 +725,7 @@ mod tests {
     #[test]
     fn typed_interpolation_failures_preserve_detailed_errors_and_warnings() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!("ready")),
+            response_body: arazzo_expr::BodySlot::present(json!("ready")),
             ..EvalContext::default()
         });
         for kind in ["regex", "jsonpath", "xpath"] {
@@ -775,7 +773,7 @@ mod tests {
     fn xpath_criteria_follow_the_spec_truth_table() {
         let xml = "<root><pets><pet>dog</pet></pets><empty/></root>";
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!(xml)),
+            response_body: arazzo_expr::BodySlot::present(json!(xml)),
             ..EvalContext::default()
         });
         let cache = RegexCache::new();
@@ -815,7 +813,7 @@ mod tests {
     #[test]
     fn xpath_criterion_without_explicit_version_10_fails_with_error() {
         let eval = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!("<root><pet>dog</pet></root>")),
+            response_body: arazzo_expr::BodySlot::present(json!("<root><pet>dog</pet></root>")),
             ..EvalContext::default()
         });
         let criterion = SuccessCriterion {
@@ -847,7 +845,7 @@ mod simple_condition_adapter_tests {
     #[test]
     fn detailed_simple_errors_have_exact_text_and_no_synthetic_warning() {
         let evaluator = ExpressionEvaluator::new(EvalContext {
-            response_body: arazzo_expr::BodySlot::Present(json!({"nil":null})),
+            response_body: arazzo_expr::BodySlot::present(json!({"nil":null})),
             ..EvalContext::default()
         });
         let cache = RegexCache::new();

@@ -204,6 +204,7 @@ dependencies = [
  "arazzo-validate",
  "async-nats",
  "criterion",
+ "encoding_rs",
  "futures-util",
  "percent-encoding",
  "proptest",

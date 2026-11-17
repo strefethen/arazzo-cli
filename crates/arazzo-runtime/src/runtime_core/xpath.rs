@@ -64,13 +64,12 @@ pub(crate) fn xpath_version_rejection(version: Option<&str>) -> Option<String> {
 /// The document borrows the caller's bytes — both entry points return only
 /// owned values, so nothing forces a deep-cloned `'static` document.
 fn xpath_backend<'a>(
-    body: &'a [u8],
+    text: &'a str,
     version: Option<&str>,
 ) -> Result<(uppsala::Document<'a>, uppsala::XPathEvaluator), String> {
     if let Some(rejection) = xpath_version_rejection(version) {
         return Err(rejection);
     }
-    let text = std::str::from_utf8(body).map_err(|err| format!("XML is not UTF-8: {err}"))?;
     // Hostile nesting or DTD entities never reach the recursive parser (ac-d1649).
     super::xml_admission::admit_xml(text)?;
     let mut doc = uppsala::parse(text).map_err(|err| format!("invalid XML: {err}"))?;
@@ -92,7 +91,7 @@ fn xpath_backend<'a>(
 /// version in; owned EBV, normalized value, and cardinality out. No Uppsala
 /// state escapes this module.
 pub(crate) fn select_xpath(
-    body: &[u8],
+    body: &str,
     expr: &str,
     version: Option<&str>,
 ) -> Result<XPathSelection, String> {
@@ -140,7 +139,7 @@ pub(crate) fn replace_xpath(
     version: Option<&str>,
     replacement_text: &str,
 ) -> Result<String, String> {
-    let (mut doc, eval) = xpath_backend(xml.as_bytes(), version)?;
+    let (mut doc, eval) = xpath_backend(xml, version)?;
 
     let nodes = {
         let root = doc.root();
@@ -227,24 +226,31 @@ fn finite_number_value(n: f64) -> Result<Value, String> {
 /// (they previously stringified as `"inf"`/`"NaN"`).
 #[cfg(test)]
 pub(crate) fn extract_xpath(body: &[u8], expr: &str) -> Value {
-    select_xpath(body, expr, Some("xpath-10")).map_or(Value::Null, |selection| {
-        selection.value.unwrap_or(Value::Null)
-    })
+    std::str::from_utf8(body)
+        .map_err(|err| err.to_string())
+        .and_then(|text| select_xpath(text, expr, Some("xpath-10")))
+        .map_or(Value::Null, |selection| {
+            selection.value.unwrap_or(Value::Null)
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn text(xml: &[u8]) -> &str {
+        std::str::from_utf8(xml).unwrap_or_else(|err| panic!("fixture: {err}"))
+    }
+
     fn selected(xml: &[u8], xpath: &str) -> XPathSelection {
-        match select_xpath(xml, xpath, Some("xpath-10")) {
+        match select_xpath(text(xml), xpath, Some("xpath-10")) {
             Ok(selection) => selection,
             Err(error) => panic!("selecting {xpath:?}: {error}"),
         }
     }
 
     fn selection_error(xml: &[u8], xpath: &str) -> String {
-        match select_xpath(xml, xpath, Some("xpath-10")) {
+        match select_xpath(text(xml), xpath, Some("xpath-10")) {
             Ok(selection) => panic!("expected {xpath:?} to fail, got {selection:?}"),
             Err(error) => error,
         }
@@ -454,7 +460,7 @@ mod tests {
     /// evaluation; unknown tokens keep their invalid-metadata message.
     #[test]
     fn xpath_version_routing_rejects_everything_but_explicit_xpath_10() {
-        let xml: &[u8] = b"<items><item>one</item></items>";
+        let xml = "<items><item>one</item></items>";
 
         assert!(select_xpath(xml, "//item", Some("xpath-10")).is_ok());
 
@@ -482,7 +488,7 @@ mod tests {
 
         // Rejection happens before parsing: even invalid XML reports the
         // version problem, not a parse problem.
-        let before_parse = match select_xpath(b"<broken", "//item", None) {
+        let before_parse = match select_xpath("<broken", "//item", None) {
             Err(error) => error,
             Ok(selection) => panic!("omitted version must be rejected, got {selection:?}"),
         };

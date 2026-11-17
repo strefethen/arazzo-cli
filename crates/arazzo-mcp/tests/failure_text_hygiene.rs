@@ -105,6 +105,11 @@ fn start_echo_server(status: u16) -> EchoServer {
                         "token": BODY_CANARY,
                     });
                     let response = Response::from_string(body.to_string())
+                        .with_header(
+                            "Content-Type: application/json"
+                                .parse::<tiny_http::Header>()
+                                .unwrap_or_else(|()| panic!("content type header")),
+                        )
                         .with_status_code(StatusCode(status));
                     let _ = request.respond(response);
                 }

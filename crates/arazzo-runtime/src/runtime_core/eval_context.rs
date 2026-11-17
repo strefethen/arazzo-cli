@@ -1,5 +1,3 @@
-use arazzo_expr::BodySlot;
-
 use super::*;
 
 pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalContext {
@@ -12,27 +10,15 @@ pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalCon
     if let Some(resp) = response {
         ctx.status_code = Some(resp.status_code);
         ctx.response_headers = resp.headers.clone();
-        ctx.response_body = response_body(resp);
+        ctx.response_body = resp.body_value.clone();
     }
     #[cfg(test)]
     if let Some(reason) = &vars.unreadable_response_body {
-        ctx.response_body = BodySlot::Unavailable {
+        ctx.response_body = arazzo_expr::BodySlot::Unavailable {
             reason: reason.clone(),
         };
     }
     ctx
-}
-
-pub(super) fn response_body(response: &Response) -> BodySlot {
-    if let Some(json) = &response.body_json {
-        return BodySlot::Present(json.clone());
-    }
-    match std::str::from_utf8(&response.body) {
-        Ok(text) => BodySlot::Present(Value::String(text.to_owned())),
-        Err(_) => BodySlot::Unavailable {
-            reason: "response body is not valid UTF-8 text".to_owned(),
-        },
-    }
 }
 
 pub(super) fn base(engine: &Engine, vars: &VarStore, response: Option<&Response>) -> EvalContext {
@@ -64,6 +50,8 @@ pub(super) fn post_request(
 
 #[cfg(test)]
 mod tests {
+    use arazzo_expr::BodySlot;
+
     use super::*;
 
     fn engine() -> Engine {
@@ -85,42 +73,43 @@ mod tests {
     }
 
     #[test]
-    fn response_overlay_preserves_absence_json_text_and_marks_invalid_utf8_unavailable() {
+    fn response_overlay_shares_the_decoded_body_instead_of_copying_it() {
         let engine = engine();
         let vars = VarStore::default();
         let absent = base(&engine, &vars, None);
         assert_eq!(absent.status_code, None);
         assert_eq!(absent.response_body, BodySlot::Absent);
         assert!(absent.response_headers.is_empty());
-        for (body, body_json, expected) in [
-            (
-                b"raw".to_vec(),
-                Some(Value::Null),
-                BodySlot::Present(Value::Null),
-            ),
-            (b"<xml/>".to_vec(), None, BodySlot::Present(json!("<xml/>"))),
-            (
-                vec![255],
-                None,
-                BodySlot::Unavailable {
-                    reason: "response body is not valid UTF-8 text".to_owned(),
-                },
-            ),
-        ] {
-            let response = Response {
-                status_code: 201,
-                headers: BTreeMap::from([("X-Test".into(), "value".into())]),
-                body,
-                body_json,
-                content_type: ContentType::Xml,
-                redirects: Vec::new(),
-            };
-            let context = base(&engine, &vars, Some(&response));
-            assert_eq!(context.status_code, Some(201));
-            assert_eq!(context.response_headers, response.headers);
-            assert_eq!(context.response_body, expected);
-            assert_shared(&absent, &context);
-        }
+        let response = Response::decoded(
+            201,
+            BTreeMap::from([
+                ("content-type".into(), "application/json".into()),
+                ("x-test".into(), "value".into()),
+            ]),
+            br#"{"a":1}"#.to_vec(),
+            Vec::new(),
+        );
+        let first = base(&engine, &vars, Some(&response));
+        let second = base(&engine, &vars, Some(&response));
+        assert_eq!(first.status_code, Some(201));
+        assert_eq!(first.response_headers, response.headers);
+        let (BodySlot::Present(stored), BodySlot::Present(left), BodySlot::Present(right)) = (
+            &response.body_value,
+            &first.response_body,
+            &second.response_body,
+        ) else {
+            panic!("decoded JSON body should be present")
+        };
+        assert!(Arc::ptr_eq(stored, left));
+        assert!(Arc::ptr_eq(left, right));
+        assert_eq!(**left, json!({"a": 1}));
+        assert_shared(&absent, &first);
+        let bytes = Response::decoded(200, BTreeMap::new(), vec![255], Vec::new());
+        assert!(matches!(bytes.body_value, BodySlot::Unavailable { .. }));
+        assert_eq!(
+            base(&engine, &vars, Some(&bytes)).response_body,
+            bytes.body_value
+        );
     }
 
     #[test]

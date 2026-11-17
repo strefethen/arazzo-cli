@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 fn evaluator() -> ExpressionEvaluator {
     ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(
+        response_body: arazzo_expr::BodySlot::present(
             json!({"items":[{"id":7}], "customer":{}, "nil":null, "number":42}),
         ),
         inputs: BTreeMap::from([
@@ -77,7 +77,7 @@ fn conformance_simple_condition_evaluation_positive_evidence() {
 #[test]
 fn inequality_is_negated_equality_including_null_and_missing() {
     let evaluator = ExpressionEvaluator::new(EvalContext {
-        response_body: arazzo_expr::BodySlot::Present(json!({"nil": null})),
+        response_body: arazzo_expr::BodySlot::present(json!({"nil": null})),
         inputs: BTreeMap::from([
             ("array".to_owned(), json!([null, 7])),
             ("object".to_owned(), json!({"nil": null})),
@@ -142,7 +142,7 @@ fn spec_non_null_data_guard_accepts_only_present_non_null_data() {
         let body = data.map_or_else(|| json!({}), |value| json!({"data": value}));
         let evaluator = ExpressionEvaluator::new(EvalContext {
             status_code: Some(200),
-            response_body: arazzo_expr::BodySlot::Present(body),
+            response_body: arazzo_expr::BodySlot::present(body),
             ..EvalContext::default()
         });
         decision(

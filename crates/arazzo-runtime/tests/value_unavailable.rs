@@ -1,7 +1,7 @@
 //! A value that exists but cannot be read is a hard resolution error, never
 //! `null` plus a warning (plan `http-body-media-types-and-binary.md`, D1).
 //!
-//! The producer here is a response body that is neither JSON nor valid UTF-8.
+//! The producer here is a response body classified as bytes (`image/jpeg`).
 //! Every site a workflow can put in front of that body is driven end to end
 //! against a hermetic server: each fails its step with
 //! `RUNTIME_VALUE_UNAVAILABLE`, names the step and the reason, and sends no
@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use tiny_http::{Header, Response as TinyResponse, Server};
 
 const CODE: &str = "RUNTIME_VALUE_UNAVAILABLE";
-const REASON: &str = "response body is not valid UTF-8 text";
+const REASON: &str = "response body is bytes (image/jpeg), which is not yet a readable value";
 const SOURCE: &str = "https://fixture.invalid/openapi.json";
 const JPEG: [u8; 4] = [0xFF, 0xD8, 0xFF, 0xE0];
 

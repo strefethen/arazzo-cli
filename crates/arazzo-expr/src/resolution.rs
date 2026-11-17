@@ -426,7 +426,7 @@ fn resolve_body(
 ) -> Resolution {
     let document = match slot {
         BodySlot::Absent => None,
-        BodySlot::Present(document) => Some(document),
+        BodySlot::Present(document) => Some(document.as_ref()),
         BodySlot::Unavailable { reason } => return Resolution::unavailable(expression, reason),
     };
     Resolution::from_lookup(expression, select_document(document, pointer, label))
@@ -515,9 +515,9 @@ mod tests {
             request_headers: BTreeMap::from([("x-request-id".to_owned(), "request".to_owned())]),
             request_query: BTreeMap::from([("q".to_owned(), "search".to_owned())]),
             request_path: BTreeMap::from([("id".to_owned(), "path-id".to_owned())]),
-            request_body: crate::BodySlot::Present(body.clone()),
+            request_body: crate::BodySlot::present(body.clone()),
             response_headers: BTreeMap::from([("x-response-id".to_owned(), "response".to_owned())]),
-            response_body: crate::BodySlot::Present(body.clone()),
+            response_body: crate::BodySlot::present(body.clone()),
             message_headers: BTreeMap::from([("x-message-id".to_owned(), "message".to_owned())]),
             message_payload: Some(body),
             self_uri: Some("workflows/example.yaml".to_owned()),
@@ -552,6 +552,7 @@ mod tests {
         let BodySlot::Present(body) = context.request_body.clone() else {
             panic!("body fixture")
         };
+        let body = body.as_ref().clone();
         let cases = [
             ("$url", json!("https://example.test/items")),
             ("$method", json!("POST")),
@@ -802,8 +803,8 @@ mod tests {
             );
         }
         let mut context = context;
-        context.request_body = BodySlot::Present(Value::Null);
-        context.response_body = BodySlot::Present(Value::Null);
+        context.request_body = BodySlot::present(Value::Null);
+        context.response_body = BodySlot::present(Value::Null);
         context.message_payload = Some(Value::Null);
         std::sync::Arc::make_mut(&mut context.inputs).insert("user".to_owned(), Value::Null);
         context.outputs.insert("data".to_owned(), Value::Null);
@@ -1158,9 +1159,9 @@ mod tests {
         assert_eq!(BodySlot::from(None), BodySlot::Absent);
         assert_eq!(
             BodySlot::from(Some(Value::Null)),
-            BodySlot::Present(Value::Null)
+            BodySlot::present(Value::Null)
         );
-        assert_eq!(BodySlot::from(json!(1)), BodySlot::Present(json!(1)));
+        assert_eq!(BodySlot::from(json!(1)), BodySlot::present(json!(1)));
         assert_eq!(
             resolve("$response.body", &EvalContext::default()).value,
             ResolvedValue::Missing

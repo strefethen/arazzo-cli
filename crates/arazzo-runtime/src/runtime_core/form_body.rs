@@ -2,12 +2,7 @@ use super::{url_crate::form_urlencoded, RuntimeError, RuntimeErrorKind};
 use serde_json::Value;
 
 pub(super) fn is_form(content_type: &str) -> bool {
-    content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+    arazzo_spec::media_type::is_form_urlencoded(content_type)
 }
 
 pub(super) fn encode(value: &Value) -> Result<Vec<u8>, RuntimeError> {
