@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`arazzo-cli serve` is back** — the MCP server returns to release binaries
+  under an explicit trust model: the connected client can run every loaded
+  workflow with the process's credentials, and no approval is asked per
+  operation. File tools and referenced documents stay inside the configured
+  roots on every platform. New flags set the limits: `--max-request-bytes`,
+  `--max-pending-requests`, `--max-result-bytes`, `--max-response-body-bytes`,
+  `--max-document-bytes`, `--max-http-timeout` and `--max-execution-timeout`.
+  README and SECURITY.md list what is and is not restricted.
+
 ### Changed
 
+- **New MCP startup notice** — `serve` and `arazzo-mcp` print the same three
+  `notice:` lines on stderr at startup, stating the trust model and that file
+  roots are a path restriction, not a sandbox. They replace the three
+  `warning:` lines from earlier builds and never echo a path or value.
 - **An unreadable response body is an error, not `null`** — a response body
   that is neither JSON nor valid UTF-8 used to resolve `$response.body` to
   `null` with a warning. Any expression that reads it now fails the step with

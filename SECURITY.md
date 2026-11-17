@@ -20,31 +20,36 @@ I'll acknowledge reports within a reasonable timeframe and provide an update whe
 
 This policy covers this repository's CLI, workspace crates, MCP server, and VS Code debug adapter, including dependency vulnerabilities that affect their security. Report upstream dependency defects to their maintainers as well; let this project know privately when its use of the dependency creates exposure.
 
-## MCP availability
+## MCP trust model
 
-The v0.9.0 CLI release removes MCP support, including the `serve` command,
-while security hardening is completed. Release artifacts do not link or package
-the MCP server. There is no flag to re-enable it in those artifacts. Existing
-MCP client configurations must be disconnected; do not downgrade to restore MCP
-as a security workaround. The development crate remains in the source workspace
-and is not part of this release. The risks below concern older releases and
-development builds, not an available v0.9.0 CLI feature.
+`arazzo-cli serve` and `arazzo-mcp` trust the connected MCP client. It can execute every loaded workflow, including its API side effects, with the server process's credentials and environment, and the server asks for no approval per operation. Both print a fixed notice saying so on stderr at startup.
+
+Restricted:
+
+- File reads by tools and referenced documents, to the configured roots, on every platform: lexical `..` escapes, dot-prefixed names, non-regular files, and paths that resolve outside a root are denied
+- Inbound request frame size and the pending-request backlog
+- Tool result size and HTTP response body size
+- Document size
+- HTTP and execution timeout ceilings
+- Cancellation of in-flight runs when the client disconnects or cancels
+- Credential redaction in failure text
+
+Not restricted:
+
+- Which hosts a workflow may contact, including localhost and private networks
+- DNS rebinding
+- Broker connections discovered through Kafka metadata
+- Memory used by already-parsed values
+- A local process changing files while they are being read
+- Anything a connected client does with the capabilities the operator granted
+
+A report that the server crosses a restricted boundary is a vulnerability. A report about an item in the second list is a known limitation, not a vulnerability.
 
 ## MCP deployment risks
 
-MCP allows an AI client to request file reads and API workflow execution. The server runs with the permissions of the account that launches it; stdio does not provide isolation. Untrusted content or prompt injection can cause an agent to request unintended operations. API workflows can modify or delete data and transmit credentials or other sensitive information.
+MCP allows an AI client to request file reads and API workflow execution. The server runs with the permissions of the account that launches it; stdio does not provide isolation, and the file roots are a path restriction, not a sandbox. Untrusted content or prompt injection can cause an agent to request unintended operations. API workflows can modify or delete data and transmit credentials or other sensitive information. Redaction is best-effort; outputs, logs, and traces may contain sensitive data.
 
-Current limitations:
-
-- Without `--allowed-dir`, file-accepting tools can read any path available to the process. Dot-prefixed files are not excluded.
-- Directory checks happen before file opens and do not guarantee containment if a symlink changes between the check and the read. Parser errors may include file contents and internal paths.
-- MCP execution does not currently enforce public-only network destinations or validate DNS results and redirects against a destination policy. Local and private services reachable by the process may be contacted.
-- Redaction is best-effort; errors, outputs, logs, and traces may contain sensitive data.
-- AsyncAPI source documents can name Kafka brokers that `serve` connects to with default options (plaintext, no credentials, bundled roots) when a workflow with a receive step runs. `--allowed-dir` now covers AsyncAPI files like OpenAPI files; the same network-destination caveat applies to broker hosts.
-
-Stronger defaults and enforcement are planned. Do not rely on those protections until they are implemented and documented for the version you run. See [README: MCP security](README.md#security) for current configuration guidance.
-
-Use process isolation, minimal read-only filesystem access, narrowly scoped credentials, external network controls, and MCP-client approval for consequential operations. Review workflows before use, prefer test accounts and non-production data, and keep the application and dependencies updated. These precautions reduce exposure but cannot eliminate risk. See the [official MCP local-server security guidance](https://modelcontextprotocol.io/docs/tutorials/security/local-server-security).
+Use process isolation, minimal read-only filesystem access, narrowly scoped credentials, external network controls, and MCP-client approval for consequential operations. Review workflows before use, prefer test accounts and non-production data, and keep the application and dependencies updated. These precautions reduce exposure but cannot eliminate risk. See [README: MCP security](README.md#security) and the [official MCP local-server security guidance](https://modelcontextprotocol.io/docs/tutorials/security/local-server-security).
 
 ## Assumption of risk and warranty
 

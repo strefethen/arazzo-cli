@@ -163,8 +163,8 @@ fn page_commands_exist_in_this_build() {
 #[test]
 fn command_check_rejects_removed_commands_flags_and_examples() {
     assert_eq!(
-        command_problems("serve"),
-        vec!["`serve`: `serve` is not a subcommand".to_string()]
+        command_problems("no-such-command"),
+        vec!["`no-such-command`: `no-such-command` is not a subcommand".to_string()]
     );
     assert_eq!(
         command_problems("run examples/httpbin-get.arazzo.yaml get-origin --no-such-flag"),

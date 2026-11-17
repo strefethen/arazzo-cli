@@ -63,7 +63,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Rate limiting** | Built-in token-bucket rate limiter (10 req/sec, burst 20; configurable through the Rust API) |
 | **Transport controls** | Scoped TLS exceptions, redirect limits, HTTPS downgrade protection, and structured transport warnings |
 | **Reusable components** | `$ref` for input schemas; `reference` for shared parameters and actions in `components` |
-| **MCP server** | Unavailable in v0.9.0 pending security hardening; removed from release binaries |
+| **MCP server** | `arazzo-cli serve` exposes loaded workflows as tools for AI agents over stdio; see [MCP Server](#mcp-server) for the trust model |
 
 Operation targets use standard Arazzo syntax: an `operationId`, or a source-description expression with a JSON Pointer in `operationPath`. Both resolve the method, path, and server from a bound OpenAPI document; see [Specification Conformance: Extensions and Gaps](#specification-conformance-extensions-and-gaps) for remaining limits.
 
@@ -866,17 +866,11 @@ This gives you a runnable starting point that you can customize — add assertio
 
 ## MCP Server
 
-**Unavailable in v0.9.0.** Release binaries exclude MCP and reject `serve`;
-there is no flag to enable it. Disconnect existing MCP client configurations.
-MCP will return only after its security gates pass. Do not downgrade as a
-security workaround. The following setup reference applies only to older
-versions and experimental source builds, not this release.
-
 arazzo-cli includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes Arazzo workflows as tools for AI agents. Any MCP-compatible client — Claude Desktop, Cursor, or custom agents — can discover and execute your workflows.
 
 ### Starting the server
 
-`serve` is included in `arazzo-cli`. To use the standalone `arazzo-mcp` command, install it separately with `cargo install --path ./crates/arazzo-mcp --locked` from the repository root.
+`serve` is included in `arazzo-cli`. To use the standalone `arazzo-mcp` command, install it separately with `cargo install --path ./crates/arazzo-mcp --locked` from the repository root. Both take the same arguments.
 
 ```bash
 # Standalone binary
@@ -885,27 +879,49 @@ arazzo-mcp examples/httpbin-get.arazzo.yaml
 # Or via the CLI subcommand
 arazzo-cli serve examples/httpbin-get.arazzo.yaml
 
-# Load all specs from a directory
-arazzo-cli serve --dir examples/
+# Load all specs from a directory and limit file tools to it
+arazzo-cli serve --dir examples/ --allowed-dir examples/
 ```
 
-The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP). Newline-delimited JSON framing is also supported for simpler integrations.
+The server communicates over stdio using Content-Length framed JSON-RPC 2.0 (the same transport as LSP and DAP). Newline-delimited JSON framing is also supported for simpler integrations. stdout carries only protocol messages; the startup notice, file-policy summary, and limits go to stderr.
+
+| Flag | Default | Limits |
+|------|---------|--------|
+| `--allowed-dir <dir>` | parents of the startup specs | Roots for file tools and referenced documents (repeatable; replaces the defaults) |
+| `--max-request-bytes <bytes>` | 262144 | One inbound JSON-RPC frame |
+| `--max-pending-requests <count>` | 16 | Decoded requests waiting for the dispatcher |
+| `--max-result-bytes <bytes>` | 1048576 | One serialized tool result |
+| `--max-response-body-bytes <bytes>` | 4194304 | One HTTP response body |
+| `--max-document-bytes <bytes>` | 4194304 | One file read by a tool |
+| `--max-http-timeout <duration>` | 30s | Ceiling and default for `http_timeout_seconds` |
+| `--max-execution-timeout <duration>` | 300s | Ceiling and default for `execution_timeout_seconds` |
+
+A tool result or document over its limit fails with `MCP_LIMIT_EXCEEDED`.
 
 ### Security
 
-**Enabling MCP gives an AI client tools that read local files and execute API workflows with the server process's privileges.** Untrusted documents, tool results, or prompts can steer an agent into unintended calls. Workflows can change or delete remote data, disclose credentials, or contact services reachable from your machine, including local and private networks.
+**The connected MCP client is trusted.** It can execute every loaded workflow, including its API side effects, with the server process's credentials and environment. The server asks for no approval per operation; load only workflows you are willing to let the agent run, and configure your client to require approval for consequential tool calls. Every startup prints this on stderr.
 
-By default, file-accepting tools (`validate_spec`, `generate_workflow`, `describe_openapi`) can read any path the process has access to. Use narrow, explicit `--allowed-dir` roots:
+Restricted:
 
-```bash
-arazzo-cli serve --allowed-dir /home/user/specs examples/*.arazzo.yaml
-```
+- File reads by tools and referenced documents, to the configured roots, on every platform: lexical `..` escapes, dot-prefixed names, non-regular files, and paths that resolve outside a root are denied
+- Inbound request frame size and the pending-request backlog
+- Tool result size and HTTP response body size
+- Document size
+- HTTP and execution timeout ceilings
+- Cancellation of in-flight runs when the client disconnects or cancels
+- Credential redaction in failure text
 
-The flag is repeatable. It also checks relative OpenAPI source paths used by workflows. It is not an operating-system sandbox: checks currently precede the actual file open, and parser errors may disclose file contents or internal paths. Dot-prefixed files such as `.env` are not currently excluded. Default startup-spec roots, denial when no roots exist, dotfile rejection, containment during file open, and sanitized errors are planned protections, not current guarantees. Network destination restrictions, including redirect and DNS checks, are also not yet enforced.
+Not restricted:
 
-Run the server in an isolated environment with only the required directories mounted read-only, narrowly scoped credentials, and externally enforced outbound network restrictions. Review workflows and destinations before enabling them, use test accounts and non-production data, and configure your MCP client to require approval for consequential tool calls. Treat tool output, errors, logs, and traces as potentially sensitive; redaction is best-effort. Follow the [official MCP local-server security guidance](https://modelcontextprotocol.io/docs/tutorials/security/local-server-security).
+- Which hosts a workflow may contact, including localhost and private networks
+- DNS rebinding
+- Broker connections discovered through Kafka metadata
+- Memory used by already-parsed values
+- A local process changing files while they are being read
+- Anything a connected client does with the capabilities you granted
 
-**Use MCP at your own risk.** You assume the risks associated with enabling the feature and authorizing its file access and API operations. The software is provided as-is without warranty, subject to the [MIT License](LICENSE). See [SECURITY.md](SECURITY.md) for the security policy and private vulnerability-reporting instructions.
+`--allowed-dir` is a path restriction, not a sandbox. For stronger isolation, run the server in a container or VM with only the required directories mounted read-only, narrowly scoped credentials, and outbound network rules enforced outside the process. Follow the [official MCP local-server security guidance](https://modelcontextprotocol.io/docs/tutorials/security/local-server-security). See [SECURITY.md](SECURITY.md) for the security policy and private vulnerability reporting.
 
 ### Available tools
 

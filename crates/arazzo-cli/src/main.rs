@@ -3,7 +3,7 @@
 //! CLI for executing and debugging Arazzo 1.0.1 API workflow specifications.
 //!
 //! Commands: `run`, `replay`, `validate`, `list`, `steps`, `catalog`, `show`,
-//! `generate`, `schema`.
+//! `generate`, `schema`, `serve`.
 
 mod cli;
 mod cli_error;
@@ -14,6 +14,7 @@ mod output;
 mod run;
 mod run_context;
 mod run_export;
+mod serve;
 mod spec_discovery;
 mod test_runner;
 mod trace;
@@ -334,6 +335,14 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             )
             .await
         }
+        Commands::Serve {
+            specs,
+            dir,
+            allowed_dir,
+            limits,
+        } => serve::serve(specs, dir, allowed_dir, limits)
+            .await
+            .map_err(CliFailure::from),
     }
 }
 

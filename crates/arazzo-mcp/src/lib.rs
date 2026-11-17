@@ -16,6 +16,18 @@ pub mod tools;
 
 pub use limits::McpLimits;
 
+pub const OPERATOR_TRUST_NOTICE: &str = concat!(
+    "notice: the connected MCP client can execute every loaded workflow, including its API side effects, ",
+    "using this process's credentials and environment. No approval is requested per operation.\n",
+    "notice: file tools and referenced documents are limited to the configured roots; this is a path ",
+    "restriction, not a sandbox, and does not isolate the process from other local software.\n",
+    "notice: review README.md (MCP Server > Security) and SECURITY.md before connecting an agent.\n",
+);
+
+pub fn print_operator_trust_notice() {
+    eprint!("{OPERATOR_TRUST_NOTICE}");
+}
+
 #[derive(Default)]
 pub struct McpServerConfig {
     pub allowed_dirs: Option<Vec<String>>,

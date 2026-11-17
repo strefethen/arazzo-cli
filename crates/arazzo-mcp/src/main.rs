@@ -85,6 +85,7 @@ fn main() {
     }
 
     let args = Args::parse();
+    arazzo_mcp::print_operator_trust_notice();
     let spec_paths = match resolve_spec_paths(&args) {
         Ok(paths) => paths,
         Err(err) => {

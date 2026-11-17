@@ -834,6 +834,16 @@ fn sweep_test() {
 }
 
 #[test]
+fn sweep_serve() {
+    assert_sweep(&["serve"], "SERVE_NO_SPECS");
+    assert_sweep(
+        &["serve", "--dir", SWEEP_MISSING_DIR],
+        "SERVE_SPEC_DISCOVERY",
+    );
+    assert_sweep(&["serve", SWEEP_MISSING], "SERVE_MCP");
+}
+
+#[test]
 fn sweep_usage_error() {
     assert_sweep(&["no-such-subcommand"], "CLI_USAGE");
 }

@@ -426,12 +426,12 @@
                 </div>
             </div>
             <div class="grid md:grid-cols-2 gap-5 mb-8">
-                <div id="mcp-notice" class="new-card card rounded-2xl p-6">
+                <div id="mcp-server" class="new-card card rounded-2xl p-6">
                     <div class="flex items-center gap-2.5 mb-2">
-                        <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0" style="color:rgb(var(--warn))"></i>
-                        <h3 class="font-bold text-warn">MCP server unavailable</h3>
+                        <i data-lucide="shield-check" class="w-5 h-5 flex-shrink-0" style="color:var(--i-teal)"></i>
+                        <h3 class="font-bold">MCP server, explicit trust</h3>
                     </div>
-                    <p class="text-ink-2 text-sm leading-relaxed">v0.9.0 excludes the MCP server pending security hardening, and <code class="inline">arazzo-cli serve</code> no longer exists. No flag restores it in release binaries. Disconnect existing MCP client configurations, and do not downgrade as a security workaround.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed"><code class="inline">arazzo-cli serve</code> exposes loaded workflows to an MCP client, which can run them with your credentials and no per-call approval. File reads stay inside the configured roots, and request, result, body, document, and timeout limits are flags. Hosts a workflow contacts are not restricted; see SECURITY.md.</p>
                 </div>
                 <div class="new-card card rounded-2xl p-6">
                     <div class="flex items-center gap-2.5 mb-2">

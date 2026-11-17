@@ -1,16 +1,22 @@
 # MCP security design status
 
-MCP returns to the CLI under the explicit operator-trust model decomposed in
-[epic ac-664e5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-664e5); its
-final ticket rewrites this page with what is and is not restricted. The earlier
-[MCP security hardening draft](../../plans/current/mcp-security-hardening.md)
-is retained as the record of superseded policy and deferred network work; it
-distinguishes approved policy from unimplemented mechanisms, so consult
-implementation and exact-candidate evidence before asserting protection.
+MCP is back in the CLI as `arazzo-cli serve` under the explicit operator-trust
+model delivered by
+[epic ac-664e5](https://tkt.stevetrefethen.com/docs/ac-tickets/ac-664e5). The
+connected client is trusted to execute every loaded workflow with the server
+process's credentials; the server restricts file roots, request and result
+sizes, timeouts, and failure text, and asks for no approval per operation. The
+restricted and not-restricted lists live in
+[README: MCP security](../../README.md#security) and
+[SECURITY.md](../../SECURITY.md#mcp-trust-model).
 
-The older March 2026 notes at this path are retired. Local consent does not
-make arbitrary file access safe, tool parameters can select paths and trigger
-network effects, and the notes' expression example was not an Arazzo authority.
+Future work, not current protection:
+
+- Network destination policy: allowed hosts, private-network denial, DNS
+  rebinding checks, and redirect validation.
+- A destination policy for Kafka brokers discovered through cluster metadata.
+- A budget for memory held by already-parsed values.
+- Containment against a local process changing files during a read.
 
 The [agent operability proposal](../../plans/current/agent-operability.md)
 requires capability descriptions to disclose actual enforcement and uncertainty.

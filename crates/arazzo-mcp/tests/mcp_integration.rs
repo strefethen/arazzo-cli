@@ -1211,8 +1211,12 @@ fn test_env_file_report_stays_off_the_stdout_framing() {
     assert!(!stderr.contains(sentinel), "value leaked: {stderr}");
     assert_eq!(
         String::from_utf8_lossy(&baseline.stderr),
-        file_policy_notice(),
-        "no .env must add only the fixed file policy notice"
+        format!(
+            "{}{}",
+            arazzo_mcp::OPERATOR_TRUST_NOTICE,
+            file_policy_notice()
+        ),
+        "no .env must add only the fixed startup notices"
     );
 
     assert_eq!(
@@ -1253,11 +1257,16 @@ fn test_env_directory_does_not_hang_the_server() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let lines: Vec<&str> = stderr.lines().collect();
+    let policy = file_policy_notice();
+    let startup: Vec<&str> = arazzo_mcp::OPERATOR_TRUST_NOTICE
+        .lines()
+        .chain([policy.trim_end()])
+        .collect();
     if cfg!(windows) {
-        assert_eq!(lines, [file_policy_notice().trim_end()], "{stderr}");
+        assert_eq!(lines, startup, "{stderr}");
     } else {
-        assert_eq!(lines.len(), 3, "{stderr}");
-        assert_eq!(lines[2], file_policy_notice().trim_end());
+        assert_eq!(lines.len(), 2 + startup.len(), "{stderr}");
+        assert_eq!(lines[2..], startup[..], "{stderr}");
         assert!(
             lines[0].starts_with("warning: .env:1: stopped reading: "),
             "{stderr}"

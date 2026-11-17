@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES};
 
@@ -11,7 +11,7 @@ use crate::trace::{parse_trace_max_body_bytes, TRACE_BODY_PREVIEW_DEFAULT_BYTES}
     version,
     about = "Execute Arazzo 1.0 workflows",
     long_about = "Execute, validate, inspect, generate, and test Arazzo 1.0 workflows.\n\nFor agents: use --json for machine-readable output, use schema <command> to discover the JSON contract, and use run --dry-run --json before a live run.",
-    after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."
+    after_help = "For agents:\n  1. Discover workflows: arazzo-cli catalog <dir> --json or arazzo-cli list <spec> --json\n  2. Inspect one workflow: arazzo-cli show <workflow-id> --dir <dir> --json\n  3. Inspect steps: arazzo-cli steps <spec> <workflow-id> --json\n  4. Check output contracts: arazzo-cli schema <command>\n  5. Plan execution: arazzo-cli run <spec> <workflow-id> --dry-run --json\n  6. Capture replayable evidence: add --trace <trace.json> and replay it with arazzo-cli replay <trace.json> --json\n  7. Expose workflows to agents: arazzo-cli serve --dir <dir> --allowed-dir <dir>\n\nAll commands support global --json for stable stdout where a JSON contract exists. Diagnostics go to stderr."
 )]
 pub struct Cli {
     /// Emit machine-readable JSON on stdout when the command has a JSON contract.
@@ -404,6 +404,58 @@ pub enum Commands {
         #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
         asyncapi_server: Vec<String>,
     },
+    /// Start an MCP server for AI agent integration
+    #[command(
+        after_help = "For agents:\n  - Load specs with positional files, --dir, or both.\n  - Use --allowed-dir to constrain file access exposed through MCP tools.\n  - This command speaks MCP over stdio; stdout is reserved for protocol messages."
+    )]
+    Serve {
+        /// Arazzo spec files to load
+        specs: Vec<String>,
+
+        /// Directory containing .arazzo.json, .arazzo.yaml, or .arazzo.yml files to load
+        #[arg(long = "dir")]
+        dir: Option<String>,
+
+        #[arg(
+            help = "Replace default MCP file roots (repeatable); defaults are startup-spec parents; tool reads deny dot-prefixed descendants"
+        )]
+        #[arg(long = "allowed-dir")]
+        allowed_dir: Vec<String>,
+
+        #[command(flatten)]
+        limits: ServeLimitArgs,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ServeLimitArgs {
+    /// Largest inbound JSON-RPC frame in bytes [default: 262144]
+    #[arg(long, value_name = "BYTES")]
+    pub max_request_bytes: Option<usize>,
+
+    /// Decoded requests that may wait for the dispatcher [default: 16]
+    #[arg(long, value_name = "COUNT")]
+    pub max_pending_requests: Option<usize>,
+
+    /// Largest serialized tool result text in bytes [default: 1048576]
+    #[arg(long, value_name = "BYTES")]
+    pub max_result_bytes: Option<usize>,
+
+    /// Largest HTTP response body in bytes [default: 4194304]
+    #[arg(long, value_name = "BYTES")]
+    pub max_response_body_bytes: Option<usize>,
+
+    /// Largest file read by a tool in bytes [default: 4194304]
+    #[arg(long, value_name = "BYTES")]
+    pub max_document_bytes: Option<usize>,
+
+    /// Ceiling and default for http_timeout_seconds, e.g. 30s [default: 30s]
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_value)]
+    pub max_http_timeout: Option<Duration>,
+
+    /// Ceiling and default for execution_timeout_seconds, e.g. 5m [default: 300s]
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_value)]
+    pub max_execution_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
