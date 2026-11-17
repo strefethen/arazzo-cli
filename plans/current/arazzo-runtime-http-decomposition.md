@@ -391,6 +391,11 @@ golden baselines.
 
 ---
 
+**Ordering:** [`http-body-media-types-and-binary.md`](http-body-media-types-and-binary.md)
+changes request and response body behavior in `engine_http.rs` and `client.rs`
+and runs first; this plan's pinned baseline is taken after it completes, and
+the two are never interleaved.
+
 **Disposition:** Draft — no design questions remain; S3's three-option decision
 was answered by the `b8cdb8b` fix. Two process items before acceptance: (1) the
 second writer's in-crate tests must land or revert before a baseline can be
