@@ -32,12 +32,20 @@ impl std::error::Error for ValueUnavailable {}
 #[non_exhaustive]
 pub enum BlobSlot {
     Input { name: String },
+    StepOutput { step_id: String, name: String },
+    Output { name: String },
+    RequestBody,
 }
 
 impl fmt::Display for BlobSlot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input { name } => write!(f, "input \"{name}\""),
+            Self::StepOutput { step_id, name } => {
+                write!(f, "step \"{step_id}\" output \"{name}\"")
+            }
+            Self::Output { name } => write!(f, "output \"{name}\""),
+            Self::RequestBody => f.write_str("request body"),
         }
     }
 }
@@ -267,7 +275,9 @@ impl Resolution {
         }
         let unavailable = ValueUnavailable {
             expression: expression.raw().to_owned(),
-            reason: format!("{slot} is bytes, which only a whole request body payload can carry"),
+            reason: format!(
+                "{slot} is bytes, which only a whole request body payload or a whole output can carry"
+            ),
         };
         Self {
             value: ResolvedValue::Blob { slot, unavailable },
@@ -324,6 +334,12 @@ pub(crate) fn resolve_parsed(
                 }
                 (context.inputs.as_ref(), "input")
             } else {
+                if context.blob_slots.outputs.contains(*name) {
+                    let slot = BlobSlot::Output {
+                        name: (*name).to_owned(),
+                    };
+                    return Resolution::blob(expression, slot, *pointer);
+                }
                 (&context.outputs, "output")
             };
             resolve_named(values, name, *pointer, expression, || {
@@ -335,6 +351,18 @@ pub(crate) fn resolve_parsed(
                 unreachable!("canonical step syntax has a step form")
             };
             let id = reference.step_id();
+            if context
+                .blob_slots
+                .steps
+                .get(id)
+                .is_some_and(|names| names.contains(reference.output_name()))
+            {
+                let slot = BlobSlot::StepOutput {
+                    step_id: id.to_owned(),
+                    name: reference.output_name().to_owned(),
+                };
+                return Resolution::blob(expression, slot, reference.pointer());
+            }
             match context.steps.get(id) {
                 Some(outputs) => resolve_named(
                     outputs,
@@ -385,6 +413,19 @@ pub(crate) fn resolve_parsed(
                 }
                 (&state.inputs, "input")
             } else {
+                if context
+                    .blob_slots
+                    .workflow_outputs
+                    .get(*id)
+                    .is_some_and(|names| names.contains(*name))
+                {
+                    return Resolution::unavailable(
+                        expression,
+                        &format!(
+                            "workflow \"{id}\" output \"{name}\" is bytes, which a $workflows reference cannot carry yet"
+                        ),
+                    );
+                }
                 (&state.outputs, "output")
             };
             resolve_named(values, name, *pointer, expression, || {
@@ -453,7 +494,21 @@ fn resolve_message_source(
             .map(Value::String)
             .ok_or_else(|| format!("request path parameter \"{name}\" not found in context")),
         (Namespace::Request, Form::Body(pointer)) => {
-            return resolve_body(expression, &context.request_body, *pointer, "request body")
+            return match (&context.request_body, pointer) {
+                (BodySlot::Unavailable { reason }, None) if context.blob_slots.request_body => {
+                    Resolution {
+                        value: ResolvedValue::Blob {
+                            slot: BlobSlot::RequestBody,
+                            unavailable: ValueUnavailable {
+                                expression: expression.raw().to_owned(),
+                                reason: reason.clone(),
+                            },
+                        },
+                        warnings: Vec::new(),
+                    }
+                }
+                _ => resolve_body(expression, &context.request_body, *pointer, "request body"),
+            };
         }
         (Namespace::Response, Form::Body(pointer)) => {
             return resolve_body(
@@ -1300,7 +1355,7 @@ mod tests {
     }
 
     const WHOLE: &str =
-        "input \"photo\" is bytes, which only a whole request body payload can carry";
+        "input \"photo\" is bytes, which only a whole request body payload or a whole output can carry";
     const POINTER: &str = "input \"photo\" is bytes, which a JSON Pointer cannot read";
 
     #[test]
@@ -1406,5 +1461,76 @@ mod tests {
             Ok(json!(7))
         );
         assert!(evaluator.evaluate_condition("$statusCode == 201 || $inputs.photo == 1"));
+    }
+
+    #[test]
+    fn step_output_workflow_output_and_sent_body_slots_resolve_like_inputs() {
+        let mut context = context();
+        context.blob_slots.steps = Arc::new(BTreeMap::from([(
+            "lookup".to_owned(),
+            std::collections::BTreeSet::from(["photo".to_owned()]),
+        )]));
+        context.blob_slots.outputs = std::collections::BTreeSet::from(["copy".to_owned()]);
+        context.blob_slots.workflow_outputs = Arc::new(BTreeMap::from([(
+            "auth".to_owned(),
+            std::collections::BTreeSet::from(["photo".to_owned()]),
+        )]));
+        context.blob_slots.request_body = true;
+        let sent = "request body is bytes, which only a whole output can carry";
+        context.request_body = crate::BodySlot::Unavailable {
+            reason: sent.to_owned(),
+        };
+        let evaluator = ExpressionEvaluator::new(context);
+        let step = BlobSlot::StepOutput {
+            step_id: "lookup".to_owned(),
+            name: "photo".to_owned(),
+        };
+        let output = BlobSlot::Output {
+            name: "copy".to_owned(),
+        };
+        let whole = |slot: &BlobSlot| {
+            format!("{slot} is bytes, which only a whole request body payload or a whole output can carry")
+        };
+        for (input, slot) in [
+            ("$steps.lookup.outputs.photo", &step),
+            ("$outputs.copy", &output),
+            ("$request.body", &BlobSlot::RequestBody),
+        ] {
+            assert_eq!(evaluator.blob_slot(input), Some(slot.clone()), "{input}");
+        }
+        for (input, reason) in [
+            ("$steps.lookup.outputs.photo", whole(&step)),
+            (
+                "$steps.lookup.outputs.photo#/a",
+                format!("{step} is bytes, which a JSON Pointer cannot read"),
+            ),
+            ("$outputs.copy", whole(&output)),
+            (
+                "$outputs.copy#/a",
+                format!("{output} is bytes, which a JSON Pointer cannot read"),
+            ),
+            ("$request.body", sent.to_owned()),
+            ("$request.body#/a", sent.to_owned()),
+            (
+                "$workflows.auth.outputs.photo",
+                "workflow \"auth\" output \"photo\" is bytes, which a $workflows reference cannot carry yet".to_owned(),
+            ),
+        ] {
+            assert_eq!(evaluator.evaluate(input), Err(bytes(input, &reason)), "{input}");
+            assert_eq!(
+                evaluator.resolve_value(&format!("x {{{input}}}")),
+                Err(bytes(input, &reason)),
+                "{input}"
+            );
+            assert_eq!(evaluator.blob_slot(&format!("{{{input}}}")), None, "{input}");
+        }
+        for not_bytes in [
+            "$steps.lookup.outputs.payload",
+            "$outputs.data",
+            "$workflows.auth.outputs.result",
+        ] {
+            assert_eq!(evaluator.blob_slot(not_bytes), None, "{not_bytes}");
+            assert!(evaluator.evaluate(not_bytes).is_ok(), "{not_bytes}");
+        }
     }
 }

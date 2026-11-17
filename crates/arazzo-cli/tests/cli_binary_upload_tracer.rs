@@ -695,11 +695,7 @@ fn bytes_fail_closed_wherever_they_cannot_be_sent_or_read() {
     assert!(fixture.take().is_empty());
 
     let echo = fixture.run("echo", &photo);
-    let message = failed(&echo, "RUNTIME_VALUE_UNAVAILABLE");
-    assert!(
-        message.ends_with("step upload: output \"sent\": $request.body: request body is bytes, which no expression can read yet"),
-        "{message}"
-    );
+    assert_eq!(succeeded(&echo)["outputs"], json!({"id":"p1"}));
     assert_output_has_no_file_bytes("echo", &echo);
     assert_eq!(fixture.take()[0].body, jpeg());
 }

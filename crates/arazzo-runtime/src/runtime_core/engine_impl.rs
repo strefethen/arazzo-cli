@@ -910,18 +910,30 @@ impl Engine {
                 }
             }
             let eval = ExpressionEvaluator::new(ctx.clone());
+            let blobs = BlobSources {
+                outputs: Some(&outputs.blobs),
+                ..BlobSources::new(vars)
+            };
             let resolved = match output {
-                OutputValue::RuntimeExpression(expression) => eval
-                    .resolve_value_with_provenance(expression)
-                    .map(|result| {
-                        let metadata = vars.expression_provenance(&result, &outputs, None);
-                        (result.value, result.warnings, metadata)
-                    }),
+                OutputValue::RuntimeExpression(expression) => {
+                    match blobs.whole(&eval, expression) {
+                        Ok(Some(blob)) => {
+                            Ok((Slot::Blob(blob), Vec::new(), ValueProvenance::default()))
+                        }
+                        Ok(None) => eval
+                            .resolve_value_with_provenance(expression)
+                            .map(|result| {
+                                let metadata = vars.expression_provenance(&result, &outputs, None);
+                                (Slot::Value(result.value), result.warnings, metadata)
+                            }),
+                        Err(unavailable) => Err(unavailable),
+                    }
+                }
                 OutputValue::Selector(selector) => {
                     super::payload::resolve_selector_with_provenance(selector, &eval).map(
                         |result| {
                             let metadata = vars.value_provenance(&result, &outputs, None);
-                            (result.value, result.warnings, metadata)
+                            (Slot::Value(result.value), result.warnings, metadata)
                         },
                     )
                 }
@@ -941,7 +953,14 @@ impl Engine {
                     WorkflowOutputWarning::new(&workflow.workflow_id, name, warning)
                 }),
             );
-            ctx.outputs.insert(name.clone(), value.clone());
+            match &value {
+                Slot::Value(value) => {
+                    ctx.outputs.insert(name.clone(), value.clone());
+                }
+                Slot::Blob(_) => {
+                    ctx.blob_slots.outputs.insert(name.clone());
+                }
+            }
             outputs.insert(name.clone(), value, metadata);
         }
         (Ok(outputs), output_warnings)

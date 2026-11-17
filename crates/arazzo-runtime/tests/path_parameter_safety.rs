@@ -302,6 +302,7 @@ fn replay_record(url: &str) -> TraceStepRecord {
         warnings: Vec::new(),
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
+        output_blobs: BTreeMap::new(),
         error: None,
         message: None,
     }

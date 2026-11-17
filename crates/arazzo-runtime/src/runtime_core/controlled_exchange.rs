@@ -243,12 +243,12 @@ pub(super) async fn execute(
     let mut outputs = ProvenancedValues::default();
     if success {
         for (name, value) in &step.outputs {
-            let (value, warnings, metadata) = evaluate_provenanced_output(
-                value, &eval, None, vars, None,
-            )
-            .map_err(|unavailable| {
-                RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
-            })?;
+            let (value, warnings, metadata) =
+                evaluate_step_output(value, &eval, None, BlobSources::new(vars), None).map_err(
+                    |unavailable| {
+                        RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
+                    },
+                )?;
             if !warnings.is_empty() {
                 return Err(RuntimeError::unspecified(format!(
                     "EXCHANGE_OUTPUT_DIAGNOSTIC: {warnings:?}"

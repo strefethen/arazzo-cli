@@ -32,7 +32,7 @@ pub enum EngineEvent {
 /// Dropping the handle requests cancellation through its shared terminal arbiter.
 pub struct ExecutionHandle {
     events: Option<mpsc::Receiver<EngineEvent>>,
-    result: Option<oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>>,
+    result: Option<oneshot::Receiver<Result<WorkflowOutputs, RuntimeError>>>,
     cancellation: ExecutionCancellation,
     watchdog: Option<tokio::task::JoinHandle<()>>,
 }
@@ -54,7 +54,7 @@ impl Drop for ExecutionHandle {
 impl ExecutionHandle {
     pub(crate) fn new(
         events: mpsc::Receiver<EngineEvent>,
-        result: oneshot::Receiver<Result<BTreeMap<String, Value>, RuntimeError>>,
+        result: oneshot::Receiver<Result<WorkflowOutputs, RuntimeError>>,
         cancellation: ExecutionCancellation,
     ) -> Self {
         Self {
@@ -94,19 +94,27 @@ impl ExecutionHandle {
         while let Some(event) = events_rx.recv().await {
             events.push(event);
         }
-        let outputs = result_rx.await.unwrap_or_else(|_| {
+        let result = result_rx.await.unwrap_or_else(|_| {
             Err(RuntimeError::new(
                 RuntimeErrorKind::InternalError,
                 "execution task completed without sending result",
             ))
         });
-        ExecutionResult { outputs, events }
+        let (outputs, output_blobs) = match result {
+            Ok(WorkflowOutputs { values, blobs }) => (Ok(values), blobs),
+            Err(error) => (Err(error), BTreeMap::new()),
+        };
+        ExecutionResult {
+            outputs,
+            output_blobs,
+            events,
+        }
         // Drop runs here, calling cancel() — task already finished, no-op
     }
 
     /// Discard events and return only the workflow result.
     #[allow(clippy::missing_panics_doc)]
-    pub async fn result_only(mut self) -> Result<BTreeMap<String, Value>, RuntimeError> {
+    pub async fn result_only(mut self) -> Result<WorkflowOutputs, RuntimeError> {
         drop(self.events.take()); // unblock event sends immediately
         let result_rx = self
             .result
@@ -122,12 +130,24 @@ impl ExecutionHandle {
 }
 
 /// Collected execution output from a completed workflow.
+///
+/// `outputs` holds the JSON outputs; a bytes output is in `output_blobs`
+/// under its name instead, and never in `outputs`.
 pub struct ExecutionResult {
     pub outputs: Result<BTreeMap<String, Value>, RuntimeError>,
+    pub output_blobs: BTreeMap<String, Blob>,
     pub events: Vec<EngineEvent>,
 }
 
 impl ExecutionResult {
+    /// Every output as it is serialized: a JSON value, or a bytes output's
+    /// descriptor (the redacted marker for a sensitive blob).
+    pub fn presented_outputs(&self) -> Result<BTreeMap<String, Value>, &RuntimeError> {
+        self.outputs
+            .as_ref()
+            .map(|values| super::blob::presented(values, &self.output_blobs))
+    }
+
     /// Filter run capture records in emission order.
     pub fn run_steps(&self) -> Vec<&RunStepRecord> {
         self.events
@@ -524,6 +544,9 @@ pub struct TraceStepRecord {
     pub decision: TraceDecision,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, Value>,
+    /// Bytes outputs as descriptors, keyed by output name; never in `outputs`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_blobs: BTreeMap<String, BytesDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// The message a receive step consumed; absent for HTTP and workflow steps.

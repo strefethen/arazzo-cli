@@ -59,6 +59,7 @@ pub(super) fn post_request(
     ctx.request_query = prep.url_result.query_params.clone();
     ctx.request_path = prep.url_result.path_params.clone();
     ctx.request_body = prep.logical.slot();
+    ctx.blob_slots.request_body = prep.logical.blob().is_some();
     ctx
 }
 

@@ -7,7 +7,7 @@ use super::request_admission::RequestAdmission;
 use super::*;
 
 const PAYLOAD: &str = "requestBody.payload";
-const BYTES_BODY: &str = "request body is bytes, which no expression can read yet";
+const BYTES_BODY: &str = "request body is bytes, which only a whole output can carry";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum BodyNode {
@@ -184,6 +184,13 @@ impl LogicalBody {
         }
     }
 
+    pub(super) fn blob(&self) -> Option<&Blob> {
+        match self {
+            Self::Bytes(blob) => Some(blob),
+            Self::Absent | Self::Json(_) => None,
+        }
+    }
+
     pub(super) fn slot(&self) -> BodySlot {
         match self {
             Self::Absent => BodySlot::Absent,
@@ -339,7 +346,7 @@ fn resolve_json(
 }
 
 fn references_bytes(source: &ValueSource, eval: &ExpressionEvaluator) -> bool {
-    if eval.context().blob_slots.inputs.is_empty() {
+    if eval.context().blob_slots.is_empty() {
         return false;
     }
     match source {
@@ -570,7 +577,7 @@ mod tests {
         assert_eq!(
             bytes.slot(),
             BodySlot::Unavailable {
-                reason: "request body is bytes, which no expression can read yet".to_owned()
+                reason: "request body is bytes, which only a whole output can carry".to_owned()
             }
         );
         assert_eq!(

@@ -97,7 +97,8 @@ mod xml_admission;
 mod xpath;
 
 use ::url as url_crate;
-pub use blob::{Blob, WorkflowInputs};
+pub use blob::{Blob, WorkflowInputs, WorkflowOutputs};
+use blob::{BlobSources, Slot};
 pub use builder::{relative_openapi_source_paths, EngineBuilder};
 pub use bytes_descriptor::{BytesDescriptor, ContentDescriptor, RedactedDescriptor};
 use client::HttpClient;
@@ -108,7 +109,9 @@ pub use client::{
 use control::{sleep_with_cancel, step_result_error};
 #[cfg(test)]
 pub(crate) use criteria::evaluate_criterion;
+#[cfg(test)]
 use criteria::evaluate_provenanced_output;
+use criteria::evaluate_step_output;
 pub(crate) use criteria::{
     evaluate_criterion_detailed, evaluate_output_value_detailed, CriterionEvaluation,
 };

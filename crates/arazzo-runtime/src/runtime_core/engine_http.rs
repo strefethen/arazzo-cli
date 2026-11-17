@@ -476,11 +476,14 @@ impl Engine {
         let mut outputs = ProvenancedValues::default();
         let mut warnings = prep.warnings.clone();
         for (name, expr) in &step.outputs {
-            let (value, expr_warnings, metadata) = evaluate_provenanced_output(
+            let (value, expr_warnings, metadata) = evaluate_step_output(
                 expr,
                 &dry_eval,
                 Some(&fake),
-                vars,
+                BlobSources {
+                    request_body: prep.logical.blob(),
+                    ..BlobSources::new(vars)
+                },
                 Some(ValueProducer {
                     workflow_id,
                     step_id: &step.step_id,
@@ -513,7 +516,7 @@ impl Engine {
                 response: Some(&fake),
                 request: Some(&prep.trace_request),
                 message: None,
-                current_outputs: &outputs.values,
+                current_outputs: &outputs,
                 depth,
                 cancel: &exec_ctx.cancel,
                 is_timeout: &exec_ctx.is_timeout,
@@ -562,7 +565,7 @@ impl Engine {
     ) -> Result<StepExecution, RuntimeError> {
         let post_ctx = super::eval_context::post_request(self, vars, Some(response), prep);
         let eval = ExpressionEvaluator::new(post_ctx);
-        let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
+        let mut outputs = ProvenancedValues::default();
         let mut criteria = Vec::new();
         let mut step_warnings = prep.warnings.clone();
         // Surface the followed redirect chain in the step's trace request.
@@ -605,7 +608,7 @@ impl Engine {
                 response: Some(response),
                 request: Some(&prep.trace_request),
                 message: None,
-                current_outputs: &checkpoint_outputs,
+                current_outputs: &outputs,
                 depth,
                 cancel: &exec_ctx.cancel,
                 is_timeout: &exec_ctx.is_timeout,
@@ -623,10 +626,13 @@ impl Engine {
             }
         }
 
-        let mut outputs = ProvenancedValues::default();
+        let blobs = BlobSources {
+            request_body: prep.logical.blob(),
+            ..BlobSources::new(vars)
+        };
         for (name, expr) in &step.outputs {
             let (value, expr_warnings, metadata) =
-                match evaluate_provenanced_output(expr, &eval, Some(response), vars, None) {
+                match evaluate_step_output(expr, &eval, Some(response), blobs, None) {
                     Ok(output) => output,
                     Err(unavailable) => {
                         return Ok(Self::failed_exchange(
@@ -641,8 +647,7 @@ impl Engine {
                         ));
                     }
                 };
-            outputs.insert(name.clone(), value.clone(), metadata);
-            checkpoint_outputs.insert(name.clone(), value);
+            outputs.insert(name.clone(), value, metadata);
             for warning in expr_warnings {
                 step_warnings.push(format!("output \"{name}\": {warning}"));
             }
@@ -653,7 +658,7 @@ impl Engine {
                 response: Some(response),
                 request: Some(&prep.trace_request),
                 message: None,
-                current_outputs: &checkpoint_outputs,
+                current_outputs: &outputs,
                 depth,
                 cancel: &exec_ctx.cancel,
                 is_timeout: &exec_ctx.is_timeout,

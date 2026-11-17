@@ -251,7 +251,7 @@ mod watchdog_tests {
             let mut owned = ExecutionHandle::new(events_rx, result_rx, cancellation.clone());
             owned.start_watchdog(Duration::from_secs(5));
             let result = if success {
-                Ok(BTreeMap::new())
+                Ok(WorkflowOutputs::default())
             } else {
                 Err(RuntimeError::new(
                     RuntimeErrorKind::InternalError,

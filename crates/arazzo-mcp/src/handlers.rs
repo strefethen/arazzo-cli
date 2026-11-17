@@ -377,9 +377,15 @@ pub fn run_workflow(
     }
 }
 
-fn project_run_result(result: &ExecutionResult, dry_run: bool, max_result_bytes: usize) -> Value {
-    let projected = match result.outputs {
-        Ok(ref outputs) => {
+/// The `run_workflow` tool result for a finished execution. A bytes output is
+/// its descriptor; bytes are never returned.
+pub fn project_run_result(
+    result: &ExecutionResult,
+    dry_run: bool,
+    max_result_bytes: usize,
+) -> Value {
+    let projected = match result.presented_outputs() {
+        Ok(outputs) => {
             if dry_run {
                 let dry_run_reqs: Vec<_> = result
                     .dry_run_requests()
@@ -410,7 +416,7 @@ fn project_run_result(result: &ExecutionResult, dry_run: bool, max_result_bytes:
                 )
             }
         }
-        Err(ref err) => {
+        Err(err) => {
             let error_json = json!({
                 "error": project_failure_text(&err.message),
                 "code": err.code(),

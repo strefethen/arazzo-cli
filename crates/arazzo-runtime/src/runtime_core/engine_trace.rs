@@ -47,7 +47,7 @@ impl Engine {
         vars: &VarStore,
         depth: usize,
     ) -> Result<(), RuntimeError> {
-        let empty_outputs = BTreeMap::new();
+        let empty_outputs = ProvenancedValues::default();
         let gate = DebugGateContext {
             workflow_id,
             step_id: &step.step_id,
@@ -97,7 +97,8 @@ impl Engine {
     ) -> Result<(), RuntimeError> {
         // User output names must not overwrite the checkpoint metadata used
         // for output inspection and unresolved-output diagnostics.
-        let mut locals = gate.current_outputs.clone();
+        let mut locals = gate.current_outputs.values.clone();
+        super::blob::mark_bytes(&mut locals, &gate.current_outputs.blobs);
         let status_code = gate
             .response
             .map(|response| response.status_code)
@@ -228,7 +229,7 @@ impl Engine {
             insert_response_locals(&mut locals, response);
         }
 
-        let current_outputs = debug.vars.step_outputs(&debug.step.step_id);
+        let current_outputs = debug.vars.step_values(&debug.step.step_id);
         let gate = DebugGateContext {
             workflow_id: debug.workflow_id,
             step_id: &debug.step.step_id,
@@ -273,7 +274,7 @@ impl Engine {
             insert_response_locals(&mut locals, response);
         }
 
-        let current_outputs = debug.vars.step_outputs(&debug.step.step_id);
+        let current_outputs = debug.vars.step_values(&debug.step.step_id);
         let gate = DebugGateContext {
             workflow_id: debug.workflow_id,
             step_id: &debug.step.step_id,
@@ -308,21 +309,29 @@ impl Engine {
             super::eval_context::after_attempt(self, gate.vars, gate.response, gate.request),
             gate.message,
         );
-        if !gate.current_outputs.is_empty() {
+        let current = gate.current_outputs;
+        if !current.values.is_empty() {
             let scoped_outputs = std::sync::Arc::make_mut(&mut eval_ctx.steps)
                 .entry(gate.step_id.to_string())
                 .or_default();
-            for (name, value) in gate.current_outputs {
+            for (name, value) in &current.values {
                 scoped_outputs.insert(name.clone(), value.clone());
             }
         }
+        if !current.blobs.is_empty() {
+            std::sync::Arc::make_mut(&mut eval_ctx.blob_slots.steps)
+                .entry(gate.step_id.to_string())
+                .or_default()
+                .extend(current.blobs.keys().cloned());
+        }
 
         let mut scopes = gate.vars.debug_scopes();
-        if !gate.current_outputs.is_empty() {
+        if !current.is_empty() {
             let scoped_outputs = scopes.steps.entry(gate.step_id.to_string()).or_default();
-            for (name, value) in gate.current_outputs {
+            for (name, value) in &current.values {
                 scoped_outputs.insert(name.clone(), value.clone());
             }
+            super::blob::mark_bytes(scoped_outputs, &current.blobs);
         }
         scopes.locals = locals;
 
@@ -484,7 +493,7 @@ impl Engine {
         duration: Duration,
         trace: &StepTraceData,
         decision: TraceDecision,
-        outputs: BTreeMap<String, Value>,
+        outputs: &ProvenancedValues,
         error: Option<String>,
     ) -> TraceStepRecord {
         TraceStepRecord {
@@ -501,7 +510,8 @@ impl Engine {
             criteria: trace.criteria.clone(),
             warnings: trace.warnings.clone(),
             decision,
-            outputs,
+            outputs: outputs.values.clone(),
+            output_blobs: super::blob::descriptors(&outputs.blobs),
             error,
             message: trace.message.clone(),
         }
@@ -521,7 +531,7 @@ pub(super) struct DebugGateContext<'a> {
     /// The attempt's received message, so `$message.*` evaluates at
     /// receive-step checkpoints and in conditional breakpoints.
     pub message: Option<&'a super::step_context::MessageSnapshot>,
-    pub current_outputs: &'a BTreeMap<String, Value>,
+    pub current_outputs: &'a ProvenancedValues,
     pub depth: usize,
     pub cancel: &'a CancellationToken,
     pub is_timeout: &'a AtomicBool,
@@ -723,7 +733,7 @@ mod output_metadata_tests {
             response: None,
             request: None,
             message: None,
-            current_outputs: &BTreeMap::new(),
+            current_outputs: &ProvenancedValues::default(),
             depth: 0,
             cancel: &cancel,
             is_timeout: &AtomicBool::new(false),
@@ -774,7 +784,7 @@ mod output_metadata_tests {
             response: None,
             request: None,
             message: None,
-            current_outputs: &BTreeMap::new(),
+            current_outputs: &ProvenancedValues::default(),
             depth: 0,
             cancel: &CancellationToken::new(),
             is_timeout: &AtomicBool::new(false),
@@ -800,10 +810,10 @@ mod output_metadata_tests {
             .build()
             .unwrap_or_else(|err| panic!("building engine: {err}"));
         let vars = VarStore::default();
-        let outputs = BTreeMap::from([
+        let outputs = ProvenancedValues::from(BTreeMap::from([
             ("outputExpression".into(), json!(42)),
             ("outputName".into(), json!("wrong name")),
-        ]);
+        ]));
         let gate = DebugGateContext {
             workflow_id: "forecast",
             step_id: "alerts",

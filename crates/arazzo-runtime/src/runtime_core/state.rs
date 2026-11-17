@@ -275,6 +275,7 @@ pub(crate) struct VarStore {
     input_blobs: Arc<BTreeMap<String, Blob>>,
     blob_slots: arazzo_expr::BlobSlots,
     steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
+    step_blobs: Arc<BTreeMap<String, BTreeMap<String, Blob>>>,
     workflow_states: Arc<BTreeMap<String, arazzo_expr::WorkflowEvalState>>,
     pub(super) input_provenance: BTreeMap<String, ValueProvenance>,
     pub(super) step_provenance: Arc<BTreeMap<String, BTreeMap<String, ValueProvenance>>>,
@@ -312,10 +313,8 @@ impl VarStore {
         step_id: &str,
         outputs: impl Into<ProvenancedValues>,
     ) -> Option<ProvenancedValues> {
-        let outputs = outputs.into();
         let previous = self.steps.get(step_id).map(|_| self.step_values(step_id));
-        Arc::make_mut(&mut self.steps).insert(step_id.to_string(), outputs.values);
-        Arc::make_mut(&mut self.step_provenance).insert(step_id.to_string(), outputs.provenance);
+        self.install_step_values(step_id, outputs.into());
         previous
     }
 
@@ -324,18 +323,34 @@ impl VarStore {
         step_id: &str,
         previous: Option<ProvenancedValues>,
     ) {
-        let steps = Arc::make_mut(&mut self.steps);
         match previous {
-            Some(outputs) => {
-                steps.insert(step_id.to_string(), outputs.values);
-                Arc::make_mut(&mut self.step_provenance)
-                    .insert(step_id.to_string(), outputs.provenance);
-            }
+            Some(outputs) => self.install_step_values(step_id, outputs),
             None => {
-                steps.remove(step_id);
+                Arc::make_mut(&mut self.steps).remove(step_id);
                 Arc::make_mut(&mut self.step_provenance).remove(step_id);
+                self.set_step_blobs(step_id, BTreeMap::new());
             }
         }
+    }
+
+    fn install_step_values(&mut self, step_id: &str, outputs: ProvenancedValues) {
+        Arc::make_mut(&mut self.steps).insert(step_id.to_owned(), outputs.values);
+        Arc::make_mut(&mut self.step_provenance).insert(step_id.to_owned(), outputs.provenance);
+        self.set_step_blobs(step_id, outputs.blobs);
+    }
+
+    fn set_step_blobs(&mut self, step_id: &str, blobs: BTreeMap<String, Blob>) {
+        let names = blobs.keys().cloned().collect::<BTreeSet<_>>();
+        set_or_clear(
+            &mut self.blob_slots.steps,
+            step_id,
+            (!names.is_empty()).then_some(names),
+        );
+        set_or_clear(
+            &mut self.step_blobs,
+            step_id,
+            (!blobs.is_empty()).then_some(blobs),
+        );
     }
 
     pub(super) fn set_inputs(
@@ -369,6 +384,9 @@ impl VarStore {
     pub(super) fn blob(&self, slot: &arazzo_expr::BlobSlot) -> Option<Blob> {
         match slot {
             arazzo_expr::BlobSlot::Input { name } => self.input_blobs.get(name).cloned(),
+            arazzo_expr::BlobSlot::StepOutput { step_id, name } => {
+                self.step_blobs.get(step_id)?.get(name).cloned()
+            }
             _ => None,
         }
     }
@@ -381,14 +399,15 @@ impl VarStore {
                 .get(step_id)
                 .cloned()
                 .unwrap_or_default(),
-            blobs: BTreeMap::new(),
+            blobs: self.step_blobs.get(step_id).cloned().unwrap_or_default(),
         }
     }
 
     pub(super) fn merge_step_outputs(&mut self, step_id: &str, mut outputs: ProvenancedValues) {
-        if outputs.values.is_empty() {
+        if outputs.is_empty() {
             return;
         }
+        let mut blobs = self.step_blobs.get(step_id).cloned().unwrap_or_default();
         let values = Arc::make_mut(&mut self.steps)
             .entry(step_id.to_owned())
             .or_default();
@@ -396,12 +415,19 @@ impl VarStore {
             .entry(step_id.to_owned())
             .or_default();
         for (name, value) in outputs.values {
+            blobs.remove(&name);
             values.insert(name.clone(), value);
             provenance.remove(&name);
             if let Some(metadata) = outputs.provenance.remove(&name) {
                 provenance.insert(name, metadata);
             }
         }
+        for (name, blob) in outputs.blobs {
+            values.remove(&name);
+            provenance.remove(&name);
+            blobs.insert(name, blob);
+        }
+        self.set_step_blobs(step_id, blobs);
     }
 
     pub(crate) fn step_outputs(&self, step_id: &str) -> BTreeMap<String, Value> {
@@ -410,16 +436,15 @@ impl VarStore {
 
     pub(crate) fn debug_scopes(&self) -> DebugScopes {
         let mut inputs = (*self.inputs).clone();
-        for name in self.input_blobs.keys() {
-            inputs.insert(
-                name.clone(),
-                Value::String(super::blob::BYTES_SCOPE_MARKER.to_owned()),
-            );
+        super::blob::mark_bytes(&mut inputs, &self.input_blobs);
+        let mut steps = (*self.steps).clone();
+        for (step_id, blobs) in self.step_blobs.iter() {
+            super::blob::mark_bytes(steps.entry(step_id.clone()).or_default(), blobs);
         }
         DebugScopes {
             locals: BTreeMap::new(),
             inputs,
-            steps: (*self.steps).clone(),
+            steps,
         }
     }
 
@@ -441,12 +466,12 @@ impl VarStore {
         mut optional_omissions: BTreeSet<String>,
     ) {
         optional_omissions.retain(|name| !inputs.blobs.contains_key(name));
-        let bytes_inputs: BTreeSet<String> = inputs.blobs.keys().cloned().collect();
-        if !bytes_inputs.is_empty() {
-            Arc::make_mut(&mut self.blob_slots.workflow_inputs)
-                .insert(workflow_id.to_string(), bytes_inputs);
-        } else if self.blob_slots.workflow_inputs.contains_key(workflow_id) {
-            Arc::make_mut(&mut self.blob_slots.workflow_inputs).remove(workflow_id);
+        for (slots, blobs) in [
+            (&mut self.blob_slots.workflow_inputs, &inputs.blobs),
+            (&mut self.blob_slots.workflow_outputs, &outputs.blobs),
+        ] {
+            let names = blobs.keys().cloned().collect::<BTreeSet<_>>();
+            set_or_clear(slots, workflow_id, (!names.is_empty()).then_some(names));
         }
         self.workflow_provenance.insert(
             workflow_id.to_string(),
@@ -477,6 +502,18 @@ impl VarStore {
         &self,
     ) -> Arc<BTreeMap<String, arazzo_expr::WorkflowEvalState>> {
         Arc::clone(&self.workflow_states)
+    }
+}
+
+fn set_or_clear<T: Clone>(map: &mut Arc<BTreeMap<String, T>>, key: &str, entry: Option<T>) {
+    match entry {
+        Some(entry) => {
+            Arc::make_mut(map).insert(key.to_owned(), entry);
+        }
+        None if map.contains_key(key) => {
+            Arc::make_mut(map).remove(key);
+        }
+        None => {}
     }
 }
 

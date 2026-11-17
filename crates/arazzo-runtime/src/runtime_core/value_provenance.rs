@@ -30,12 +30,30 @@ impl From<WorkflowInputs> for ProvenancedValues {
 }
 
 impl ProvenancedValues {
-    pub(super) fn insert(&mut self, name: String, value: Value, metadata: ValueProvenance) {
-        self.values.insert(name.clone(), value);
+    pub(super) fn insert(
+        &mut self,
+        name: String,
+        slot: impl Into<Slot>,
+        metadata: ValueProvenance,
+    ) {
         self.provenance.remove(&name);
+        match slot.into() {
+            Slot::Value(value) => {
+                self.blobs.remove(&name);
+                self.values.insert(name.clone(), value);
+            }
+            Slot::Blob(blob) => {
+                self.values.remove(&name);
+                self.blobs.insert(name.clone(), blob);
+            }
+        }
         if metadata.unresolved || !metadata.skipped.is_empty() {
             self.provenance.insert(name, metadata);
         }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.blobs.is_empty()
     }
 }
 

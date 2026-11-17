@@ -1286,3 +1286,39 @@ fn test_env_directory_does_not_hang_the_server() {
         .as_str()
         .is_some_and(|name| name == "arazzo-mcp"));
 }
+
+#[test]
+fn run_workflow_result_renders_each_bytes_output_as_its_descriptor() {
+    use arazzo_runtime::{Blob, BytesDescriptor, ExecutionResult};
+
+    let photo = Blob::new(b"PLANTED-MCP-PHOTO-BYTES".to_vec()).with_media_type("image/png");
+    let key = Blob::new(b"PLANTED-MCP-KEY-BYTES".to_vec()).sensitive();
+    let result = ExecutionResult {
+        outputs: Ok(BTreeMap::from([("id".to_owned(), json!("p1"))])),
+        output_blobs: BTreeMap::from([
+            ("photo".to_owned(), photo.clone()),
+            ("key".to_owned(), key),
+        ]),
+        events: Vec::new(),
+    };
+    let projected = arazzo_mcp::handlers::project_run_result(&result, false, 1 << 20);
+    let response = json!({ "result": projected });
+    assert!(!is_tool_error(&response), "{response}");
+    let run = extract_tool_text(&response).unwrap_or(Value::Null);
+    assert_eq!(
+        run,
+        json!({"kind":"success", "outputs":{
+            "id":"p1",
+            "photo":BytesDescriptor::of(
+                b"PLANTED-MCP-PHOTO-BYTES",
+                Some("image/png".to_owned()),
+                None
+            ).to_value(),
+            "key":{"kind":"bytes", "redacted":true}
+        }})
+    );
+    assert_eq!(run["outputs"]["photo"]["size"], 23);
+    let text = response.to_string();
+    assert!(!text.contains("PLANTED-MCP"), "{text}");
+    assert!(!text.contains("UExBTlRFRC1NQ1"), "{text}");
+}

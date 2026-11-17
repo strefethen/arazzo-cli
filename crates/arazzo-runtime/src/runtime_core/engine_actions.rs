@@ -240,7 +240,7 @@ impl Engine {
             super::eval_context::after_attempt(self, ctx.vars, ctx.response, ctx.request),
             ctx.message,
         ));
-        let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
+        let current_outputs = ctx.vars.step_values(&ctx.step.step_id);
         let gate = DebugGateContext {
             workflow_id: ctx.workflow_id,
             step_id: &ctx.step.step_id,

@@ -54,6 +54,9 @@ pub struct RunStepRecord {
     pub outcome: RunStepOutcome,
     pub duration_ms: u64,
     pub outputs: BTreeMap<String, Value>,
+    /// Bytes outputs as descriptors, keyed by output name; never in `outputs`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_blobs: BTreeMap<String, BytesDescriptor>,
     pub request: Option<RunRequestMetadata>,
     pub response: Option<RunResponseMetadata>,
     pub decision: TraceDecision,
@@ -113,6 +116,7 @@ impl Engine {
             outcome,
             duration_ms: engine_trace::duration_ms_u64(attempt.duration),
             outputs: execution.outputs.values.clone(),
+            output_blobs: super::blob::descriptors(&execution.outputs.blobs),
             request,
             response,
             decision: attempt.decision.clone(),

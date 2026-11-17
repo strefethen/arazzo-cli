@@ -18,6 +18,7 @@
       "additionalProperties": true
     },
     "outputs": {
+      "description": "Workflow outputs. A bytes output is its descriptor, or the redacted\nmarker for bytes from a sensitive input or under a credential-like\noutput name; its content is never exported.",
       "type": "object",
       "additionalProperties": true
     },
@@ -192,6 +193,7 @@
           "minimum": 0
         },
         "outputs": {
+          "description": "The attempt's outputs; a bytes output is its descriptor or the redacted\nmarker, as in the run's `outputs`.",
           "type": "object",
           "additionalProperties": true
         },

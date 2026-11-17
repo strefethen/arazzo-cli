@@ -383,6 +383,28 @@ pub(super) fn evaluate_provenanced_output(
     })
 }
 
+/// A step output: a whole reference to a bytes slot stores the bytes, and
+/// every other output resolves as a value.
+pub(super) fn evaluate_step_output(
+    output: &OutputValue,
+    eval: &ExpressionEvaluator,
+    response: Option<&Response>,
+    blobs: BlobSources<'_>,
+    producer: Option<ValueProducer<'_>>,
+) -> Result<
+    (Slot, Vec<arazzo_expr::ExpressionWarning>, ValueProvenance),
+    arazzo_expr::ValueUnavailable,
+> {
+    if let OutputValue::RuntimeExpression(expression) = output {
+        if let Some(blob) = blobs.whole(eval, expression)? {
+            return Ok((Slot::Blob(blob), Vec::new(), ValueProvenance::default()));
+        }
+    }
+    let (value, warnings, metadata) =
+        evaluate_provenanced_output(output, eval, response, blobs.vars, producer)?;
+    Ok((Slot::Value(value), warnings, metadata))
+}
+
 fn default_criterion_context(response: Option<&Response>) -> Result<Value, Unreadable> {
     match response.map(|resp| &resp.body_value) {
         None | Some(BodySlot::Absent) => Ok(Value::Null),

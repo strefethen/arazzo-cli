@@ -56,7 +56,7 @@ impl Engine {
                     Some(_completion_guard.cancellation()),
                 )
                 .await
-                .map(|outputs| outputs.values);
+                .map(WorkflowOutputs::from);
 
             drop(ctx);
             let result = _completion_guard.finish(result);
@@ -176,7 +176,7 @@ impl Engine {
                     Some(_completion_guard.cancellation()),
                 )
                 .await
-                .map(|outputs| outputs.values);
+                .map(WorkflowOutputs::from);
 
             drop(ctx);
             let result = _completion_guard.finish(result);

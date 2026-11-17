@@ -142,7 +142,22 @@ impl From<Option<Value>> for BodySlot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BlobSlots {
     pub inputs: Arc<BTreeSet<String>>,
+    pub steps: Arc<BTreeMap<String, BTreeSet<String>>>,
+    pub outputs: BTreeSet<String>,
+    pub request_body: bool,
     pub workflow_inputs: Arc<BTreeMap<String, BTreeSet<String>>>,
+    pub workflow_outputs: Arc<BTreeMap<String, BTreeSet<String>>>,
+}
+
+impl BlobSlots {
+    /// Whether no slot here can resolve to the blob outcome. `$workflows`
+    /// slots never do: a reference to one is always an error.
+    pub fn is_empty(&self) -> bool {
+        self.inputs.is_empty()
+            && self.steps.is_empty()
+            && self.outputs.is_empty()
+            && !self.request_body
+    }
 }
 
 /// Evaluation context for expression resolution.
@@ -213,7 +228,7 @@ impl ExpressionEvaluator {
     }
 
     pub fn blob_slot(&self, value: &str) -> Option<BlobSlot> {
-        if self.ctx.blob_slots.inputs.is_empty() {
+        if self.ctx.blob_slots.is_empty() {
             return None;
         }
         let Ok(ValueStringSyntax::Expression(expression)) = classify_value_string(value) else {

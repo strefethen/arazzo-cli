@@ -32,6 +32,9 @@ pub struct RunExport {
     /// `filename`, or `{"kind":"bytes","redacted":true}` for a sensitive
     /// input; its content is never exported.
     inputs: BTreeMap<String, Value>,
+    /// Workflow outputs. A bytes output is its descriptor, or the redacted
+    /// marker for bytes from a sensitive input or under a credential-like
+    /// output name; its content is never exported.
     outputs: BTreeMap<String, Value>,
     workflows: BTreeMap<String, Workflow>,
 }
@@ -97,6 +100,8 @@ struct Execution {
     attempt: u32,
     outcome: StepOutcome,
     duration_ms: u64,
+    /// The attempt's outputs; a bytes output is its descriptor or the redacted
+    /// marker, as in the run's `outputs`.
     outputs: BTreeMap<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request: Option<Request>,
@@ -198,6 +203,15 @@ pub fn build(
     }
     let mut outputs = result.outputs.as_ref().cloned().unwrap_or_default();
     redact_values(&mut outputs);
+    if result.outputs.is_ok() {
+        insert_descriptors(
+            &mut outputs,
+            result
+                .output_blobs
+                .iter()
+                .map(|(name, blob)| (name, blob.descriptor())),
+        );
+    }
     Ok(RunExport {
         schema_version: SchemaVersion::V1,
         tool: Tool {
@@ -248,6 +262,13 @@ fn execution_from_record(record: &RunStepRecord) -> Result<Execution, String> {
     });
     let mut outputs = record.outputs.clone();
     redact_values(&mut outputs);
+    insert_descriptors(
+        &mut outputs,
+        record
+            .output_blobs
+            .iter()
+            .map(|(name, descriptor)| (name, descriptor.clone())),
+    );
     let decision = decision_from_record(&record.decision)?;
     Ok(Execution {
         sequence: record.seq,
@@ -292,6 +313,20 @@ fn redact_header_values(headers: &mut BTreeMap<String, String>) {
         if !is_sensitive_key(key) {
             *value = redact_text_patterns(value);
         }
+    }
+}
+
+fn insert_descriptors<'a>(
+    values: &mut BTreeMap<String, Value>,
+    descriptors: impl Iterator<Item = (&'a String, BytesDescriptor)>,
+) {
+    for (name, descriptor) in descriptors {
+        let descriptor = if is_sensitive_key(name) {
+            BytesDescriptor::redacted()
+        } else {
+            descriptor
+        };
+        values.insert(name.clone(), descriptor.to_value());
     }
 }
 

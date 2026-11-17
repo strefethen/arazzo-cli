@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    redact_headers, redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
-    redact_trace_request, BytesDescriptor, SequentialFallback, TraceStepRecord, TransportWarning,
+    is_sensitive_key, redact_headers, redact_inputs, redact_json_object, redact_json_value,
+    redact_text_patterns, redact_trace_request, BytesDescriptor, SequentialFallback,
+    TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -34,15 +35,21 @@ impl TraceFile {
             return Some(format!("inputBlobs.{name}"));
         }
         self.steps.iter().find_map(|step| {
-            step.request
+            let slot = if step
+                .request
                 .as_ref()
-                .filter(|request| !request.body_blobs.is_empty())
-                .map(|_| {
-                    format!(
-                        "request.bodyBlobs of workflow \"{}\" step \"{}\" (seq {})",
-                        step.workflow_id, step.step_id, step.seq
-                    )
-                })
+                .is_some_and(|request| !request.body_blobs.is_empty())
+            {
+                "request.bodyBlobs"
+            } else if !step.output_blobs.is_empty() {
+                "outputBlobs"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "{slot} of workflow \"{}\" step \"{}\" (seq {})",
+                step.workflow_id, step.step_id, step.seq
+            ))
         })
     }
 }
@@ -284,6 +291,11 @@ fn redact_trace_file(
         }
 
         redact_json_object(&mut step.outputs);
+        for (name, descriptor) in &mut step.output_blobs {
+            if is_sensitive_key(name) {
+                *descriptor = BytesDescriptor::redacted();
+            }
+        }
     }
 }
 
@@ -348,6 +360,7 @@ mod tests {
                 warnings: Vec::new(),
                 decision: TraceDecision::with_path(TraceDecisionPath::Next),
                 outputs: BTreeMap::new(),
+                output_blobs: BTreeMap::new(),
                 error: None,
                 message: None,
             }],

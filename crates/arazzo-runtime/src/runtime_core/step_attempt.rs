@@ -297,7 +297,7 @@ impl Engine {
             attempt.duration,
             &attempt.execution.trace,
             attempt.decision.clone(),
-            attempt.execution.outputs.values.clone(),
+            &attempt.execution.outputs,
             attempt.trace_error.clone(),
         );
         Engine::push_trace_record(ctx, record).await;

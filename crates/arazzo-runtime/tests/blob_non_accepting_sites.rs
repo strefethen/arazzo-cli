@@ -15,9 +15,10 @@ use tiny_http::{Header, Response as TinyResponse, Server};
 
 const UNAVAILABLE: &str = "RUNTIME_VALUE_UNAVAILABLE";
 const INVALID_BODY: &str = "RUNTIME_INVALID_REQUEST_BODY";
-const WHOLE: &str = "input \"photo\" is bytes, which only a whole request body payload can carry";
+const WHOLE: &str =
+    "input \"photo\" is bytes, which only a whole request body payload or a whole output can carry";
 const POINTER: &str = "input \"photo\" is bytes, which a JSON Pointer cannot read";
-const SENT_BODY: &str = "request body is bytes, which no expression can read yet";
+const SENT_BODY: &str = "request body is bytes, which only a whole output can carry";
 const SOURCE: &str = "https://fixture.invalid/openapi.json";
 const JPEG: [u8; 6] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
 const PNG: [u8; 4] = [0x89, 0x50, 0x4E, 0x47];
@@ -484,12 +485,6 @@ async fn every_site_after_the_response_fails_the_step_instead_of_reading_null() 
             WHOLE,
         ),
         (
-            "step output",
-            json!({"outputs":{"photo":"$inputs.photo"}}),
-            "step upload: output \"photo\": $inputs.photo",
-            WHOLE,
-        ),
-        (
             "step output through a pointer",
             json!({"outputs":{"exif":"$inputs.photo#/exif"}}),
             "step upload: output \"exif\": $inputs.photo#/exif",
@@ -560,16 +555,11 @@ async fn the_default_criterion_context_over_a_bytes_response_fails_the_step() {
 }
 
 #[tokio::test]
-async fn request_body_after_a_whole_blob_upload_maps_to_nothing_but_errors() {
+async fn request_body_after_a_whole_blob_upload_errors_everywhere_but_a_whole_output() {
     let server = UploadServer::start();
     let sent = |fields: Value| overlay(body(Some("image/jpeg"), json!("$inputs.photo")), &fields);
     let failing = json!({"condition":"$statusCode == 500"});
     let cases = [
-        (
-            "step output",
-            sent(json!({"outputs":{"sent":"$request.body"}})),
-            "step upload: output \"sent\": $request.body",
-        ),
         (
             "step output through a pointer",
             sent(json!({"outputs":{"exif":"$request.body#/exif"}})),
@@ -619,7 +609,7 @@ async fn request_body_after_a_whole_blob_upload_maps_to_nothing_but_errors() {
         (
             "onFailure action criterion after a failed output",
             sent(
-                json!({"outputs":{"sent":"$request.body"}, "onFailure":[{"name":"stop",
+                json!({"outputs":{"sent":"$request.body#/exif"}, "onFailure":[{"name":"stop",
                 "type":"end", "criteria":[{"condition":"$request.body#/a == null"}]}]}),
             ),
             "step upload: onFailure[0].criteria[0]: $request.body#/a",
@@ -680,10 +670,9 @@ async fn request_body_after_a_whole_blob_upload_maps_to_nothing_but_errors() {
 }
 
 #[tokio::test]
-async fn workflow_outputs_and_sub_workflow_parameters_refuse_bytes() {
+async fn workflow_output_pointers_and_sub_workflow_parameters_refuse_bytes() {
     let server = UploadServer::start();
     for (output, expression, reason) in [
-        (json!("$inputs.photo"), "$inputs.photo", WHOLE),
         (json!("$inputs.photo#/exif"), "$inputs.photo#/exif", POINTER),
         (json!("photo {$inputs.photo}"), "$inputs.photo", WHOLE),
         (selector("/exif"), "$inputs.photo", WHOLE),
@@ -773,7 +762,7 @@ async fn a_goto_target_inherits_the_bytes_and_uploads_them_unchanged() {
 }
 
 #[tokio::test]
-async fn a_receive_step_refuses_bytes_as_correlation_id_and_as_an_output() {
+async fn a_receive_step_refuses_bytes_as_correlation_id_and_carries_them_as_an_output() {
     let dir = std::env::temp_dir().join(format!("arazzo-bytes-receive-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("fixture dir: {error}"));
     std::fs::write(
@@ -819,7 +808,6 @@ async fn a_receive_step_refuses_bytes_as_correlation_id_and_as_an_output() {
             "step \"receive\": correlationId",
         ),
         ("correlationId", whole, "step \"receive\": correlationId"),
-        ("message step output", output, "output \"photo\""),
     ] {
         let error = refused(site, outcome);
         assert_eq!(error.code(), UNAVAILABLE, "{site}: {error}");
@@ -831,6 +819,7 @@ async fn a_receive_step_refuses_bytes_as_correlation_id_and_as_an_output() {
         );
         assert!(error.message.contains("receive"), "{site}: {error}");
     }
+    assert!(output.is_ok(), "message step output: {output:?}");
     let error = refused("message payload of a send step", send);
     assert_eq!(
         error.code(),

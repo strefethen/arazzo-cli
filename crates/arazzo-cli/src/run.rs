@@ -436,7 +436,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         .map_err(|err| CliError::new(CLI_OUTPUT_WRITE, err));
     }
 
-    let outputs = exec_result.outputs.unwrap_or_default();
+    let outputs = exec_result.presented_outputs().unwrap_or_default();
     if global.verbose && !global.json {
         output::emit_run_steps(&trace_steps);
     }

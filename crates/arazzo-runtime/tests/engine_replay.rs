@@ -71,6 +71,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
         warnings: Vec::new(),
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
+        output_blobs: BTreeMap::new(),
         error: None,
         message: None,
     }]
@@ -219,6 +220,7 @@ async fn replay_uses_the_full_recorded_body() {
         warnings: Vec::new(),
         decision: TraceDecision::with_path(TraceDecisionPath::Next),
         outputs: BTreeMap::new(),
+        output_blobs: BTreeMap::new(),
         error: None,
         message: None,
     }];

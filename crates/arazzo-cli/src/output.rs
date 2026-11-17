@@ -322,6 +322,10 @@ pub enum StepsOutput {
 #[allow(dead_code)] // Used only for schema generation via schema_for!()
 pub enum RunOutput {
     Success {
+        /// Workflow outputs. A bytes output is its descriptor,
+        /// `{"kind":"bytes","size":…,"sha256":…}` with optional `mediaType` and
+        /// `filename`, or `{"kind":"bytes","redacted":true}` for bytes from a
+        /// sensitive input; bytes are never printed.
         outputs: BTreeMap<String, Value>,
         /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

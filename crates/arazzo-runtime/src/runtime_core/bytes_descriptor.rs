@@ -73,6 +73,11 @@ impl BytesDescriptor {
         })
     }
 
+    /// The descriptor as the JSON value every serialized surface shows.
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::json!(self)
+    }
+
     pub fn summary(&self) -> String {
         match self {
             Self::Content(content) => match &content.media_type {

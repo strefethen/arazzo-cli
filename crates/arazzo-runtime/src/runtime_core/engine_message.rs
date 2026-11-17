@@ -26,10 +26,11 @@ use super::kafka::{
 };
 use super::step_context::{with_message, MessageSnapshot};
 use super::{
-    evaluate_criterion_detailed, evaluate_provenanced_output, DryRunRequest, Engine, EngineEvent,
-    ExecutionContext, ExpressionEvaluator, ObserverEvent, ProvenancedValues, ReceiverArmed,
-    RuntimeError, RuntimeErrorKind, StepExecution, StepResult, StepTraceData, TraceCriterionResult,
-    TraceMessage, TransportWarning, TransportWarningKind, VarStore, TRACE_BODY_PREVIEW_MAX_BYTES,
+    evaluate_criterion_detailed, evaluate_step_output, BlobSources, DryRunRequest, Engine,
+    EngineEvent, ExecutionContext, ExpressionEvaluator, ObserverEvent, ProvenancedValues,
+    ReceiverArmed, RuntimeError, RuntimeErrorKind, StepExecution, StepResult, StepTraceData,
+    TraceCriterionResult, TraceMessage, TransportWarning, TransportWarningKind, VarStore,
+    TRACE_BODY_PREVIEW_MAX_BYTES,
 };
 
 type ArmKey = (ConnectionIdentity, String);
@@ -413,7 +414,7 @@ impl Engine {
             super::eval_context::base(self, vars, None),
             Some(&snapshot),
         ));
-        let mut checkpoint_outputs = BTreeMap::<String, Value>::new();
+        let mut outputs = ProvenancedValues::default();
         let mut criteria = Vec::new();
         let criteria_to_check: &[arazzo_spec::SuccessCriterion] = if evaluate_criteria {
             &step.success_criteria
@@ -454,7 +455,7 @@ impl Engine {
                 response: None,
                 request: None,
                 message: Some(&snapshot),
-                current_outputs: &checkpoint_outputs,
+                current_outputs: &outputs,
                 depth,
             };
             self.debug_gate_success_criterion(&gate, index, &evaluation)
@@ -483,7 +484,6 @@ impl Engine {
             }
         }
 
-        let mut outputs = ProvenancedValues::default();
         for (name, expr) in &step.outputs {
             let producer = trace_message.simulated.then_some(super::ValueProducer {
                 workflow_id,
@@ -491,14 +491,13 @@ impl Engine {
                 site: super::ValueProducerSite::Output(name),
                 transport: super::ValueProducerTransport::Message,
             });
-            let (value, expr_warnings, metadata) = evaluate_provenanced_output(
-                expr, &eval, None, vars, producer,
-            )
-            .map_err(|unavailable| {
-                RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
-            })?;
-            outputs.insert(name.clone(), value.clone(), metadata);
-            checkpoint_outputs.insert(name.clone(), value);
+            let (value, expr_warnings, metadata) =
+                evaluate_step_output(expr, &eval, None, BlobSources::new(vars), producer).map_err(
+                    |unavailable| {
+                        RuntimeError::value_unavailable(&format!("output {name:?}"), unavailable)
+                    },
+                )?;
+            outputs.insert(name.clone(), value, metadata);
             for warning in expr_warnings {
                 warnings.push(format!("output \"{name}\": {warning}"));
             }
@@ -511,7 +510,7 @@ impl Engine {
                 response: None,
                 request: None,
                 message: Some(&snapshot),
-                current_outputs: &checkpoint_outputs,
+                current_outputs: &outputs,
                 depth,
             };
             self.debug_gate_output(&gate, name, expr).await?;

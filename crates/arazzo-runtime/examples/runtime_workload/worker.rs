@@ -153,7 +153,10 @@ pub(crate) async fn complete(handle: ExecutionHandle, mode: HandleMode) -> Obser
             }
         }
         HandleMode::ResultOnly => ObservedExecution {
-            outputs: handle.result_only().await,
+            outputs: handle
+                .result_only()
+                .await
+                .map(|outputs| outputs.presented()),
             events: Vec::new(),
         },
     }
