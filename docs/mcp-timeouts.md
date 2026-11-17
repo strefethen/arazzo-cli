@@ -16,7 +16,7 @@ with a text JSON payload carrying `MCP_INVALID_ARGUMENT` and a fixed field/range
 message. Invalid input never falls back to a default.
 
 The server also bounds what it reads, queues and returns. Each limit has a
-flag on the standalone `arazzo-mcp` binary and a field on `McpLimits`:
+flag on `arazzo-cli serve` and the standalone `arazzo-mcp` binary and a field on `McpLimits`:
 
 | Flag | Default | Bounds |
 |---|---:|---|

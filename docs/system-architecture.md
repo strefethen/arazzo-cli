@@ -108,8 +108,8 @@ not necessarily a full wire request. Label those limits where decisions are made
 
 **Policy versus description.** A tool description informs the caller. The
 resource owner enforces access, deadlines and limits. MCP's
-[hardening draft](../plans/current/mcp-security-hardening.md) owns its policy and
-unresolved mechanisms; architectural prose must not report them as delivered.
+trust model is stated in [SECURITY.md](../SECURITY.md); unresolved hardening
+mechanisms are open work; architectural prose must not report them as delivered.
 
 **Cancellation versus rollback.** Stopping local work does not undo effects
 already dispatched. Re-running after a timeout or reporting failure can repeat
