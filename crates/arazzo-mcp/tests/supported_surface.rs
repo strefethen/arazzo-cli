@@ -128,7 +128,7 @@ impl Session {
 
     fn send(&mut self, message: &Value) {
         let input = self.input.as_mut().unwrap();
-        writeln!(input, "{message}").unwrap();
+        input.write_all(format!("{message}\n").as_bytes()).unwrap();
         input.flush().unwrap();
     }
 
