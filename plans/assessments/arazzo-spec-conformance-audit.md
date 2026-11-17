@@ -9,7 +9,7 @@
 Eleven deviations in the original pass, F1–F11 below. Two cause a conformant
 document to fail outright or silently misbehave; the rest are unenforced
 constraints, ignored fields, non-conformant output, and undocumented
-extensions. Later passes added F12–F25 — see the addenda at the end, which also
+extensions. Later passes added F12–F26 — see the addenda at the end, which also
 record which findings have since been closed.
 
 **2026-10-15 F1/F5 resolution:** standard operation IDs and canonical
@@ -1155,3 +1155,43 @@ require their own `type`; `name` remains literal, including reference-looking
 strings. Canonical `reference` reuse replaces the whole action and retains
 ignored-sibling semantics. This supersedes the earlier compatibility exception
 recorded above without changing action ordering or workflow/Step inheritance.
+
+---
+
+## Addendum — 2026-11-17 (ac-b7b17 omitted `contentType`)
+
+One deviation, recorded while planning HTTP body media types
+(`plans/current/http-body-media-types-and-binary.md`, decision D2). Grounded in
+the vendored `spec/arazzo/v1.1.0.html`.
+
+| # | Deviation | Severity | Surface |
+|---|---|---|---|
+| F26 | An omitted Request Body Object `contentType` is serialized as JSON, not by the targeted operation's Content-Type | P2 | runtime |
+
+### F26. Omitted `contentType` defaults to JSON
+
+**Spec** (Request Body Object, `contentType`): *"If omitted then refer to
+Content-Type specified at the targeted operation to understand serialization
+requirements."*
+
+**We do:** `prepare_http_request_for_workflow`
+(`crates/arazzo-runtime/src/runtime_core/engine_http.rs`) never reads the
+targeted operation's `requestBody`. When `contentType` is omitted the request is
+serialized by the JSON rows of the request table (D2), and the `Content-Type`
+header is set to `application/json`. Today the body and header paths disagree: a
+string payload with an empty `contentType` is sent verbatim, because the
+serializer sees `ct == ""` and treats it as non-JSON, while the header still
+reads `application/json`.
+
+**Why it stays open.** Honoring the sentence means consulting the referenced
+OpenAPI operation, which the serialization stance forbids (`AGENTS.md`,
+"Parameter serialization": the runtime takes only `paths`, `servers`, `url` and
+`variables` from a source description). F16 is the precedent: a known
+consequence of that stance, recorded rather than patched per location. Closing
+F26 is a stance change and a separate initiative, in the same workspace-wide
+feature as F16, not an inline fix.
+
+**Related behavior.** The D2 request table additionally errors when a blob or
+multipart payload has no explicit `contentType`, since JSON is not a valid
+reading of those payloads. That is a refusal, not a second deviation: it fails
+loudly rather than guessing a serialization.
