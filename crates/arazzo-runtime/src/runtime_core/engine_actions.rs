@@ -18,6 +18,7 @@ impl Engine {
                         branch: ActionBranch::Success,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        request: ctx.request,
                         message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         cancel: ctx.cancel,
@@ -45,6 +46,7 @@ impl Engine {
                             cancel: ctx.cancel,
                             is_timeout: ctx.is_timeout,
                             response: ctx.result.response.as_deref(),
+                            request: ctx.request,
                             message: ctx.result.message.as_ref(),
                             vars: ctx.vars,
                             original_err_kind: ctx.result.err_kind,
@@ -55,6 +57,7 @@ impl Engine {
                             step,
                             vars: ctx.vars,
                             response: ctx.result.response.as_deref(),
+                            request: ctx.request,
                             message: ctx.result.message.as_ref(),
                             depth: ctx.depth,
                             branch: ActionBranch::Success,
@@ -68,7 +71,7 @@ impl Engine {
                     return RoutedDecision::error(control::cancellation_error(ctx.is_timeout));
                 }
                 return match decision {
-                    ActionExecution::Routed(decision) => decision,
+                    ActionExecution::Routed(decision) => *decision,
                     ActionExecution::RetryExhausted(exhausted) => {
                         Self::retry_limit_exceeded_decision(step, exhausted)
                     }
@@ -99,6 +102,7 @@ impl Engine {
                         branch: ActionBranch::Failure,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        request: ctx.request,
                         message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         cancel: ctx.cancel,
@@ -134,6 +138,7 @@ impl Engine {
                         cancel: ctx.cancel,
                         is_timeout: ctx.is_timeout,
                         response: ctx.result.response.as_deref(),
+                        request: ctx.request,
                         message: ctx.result.message.as_ref(),
                         vars: ctx.vars,
                         original_err_kind: ctx.result.err_kind,
@@ -144,6 +149,7 @@ impl Engine {
                         step,
                         vars: ctx.vars,
                         response: ctx.result.response.as_deref(),
+                        request: ctx.request,
                         message: ctx.result.message.as_ref(),
                         depth: ctx.depth,
                         branch: ActionBranch::Failure,
@@ -158,7 +164,7 @@ impl Engine {
             }
 
             match decision {
-                ActionExecution::Routed(decision) => return decision,
+                ActionExecution::Routed(decision) => return *decision,
                 ActionExecution::RetryExhausted(exhausted) => {
                     exhausted_retry = Some(exhausted);
                     next_action_index = action.index.saturating_add(1);
@@ -231,7 +237,7 @@ impl Engine {
             return Err(control::cancellation_error(ctx.is_timeout));
         }
         let eval = ExpressionEvaluator::new(super::step_context::with_message(
-            super::eval_context::base(self, ctx.vars, ctx.response),
+            super::eval_context::after_attempt(self, ctx.vars, ctx.response, ctx.request),
             ctx.message,
         ));
         let current_outputs = ctx.vars.step_outputs(&ctx.step.step_id);
@@ -240,7 +246,7 @@ impl Engine {
             step_id: &ctx.step.step_id,
             vars: ctx.vars,
             response: ctx.response,
-            request: None,
+            request: ctx.request,
             message: ctx.message,
             current_outputs: &current_outputs,
             depth: ctx.depth,
@@ -355,10 +361,11 @@ impl Engine {
             }
             ActionType::Goto => {
                 // Resolve expressions in goto targets (e.g. "step_{$inputs.target}").
-                let eval = ExpressionEvaluator::new(super::eval_context::base(
+                let eval = ExpressionEvaluator::new(super::eval_context::after_attempt(
                     self,
                     ctx.vars,
                     ctx.response,
+                    ctx.request,
                 ));
                 let source_step_id = &ctx.workflow.steps[ctx.current_idx].step_id;
                 if !action.step_id.is_empty() {
@@ -403,7 +410,12 @@ impl Engine {
                     };
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
-                            super::eval_context::base(self, ctx.vars, ctx.response),
+                            super::eval_context::after_attempt(
+                                self,
+                                ctx.vars,
+                                ctx.response,
+                                ctx.request,
+                            ),
                             ctx.message,
                         ));
                     let inputs = match map_action_parameters(
@@ -460,10 +472,11 @@ impl Engine {
                 // at the FlowDecision::Retry consumption sites, where `vars`
                 // is mutable, after the retry delay and immediately before the
                 // retried attempt.
-                let eval = ExpressionEvaluator::new(super::eval_context::base(
+                let eval = ExpressionEvaluator::new(super::eval_context::after_attempt(
                     self,
                     ctx.vars,
                     ctx.response,
+                    ctx.request,
                 ));
                 let source_step_id = &ctx.workflow.steps[ctx.current_idx].step_id;
                 let reference = if !action.step_id.is_empty() {
@@ -474,7 +487,12 @@ impl Engine {
                 } else if !action.workflow_id.is_empty() {
                     let parameter_eval =
                         ExpressionEvaluator::new(super::step_context::with_message(
-                            super::eval_context::base(self, ctx.vars, ctx.response),
+                            super::eval_context::after_attempt(
+                                self,
+                                ctx.vars,
+                                ctx.response,
+                                ctx.request,
+                            ),
                             ctx.message,
                         ));
                     let workflow_id = match action_target(
@@ -786,13 +804,13 @@ struct ExhaustedRetry {
 
 #[derive(Debug)]
 enum ActionExecution {
-    Routed(RoutedDecision),
+    Routed(Box<RoutedDecision>),
     RetryExhausted(ExhaustedRetry),
 }
 
 impl From<RoutedDecision> for ActionExecution {
     fn from(decision: RoutedDecision) -> Self {
-        Self::Routed(decision)
+        Self::Routed(Box::new(decision))
     }
 }
 
@@ -819,6 +837,7 @@ pub(super) struct SelectedActionDebugContext<'a> {
     pub step: &'a Step,
     pub vars: &'a VarStore,
     pub response: Option<&'a Response>,
+    pub request: Option<&'a TraceRequest>,
     /// The attempt's received message, so `$message.*` stays evaluable at
     /// retry checkpoints after a message failed its criteria.
     pub message: Option<&'a super::step_context::MessageSnapshot>,
@@ -836,6 +855,7 @@ struct ActionSelectionContext<'a> {
     branch: ActionBranch,
     vars: &'a VarStore,
     response: Option<&'a Response>,
+    request: Option<&'a TraceRequest>,
     message: Option<&'a super::step_context::MessageSnapshot>,
     depth: usize,
     cancel: &'a CancellationToken,
@@ -848,6 +868,7 @@ pub(super) struct StepDecisionContext<'a> {
     pub workflow: &'a Workflow,
     pub step_idx: usize,
     pub result: &'a StepResult,
+    pub request: Option<&'a TraceRequest>,
     pub vars: &'a VarStore,
     pub depth: usize,
     pub retry_count: &'a BTreeMap<RetrySite, u64>,
@@ -865,6 +886,7 @@ struct ExecuteActionContext<'a> {
     cancel: &'a CancellationToken,
     is_timeout: &'a AtomicBool,
     response: Option<&'a Response>,
+    request: Option<&'a TraceRequest>,
     message: Option<&'a super::step_context::MessageSnapshot>,
     vars: &'a VarStore,
     /// Original error kind from a runtime error (e.g. HttpRequest, ExecutionTimeout).

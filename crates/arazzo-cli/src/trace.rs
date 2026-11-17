@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_headers, redact_inputs, redact_json_object, redact_json_value, redact_text_patterns,
-    redact_trace_request, SequentialFallback, TraceStepRecord, TransportWarning,
+    redact_trace_request, BytesDescriptor, SequentialFallback, TraceStepRecord, TransportWarning,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,28 @@ pub struct TraceFile {
     pub tool: TraceTool,
     pub run: TraceRun,
     pub inputs: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_blobs: BTreeMap<String, BytesDescriptor>,
     pub steps: Vec<TraceStepRecord>,
+}
+
+impl TraceFile {
+    fn recorded_bytes(&self) -> Option<String> {
+        if let Some(name) = self.input_blobs.keys().next() {
+            return Some(format!("inputBlobs.{name}"));
+        }
+        self.steps.iter().find_map(|step| {
+            step.request
+                .as_ref()
+                .filter(|request| !request.body_blobs.is_empty())
+                .map(|_| {
+                    format!(
+                        "request.bodyBlobs of workflow \"{}\" step \"{}\" (seq {})",
+                        step.workflow_id, step.step_id, step.seq
+                    )
+                })
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,12 +117,20 @@ pub fn read_trace_file(path: &Path) -> Result<TraceFile, String> {
             version.map_or_else(|| "(none)".to_owned(), |version| format!("\"{version}\""))
         ));
     }
-    serde_json::from_value(value).map_err(parse_error)
+    let trace: TraceFile = serde_json::from_value(value).map_err(parse_error)?;
+    if let Some(slot) = trace.recorded_bytes() {
+        return Err(format!(
+            "trace {} records bytes at {slot}; a trace keeps only a descriptor of bytes, and replay cannot restore them yet",
+            path.display()
+        ));
+    }
+    Ok(trace)
 }
 
 pub fn build_trace_file(
     meta: TraceRunMetadata,
     inputs: BTreeMap<String, Value>,
+    input_blobs: BTreeMap<String, BytesDescriptor>,
     steps: Vec<TraceStepRecord>,
 ) -> TraceFile {
     TraceFile {
@@ -129,6 +158,7 @@ pub fn build_trace_file(
             sequential_fallbacks: meta.sequential_fallbacks,
         },
         inputs,
+        input_blobs,
         steps,
     }
 }
@@ -271,9 +301,7 @@ fn truncate_at_char_boundary(text: &mut String, max_bytes: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arazzo_runtime::{
-        BytesDescriptor, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, REDACTED,
-    };
+    use arazzo_runtime::{TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, REDACTED};
 
     fn make_trace_file(response: TraceResponse) -> TraceFile {
         TraceFile {
@@ -297,6 +325,7 @@ mod tests {
                 sequential_fallbacks: Vec::new(),
             },
             inputs: BTreeMap::new(),
+            input_blobs: BTreeMap::new(),
             steps: vec![TraceStepRecord {
                 seq: 1,
                 workflow_id: "wf".to_string(),
@@ -311,6 +340,7 @@ mod tests {
                     url: "https://example.com/test".to_string(),
                     headers: BTreeMap::new(),
                     body: None,
+                    body_blobs: BTreeMap::new(),
                     redirects: Vec::new(),
                 }),
                 response: Some(response),

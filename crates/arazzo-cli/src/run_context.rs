@@ -23,6 +23,8 @@ pub struct RunOptions {
     pub no_deps: bool,
     pub input_flags: Vec<String>,
     pub input_json_flags: Vec<String>,
+    pub input_file_flags: Vec<String>,
+    pub max_input_file_size: usize,
     pub http_timeout: Duration,
     pub execution_timeout: Duration,
     pub header_flags: Vec<String>,

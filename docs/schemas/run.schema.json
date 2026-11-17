@@ -40,6 +40,7 @@
           "type": "string"
         },
         "code": {
+          "description": "The stage that failed: `RUN_INPUT_FORMAT` for a malformed `--input`\nor `--input-json`, `RUN_INPUT_FILE` for an `--input-file` that is\nrefused or cannot be read, another `RUN_*` code for the spec, trace\nor export, and a `RUNTIME_*` code for execution.",
           "type": "string"
         },
         "warnings": {
@@ -168,7 +169,9 @@
             "type": "string"
           }
         },
-        "body": true,
+        "body": {
+          "description": "The logical request body. Bytes are never printed: a bytes body is\nits descriptor, `{\"kind\":\"bytes\",\"size\":…,\"sha256\":…}` with optional\n`mediaType` and `filename`, or `{\"kind\":\"bytes\",\"redacted\":true}` for\nbytes from a sensitive input."
+        },
         "warnings": {
           "type": "array",
           "items": {

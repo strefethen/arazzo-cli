@@ -125,7 +125,8 @@ impl Execution<'_, '_> {
                 return match resolution.value {
                     ResolvedValue::Present(value) => Ok(Some(value)),
                     ResolvedValue::Missing => Ok(None),
-                    ResolvedValue::Unavailable(unavailable) => Err(ConditionError {
+                    ResolvedValue::Unavailable(unavailable)
+                    | ResolvedValue::Blob { unavailable, .. } => Err(ConditionError {
                         kind: ConditionErrorKind::ValueUnavailable,
                         byte_offset: syntax.span.start,
                         message: unavailable.to_string(),

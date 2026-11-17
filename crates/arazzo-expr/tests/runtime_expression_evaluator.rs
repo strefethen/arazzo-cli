@@ -51,6 +51,7 @@ fn evaluator() -> ExpressionEvaluator {
         request_body: arazzo_expr::BodySlot::present(body.clone()),
         response_body: arazzo_expr::BodySlot::present(body.clone()),
         message_payload: Some(body),
+        blob_slots: arazzo_expr::BlobSlots::default(),
     })
 }
 

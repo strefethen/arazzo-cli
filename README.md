@@ -121,6 +121,8 @@ Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.j
 
 - `--input key=value` — workflow input with scalar coercion and environment-variable lookup (repeatable); use `--input-json` for explicit JSON types
 - `--input-json key=<json>` — JSON-typed input (repeatable)
+- `--input-file name=<path>` — bytes input read from a file, for an input whose schema declares no `type`; send it whole with `payload: $inputs.<name>` under an explicit non-JSON `contentType` (repeatable)
+- `--max-input-file-size <bytes>` — size limit for one `--input-file`, enforced while reading (default `10485760` = 10 MiB)
 - `--header Name=value` — HTTP header applied to all requests (repeatable)
 - `--step <step-id>` — execute a single step (auto-resolves upstream dependencies)
 - `--no-deps` — skip dependency resolution when using `--step` (isolated execution)

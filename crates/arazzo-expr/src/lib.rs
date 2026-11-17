@@ -3,7 +3,7 @@
 //! Expression parser and evaluator for Arazzo runtime expressions.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use std::sync::LazyLock;
@@ -20,7 +20,7 @@ mod simple_condition;
 mod step_output_reference;
 
 pub use resolution::{
-    ExpressionResolution, StoredValueReference, ValueResolution, ValueUnavailable,
+    BlobSlot, ExpressionResolution, StoredValueReference, ValueResolution, ValueUnavailable,
 };
 
 pub use step_output_reference::{
@@ -139,10 +139,17 @@ impl From<Option<Value>> for BodySlot {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlobSlots {
+    pub inputs: Arc<BTreeSet<String>>,
+    pub workflow_inputs: Arc<BTreeMap<String, BTreeSet<String>>>,
+}
+
 /// Evaluation context for expression resolution.
 #[derive(Debug, Clone, Default)]
 pub struct EvalContext {
     pub inputs: Arc<BTreeMap<String, Value>>,
+    pub blob_slots: BlobSlots,
     /// Step outputs, wrapped in `Arc` for cheap cloning during repeated evaluation.
     pub steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     pub outputs: BTreeMap<String, Value>,
@@ -205,6 +212,19 @@ impl ExpressionEvaluator {
         interpolation::resolve_value(value, self.context())
     }
 
+    pub fn blob_slot(&self, value: &str) -> Option<BlobSlot> {
+        if self.ctx.blob_slots.inputs.is_empty() {
+            return None;
+        }
+        let Ok(ValueStringSyntax::Expression(expression)) = classify_value_string(value) else {
+            return None;
+        };
+        match resolution::resolve_parsed(&expression, self.context()).value {
+            resolution::ResolvedValue::Blob { slot, .. } => Some(slot),
+            _ => None,
+        }
+    }
+
     /// Evaluate an expression and return a dynamic JSON value.
     ///
     /// Missing keys and unknown namespaces silently return `Value::Null`.
@@ -224,7 +244,8 @@ impl ExpressionEvaluator {
         match resolution::resolve_parsed(&parsed, self.context()).value {
             resolution::ResolvedValue::Present(value) => Ok(Some(value)),
             resolution::ResolvedValue::Missing => Ok(None),
-            resolution::ResolvedValue::Unavailable(unavailable) => Err(unavailable),
+            resolution::ResolvedValue::Unavailable(unavailable)
+            | resolution::ResolvedValue::Blob { unavailable, .. } => Err(unavailable),
         }
     }
 

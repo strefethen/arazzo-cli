@@ -34,6 +34,7 @@ mod asyncapi_receive_tests;
 mod asyncapi_target;
 #[cfg(test)]
 mod asyncapi_target_tests;
+mod blob;
 mod builder;
 mod bytes_descriptor;
 mod client;
@@ -77,6 +78,7 @@ mod regex_cache;
 mod replay;
 mod replay_projection;
 mod request_admission;
+mod request_body;
 mod response_body;
 mod run_record;
 mod source_document;
@@ -95,6 +97,7 @@ mod xml_admission;
 mod xpath;
 
 use ::url as url_crate;
+pub use blob::{Blob, WorkflowInputs};
 pub use builder::{relative_openapi_source_paths, EngineBuilder};
 pub use bytes_descriptor::{BytesDescriptor, ContentDescriptor, RedactedDescriptor};
 use client::HttpClient;

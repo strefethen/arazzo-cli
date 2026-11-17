@@ -147,7 +147,7 @@ fn resolve_value_checked(
     }
 }
 
-fn child_pointer(pointer: &str, token: &str) -> String {
+pub(super) fn child_pointer(pointer: &str, token: &str) -> String {
     format!("{pointer}/{}", token.replace('~', "~0").replace('/', "~1"))
 }
 

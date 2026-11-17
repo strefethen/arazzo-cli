@@ -13,6 +13,7 @@ pub(super) fn validate_replay_request(
         url: actual.url.clone(),
         headers: actual.headers.clone(),
         body: logical_body.cloned(),
+        body_blobs: BTreeMap::new(),
         redirects: Vec::new(),
     };
     redact_trace_request(&mut expected);
@@ -61,6 +62,7 @@ mod tests {
             url: cfg.url.clone(),
             headers: cfg.headers.clone(),
             body,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         }
     }

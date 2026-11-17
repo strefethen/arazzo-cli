@@ -413,6 +413,7 @@ mod tests {
             url: "https://example.com/token".to_string(),
             headers: BTreeMap::new(),
             body: Some(json!(body)),
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         };
         let mut dry_run = DryRunRequest {

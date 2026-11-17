@@ -287,6 +287,7 @@ fn replay_record(url: &str) -> TraceStepRecord {
             url: url.to_string(),
             headers: BTreeMap::new(),
             body: None,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         }),
         response: Some(TraceResponse {

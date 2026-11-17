@@ -112,9 +112,15 @@ Blob slots are marked out of band, by `inputBlobs`, `outputBlobs`,
 `request.bodyBlobs` and `response.bodyBlob`. A value elsewhere in the trace
 that merely has the descriptor's shape is ordinary JSON, not bytes.
 
-This release records `response.bodyBlob`. `inputBlobs`, `outputBlobs` and
-`request.bodyBlobs` are part of the schema now so it does not change when
-bytes inputs, outputs and multipart requests arrive.
+This release records `response.bodyBlob`, `inputBlobs` for inputs loaded with
+`run --input-file`, and `request.bodyBlobs` with the single key `""` for a
+request body that is bytes as a whole. `outputBlobs` and `/<part>` keys are
+part of the schema now so it does not change when bytes outputs and multipart
+requests arrive.
+
+A trace that records `inputBlobs` or `request.bodyBlobs` does not replay yet:
+`replay` refuses it with `REPLAY_TRACE_LOAD`, because the trace holds only
+descriptors and replay cannot restore the bytes.
 
 ## Replay
 

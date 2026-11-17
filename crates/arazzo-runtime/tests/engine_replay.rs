@@ -56,6 +56,7 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
             url: url.to_string(),
             headers: BTreeMap::new(),
             body: None,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         }),
         response: Some(TraceResponse {
@@ -203,6 +204,7 @@ async fn replay_uses_the_full_recorded_body() {
             url: "https://replay.invalid/items".to_string(),
             headers: BTreeMap::new(),
             body: None,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         }),
         response: Some(TraceResponse {

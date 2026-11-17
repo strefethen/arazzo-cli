@@ -333,6 +333,10 @@ pub enum RunOutput {
     // `main` prints this shape from a `CliError` built by `run_error`.
     Error {
         error: String,
+        /// The stage that failed: `RUN_INPUT_FORMAT` for a malformed `--input`
+        /// or `--input-json`, `RUN_INPUT_FILE` for an `--input-file` that is
+        /// refused or cannot be read, another `RUN_*` code for the spec, trace
+        /// or export, and a `RUNTIME_*` code for execution.
         code: String,
         /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

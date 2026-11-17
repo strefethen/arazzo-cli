@@ -437,9 +437,9 @@ fn a_request_body_with_no_payload_preserves_the_bound_method() {
     assert_eq!(prepared.method, "GET");
     assert!(prepared.body.is_none(), "actual: {:?}", prepared.body);
     assert!(
-        prepared.body_json.is_none(),
+        prepared.logical.json().is_none(),
         "actual: {:?}",
-        prepared.body_json
+        prepared.logical
     );
     assert!(
         !prepared.headers.contains_key("Content-Type"),

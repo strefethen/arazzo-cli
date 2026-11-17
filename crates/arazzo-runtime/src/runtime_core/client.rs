@@ -335,7 +335,7 @@ impl HttpClient {
     ) -> Result<Self, RuntimeError> {
         let mode = if let Some(steps) = replay_trace_steps {
             HttpClientMode::Replay(Arc::new(tokio::sync::Mutex::new(
-                ReplayState::from_trace_steps(&steps),
+                ReplayState::from_trace_steps(&steps)?,
             )))
         } else {
             // Redirects are followed by an explicit loop in `request` so

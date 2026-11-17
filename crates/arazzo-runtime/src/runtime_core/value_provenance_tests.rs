@@ -14,6 +14,7 @@ fn marked(value: Value) -> ProvenancedValues {
                 ..Default::default()
             },
         )]),
+        blobs: BTreeMap::new(),
     }
 }
 

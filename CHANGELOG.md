@@ -17,6 +17,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--max-pending-requests`, `--max-result-bytes`, `--max-response-body-bytes`,
   `--max-document-bytes`, `--max-http-timeout` and `--max-execution-timeout`.
   README and SECURITY.md list what is and is not restricted.
+- **A workflow can upload a file byte for byte** — `run --input-file
+  <name>=<path>` loads a file as a bytes input, and a step with
+  `payload: $inputs.<name>` and an explicit `contentType` that is neither JSON
+  nor form sends exactly those bytes, including across a 307 or 308 redirect.
+  The input must be declared in the workflow's `inputs` with a schema that has
+  no `type`, `$ref`, `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `not` or `if`.
+  Any other schema, an undeclared name, a name also given by `--input` or
+  `--input-json`, an unreadable file and a file over `--max-input-file-size`
+  (default 10 MiB, counted while reading) fail before the run with
+  `RUN_INPUT_FILE`. The path is taken literally, and no document field names a
+  file: `payload: ./cat.jpg` is the text `./cat.jpg`.
+  - Bytes are opaque, and the whole value as a request body is the only place
+    they can go in this release. A JSON Pointer into them, `{}` interpolation,
+    a criterion or Selector Object context, a `simple` condition operand, a
+    parameter in any location, a replacement target or value, an output, a
+    `correlationId`, a `workflowId` step or action parameter, a `$workflows`
+    reference to an inherited bytes input, and debugger evaluate, watch and
+    breakpoint-condition requests fail with `RUNTIME_VALUE_UNAVAILABLE`; a
+    request whose preparation reads them is not sent.
+  - Bytes with no `contentType`, under a JSON or
+    `application/x-www-form-urlencoded` `contentType`, or inside a payload map
+    or array fail with `RUNTIME_INVALID_REQUEST_BODY` before sending.
+  - After a bytes upload `$request.body` is bytes too: every step criterion,
+    output, action criterion, action target or parameter, and debugger request
+    that reads it fails with `RUNTIME_VALUE_UNAVAILABLE`. An attempt that fails
+    in transport records no request, so an `onFailure` action there still reads
+    `$request.body` as missing.
+  - Bytes are never printed or recorded. A trace lists the input under
+    `inputBlobs` and the request body under `request.bodyBlobs`; `--dry-run`
+    and `--export-run` show the descriptor (`kind: "bytes"`, `size`, `sha256`,
+    `filename`) in place of the body or input. An input declared `writeOnly`
+    or `format: password`, or named like a credential, shows
+    `{"kind": "bytes", "redacted": true}` with no hash. `replay` refuses a
+    trace that recorded bytes with `REPLAY_TRACE_LOAD`.
+  - Library callers pass bytes through `WorkflowInputs`, which every
+    `Engine::execute*` method accepts in place of the JSON input map.
+    **Upgrade note:** a call that relied on type inference for that argument,
+    such as `execute(id, serde_json::from_value(v)?)`, must now name the map
+    type.
 
 ### Changed
 

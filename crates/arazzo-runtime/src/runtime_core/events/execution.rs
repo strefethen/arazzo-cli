@@ -5,7 +5,7 @@ impl Engine {
     /// for streaming events and awaiting the final result.
     ///
     /// A Tokio runtime must be active when calling this method.
-    pub fn execute(&self, workflow_id: &str, inputs: BTreeMap<String, Value>) -> ExecutionHandle {
+    pub fn execute(&self, workflow_id: &str, inputs: impl Into<WorkflowInputs>) -> ExecutionHandle {
         self.execute_with_completed_workflows(workflow_id, inputs, &BTreeSet::new())
     }
 
@@ -15,9 +15,10 @@ impl Engine {
     pub fn execute_with_completed_workflows(
         &self,
         workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
         completed_workflows: &BTreeSet<String>,
     ) -> ExecutionHandle {
+        let inputs = ProvenancedValues::from(inputs.into());
         let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
         let (result_tx, result_rx) = oneshot::channel();
         let cancellation = ExecutionCancellation::default();
@@ -50,7 +51,7 @@ impl Engine {
                 .execute_inner(
                     &ctx,
                     &wf_id,
-                    inputs.into(),
+                    inputs,
                     0,
                     Some(_completion_guard.cancellation()),
                 )
@@ -69,7 +70,7 @@ impl Engine {
     pub fn execute_with_timeout(
         &self,
         workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
         timeout: Duration,
     ) -> ExecutionHandle {
         self.execute_with_timeout_and_completed_workflows(
@@ -85,7 +86,7 @@ impl Engine {
     pub fn execute_with_timeout_and_completed_workflows(
         &self,
         workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
         timeout: Duration,
         completed_workflows: &BTreeSet<String>,
     ) -> ExecutionHandle {
@@ -99,7 +100,7 @@ impl Engine {
     pub async fn execute_collect(
         &self,
         workflow_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
     ) -> ExecutionResult {
         self.execute(workflow_id, inputs).collect().await
     }
@@ -114,7 +115,7 @@ impl Engine {
         &self,
         workflow_id: &str,
         step_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
         no_deps: bool,
     ) -> ExecutionHandle {
         self.execute_step_with_completed_workflows(
@@ -131,10 +132,11 @@ impl Engine {
         &self,
         workflow_id: &str,
         step_id: &str,
-        inputs: BTreeMap<String, Value>,
+        inputs: impl Into<WorkflowInputs>,
         no_deps: bool,
         completed_workflows: &BTreeSet<String>,
     ) -> ExecutionHandle {
+        let inputs = ProvenancedValues::from(inputs.into());
         let (event_tx, event_rx) = mpsc::channel(self.inner.channel_capacity);
         let (result_tx, result_rx) = oneshot::channel();
         let cancellation = ExecutionCancellation::default();
@@ -169,7 +171,7 @@ impl Engine {
                     &ctx,
                     &wf_id,
                     &s_id,
-                    inputs.into(),
+                    inputs,
                     no_deps,
                     Some(_completion_guard.cancellation()),
                 )

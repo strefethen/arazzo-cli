@@ -21,12 +21,21 @@ pub(super) struct ReplayState {
 }
 
 impl ReplayState {
-    pub(super) fn from_trace_steps(steps: &[TraceStepRecord]) -> Self {
+    pub(super) fn from_trace_steps(steps: &[TraceStepRecord]) -> Result<Self, RuntimeError> {
         let mut records_by_step = BTreeMap::<ReplayKey, VecDeque<ReplayRecord>>::new();
         for step in steps {
             let Some(request) = &step.request else {
                 continue;
             };
+            if !request.body_blobs.is_empty() {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::ValueUnavailable,
+                    format!(
+                        "replay trace records bytes in the request body of workflow {:?} step {:?} (seq {}); replay cannot restore recorded bytes yet",
+                        step.workflow_id, step.step_id, step.seq
+                    ),
+                ));
+            }
             let key = ReplayKey {
                 workflow_id: step.workflow_id.clone(),
                 step_id: step.step_id.clone(),
@@ -42,6 +51,6 @@ impl ReplayState {
                     error: step.error.clone(),
                 });
         }
-        Self { records_by_step }
+        Ok(Self { records_by_step })
     }
 }

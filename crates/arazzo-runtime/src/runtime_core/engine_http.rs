@@ -280,71 +280,13 @@ impl Engine {
             self.build_url_with_evaluator(&resolved.path, &resolved.base, step, &eval, &admission)?;
 
         let mut prep_warnings = url_result.warnings.clone();
-        let mut projected_body = None;
-        let body_json = if let Some(req_body) = &step.request_body {
-            if let Some(payload) = &req_body.payload {
-                let resolution = admission.resolve(payload, &eval, "requestBody.payload")?;
-                let mut projection = admission.project(&resolution, "requestBody.payload")?;
-                let mut body = resolution.value;
-                let payload_warnings = resolution.warnings;
-                prep_warnings.extend(
-                    payload_warnings
-                        .into_iter()
-                        .map(|warning| format!("requestBody.payload: {warning}")),
-                );
-                if !req_body.replacements.is_empty() {
-                    if self.inner.dry_run_mode {
-                        let (mutated, display, warnings) = payload::apply_replacements_projected(
-                            body,
-                            projection,
-                            req_body.content_type.as_str(),
-                            &req_body.replacements,
-                            &eval,
-                            &admission,
-                        )?;
-                        body = mutated;
-                        projection = display;
-                        prep_warnings.extend(warnings);
-                    } else {
-                        let (mutated, warnings) = apply_replacements(
-                            body,
-                            req_body.content_type.as_str(),
-                            &req_body.replacements,
-                            &eval,
-                            &admission,
-                        )?;
-                        body = mutated;
-                        projection = body.clone();
-                        prep_warnings.extend(warnings);
-                    }
-                }
-                projected_body = Some(projection);
-                Some(body)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let body = body_json
-            .as_ref()
-            .map(|value| {
-                let ct = step
-                    .request_body
-                    .as_ref()
-                    .map(|rb| rb.content_type.as_str())
-                    .unwrap_or("application/json");
-                if super::form_body::is_form(ct) {
-                    return super::form_body::encode(value);
-                }
-                if !arazzo_spec::media_type::is_json(ct) {
-                    if let Value::String(s) = value {
-                        return Ok(s.as_bytes().to_vec());
-                    }
-                }
-                Ok(serde_json::to_vec(value).unwrap_or_default())
-            })
-            .transpose()?;
+        let request_body::PreparedBody {
+            wire: body,
+            logical,
+            projection: projected_body,
+            warnings: body_warnings,
+        } = request_body::prepare(step, vars, &eval, &admission, self.inner.dry_run_mode)?;
+        prep_warnings.extend(body_warnings);
 
         let mut headers = BTreeMap::new();
         if body.is_some() {
@@ -406,7 +348,8 @@ impl Engine {
             method: method.clone(),
             url: url_result.url.clone(),
             headers: headers.clone(),
-            body: body_json.clone(),
+            body: logical.json().cloned(),
+            body_blobs: logical.blobs(),
             redirects: Vec::new(),
         };
 
@@ -416,6 +359,7 @@ impl Engine {
             url: projected_url.url,
             headers: projected_headers,
             body: projected_body,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         };
 
@@ -424,7 +368,7 @@ impl Engine {
             url_result,
             headers,
             body,
-            body_json,
+            logical,
             trace_request,
             presentation,
             warnings: prep_warnings,
@@ -498,7 +442,7 @@ impl Engine {
                     headers: prep.headers.clone(),
                     body: prep.body.clone(),
                 },
-                prep.body_json.as_ref(),
+                prep.logical.json(),
                 &exec_ctx.cancel,
                 &exec_ctx.is_timeout,
             )
@@ -1076,7 +1020,7 @@ pub(crate) struct PreparedRequest {
     pub url_result: UrlBuildResult,
     pub headers: BTreeMap<String, String>,
     pub body: Option<Vec<u8>>,
-    pub body_json: Option<Value>,
+    pub logical: request_body::LogicalBody,
     pub trace_request: TraceRequest,
     presentation: TraceRequest,
     pub warnings: Vec<String>,

@@ -272,6 +272,8 @@ pub(super) struct StepTraceData {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct VarStore {
     pub(super) inputs: Arc<BTreeMap<String, Value>>,
+    input_blobs: Arc<BTreeMap<String, Blob>>,
+    blob_slots: arazzo_expr::BlobSlots,
     steps: Arc<BTreeMap<String, BTreeMap<String, Value>>>,
     workflow_states: Arc<BTreeMap<String, arazzo_expr::WorkflowEvalState>>,
     pub(super) input_provenance: BTreeMap<String, ValueProvenance>,
@@ -336,7 +338,17 @@ impl VarStore {
         }
     }
 
-    pub(super) fn set_inputs(&mut self, inputs: ProvenancedValues, omissions: BTreeSet<String>) {
+    pub(super) fn set_inputs(
+        &mut self,
+        mut inputs: ProvenancedValues,
+        mut omissions: BTreeSet<String>,
+    ) {
+        inputs
+            .values
+            .retain(|name, _| !inputs.blobs.contains_key(name));
+        omissions.retain(|name| !inputs.blobs.contains_key(name));
+        self.blob_slots.inputs = Arc::new(inputs.blobs.keys().cloned().collect());
+        self.input_blobs = Arc::new(inputs.blobs);
         self.inputs = Arc::new(inputs.values);
         self.input_provenance = inputs.provenance;
         self.optional_omissions = omissions;
@@ -346,6 +358,18 @@ impl VarStore {
         ProvenancedValues {
             values: (*self.inputs).clone(),
             provenance: self.input_provenance.clone(),
+            blobs: (*self.input_blobs).clone(),
+        }
+    }
+
+    pub(super) fn blob_slots(&self) -> arazzo_expr::BlobSlots {
+        self.blob_slots.clone()
+    }
+
+    pub(super) fn blob(&self, slot: &arazzo_expr::BlobSlot) -> Option<Blob> {
+        match slot {
+            arazzo_expr::BlobSlot::Input { name } => self.input_blobs.get(name).cloned(),
+            _ => None,
         }
     }
 
@@ -357,6 +381,7 @@ impl VarStore {
                 .get(step_id)
                 .cloned()
                 .unwrap_or_default(),
+            blobs: BTreeMap::new(),
         }
     }
 
@@ -384,9 +409,16 @@ impl VarStore {
     }
 
     pub(crate) fn debug_scopes(&self) -> DebugScopes {
+        let mut inputs = (*self.inputs).clone();
+        for name in self.input_blobs.keys() {
+            inputs.insert(
+                name.clone(),
+                Value::String(super::blob::BYTES_SCOPE_MARKER.to_owned()),
+            );
+        }
         DebugScopes {
             locals: BTreeMap::new(),
-            inputs: (*self.inputs).clone(),
+            inputs,
             steps: (*self.steps).clone(),
         }
     }
@@ -406,8 +438,16 @@ impl VarStore {
         workflow_id: &str,
         inputs: ProvenancedValues,
         outputs: ProvenancedValues,
-        optional_omissions: BTreeSet<String>,
+        mut optional_omissions: BTreeSet<String>,
     ) {
+        optional_omissions.retain(|name| !inputs.blobs.contains_key(name));
+        let bytes_inputs: BTreeSet<String> = inputs.blobs.keys().cloned().collect();
+        if !bytes_inputs.is_empty() {
+            Arc::make_mut(&mut self.blob_slots.workflow_inputs)
+                .insert(workflow_id.to_string(), bytes_inputs);
+        } else if self.blob_slots.workflow_inputs.contains_key(workflow_id) {
+            Arc::make_mut(&mut self.blob_slots.workflow_inputs).remove(workflow_id);
+        }
         self.workflow_provenance.insert(
             workflow_id.to_string(),
             super::value_provenance::WorkflowProvenance {

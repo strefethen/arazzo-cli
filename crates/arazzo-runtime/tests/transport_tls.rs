@@ -567,6 +567,7 @@ async fn replay_engine_emits_no_transport_warnings() {
             url: "http://192.0.2.1/a".to_string(),
             headers,
             body: None,
+            body_blobs: BTreeMap::new(),
             redirects: Vec::new(),
         }),
         response: Some(TraceResponse {

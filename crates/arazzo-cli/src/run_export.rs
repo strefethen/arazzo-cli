@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use arazzo_runtime::{
-    is_sensitive_key, redact_headers, redact_text_patterns, redact_url_components, ExecutionResult,
-    RunStepOutcome, RunStepRecord, TraceDecision, REDACTED,
+    is_sensitive_key, redact_headers, redact_text_patterns, redact_url_components, BytesDescriptor,
+    ExecutionResult, RunStepOutcome, RunStepRecord, TraceDecision, REDACTED,
 };
 use humantime::format_rfc3339;
 use schemars::JsonSchema;
@@ -27,6 +27,10 @@ pub struct RunExport {
     schema_version: SchemaVersion,
     tool: Tool,
     run: Run,
+    /// Workflow inputs. A bytes input is its descriptor,
+    /// `{"kind":"bytes","size":…,"sha256":…}` with optional `mediaType` and
+    /// `filename`, or `{"kind":"bytes","redacted":true}` for a sensitive
+    /// input; its content is never exported.
     inputs: BTreeMap<String, Value>,
     outputs: BTreeMap<String, Value>,
     workflows: BTreeMap<String, Workflow>,
@@ -158,6 +162,7 @@ pub struct RunMetadata<'a> {
 pub fn build(
     meta: RunMetadata<'_>,
     inputs: &BTreeMap<String, Value>,
+    input_blobs: &BTreeMap<String, BytesDescriptor>,
     result: &ExecutionResult,
 ) -> Result<RunExport, String> {
     let mut workflows = BTreeMap::new();
@@ -186,6 +191,11 @@ pub fn build(
     };
     let mut inputs = inputs.clone();
     redact_values(&mut inputs);
+    for (name, descriptor) in input_blobs {
+        let descriptor = serde_json::to_value(descriptor)
+            .map_err(|err| format!("serializing bytes descriptor of input \"{name}\": {err}"))?;
+        inputs.insert(name.clone(), descriptor);
+    }
     let mut outputs = result.outputs.as_ref().cloned().unwrap_or_default();
     redact_values(&mut outputs);
     Ok(RunExport {

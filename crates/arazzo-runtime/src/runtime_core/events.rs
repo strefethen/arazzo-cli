@@ -235,6 +235,10 @@ pub struct DryRunRequest {
     pub url: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// The logical request body. Bytes are never printed: a bytes body is
+    /// its descriptor, `{"kind":"bytes","size":…,"sha256":…}` with optional
+    /// `mediaType` and `filename`, or `{"kind":"bytes","redacted":true}` for
+    /// bytes from a sensitive input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -316,6 +320,8 @@ pub struct TraceRequest {
         deserialize_with = "deserialize_present_body"
     )]
     pub body: Option<Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub body_blobs: BTreeMap<String, BytesDescriptor>,
     /// Redirect chain followed before the final response, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redirects: Vec<TraceRedirectHop>,

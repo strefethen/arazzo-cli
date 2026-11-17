@@ -6,6 +6,7 @@ use arazzo_expr::{RuntimeExpressionNamespace, StoredValueReference, ValueResolut
 pub(crate) struct ProvenancedValues {
     pub(crate) values: BTreeMap<String, Value>,
     pub(super) provenance: BTreeMap<String, ValueProvenance>,
+    pub(super) blobs: BTreeMap<String, Blob>,
 }
 
 impl From<BTreeMap<String, Value>> for ProvenancedValues {
@@ -13,6 +14,17 @@ impl From<BTreeMap<String, Value>> for ProvenancedValues {
         Self {
             values,
             provenance: BTreeMap::new(),
+            blobs: BTreeMap::new(),
+        }
+    }
+}
+
+impl From<WorkflowInputs> for ProvenancedValues {
+    fn from(inputs: WorkflowInputs) -> Self {
+        Self {
+            values: inputs.values,
+            provenance: BTreeMap::new(),
+            blobs: inputs.blobs,
         }
     }
 }

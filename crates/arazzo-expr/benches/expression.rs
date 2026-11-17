@@ -61,6 +61,7 @@ fn rich_context() -> EvalContext {
 
     EvalContext {
         inputs: inputs.into(),
+        blob_slots: arazzo_expr::BlobSlots::default(),
         steps: steps.into(),
         outputs: BTreeMap::new(),
         workflows: BTreeMap::new().into(),

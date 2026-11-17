@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalContext {
     let mut ctx = EvalContext {
         inputs: vars.inputs_snapshot(),
+        blob_slots: vars.blob_slots(),
         steps: vars.steps_snapshot(),
         workflows: vars.workflows_snapshot(),
         ..EvalContext::default()
@@ -28,6 +29,19 @@ pub(super) fn base(engine: &Engine, vars: &VarStore, response: Option<&Response>
     ctx
 }
 
+pub(super) fn after_attempt(
+    engine: &Engine,
+    vars: &VarStore,
+    response: Option<&Response>,
+    request: Option<&TraceRequest>,
+) -> EvalContext {
+    let mut ctx = base(engine, vars, response);
+    if let Some(slot) = request.and_then(super::request_body::recorded_bytes) {
+        ctx.request_body = slot;
+    }
+    ctx
+}
+
 pub(super) fn request(engine: &Engine, vars: &VarStore, method: &str) -> EvalContext {
     super::request_admission::request_context(vars, base(engine, vars, None), method)
 }
@@ -44,7 +58,7 @@ pub(super) fn post_request(
     ctx.request_headers = prep.headers.clone();
     ctx.request_query = prep.url_result.query_params.clone();
     ctx.request_path = prep.url_result.path_params.clone();
-    ctx.request_body = prep.body_json.clone().into();
+    ctx.request_body = prep.logical.slot();
     ctx
 }
 

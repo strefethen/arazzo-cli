@@ -5,13 +5,14 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     redact_inputs, sensitive_input_names, ClientConfig, EngineBuilder, EngineEvent,
-    SequentialFallback, TraceStepRecord, TransportWarning,
+    SequentialFallback, TraceStepRecord, TransportWarning, WorkflowInputs,
 };
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::cli_error::{self, CliError, SpecErrorCodes, CLI_OUTPUT_WRITE};
 use crate::handlers::{parse_input_kv, parse_input_value};
+use crate::input_file::{self, InputFiles};
 use crate::message_transport::{ArmedLinePrinter, RUN_MESSAGE_CODES};
 use crate::output;
 use crate::run_context::RunContext;
@@ -126,15 +127,25 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         inputs.insert(key, value);
     }
 
+    let input_schema = spec
+        .workflows
+        .iter()
+        .find(|workflow| workflow.workflow_id == run.workflow_id)
+        .and_then(|workflow| workflow.inputs.as_ref());
+    let input_blobs = InputFiles {
+        flags: &run.input_file_flags,
+        max_bytes: run.max_input_file_size,
+        workflow_id: &run.workflow_id,
+        schema: input_schema,
+        json_inputs: &inputs,
+    }
+    .load()
+    .map_err(|message| output::run_error("RUN_INPUT_FILE", message, &[], &transport_warnings))?;
+    let input_blob_descriptors = input_file::descriptors(&input_blobs);
+
     // One sensitive input-name set feeds both the `--verbose` echo and the
     // trace file, so the two sinks cannot disagree about what is a secret.
-    let sensitive_inputs = sensitive_input_names(
-        spec.workflows
-            .iter()
-            .find(|workflow| workflow.workflow_id == run.workflow_id)
-            .and_then(|workflow| workflow.inputs.as_ref()),
-        inputs.keys().map(String::as_str),
-    );
+    let sensitive_inputs = sensitive_input_names(input_schema, inputs.keys().map(String::as_str));
 
     if global.verbose {
         eprintln!("Executing workflow: {}", run.workflow_id);
@@ -142,6 +153,13 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         let mut redacted = inputs.clone();
         redact_inputs(&mut redacted, &sensitive_inputs);
         eprintln!("Inputs: {redacted:?}");
+        if !input_blob_descriptors.is_empty() {
+            let files: BTreeMap<&str, String> = input_blob_descriptors
+                .iter()
+                .map(|(name, descriptor)| (name.as_str(), descriptor.summary()))
+                .collect();
+            eprintln!("Input files: {files:?}");
+        }
     }
 
     let mut cfg = ClientConfig {
@@ -214,14 +232,15 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
 
     let run_started_at = SystemTime::now();
     let run_started_inst = std::time::Instant::now();
+    let workflow_inputs = WorkflowInputs::new(inputs.clone(), input_blobs);
     let exec_result = if let Some(step_id) = &run.step_id {
         let mut handle =
-            engine.execute_step(&run.workflow_id, step_id, inputs.clone(), run.no_deps);
+            engine.execute_step(&run.workflow_id, step_id, workflow_inputs, run.no_deps);
         handle.start_watchdog(execution_timeout);
         handle.collect().await
     } else {
         engine
-            .execute_with_timeout(&run.workflow_id, inputs.clone(), execution_timeout)
+            .execute_with_timeout(&run.workflow_id, workflow_inputs, execution_timeout)
             .collect()
             .await
     };
@@ -307,6 +326,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
                 sequential_fallbacks,
             },
             inputs.clone(),
+            input_blob_descriptors.clone(),
             trace_steps.clone(),
         );
         prepare_trace_for_write(&mut trace_file, run.trace_max_body_bytes, &sensitive_inputs);
@@ -329,6 +349,7 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
                 duration_ms: u64::try_from(run_duration.as_millis()).unwrap_or(u64::MAX),
             },
             &inputs,
+            &input_blob_descriptors,
             &exec_result,
         );
         let written =

@@ -60,6 +60,18 @@ pub enum Commands {
         #[arg(long = "input-json")]
         input_json: Vec<String>,
 
+        /// Bytes input read from a file, as `name=path`, for an input whose schema declares no type. The path is taken literally. Repeatable.
+        #[arg(long = "input-file", value_name = "NAME=PATH")]
+        input_file: Vec<String>,
+
+        /// Maximum size in bytes of one --input-file, enforced while reading (default: 10485760 = 10 MiB)
+        #[arg(
+            long = "max-input-file-size",
+            value_name = "BYTES",
+            default_value_t = arazzo_runtime::DEFAULT_MAX_RESPONSE_BYTES
+        )]
+        max_input_file_size: usize,
+
         /// Per-request HTTP timeout, for example 500ms, 30s, or 2m.
         #[arg(
             short = 't',

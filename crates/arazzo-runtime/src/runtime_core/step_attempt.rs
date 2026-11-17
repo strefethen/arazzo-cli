@@ -165,6 +165,7 @@ impl Engine {
                     workflow: scope.workflow,
                     step_idx: scope.step_idx,
                     result: &execution.result,
+                    request: execution.trace.request.as_ref(),
                     vars: scope.vars,
                     depth: scope.depth,
                     retry_count: scope.retry_count,

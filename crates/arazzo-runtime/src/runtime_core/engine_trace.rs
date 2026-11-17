@@ -234,7 +234,7 @@ impl Engine {
             step_id: &debug.step.step_id,
             vars: debug.vars,
             response: debug.response,
-            request: None,
+            request: debug.request,
             message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
@@ -279,7 +279,7 @@ impl Engine {
             step_id: &debug.step.step_id,
             vars: debug.vars,
             response: debug.response,
-            request: None,
+            request: debug.request,
             message: debug.message,
             current_outputs: &current_outputs,
             depth: debug.depth,
@@ -305,7 +305,7 @@ impl Engine {
         };
 
         let mut eval_ctx = super::step_context::with_message(
-            super::eval_context::base(self, gate.vars, gate.response),
+            super::eval_context::after_attempt(self, gate.vars, gate.response, gate.request),
             gate.message,
         );
         if !gate.current_outputs.is_empty() {
@@ -662,6 +662,11 @@ fn insert_request_locals(locals: &mut BTreeMap<String, Value>, request: &TraceRe
     locals.insert("requestHeaders".to_string(), json!(request.headers));
     if let Some(body) = &request.body {
         locals.insert("requestBody".to_string(), body.clone());
+    } else if !request.body_blobs.is_empty() {
+        locals.insert(
+            "requestBody".to_string(),
+            Value::String(super::blob::BYTES_SCOPE_MARKER.to_owned()),
+        );
     }
 }
 

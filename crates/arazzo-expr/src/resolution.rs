@@ -1,6 +1,7 @@
 //! Parsed Runtime Expression lookup with absence retained until public projection.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde_json::Value;
 
@@ -26,6 +27,20 @@ impl std::fmt::Display for ValueUnavailable {
 }
 
 impl std::error::Error for ValueUnavailable {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlobSlot {
+    Input { name: String },
+}
+
+impl fmt::Display for BlobSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input { name } => write!(f, "input \"{name}\""),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValueResolution {
@@ -179,6 +194,10 @@ pub(crate) enum ResolvedValue {
     Present(Value),
     Missing,
     Unavailable(ValueUnavailable),
+    Blob {
+        slot: BlobSlot,
+        unavailable: ValueUnavailable,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -192,7 +211,9 @@ impl Resolution {
         match self.value {
             ResolvedValue::Present(value) => Ok((value, self.warnings)),
             ResolvedValue::Missing => Ok((Value::Null, self.warnings)),
-            ResolvedValue::Unavailable(unavailable) => Err(unavailable),
+            ResolvedValue::Unavailable(unavailable) | ResolvedValue::Blob { unavailable, .. } => {
+                Err(unavailable)
+            }
         }
     }
 
@@ -229,6 +250,27 @@ impl Resolution {
                 expression: expression.raw().to_owned(),
                 reason: reason.to_owned(),
             }),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn blob(
+        expression: &ParsedRuntimeExpression<'_>,
+        slot: BlobSlot,
+        pointer: Option<RuntimeExpressionPointer<'_>>,
+    ) -> Self {
+        if pointer.is_some() {
+            return Self::unavailable(
+                expression,
+                &format!("{slot} is bytes, which a JSON Pointer cannot read"),
+            );
+        }
+        let unavailable = ValueUnavailable {
+            expression: expression.raw().to_owned(),
+            reason: format!("{slot} is bytes, which only a whole request body payload can carry"),
+        };
+        Self {
+            value: ResolvedValue::Blob { slot, unavailable },
             warnings: Vec::new(),
         }
     }
@@ -274,6 +316,12 @@ pub(crate) fn resolve_parsed(
                 unreachable!("canonical input/output syntax has a named form")
             };
             let (values, label) = if expression.namespace() == Namespace::Inputs {
+                if context.blob_slots.inputs.contains(*name) {
+                    let slot = BlobSlot::Input {
+                        name: (*name).to_owned(),
+                    };
+                    return Resolution::blob(expression, slot, *pointer);
+                }
                 (context.inputs.as_ref(), "input")
             } else {
                 (&context.outputs, "output")
@@ -322,6 +370,19 @@ pub(crate) fn resolve_parsed(
                 );
             };
             let (values, label) = if field.eq_ignore_ascii_case("inputs") {
+                if context
+                    .blob_slots
+                    .workflow_inputs
+                    .get(*id)
+                    .is_some_and(|names| names.contains(*name))
+                {
+                    return Resolution::unavailable(
+                        expression,
+                        &format!(
+                            "workflow \"{id}\" input \"{name}\" is bytes, which a $workflows reference cannot carry yet"
+                        ),
+                    );
+                }
                 (&state.inputs, "input")
             } else {
                 (&state.outputs, "output")
@@ -518,6 +579,7 @@ mod tests {
             request_body: crate::BodySlot::present(body.clone()),
             response_headers: BTreeMap::from([("x-response-id".to_owned(), "response".to_owned())]),
             response_body: crate::BodySlot::present(body.clone()),
+            blob_slots: crate::BlobSlots::default(),
             message_headers: BTreeMap::from([("x-message-id".to_owned(), "message".to_owned())]),
             message_payload: Some(body),
             self_uri: Some("workflows/example.yaml".to_owned()),
@@ -1220,5 +1282,129 @@ mod tests {
             assert!(evaluation.result, "{condition}");
             assert_eq!(evaluation.error, None, "{condition}");
         }
+    }
+
+    fn with_bytes_input() -> EvalContext {
+        let mut context = context();
+        let names = std::collections::BTreeSet::from(["photo".to_owned()]);
+        context.blob_slots.inputs = Arc::new(names.clone());
+        context.blob_slots.workflow_inputs = Arc::new(BTreeMap::from([("auth".to_owned(), names)]));
+        context
+    }
+
+    fn bytes(input: &str, reason: &str) -> ValueUnavailable {
+        ValueUnavailable {
+            expression: input.to_owned(),
+            reason: reason.to_owned(),
+        }
+    }
+
+    const WHOLE: &str =
+        "input \"photo\" is bytes, which only a whole request body payload can carry";
+    const POINTER: &str = "input \"photo\" is bytes, which a JSON Pointer cannot read";
+
+    #[test]
+    fn a_whole_reference_to_a_bytes_slot_is_the_blob_outcome() {
+        let context = with_bytes_input();
+        let evaluator = ExpressionEvaluator::new(context.clone());
+        let slot = BlobSlot::Input {
+            name: "photo".to_owned(),
+        };
+        for input in ["$inputs.photo", "$INPUTS.photo"] {
+            assert_eq!(
+                resolve(input, &context).value,
+                ResolvedValue::Blob {
+                    slot: slot.clone(),
+                    unavailable: bytes(input, WHOLE),
+                },
+                "{input}"
+            );
+            assert_eq!(evaluator.blob_slot(input), Some(slot.clone()), "{input}");
+        }
+        for not_whole in [
+            "$inputs.photo#",
+            "$inputs.photo#/a",
+            "{$inputs.photo}",
+            "x{$inputs.photo}",
+            "$inputs.Photo",
+            "$inputs.user",
+            "$workflows.auth.inputs.photo",
+            "photo",
+            "$inputs.photo extra",
+        ] {
+            assert_eq!(evaluator.blob_slot(not_whole), None, "{not_whole}");
+        }
+        assert_eq!(
+            ExpressionEvaluator::new(self::context()).blob_slot("$inputs.photo"),
+            None
+        );
+        assert_eq!(
+            resolve("$inputs.photo", &self::context()).value,
+            ResolvedValue::Missing
+        );
+    }
+
+    #[test]
+    fn bytes_never_become_a_value_through_any_resolution_entry_point() {
+        let evaluator = ExpressionEvaluator::new(with_bytes_input());
+        for (input, reason) in [
+            ("$inputs.photo", WHOLE),
+            ("$inputs.photo#", POINTER),
+            ("$inputs.photo#/items/0/id", POINTER),
+            (
+                "$workflows.auth.inputs.photo",
+                "workflow \"auth\" input \"photo\" is bytes, which a $workflows reference cannot carry yet",
+            ),
+            (
+                "$workflows.auth.inputs.photo#/a",
+                "workflow \"auth\" input \"photo\" is bytes, which a $workflows reference cannot carry yet",
+            ),
+        ] {
+            let unavailable = bytes(input, reason);
+            let template = format!("before {{{input}}} after");
+            assert_eq!(evaluator.evaluate(input), Err(unavailable.clone()));
+            assert_eq!(evaluator.evaluate_resolved(input), Err(unavailable.clone()));
+            assert_eq!(
+                evaluator.evaluate_with_diagnostics(input),
+                Err(unavailable.clone())
+            );
+            assert_eq!(
+                evaluator.evaluate_with_provenance(input),
+                Err(unavailable.clone())
+            );
+            assert_eq!(evaluator.evaluate_string(input), Err(unavailable.clone()));
+            for value in [input, template.as_str()] {
+                assert_eq!(evaluator.resolve_value(value), Err(unavailable.clone()));
+                assert_eq!(
+                    evaluator.resolve_value_with_diagnostics(value),
+                    Err(unavailable.clone())
+                );
+                assert_eq!(
+                    evaluator.resolve_value_with_provenance(value),
+                    Err(unavailable.clone())
+                );
+                assert!(evaluator
+                    .interpolate_string(value)
+                    .is_err_and(|refused| refused.reason.contains(" is bytes, which ")));
+            }
+            let condition = format!("{input} == 1");
+            let evaluation = evaluator.evaluate_condition_detailed(&condition);
+            assert!(!evaluation.result, "{condition}");
+            assert_eq!(
+                evaluation.error,
+                Some(crate::ConditionError {
+                    kind: crate::ConditionErrorKind::ValueUnavailable,
+                    byte_offset: 0,
+                    message: unavailable.to_string(),
+                }),
+                "{condition}"
+            );
+        }
+        assert_eq!(evaluator.evaluate("$inputs.user#/items/0/id"), Ok(json!(7)));
+        assert_eq!(
+            evaluator.evaluate("$workflows.auth.inputs.config#/items/0/id"),
+            Ok(json!(7))
+        );
+        assert!(evaluator.evaluate_condition("$statusCode == 201 || $inputs.photo == 1"));
     }
 }

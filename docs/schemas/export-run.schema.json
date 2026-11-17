@@ -13,6 +13,7 @@
       "$ref": "#/$defs/Run"
     },
     "inputs": {
+      "description": "Workflow inputs. A bytes input is its descriptor,\n`{\"kind\":\"bytes\",\"size\":…,\"sha256\":…}` with optional `mediaType` and\n`filename`, or `{\"kind\":\"bytes\",\"redacted\":true}` for a sensitive\ninput; its content is never exported.",
       "type": "object",
       "additionalProperties": true
     },

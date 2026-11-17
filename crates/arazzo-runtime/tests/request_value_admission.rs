@@ -325,7 +325,9 @@ async fn concrete_missing_null_type_and_enum_invalid_inputs_keep_validation() {
             "workflowId":"main","inputs":{"type":"object","required":["id"],"properties":{"id":{"type":"string","enum":["ok"]}}},
             "steps":[target(json!([{"name":"id","in":"path","value":"$inputs.id"}]))]
         }])).strict_inputs(true).dry_run(true).build().unwrap_or_else(|error| panic!("engine: {error}"));
-        let result = engine.execute_collect("main", parse(inputs)).await;
+        let result = engine
+            .execute_collect("main", parse::<BTreeMap<String, Value>>(inputs))
+            .await;
         assert_eq!(
             result
                 .outputs

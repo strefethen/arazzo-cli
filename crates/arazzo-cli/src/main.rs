@@ -9,6 +9,7 @@ mod cli;
 mod cli_error;
 mod generate;
 mod handlers;
+mod input_file;
 mod message_transport;
 mod output;
 mod run;
@@ -169,6 +170,8 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             no_deps,
             input,
             input_json,
+            input_file,
+            max_input_file_size,
             http_timeout,
             execution_timeout,
             header,
@@ -201,6 +204,8 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
                     no_deps,
                     input_flags: input,
                     input_json_flags: input_json,
+                    input_file_flags: input_file,
+                    max_input_file_size,
                     http_timeout,
                     execution_timeout,
                     header_flags: header,
