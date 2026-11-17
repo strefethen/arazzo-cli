@@ -524,7 +524,7 @@ impl Engine {
             headers: BTreeMap::new(),
             body: b"{}".to_vec(),
             body_value: arazzo_expr::BodySlot::present(json!({})),
-            content_type: ContentType::Json,
+            media_type: arazzo_spec::media_type::MediaType::parse("application/json"),
             redirects: Vec::new(),
         };
         let dry_ctx = super::eval_context::post_request(self, vars, Some(&fake), &prep);
@@ -584,6 +584,7 @@ impl Engine {
             body: prep.presentation.body.clone(),
             warnings: warnings.clone(),
         };
+        let trace_response = build_trace_response(&fake);
         Ok(StepExecution {
             result: StepResult {
                 success: true,
@@ -596,15 +597,7 @@ impl Engine {
             dry_run_request: Some(req),
             trace: StepTraceData {
                 request: Some(prep.trace_request),
-                response: Some(TraceResponse {
-                    status_code: 200,
-                    content_type: ContentType::Json,
-                    headers: BTreeMap::new(),
-                    body_bytes: 2,
-                    body_preview: Some("{}".to_string()),
-                    body: Some("{}".to_string()),
-                    body_lossy: false,
-                }),
+                response: Some(trace_response),
                 criteria: Vec::new(),
                 warnings,
                 message: None,

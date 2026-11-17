@@ -48,7 +48,7 @@ arazzo-cli run examples/httpbin-get.arazzo.yaml get-origin
 | **Dry-run mode** | Preview requests without sending them; response-dependent values use a simulated response (`--dry-run`) |
 | **Test suites** | Run workflows from files or directories with TAP, JUnit XML, or JSON reports (`test`) |
 | **Input validation** | Require, type-check, and enforce top-level property enums for workflow inputs, with strict mode (`--strict-inputs`) |
-| **Execution traces** | Write detailed `trace.v1` JSON artifacts with pattern-based redaction of recognized sensitive values |
+| **Execution traces** | Write detailed `trace.v2` JSON artifacts with pattern-based redaction of recognized sensitive values |
 | **Deterministic replay** | Re-execute trace artifacts offline with response injection and drift checks (`replay`) |
 | **Sub-workflows** | Call workflows from workflows with input/output passing (up to 10 levels deep) |
 | **VS Code debugger** | Set breakpoints, step through workflows, inspect variables, evaluate expressions |
@@ -95,7 +95,7 @@ Operation targets use standard Arazzo syntax: an `operationId`, or a source-desc
 
 ```
 arazzo-cli run <spec> <workflow-id>        Execute a workflow
-arazzo-cli replay <trace.json>             Replay a trace.v1 artifact with injected responses
+arazzo-cli replay <trace.json>             Replay a trace.v2 artifact with injected responses
 arazzo-cli validate <spec>                 Parse and validate a spec
 arazzo-cli list <spec>                     List workflows in a spec
 arazzo-cli steps <spec> <workflow-id>      List steps within a workflow
@@ -132,7 +132,7 @@ Specs may be YAML or JSON. `catalog` and `show` inspect `.yaml`, `.yml`, and `.j
 - `--dry-run` — resolve requests without sending
 - `--openapi <path>` — provide an OpenAPI document for operation ID or pointer resolution (repeatable)
 - `--expr-diagnostics <off|warn|error>` — step expression warning level (default `off`); workflow-output warnings are always reported, and `error` fails on them
-- `--trace <path>` — write a trace.v1 execution artifact
+- `--trace <path>` — write a trace.v2 execution artifact
 - `--export-run <path>` — write a versioned JSON run artifact with declared outputs and step history
 - `--trace-max-body-bytes <n>` — response body/preview truncation threshold in the trace (default `2048`, maximum `1048576`); declared outputs and request bodies are not capped by this flag
 - `--insecure-host <host[:port]>` — disable TLS certificate verification for a specific host (repeatable)
@@ -181,7 +181,7 @@ admitted. Dry-run does not evaluate live success criteria.
 
 `replay` flags:
 
-- `<trace.json>` — trace.v1 file to replay
+- `<trace.json>` — trace.v2 file to replay
 - `--spec <path>` — override `run.specPath` recorded in the trace
 - `--workflow-id <id>` — override `run.workflowId` recorded in the trace
 - `--execution-timeout <duration>` — replay timeout (default `5m`)
@@ -243,7 +243,7 @@ The `run.v1` export keeps typed declared outputs, ordered attempts, HTTP status 
 
 ## Execution Traces
 
-`run --trace <path>` writes a `trace.v1` JSON artifact with per-attempt request, response, criteria evaluation, and routing records. Response bodies are truncated at `--trace-max-body-bytes` (default 2048 bytes, plus a truncation marker).
+`run --trace <path>` writes a `trace.v2` JSON artifact with per-attempt request, response, criteria evaluation, and routing records. JSON and text response bodies are recorded as decoded text and truncated at `--trace-max-body-bytes` (default 2048 bytes, plus a truncation marker). A binary or undecodable body is recorded only as a descriptor (size, SHA-256, media type), never its content.
 
 Trace writing redacts values whose names or text match its common sensitive-value patterns. This is best-effort; secrets that do not match those patterns may remain in a trace:
 
@@ -255,7 +255,7 @@ Abbreviated structure (not a complete replayable artifact; the tool version refl
 
 ```json
 {
-  "schemaVersion": "trace.v1",
+  "schemaVersion": "trace.v2",
   "tool": { "name": "arazzo", "version": "0.9.0" },
   "run": {
     "workflowId": "status-check",
@@ -273,7 +273,7 @@ Abbreviated structure (not a complete replayable artifact; the tool version refl
 }
 ```
 
-Schema reference: [trace format](docs/trace-schema-v1.md) | [JSON Schema](docs/schemas/trace-v1.schema.json)
+Schema reference: [trace format](docs/trace-schema-v2.md) | [JSON Schema](docs/schemas/trace-v2.schema.json)
 
 ## Deterministic Replay
 

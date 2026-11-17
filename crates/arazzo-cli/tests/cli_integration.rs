@@ -2400,7 +2400,7 @@ fn run_trace_writes_file_and_preserves_json_stdout() {
     let trace = read_json_file(&trace_path);
     assert_eq!(
         trace.get("schemaVersion"),
-        Some(&Value::String("trace.v1".to_string()))
+        Some(&Value::String("trace.v2".to_string()))
     );
     assert_eq!(
         trace.pointer("/run/status"),
@@ -2717,6 +2717,65 @@ fn replay_json_reexecutes_trace_successfully() {
         body.get("requestsChecked"),
         Some(&Value::Number(2.into())),
         "expected replay to validate two HTTP requests"
+    );
+}
+
+#[test]
+fn replay_refuses_a_trace_v1_file_naming_both_versions() {
+    let temp = TempDir::new("arazzo-replay-v1");
+    let spec_path = hermetic_example_spec(
+        "httpbin-get.arazzo.yaml",
+        "https://httpbin.org",
+        temp.path(),
+    );
+    let mut trace_path = temp.path().to_path_buf();
+    trace_path.push("trace.json");
+    let spec_str = spec_path.to_string_lossy().to_string();
+    let trace_str = trace_path.to_string_lossy().to_string();
+    let trace_output = run(
+        [
+            "--json",
+            "run",
+            &spec_str,
+            "status-check",
+            "--dry-run",
+            "--input",
+            "code=429",
+            "--trace",
+            &trace_str,
+        ]
+        .as_slice(),
+        None,
+    );
+    assert!(trace_output.status.success());
+    let mut trace = read_json_file(&trace_path);
+    trace["schemaVersion"] = Value::String("trace.v1".to_string());
+    for step in trace["steps"].as_array_mut().into_iter().flatten() {
+        if let Some(response) = step.get_mut("response").and_then(Value::as_object_mut) {
+            response.remove("mediaType");
+            response.insert("contentType".to_string(), Value::String("json".to_string()));
+            response.insert("bodyPreview".to_string(), Value::String("{}".to_string()));
+        }
+    }
+    if let Err(err) = fs::write(&trace_path, trace.to_string()) {
+        panic!("writing v1 trace {}: {err}", trace_path.display());
+    }
+
+    let replay_output = run(["--json", "replay", &trace_str].as_slice(), None);
+    assert!(!replay_output.status.success());
+    let body = stdout_json(&replay_output);
+    assert_replay_json_kind(&body, "error");
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("REPLAY_TRACE_LOAD")
+    );
+    let message = body
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("\"trace.v1\"") && message.contains("\"trace.v2\""),
+        "{message}"
     );
 }
 

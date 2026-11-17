@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "trace.v1",
+  "schemaVersion": "trace.v2",
   "tool": {
     "name": "arazzo",
     "version": "<TOOL_VERSION>"

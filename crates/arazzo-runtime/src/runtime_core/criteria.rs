@@ -570,7 +570,7 @@ mod tests {
             headers: BTreeMap::new(),
             body: xml.as_bytes().to_vec(),
             body_value: arazzo_expr::BodySlot::present(json!(xml)),
-            content_type: ContentType::Xml,
+            media_type: None,
             redirects: Vec::new(),
         };
         let eval = ExpressionEvaluator::new(EvalContext {

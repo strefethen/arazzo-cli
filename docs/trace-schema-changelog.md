@@ -1,6 +1,15 @@
 # Trace Schema Changelog
 
-## `trace.v1` (current)
+## `trace.v2` (current)
+
+- Responses record `mediaType`, the parsed `Content-Type`, replacing the `contentType` classification.
+- JSON and text response bodies are recorded as exactly decoded text in any charset, redacted and truncated as before.
+- Bytes and undecodable response bodies are recorded only as a `bodyBlob` descriptor (`kind`, `size`, `sha256`, `mediaType`) plus `bodyError`; content is never written.
+- Removed `bodyPreview` and `bodyLossy`.
+- Defined out-of-band bytes slots for later producers: `inputBlobs`, `steps[*].outputBlobs`, `steps[*].request.bodyBlobs`, and the redacted descriptor marker.
+- `replay` refuses `trace.v1` files. Migration notes: [trace-schema-v2.md](trace-schema-v2.md#migrating-from-tracev1).
+
+## `trace.v1`
 
 - Introduced stable trace artifact schema for CLI `run --trace`.
 - Added deterministic per-step sequence ordering.

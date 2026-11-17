@@ -63,11 +63,11 @@ fn observation(case: &CaseSpec) -> (worker::ObservedExecution, protocol::Snapsho
         }
         let decision = json!({"path":"next"});
         if case.settings.capture {
-            events.push(EngineEvent::RunStep(serde_json::from_value::<RunStepRecord>(json!({"seq":i+1,"workflowId":case.workflow_id,"stepId":step,"attempt":1,"outcome":"success","durationMs":0,"outputs":out,"request":{"method":"GET","url":format!("http://127.0.0.1:12345{}",op.path),"headers":{}},"response":{"statusCode":200,"headers":{},"contentType":"json","bodyBytes":1024},"decision":decision,"error":null})).unwrap()));
+            events.push(EngineEvent::RunStep(serde_json::from_value::<RunStepRecord>(json!({"seq":i+1,"workflowId":case.workflow_id,"stepId":step,"attempt":1,"outcome":"success","durationMs":0,"outputs":out,"request":{"method":"GET","url":format!("http://127.0.0.1:12345{}",op.path),"headers":{}},"response":{"statusCode":200,"headers":{},"mediaType":"application/json","bodyBytes":1024},"decision":decision,"error":null})).unwrap()));
         }
         if case.settings.trace {
             let criteria:Vec<_>=case.expected.criteria.iter().filter(|c|c.step_id==*step).map(|c|json!({"index":c.index,"type":c.criterion_type,"condition":c.condition,"context":c.context,"result":c.passed})).collect();
-            events.push(EngineEvent::TraceStep(serde_json::from_value::<TraceStepRecord>(json!({"seq":i+1,"workflowId":case.workflow_id,"stepId":step,"attempt":1,"kind":"http","operationPath":operation,"workflowIdRef":"","durationMs":0,"request":{"method":"GET","url":format!("http://127.0.0.1:12345{}",op.path),"headers":{}},"response":{"statusCode":200,"contentType":"json","bodyBytes":1024},"criteria":criteria,"warnings":[],"decision":decision,"outputs":out,"error":null})).unwrap()));
+            events.push(EngineEvent::TraceStep(serde_json::from_value::<TraceStepRecord>(json!({"seq":i+1,"workflowId":case.workflow_id,"stepId":step,"attempt":1,"kind":"http","operationPath":operation,"workflowIdRef":"","durationMs":0,"request":{"method":"GET","url":format!("http://127.0.0.1:12345{}",op.path),"headers":{}},"response":{"statusCode":200,"mediaType":"application/json","bodyBytes":1024},"criteria":criteria,"warnings":[],"decision":decision,"outputs":out,"error":null})).unwrap()));
         }
         requests.push(protocol::RequestRecord {
             path: op.path,

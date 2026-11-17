@@ -190,7 +190,10 @@
           "minimum": 0
         },
         "contentType": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "headers": {
           "type": "object",
@@ -206,7 +209,6 @@
       "required": [
         "statusCode",
         "headers",
-        "contentType",
         "bodyBytes"
       ]
     },

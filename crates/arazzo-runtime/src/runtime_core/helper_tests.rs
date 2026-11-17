@@ -121,7 +121,7 @@ fn evaluate_criterion_xpath_uses_context_and_condition() {
         headers: BTreeMap::new(),
         body: xml.as_bytes().to_vec(),
         body_value: arazzo_expr::BodySlot::present(Value::String(xml.to_string())),
-        content_type: ContentType::Xml,
+        media_type: None,
         redirects: Vec::new(),
     };
     // Mirror engine wiring (state.rs eval_context): non-JSON bodies reach

@@ -139,7 +139,8 @@ struct Request {
 struct Response {
     status_code: i64,
     headers: BTreeMap<String, String>,
-    content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
     body_bytes: u64,
 }
 
@@ -231,7 +232,7 @@ fn execution_from_record(record: &RunStepRecord) -> Result<Execution, String> {
         Response {
             status_code: response.status_code,
             headers,
-            content_type: redact_text_patterns(&response.content_type.to_string()),
+            content_type: response.media_type.as_deref().map(redact_text_patterns),
             body_bytes: response.body_bytes,
         }
     });

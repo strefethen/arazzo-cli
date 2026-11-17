@@ -125,7 +125,7 @@ fn projection(event: &EngineEvent) -> Value {
             e.response.as_ref().map(|r| json!([
                 r.status_code,
                 r.body_bytes,
-                r.content_type,
+                r.media_type,
                 r.headers
             ])),
             e.decision,
@@ -365,7 +365,7 @@ fn expected_events(case: &CaseSpec) -> Vec<Value> {
                     [
                         status,
                         case.dimensions.serialized_body_bytes,
-                        "json",
+                        "application/json",
                         headers
                     ],
                     decision,

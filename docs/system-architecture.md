@@ -13,7 +13,7 @@ release verification, especially while the checkout contains uncommitted work.
 | How do execution, capture and queries connect today? | [Runtime architecture](architecture.md) |
 | How should an agent operate and improve the system? | [Agent operability plan](../plans/current/agent-operability.md), **Draft** |
 | How will machine discovery and inspection work? | [Discovery and inspection plan](../plans/current/agent-discovery-and-inspection.md), **Draft** |
-| What is the execution/replay evidence contract? | [Run export](run-export-v1.md), [trace](trace-schema-v1.md), [internal API](internal-api-v1.md) |
+| What is the execution/replay evidence contract? | [Run export](run-export-v1.md), [trace](trace-schema-v2.md), [internal API](internal-api-v1.md) |
 | What is permitted Arazzo? | [Vendored specifications](../spec/README.md), then the [conformance audit](../plans/assessments/arazzo-spec-conformance-audit.md) |
 | What is the delivery direction? | [Roadmap](../plans/roadmap.md); live work state belongs to `tkt` |
 

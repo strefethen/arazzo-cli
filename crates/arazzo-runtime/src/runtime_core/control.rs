@@ -19,21 +19,17 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
         return RuntimeError::new(kind, format!("step {step_id}: {err}"));
     }
     if let Some(resp) = &result.response {
-        let mut body_preview =
-            if let Ok(mut body_json) = serde_json::from_slice::<Value>(&resp.body) {
-                redact_json_value(&mut body_json);
-                body_json.to_string()
-            } else {
-                redact_text_patterns(&String::from_utf8_lossy(&resp.body))
-            };
-        if body_preview.len() > 500 {
-            let mut end = 500;
-            while !body_preview.is_char_boundary(end) {
-                end -= 1;
+        let body_preview = match resp.body_view() {
+            BodyView::Absent => String::new(),
+            BodyView::Text(text) => {
+                let mut preview = redacted_body_text(&text);
+                truncate_with_ellipsis(&mut preview, 500);
+                preview
             }
-            body_preview.truncate(end);
-            body_preview.push_str("...");
-        }
+            BodyView::Bytes { descriptor, .. } => {
+                descriptor.map_or_else(|| "<bytes>".to_owned(), |d| d.summary())
+            }
+        };
         return RuntimeError::new(
             RuntimeErrorKind::SuccessCriteriaFailed,
             format!(
@@ -46,6 +42,16 @@ pub(super) fn step_result_error(step_id: &str, result: &StepResult) -> RuntimeEr
         RuntimeErrorKind::SuccessCriteriaFailed,
         format!("step {step_id}: success criteria not met"),
     )
+}
+
+fn redacted_body_text(text: &str) -> String {
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut value) => {
+            redact_json_value(&mut value);
+            value.to_string()
+        }
+        Err(_) => redact_text_patterns(text),
+    }
 }
 
 pub(super) async fn sleep_with_cancel(

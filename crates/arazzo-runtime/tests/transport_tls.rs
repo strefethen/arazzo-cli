@@ -571,12 +571,11 @@ async fn replay_engine_emits_no_transport_warnings() {
         }),
         response: Some(TraceResponse {
             status_code: 200,
-            content_type: arazzo_runtime::ContentType::Json,
+            media_type: Some("application/json".to_string()),
             headers: BTreeMap::new(),
             body_bytes: 11,
-            body_preview: Some(r#"{"ok":true}"#.to_string()),
             body: Some(r#"{"ok":true}"#.to_string()),
-            body_lossy: false,
+            ..TraceResponse::default()
         }),
         ..TraceStepRecord::default()
     };

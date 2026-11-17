@@ -54,14 +54,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the WHATWG Encoding Standard table; its `replacement` labels (such as
   `iso-2022-kr`) are rejected, a byte order mark that contradicts the charset
   is an error, and `utf-16` without `le`/`be` needs a byte order mark. Replay
-  classifies recorded bodies the same way from the recorded headers, and a body
-  the trace stored lossily is unavailable. Traces and run exports record
-  `contentType` as the declared type, so a response without one is `""`, not
-  `json`. **Upgrade note:** an API that sends JSON without a `Content-Type`, or
+  rebuilds recorded bodies by the recorded media type (see `trace.v2` below).
+  **Upgrade note:** an API that sends JSON without a `Content-Type`, or
   labelled `text/plain`, no longer exposes it as JSON. A request `contentType`
   that only contains the text `json` (such as `application/x-ndjson`) no longer
   JSON-serializes a string payload; `application/json` and `+json` types are
   unchanged.
+- **Traces move to `trace.v2`** — `run --trace` writes
+  `schemaVersion: "trace.v2"`, described in
+  [docs/trace-schema-v2.md](docs/trace-schema-v2.md) and
+  [docs/schemas/trace-v2.schema.json](docs/schemas/trace-v2.schema.json). A
+  response records `mediaType`, the parsed `Content-Type`, in place of the
+  `contentType` classification (`json`, `xml` or the raw header). A JSON or
+  text body is recorded as its decoded text, in any charset, and is redacted
+  and truncated as before; `bodyPreview` and `bodyLossy` are gone. A bytes
+  body, or one that failed to decode, is recorded only as a `bodyBlob`
+  descriptor (`kind: "bytes"`, `size`, `sha256`, `mediaType`) plus
+  `bodyError` when decoding failed: its content is never written. `replay`
+  refuses a `trace.v1` file with `REPLAY_TRACE_LOAD`, naming both versions;
+  re-record it with this version. **Upgrade note:** tools that read
+  `contentType`, `bodyPreview` or `bodyLossy` from trace responses must read
+  `mediaType`, `body` and `bodyBlob`.
+- **Run exports record the parsed media type** — a `run.v1` response's
+  `contentType` is now the parsed `Content-Type` (for example
+  `application/json;charset=utf-8`) instead of `json`/`xml`/the raw header,
+  and is omitted when the response has no parseable `Content-Type`.
+- **Failed-criteria messages never print raw bytes** — the body shown in a
+  `success criteria not met` message (stderr, `--json` errors and MCP results)
+  is the decoded, redacted text for a JSON or text body and a summary such as
+  `<1024 bytes, image/png>` for a bytes or undecodable body, never lossily
+  decoded bytes.
 - **The default criterion context is `$response.body`** — a `regex`,
   `jsonpath` or `xpath` criterion with no `context` now evaluates over exactly
   what `$response.body` resolves to, so an undecodable body fails the criterion

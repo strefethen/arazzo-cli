@@ -13,7 +13,7 @@
     "timeoutMs": 300000,
     "workflowId": "status-check"
   },
-  "schemaVersion": "trace.v1",
+  "schemaVersion": "trace.v2",
   "steps": [
     {
       "attempt": 1,
@@ -30,8 +30,7 @@
       "response": {
         "body": "{}",
         "bodyBytes": 2,
-        "bodyPreview": "{}",
-        "contentType": "json",
+        "mediaType": "application/json",
         "statusCode": 200
       },
       "seq": 1,
@@ -53,8 +52,7 @@
       "response": {
         "body": "{}",
         "bodyBytes": 2,
-        "bodyPreview": "{}",
-        "contentType": "json",
+        "mediaType": "application/json",
         "statusCode": 200
       },
       "seq": 2,

@@ -461,7 +461,7 @@ fn non_json_criteria_previews_mirror_names_and_export_omits_the_preview() {
     );
     let trace = artifact(&trace_path);
     assert_eq!(trace["steps"][0]["response"]["body"], expected);
-    assert_eq!(trace["steps"][0]["response"]["bodyPreview"], expected);
+    assert!(trace["steps"][0]["response"].get("bodyPreview").is_none());
     assert!(
         trace["run"]["error"].as_str().unwrap().contains(expected),
         "{trace}"
@@ -994,7 +994,7 @@ fn url_userinfo_and_string_leaves_are_sanitized() {
 }
 
 #[test]
-fn content_type_classification_redacts_embedded_credentials() {
+fn content_type_is_the_parsed_media_type_with_embedded_credentials_redacted() {
     let temp = TempDir::new();
     let server = Server::start(|_, _| {
         (
@@ -1015,8 +1015,34 @@ fn content_type_classification_redacts_embedded_credentials() {
     );
     let value = artifact(&path);
     let response = &value["workflows"]["wf"]["steps"]["one"]["executions"][0]["response"];
-    assert_eq!(response["contentType"], "text/plain; token=[REDACTED]");
+    assert_eq!(response["contentType"], "text/plain;token=[REDACTED]");
     assert!(!value.to_string().contains("review-secret"));
+}
+
+#[test]
+fn content_type_is_parsed_and_absent_when_it_does_not_parse() {
+    for (header, expected) in [
+        (
+            "Application/JSON ; Charset=UTF-8",
+            json!("application/json;charset=UTF-8"),
+        ),
+        ("not a media type", Value::Null),
+    ] {
+        let temp = TempDir::new();
+        let server = Server::start(move |_, _| {
+            (200, "{}".into(), vec![("Content-Type", header.to_owned())])
+        });
+        let workflows =
+            "  - workflowId: wf\n    steps:\n      - stepId: one\n        operationId: fixtureGetOne\n";
+        let spec = spec(&temp, &server.url, workflows);
+        let path = temp.path("run.json");
+        let output = run_json(&spec, "wf", &["--export-run", path.to_str().unwrap()]);
+        assert!(output.status.success(), "{header:?}");
+        let value = artifact(&path);
+        let response = &value["workflows"]["wf"]["steps"]["one"]["executions"][0]["response"];
+        assert_eq!(response["contentType"], expected, "{header:?}: {response}");
+        assert_eq!(response["bodyBytes"], 2);
+    }
 }
 
 #[test]

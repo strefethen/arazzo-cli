@@ -106,7 +106,7 @@ pub enum Commands {
         #[arg(long = "strict-inputs")]
         strict_inputs: bool,
 
-        /// Write a redacted trace.v1 JSON file for replay and debugging.
+        /// Write a redacted trace.v2 JSON file for replay and debugging.
         #[arg(long = "trace")]
         trace: Option<String>,
 
@@ -114,7 +114,7 @@ pub enum Commands {
         #[arg(long = "export-run", value_name = "PATH")]
         export_run: Option<String>,
 
-        /// Maximum response body preview bytes stored per trace step.
+        /// Maximum decoded response body text bytes stored per trace step.
         #[arg(
             long = "trace-max-body-bytes",
             default_value_t = TRACE_BODY_PREVIEW_DEFAULT_BYTES,
@@ -178,12 +178,12 @@ pub enum Commands {
         #[arg(long = "asyncapi-server", value_name = "SOURCE=KEY")]
         asyncapi_server: Vec<String>,
     },
-    /// Replay a recorded trace.v1 file with deterministic response injection
+    /// Replay a recorded trace.v2 file with deterministic response injection
     #[command(
         after_help = "For agents:\n  - Replay is deterministic and does not need live upstream responses recorded in the trace.\n  - Use --json for parseable replay success/error envelopes.\n  - Use schema replay to inspect the JSON output contract."
     )]
     Replay {
-        /// Path to trace.v1 JSON file
+        /// Path to trace.v2 JSON file
         trace: String,
 
         /// Override spec path from trace.run.specPath

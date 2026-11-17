@@ -554,7 +554,7 @@ async fn a_success_criterion_warning_carries_the_index_of_the_criterion() {
         }),
         response: Some(TraceResponse {
             status_code: 200,
-            content_type: ContentType::Json,
+            media_type: Some("application/json".to_string()),
             body_bytes: 2,
             body: Some("{}".to_string()),
             ..TraceResponse::default()

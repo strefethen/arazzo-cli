@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arazzo_runtime::{
-    ContentType, EngineBuilder, ExecutionResult, RuntimeErrorKind, TraceDecision,
-    TraceDecisionPath, TraceRequest, TraceResponse, TraceStepRecord,
+    EngineBuilder, ExecutionResult, RuntimeErrorKind, TraceDecision, TraceDecisionPath,
+    TraceRequest, TraceResponse, TraceStepRecord,
 };
 use arazzo_spec::{
     ArazzoSpec, Info, ParamLocation, Parameter, SourceDescription, SourceType, Step, StepTarget,
@@ -291,12 +291,11 @@ fn replay_record(url: &str) -> TraceStepRecord {
         }),
         response: Some(TraceResponse {
             status_code: 200,
-            content_type: ContentType::Json,
+            media_type: Some("application/json".to_string()),
             headers: BTreeMap::new(),
             body_bytes: 2,
-            body_preview: Some("{}".to_string()),
             body: Some("{}".to_string()),
-            body_lossy: false,
+            ..TraceResponse::default()
         }),
         criteria: Vec::new(),
         warnings: Vec::new(),

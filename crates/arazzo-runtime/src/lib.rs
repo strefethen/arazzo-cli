@@ -47,7 +47,7 @@ pub mod api_v1 {
 #[allow(deprecated)]
 mod tests {
     use super::runtime_core::VarStore;
-    use super::{ClientConfig, ContentType, Engine, Response, RuntimeErrorKind};
+    use super::{ClientConfig, Engine, Response, RuntimeErrorKind};
     use crate::EngineBuilder;
     use arazzo_spec::{
         ActionType, ArazzoSpec, CriterionExpressionType, CriterionType, Info, OnAction,
@@ -238,7 +238,7 @@ mod tests {
             headers: BTreeMap::new(),
             body: Vec::new(),
             body_value: arazzo_expr::BodySlot::Absent,
-            content_type: ContentType::Json,
+            media_type: None,
             redirects: Vec::new(),
         };
         let ordered = vec![
@@ -268,7 +268,7 @@ mod tests {
             headers: BTreeMap::new(),
             body: br#"{"pets":[{"id":1}]}"#.to_vec(),
             body_value: arazzo_expr::BodySlot::present(json!({"pets":[{"id":1}]})),
-            content_type: ContentType::Json,
+            media_type: None,
             redirects: Vec::new(),
         };
         // Explicit `rfc9535`: the shared JSONPath owner evaluates only

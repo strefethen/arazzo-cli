@@ -73,7 +73,7 @@ lost observations as proof of rollback. Preserve deterministic logical ordering
 without claiming deterministic wall-clock completion.
 
 Use the [internal API policy](internal-api-v1.md),
-[trace contract](trace-schema-v1.md) and [run export contract](run-export-v1.md)
+[trace contract](trace-schema-v2.md) and [run export contract](run-export-v1.md)
 for compatibility. New fields need end-to-end redaction and serialization proof.
 Breaking changes need versioning and migration. A new streaming consumer must
 first have a usable public subscription and bounded lifetime contract; private

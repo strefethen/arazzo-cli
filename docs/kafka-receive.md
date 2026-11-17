@@ -251,7 +251,7 @@ Kafka receiver armed: orders.placed on 127.0.0.1:19092 (1 partitions)
 When correlation filtering skipped records, the receive line adds
 ` skipped=<n>` before the duration; it is unchanged when none were skipped.
 
-**Trace.** A receive step's `trace.v1` record has no `request`/`response`;
+**Trace.** A receive step's `trace.v2` record has no `request`/`response`;
 it carries an optional `message` object: `transport` (`kafka`), `host`,
 `topic`, `partition`, `offset`, `timestampMs`, `key`, `headers`,
 `payloadBytes`, `payloadPreview`, `payload`, `payloadLossy`, and `simulated`
@@ -261,7 +261,7 @@ skipped before the match and is omitted when zero. Without correlation,
 `correlationId` is omitted. Header values and the key are redacted by the same patterns as
 HTTP headers; the payload and its preview are redacted like HTTP response
 bodies and truncated to `--trace-max-body-bytes`. See
-[trace-schema-v1.md](trace-schema-v1.md).
+[trace-schema-v2.md](trace-schema-v2.md).
 
 **Codes.**
 

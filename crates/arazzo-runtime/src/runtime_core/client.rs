@@ -778,27 +778,10 @@ impl HttpClient {
             }
         };
 
-        let body = trace_response
-            .body
-            .clone()
-            .or_else(|| trace_response.body_preview.clone())
-            .unwrap_or_default()
-            .into_bytes();
-        let mut response = Response::decoded(
-            trace_response.status_code,
-            trace_response.headers,
-            body,
+        Ok(Response::replayed(
+            trace_response,
             record.request.redirects.clone(),
-        );
-        if trace_response.body_lossy {
-            response.body_value = arazzo_expr::BodySlot::Unavailable {
-                reason: format!(
-                    "replay trace recorded the response body lossily at seq {}, so its exact text is unknown",
-                    record.seq
-                ),
-            };
-        }
-        Ok(response)
+        ))
     }
 
     async fn wait_for_rate_limit(
@@ -833,27 +816,6 @@ pub struct RequestConfig {
     pub body: Option<Vec<u8>>,
 }
 
-/// Result of building a URL from an operationPath, including resolved parameters.
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentType {
-    #[default]
-    Json,
-    Xml,
-    Other(String),
-}
-
-impl std::fmt::Display for ContentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Json => write!(f, "json"),
-            Self::Xml => write!(f, "xml"),
-            Self::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
 /// Response returned by the runtime client.
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -861,7 +823,7 @@ pub struct Response {
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
     pub body_value: arazzo_expr::BodySlot,
-    pub content_type: ContentType,
+    pub media_type: Option<arazzo_spec::media_type::MediaType>,
     /// Redirect hops followed before this response, oldest first.
     pub redirects: Vec<TraceRedirectHop>,
 }

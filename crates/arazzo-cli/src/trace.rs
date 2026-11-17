@@ -11,7 +11,7 @@ use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const TRACE_SCHEMA_VERSION: &str = "trace.v1";
+pub const TRACE_SCHEMA_VERSION: &str = "trace.v2";
 pub const INTERNAL_TRACE_PIPELINE_VERSION: &str = "v1";
 pub const TRACE_BODY_PREVIEW_DEFAULT_BYTES: usize = 2048;
 pub const TRACE_MAX_BODY_BYTES_LIMIT: usize = 1024 * 1024;
@@ -86,15 +86,17 @@ pub fn parse_trace_max_body_bytes(raw: &str) -> Result<usize, String> {
 pub fn read_trace_file(path: &Path) -> Result<TraceFile, String> {
     let data =
         fs::read(path).map_err(|err| format!("reading trace file {}: {err}", path.display()))?;
-    let trace: TraceFile = serde_json::from_slice(&data)
-        .map_err(|err| format!("parsing trace JSON {}: {err}", path.display()))?;
-    if trace.schema_version != TRACE_SCHEMA_VERSION {
+    let parse_error =
+        |err: serde_json::Error| format!("parsing trace JSON {}: {err}", path.display());
+    let value: Value = serde_json::from_slice(&data).map_err(parse_error)?;
+    let version = value.get("schemaVersion").and_then(Value::as_str);
+    if version != Some(TRACE_SCHEMA_VERSION) {
         return Err(format!(
-            "unsupported trace schema version \"{}\" (expected \"{}\")",
-            trace.schema_version, TRACE_SCHEMA_VERSION
+            "unsupported trace schema version {}: this version replays only \"{TRACE_SCHEMA_VERSION}\"; re-record the trace with run --trace",
+            version.map_or_else(|| "(none)".to_owned(), |version| format!("\"{version}\""))
         ));
     }
-    Ok(trace)
+    serde_json::from_value(value).map_err(parse_error)
 }
 
 pub fn build_trace_file(
@@ -205,7 +207,10 @@ fn redact_trace_file(
 
         if let Some(response) = &mut step.response {
             redact_headers(&mut response.headers);
-            if let Some(text) = response.body.as_mut().or(response.body_preview.as_mut()) {
+            if let Some(media_type) = &mut response.media_type {
+                *media_type = redact_text_patterns(media_type);
+            }
+            if let Some(text) = &mut response.body {
                 if let Ok(mut value) = serde_json::from_str::<Value>(text) {
                     redact_json_value(&mut value);
                     if let Ok(serialized) = serde_json::to_string(&value) {
@@ -214,15 +219,10 @@ fn redact_trace_file(
                 } else {
                     *text = redact_text_patterns(text);
                 }
-            }
-            if let Some(body) = &response.body {
-                response.body_preview = Some(body.clone());
-            }
-            for text in [&mut response.body_preview, &mut response.body]
-                .into_iter()
-                .flatten()
-            {
                 truncate_at_char_boundary(text, max_body_bytes);
+            }
+            if let Some(error) = &mut response.body_error {
+                *error = redact_text_patterns(error);
             }
         }
 
@@ -272,7 +272,7 @@ fn truncate_at_char_boundary(text: &mut String, max_bytes: usize) {
 mod tests {
     use super::*;
     use arazzo_runtime::{
-        ContentType, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, REDACTED,
+        BytesDescriptor, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse, REDACTED,
     };
 
     fn make_trace_file(response: TraceResponse) -> TraceFile {
@@ -325,31 +325,25 @@ mod tests {
     }
 
     #[test]
-    fn http_preview_is_derived_after_full_body_redaction() {
+    fn http_body_is_redacted_whole_then_truncated() {
         let body = format!(
             r#"{{"a_token":"FAKE-HTTP-SECRET","b_nested":{{"password":"FAKE-NESTED-SECRET"}},"c_name":"visible","zz_padding":"{}"}}"#,
             "é".repeat(3000)
         );
-        for content_type in [ContentType::Json, ContentType::Other("text/plain".into())] {
+        for media_type in ["application/json", "text/plain"] {
             for limit in [0, 101, 2048, 4096, 10000] {
                 let mut trace = make_trace_file(TraceResponse {
                     status_code: 201,
-                    content_type: content_type.clone(),
+                    media_type: Some(media_type.to_owned()),
                     body_bytes: body.len() as u64,
-                    body_preview: Some(format!(
-                        "{}...",
-                        String::from_utf8_lossy(&body.as_bytes()[..2048])
-                    )),
                     body: Some(body.clone()),
-                    body_lossy: false,
-                    headers: BTreeMap::new(),
+                    ..TraceResponse::default()
                 });
                 redact_trace_file(&mut trace, limit, &BTreeSet::new());
                 let response = trace.steps[0]
                     .response
                     .as_ref()
                     .unwrap_or_else(|| panic!("response"));
-                assert_eq!(response.body_preview, response.body);
                 let text = response.body.as_ref().unwrap_or_else(|| panic!("body"));
                 assert!(!text.contains("FAKE-HTTP-SECRET"));
                 assert!(!text.contains("FAKE-NESTED-SECRET"));
@@ -362,15 +356,14 @@ mod tests {
                     assert_eq!(text, "...");
                 }
                 assert_eq!(response.status_code, 201);
-                assert_eq!(response.content_type, content_type);
+                assert_eq!(response.media_type.as_deref(), Some(media_type));
                 assert_eq!(response.body_bytes, body.len() as u64);
-                assert!(!response.body_lossy);
             }
         }
     }
 
     #[test]
-    fn http_body_preview_preserves_utf8_and_plain_text_redaction() {
+    fn http_body_preserves_utf8_and_plain_text_redaction() {
         for (body, limit, expected) in [
             ("ééé", 3, "é..."),
             (
@@ -381,8 +374,6 @@ mod tests {
         ] {
             let mut trace = make_trace_file(TraceResponse {
                 body: Some(body.into()),
-                body_preview: Some("stale preview".into()),
-                body_lossy: true,
                 ..TraceResponse::default()
             });
             redact_trace_file(&mut trace, limit, &BTreeSet::new());
@@ -391,36 +382,37 @@ mod tests {
                 .as_ref()
                 .unwrap_or_else(|| panic!("response"));
             assert_eq!(response.body.as_deref(), Some(expected));
-            assert_eq!(response.body_preview.as_deref(), Some(expected));
-            assert!(response.body_lossy);
         }
     }
 
     #[test]
-    fn http_preview_only_and_empty_responses_keep_existing_behavior() {
-        for (preview, expected) in [
-            (None, None),
-            (
-                Some(r#"{"token":"FAKE-PREVIEW"}"#),
-                Some(r#"{"token":"[REDACTED]"}"#),
-            ),
-            (
-                Some("token=FAKE-PREVIEW user=visible"),
-                Some("token=[REDACTED] user=visible"),
-            ),
-        ] {
-            let mut trace = make_trace_file(TraceResponse {
-                body_preview: preview.map(str::to_owned),
-                ..TraceResponse::default()
-            });
-            redact_trace_file(&mut trace, 2048, &BTreeSet::new());
-            let response = trace.steps[0]
-                .response
-                .as_ref()
-                .unwrap_or_else(|| panic!("response"));
-            assert_eq!(response.body_preview.as_deref(), expected);
-            assert!(response.body.is_none());
-        }
+    fn a_bytes_descriptor_is_never_truncated_or_pattern_redacted() {
+        let descriptor = BytesDescriptor::of(
+            b"token=FAKE-BYTES-SECRET",
+            Some("application/octet-stream".into()),
+            None,
+        );
+        let mut trace = make_trace_file(TraceResponse {
+            media_type: Some("application/octet-stream;token=FAKE-PARAM".into()),
+            body_blob: Some(descriptor.clone()),
+            body_error: Some("decoding failed near token=FAKE-ERROR".into()),
+            ..TraceResponse::default()
+        });
+        redact_trace_file(&mut trace, 0, &BTreeSet::new());
+        let response = trace.steps[0]
+            .response
+            .as_ref()
+            .unwrap_or_else(|| panic!("response"));
+        assert_eq!(response.body_blob.as_ref(), Some(&descriptor));
+        assert!(response.body.is_none());
+        assert_eq!(
+            response.media_type.as_deref(),
+            Some("application/octet-stream;token=[REDACTED]")
+        );
+        assert_eq!(
+            response.body_error.as_deref(),
+            Some("decoding failed near token=[REDACTED]")
+        );
     }
 
     #[test]
@@ -544,16 +536,14 @@ mod tests {
     }
 
     #[test]
-    fn redact_trace_redacts_both_body_and_body_preview() {
+    fn redact_trace_redacts_a_json_body() {
         let json_body = r#"{"token":"secret123","name":"Alice"}"#.to_string();
         let response = TraceResponse {
             status_code: 200,
-            content_type: ContentType::Json,
-            headers: BTreeMap::new(),
+            media_type: Some("application/json".to_string()),
             body_bytes: json_body.len() as u64,
-            body_preview: Some(json_body.clone()),
             body: Some(json_body),
-            body_lossy: false,
+            ..TraceResponse::default()
         };
 
         let mut trace = make_trace_file(response);
@@ -563,16 +553,6 @@ mod tests {
             .response
             .as_ref()
             .unwrap_or_else(|| panic!("response missing"));
-        // Both body and body_preview should have "token" redacted
-        let preview_str = resp
-            .body_preview
-            .as_deref()
-            .unwrap_or_else(|| panic!("preview missing"));
-        let preview: Value =
-            serde_json::from_str(preview_str).unwrap_or_else(|e| panic!("parse preview: {e}"));
-        assert_eq!(preview["token"], Value::String(REDACTED.to_string()));
-        assert_eq!(preview["name"], Value::String("Alice".to_string()));
-
         let body_str = resp
             .body
             .as_deref()
@@ -585,16 +565,13 @@ mod tests {
 
     #[test]
     fn redact_trace_redacts_json_body_regardless_of_content_type() {
-        // Body is valid JSON but content type says "other"
         let json_body = r#"{"password":"hunter2","user":"bob"}"#.to_string();
         let response = TraceResponse {
             status_code: 200,
-            content_type: ContentType::Other("text/plain".to_string()),
-            headers: BTreeMap::new(),
+            media_type: Some("text/plain".to_string()),
             body_bytes: json_body.len() as u64,
-            body_preview: Some(json_body.clone()),
             body: Some(json_body),
-            body_lossy: false,
+            ..TraceResponse::default()
         };
 
         let mut trace = make_trace_file(response);
@@ -622,12 +599,10 @@ mod tests {
                 .to_string();
         let response = TraceResponse {
             status_code: 200,
-            content_type: ContentType::Other("text/plain".to_string()),
-            headers: BTreeMap::new(),
+            media_type: Some("text/plain".to_string()),
             body_bytes: plain_body.len() as u64,
-            body_preview: Some(plain_body.clone()),
             body: Some(plain_body),
-            body_lossy: false,
+            ..TraceResponse::default()
         };
 
         let mut trace = make_trace_file(response);

@@ -34,7 +34,8 @@ pub struct RunRequestMetadata {
 pub struct RunResponseMetadata {
     pub status_code: i64,
     pub headers: BTreeMap<String, String>,
-    pub content_type: ContentType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
     pub body_bytes: u64,
 }
 
@@ -93,7 +94,7 @@ impl Engine {
                 .map(|response| RunResponseMetadata {
                     status_code: response.status_code,
                     headers: response.headers.clone(),
-                    content_type: response.content_type.clone(),
+                    media_type: response.media_type_text(),
                     body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
                 })
         };

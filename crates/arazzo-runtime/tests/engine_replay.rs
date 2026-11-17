@@ -5,8 +5,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use arazzo_runtime::{
-    ContentType, RuntimeErrorKind, TraceDecision, TraceDecisionPath, TraceRequest, TraceResponse,
-    TraceStepRecord,
+    BytesDescriptor, RuntimeErrorKind, TraceDecision, TraceDecisionPath, TraceRequest,
+    TraceResponse, TraceStepRecord,
 };
 use arazzo_spec::{Step, StepTarget, SuccessCriterion, Workflow};
 use common::make_spec_with_base;
@@ -60,12 +60,11 @@ fn replay_trace(url: &str) -> Vec<TraceStepRecord> {
         }),
         response: Some(TraceResponse {
             status_code: 200,
-            content_type: ContentType::Json,
+            media_type: Some("application/json".to_string()),
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body_bytes: 14,
-            body_preview: Some(r#"{"value":"ok"}"#.to_string()),
             body: Some(r#"{"value":"ok"}"#.to_string()),
-            body_lossy: false,
+            ..TraceResponse::default()
         }),
         criteria: Vec::new(),
         warnings: Vec::new(),
@@ -98,12 +97,20 @@ async fn replay_executes_without_live_network() {
 #[tokio::test]
 async fn replay_classifies_the_recorded_body_like_a_live_response() {
     let mut untyped = replay_trace("https://replay.invalid/items");
-    let mut lossy = replay_trace("https://replay.invalid/items");
+    let mut undecodable = replay_trace("https://replay.invalid/items");
     if let Some(response) = untyped[0].response.as_mut() {
         response.headers.clear();
+        response.media_type = None;
     }
-    if let Some(response) = lossy[0].response.as_mut() {
-        response.body_lossy = true;
+    if let Some(response) = undecodable[0].response.as_mut() {
+        response.body = None;
+        response.body_blob = Some(BytesDescriptor::of(
+            b"{\xFF",
+            Some("application/json".into()),
+            None,
+        ));
+        response.body_error =
+            Some("response body is not valid JSON (application/json): recorded".into());
     }
     let cases = [
         (
@@ -111,8 +118,8 @@ async fn replay_classifies_the_recorded_body_like_a_live_response() {
             "response has no Content-Type header, so its body is bytes, which is not yet a readable value",
         ),
         (
-            lossy,
-            "replay trace recorded the response body lossily at seq 1, so its exact text is unknown",
+            undecodable,
+            "response body is not valid JSON (application/json): recorded",
         ),
     ];
     for (trace, reason) in cases {
@@ -177,14 +184,10 @@ async fn replay_propagates_workflow_dependency_error_without_consuming_requests(
     assert_eq!(err.code(), "RUNTIME_WORKFLOW_DEPENDENCY_UNSATISFIED");
 }
 
-// ── Bug #7: replay uses full body, not truncated body_preview ────
-
 #[tokio::test]
-async fn replay_uses_full_body_not_truncated_preview() {
-    // Build a JSON body larger than TRACE_BODY_PREVIEW_MAX_BYTES (2048)
+async fn replay_uses_the_full_recorded_body() {
     let large_value = "x".repeat(3000);
     let full_body = format!(r#"{{"value":"{large_value}"}}"#);
-    let preview = format!("{}...", &full_body[..2048]);
 
     let trace = vec![TraceStepRecord {
         seq: 1,
@@ -204,12 +207,11 @@ async fn replay_uses_full_body_not_truncated_preview() {
         }),
         response: Some(TraceResponse {
             status_code: 200,
-            content_type: ContentType::Json,
+            media_type: Some("application/json".to_string()),
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body_bytes: full_body.len() as u64,
-            body_preview: Some(preview),
             body: Some(full_body.clone()),
-            body_lossy: false,
+            ..TraceResponse::default()
         }),
         criteria: Vec::new(),
         warnings: Vec::new(),
@@ -349,5 +351,141 @@ async fn replay_empty_form_wire_keeps_logical_shape() {
                 "{logical} versus {other}"
             );
         }
+    }
+}
+
+const PLANTED_PNG: &[u8] = b"\x89PNG\r\n\x1a\nPLANTED-PNG-CONTENT";
+
+struct RawServer {
+    base_url: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RawServer {
+    fn start() -> Self {
+        use std::sync::atomic::Ordering;
+        let server = tiny_http::Server::http("127.0.0.1:0")
+            .unwrap_or_else(|err| panic!("binding raw server: {err}"));
+        let base_url = format!("http://{}", server.server_addr());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = std::sync::Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_millis(20))
+                else {
+                    continue;
+                };
+                let (media_type, body): (&str, &[u8]) = match request.url() {
+                    "/latin" => ("text/plain; charset=iso-8859-1", b"caf\xE9 au lait"),
+                    _ => ("image/png", PLANTED_PNG),
+                };
+                let response = tiny_http::Response::from_data(body).with_header(
+                    tiny_http::Header::from_bytes("Content-Type", media_type)
+                        .unwrap_or_else(|()| panic!("content type header")),
+                );
+                let _ = request.respond(response);
+            }
+        });
+        Self {
+            base_url,
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for RawServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn download_builder(base: &str) -> arazzo_runtime::EngineBuilder {
+    let step = |operation: &str, output: &str| {
+        json!({"stepId":"s1","operationId":operation,
+            "successCriteria":[{"condition":"$statusCode == 200"}],
+            "outputs":{"value":output}})
+    };
+    let spec = serde_json::from_value(json!({
+        "arazzo":"1.1.0","info":{"title":"replay","version":"1"},
+        "sourceDescriptions":[{"name":"api","url":"https://fixture.invalid/api","type":"openapi"}],
+        "workflows":[
+            {"workflowId":"text","steps":[step("latin","$response.body")],
+                "outputs":{"value":"$steps.s1.outputs.value"}},
+            {"workflowId":"bytes","steps":[step("png","$statusCode")],
+                "outputs":{"value":"$steps.s1.outputs.value"}}]
+    }))
+    .unwrap_or_else(|err| panic!("download fixture: {err}"));
+    let get = |id: &str| json!({"get":{"operationId":id,"responses":{"200":{"description":"ok"}}}});
+    let api = json!({"openapi":"3.2.0","$self":"https://fixture.invalid/api",
+        "info":{"title":"api","version":"1"},"servers":[{"url":base}],
+        "paths":{"/latin":get("latin"),"/png":get("png")}});
+    arazzo_runtime::EngineBuilder::new(spec)
+        .openapi_spec(api.to_string().into_bytes(), None)
+        .trace(true)
+}
+
+#[tokio::test]
+async fn a_v2_trace_round_trips_through_json_and_replays_the_same_outcome() {
+    let server = RawServer::start();
+    for (workflow, expected) in [("text", json!("caf\u{e9} au lait")), ("bytes", json!(200))] {
+        let live = download_builder(&server.base_url)
+            .build()
+            .unwrap_or_else(|err| panic!("live engine: {err}"))
+            .execute_collect(workflow, BTreeMap::new())
+            .await;
+        let outputs = live
+            .outputs
+            .as_ref()
+            .unwrap_or_else(|err| panic!("{workflow} live run: {err}"))
+            .clone();
+        assert_eq!(outputs.get("value"), Some(&expected), "{workflow}");
+        let steps: Vec<TraceStepRecord> = live.trace_steps().into_iter().cloned().collect();
+        let serialized =
+            serde_json::to_string(&steps).unwrap_or_else(|err| panic!("serializing: {err}"));
+        assert!(!serialized.contains("PLANTED"), "{serialized}");
+        assert!(!serialized.contains('\u{fffd}'), "{serialized}");
+        let response = steps[0]
+            .response
+            .as_ref()
+            .unwrap_or_else(|| panic!("{workflow} response"));
+        match workflow {
+            "text" => {
+                assert_eq!(response.body.as_deref(), Some("caf\u{e9} au lait"));
+                assert_eq!(
+                    response.media_type.as_deref(),
+                    Some("text/plain;charset=iso-8859-1")
+                );
+                assert!(response.body_blob.is_none());
+            }
+            _ => {
+                assert!(response.body.is_none());
+                assert_eq!(
+                    response.body_blob,
+                    Some(BytesDescriptor::of(
+                        PLANTED_PNG,
+                        Some("image/png".into()),
+                        None
+                    ))
+                );
+                assert!(response.body_error.is_none());
+            }
+        }
+        let restored: Vec<TraceStepRecord> =
+            serde_json::from_str(&serialized).unwrap_or_else(|err| panic!("restoring: {err}"));
+        assert_eq!(restored, steps);
+        let replayed = download_builder(&server.base_url)
+            .replay_trace_steps(restored)
+            .build()
+            .unwrap_or_else(|err| panic!("replay engine: {err}"))
+            .execute_collect(workflow, BTreeMap::new())
+            .await
+            .outputs
+            .unwrap_or_else(|err| panic!("{workflow} replay: {err}"));
+        assert_eq!(replayed, outputs, "{workflow}");
     }
 }

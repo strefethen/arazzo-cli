@@ -410,18 +410,17 @@ pub enum SequentialFallbackReason {
 #[serde(rename_all = "camelCase")]
 pub struct TraceResponse {
     pub status_code: i64,
-    pub content_type: ContentType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
     pub body_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_preview: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// True when the body was converted via lossy UTF-8 (non-UTF-8 bytes replaced
-    /// with U+FFFD). Replay consumers should treat the body as approximate.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub body_lossy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_blob: Option<BytesDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_error: Option<String>,
 }
 
 /// Trace result of evaluating one success criterion.
@@ -440,7 +439,7 @@ pub struct TraceCriterionResult {
 }
 
 /// Trace record of the message an AsyncAPI receive step consumed (or, in a
-/// dry run, simulated). Additive to `trace.v1`; absent for HTTP steps.
+/// dry run, simulated). Absent for HTTP steps.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceMessage {

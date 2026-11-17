@@ -35,6 +35,7 @@ mod asyncapi_target;
 #[cfg(test)]
 mod asyncapi_target_tests;
 mod builder;
+mod bytes_descriptor;
 mod client;
 mod control;
 #[cfg(test)]
@@ -95,10 +96,11 @@ mod xpath;
 
 use ::url as url_crate;
 pub use builder::{relative_openapi_source_paths, EngineBuilder};
+pub use bytes_descriptor::{BytesDescriptor, ContentDescriptor, RedactedDescriptor};
 use client::HttpClient;
 pub use client::{
-    decide_redirect, is_loopback_host, ClientConfig, ContentType, RateLimitConfig,
-    RedirectDecision, RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
+    decide_redirect, is_loopback_host, ClientConfig, RateLimitConfig, RedirectDecision,
+    RequestConfig, Response, DEFAULT_MAX_REDIRECTS,
 };
 use control::{sleep_with_cancel, step_result_error};
 #[cfg(test)]
@@ -134,6 +136,7 @@ use payload::{
 };
 use regex_cache::RegexCache;
 use replay::{ReplayKey, ReplayState};
+use response_body::{truncate_with_ellipsis, BodyView};
 pub use run_record::{RunRequestMetadata, RunResponseMetadata, RunStepOutcome, RunStepRecord};
 pub use source_document::SourceDocumentLoader;
 pub use state::Engine;

@@ -562,35 +562,22 @@ pub(super) fn step_workflow_id_ref(step: &Step) -> String {
 }
 
 pub(super) fn build_trace_response(response: &Response) -> TraceResponse {
-    let body_preview = if response.body.is_empty() {
-        None
-    } else {
-        let max = TRACE_BODY_PREVIEW_MAX_BYTES.min(response.body.len());
-        let mut preview = String::from_utf8_lossy(&response.body[..max]).to_string();
-        if response.body.len() > max {
-            preview.push_str("...");
-        }
-        Some(preview)
+    let (body, body_blob, body_error) = match response.body_view() {
+        BodyView::Absent => (None, None, None),
+        BodyView::Text(text) => (Some(text.into_owned()), None, None),
+        BodyView::Bytes {
+            descriptor,
+            decode_error,
+        } => (None, descriptor, decode_error.map(str::to_owned)),
     };
-
-    let (body, body_lossy) = if response.body.is_empty() {
-        (None, false)
-    } else {
-        let lossy = std::str::from_utf8(&response.body).is_err();
-        (
-            Some(String::from_utf8_lossy(&response.body).to_string()),
-            lossy,
-        )
-    };
-
     TraceResponse {
         status_code: response.status_code,
-        content_type: response.content_type.clone(),
+        media_type: response.media_type_text(),
         headers: response.headers.clone(),
         body_bytes: u64::try_from(response.body.len()).unwrap_or(u64::MAX),
-        body_preview,
         body,
-        body_lossy,
+        body_blob,
+        body_error,
     }
 }
 
@@ -683,28 +670,26 @@ pub(super) fn insert_response_locals(locals: &mut BTreeMap<String, Value>, respo
         "responseStatusCode".to_string(),
         Value::Number(response.status_code.into()),
     );
-    locals.insert(
-        "responseContentType".to_string(),
-        Value::String(response.content_type.to_string()),
-    );
+    if let Some(media_type) = response.media_type_text() {
+        locals.insert("responseContentType".to_string(), Value::String(media_type));
+    }
     locals.insert("responseHeaders".to_string(), json!(response.headers));
 
-    if !response.body.is_empty() {
-        let raw = match &response.body_value {
-            arazzo_expr::BodySlot::Present(value) => match value.as_ref() {
-                Value::String(text) => text.clone(),
-                _ => String::from_utf8_lossy(&response.body).into_owned(),
-            },
-            _ => String::from_utf8_lossy(&response.body).into_owned(),
-        };
-        locals.insert("responseBodyRaw".to_string(), Value::String(raw));
-
-        let max = TRACE_BODY_PREVIEW_MAX_BYTES.min(response.body.len());
-        let mut preview = String::from_utf8_lossy(&response.body[..max]).to_string();
-        if response.body.len() > max {
-            preview.push_str("...");
+    match response.body_view() {
+        BodyView::Absent => {}
+        BodyView::Text(text) => {
+            let mut preview = text.to_string();
+            truncate_with_ellipsis(&mut preview, TRACE_BODY_PREVIEW_MAX_BYTES);
+            locals.insert(
+                "responseBodyRaw".to_string(),
+                Value::String(text.into_owned()),
+            );
+            locals.insert("responseBodyPreview".to_string(), Value::String(preview));
         }
-        locals.insert("responseBodyPreview".to_string(), Value::String(preview));
+        BodyView::Bytes { descriptor, .. } => {
+            let summary = descriptor.map_or_else(|| "<bytes>".to_owned(), |d| d.summary());
+            locals.insert("responseBodyPreview".to_string(), Value::String(summary));
+        }
     }
 }
 
