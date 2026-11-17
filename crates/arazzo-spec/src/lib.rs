@@ -331,7 +331,57 @@ impl PropertyDef {
             Some(serde_yaml_ng::Value::Bool(true))
         )
     }
+
+    pub fn content_encoding(&self) -> Option<Result<&str, &serde_yaml_ng::Value>> {
+        self.string_keyword("contentEncoding")
+    }
+
+    pub fn content_media_type(&self) -> Option<Result<&str, &serde_yaml_ng::Value>> {
+        self.string_keyword("contentMediaType")
+    }
+
+    pub fn reference_or_applicator_keyword(&self) -> Option<&'static str> {
+        self.first_present(&REFERENCE_AND_APPLICATOR_KEYWORDS)
+    }
+
+    pub fn enumeration_keyword(&self) -> Option<&'static str> {
+        self.first_present(&["enum", "const"])
+    }
+
+    fn string_keyword(&self, keyword: &str) -> Option<Result<&str, &serde_yaml_ng::Value>> {
+        self.extensions.get(keyword).map(|value| match value {
+            serde_yaml_ng::Value::String(text) => Ok(text.as_str()),
+            other => Err(other),
+        })
+    }
+
+    fn first_present(&self, keywords: &[&'static str]) -> Option<&'static str> {
+        keywords
+            .iter()
+            .copied()
+            .find(|keyword| self.extensions.contains_key(*keyword))
+    }
 }
+
+const REFERENCE_AND_APPLICATOR_KEYWORDS: [&str; 17] = [
+    "$ref",
+    "$dynamicRef",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    "dependentSchemas",
+    "prefixItems",
+    "items",
+    "contains",
+    "properties",
+    "patternProperties",
+    "additionalProperties",
+    "propertyNames",
+];
 
 /// Step target discriminator — exactly one target field is permitted.
 #[derive(Debug, Clone, PartialEq)]
@@ -1214,6 +1264,56 @@ mod tests {
                 Err(err) => panic!("deserializing property YAML {yaml:?}: {err}"),
             };
             assert_eq!(prop.is_write_only(), expected, "{yaml:?}");
+        }
+    }
+
+    fn property(yaml: &str) -> PropertyDef {
+        serde_yaml_ng::from_str(yaml)
+            .unwrap_or_else(|err| panic!("deserializing property YAML {yaml:?}: {err}"))
+    }
+
+    #[test]
+    fn property_def_content_keywords_read_strings_and_surface_other_values() {
+        let prop = property("contentEncoding: base64url\ncontentMediaType: image/png\n");
+        assert_eq!(prop.content_encoding(), Some(Ok("base64url")));
+        assert_eq!(prop.content_media_type(), Some(Ok("image/png")));
+        let absent = property("type: string\nformat: binary\n");
+        assert_eq!(absent.content_encoding(), None);
+        assert_eq!(absent.content_media_type(), None);
+        let odd = property("contentEncoding: 64\ncontentMediaType: [a]\n");
+        assert!(matches!(odd.content_encoding(), Some(Err(_))));
+        assert!(matches!(odd.content_media_type(), Some(Err(_))));
+    }
+
+    #[test]
+    fn property_def_keyword_accessors_name_the_first_keyword_present() {
+        for (yaml, expected) in [
+            ("{}", None),
+            ("format: binary", None),
+            ("enum: [a]", None),
+            ("$ref: '#/x'", Some("$ref")),
+            ("$dynamicRef: '#x'", Some("$dynamicRef")),
+            ("allOf: [{}]", Some("allOf")),
+            ("oneOf: [{}]", Some("oneOf")),
+            ("not: {}", Some("not")),
+            ("if: {}", Some("if")),
+            ("items: {}", Some("items")),
+            ("properties: {}", Some("properties")),
+            ("additionalProperties: false", Some("additionalProperties")),
+        ] {
+            assert_eq!(
+                property(yaml).reference_or_applicator_keyword(),
+                expected,
+                "{yaml}"
+            );
+        }
+        for (yaml, expected) in [
+            ("{}", None),
+            ("allOf: [{}]", None),
+            ("enum: [a, b]", Some("enum")),
+            ("const: a", Some("const")),
+        ] {
+            assert_eq!(property(yaml).enumeration_keyword(), expected, "{yaml}");
         }
     }
 }

@@ -17,17 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--max-pending-requests`, `--max-result-bytes`, `--max-response-body-bytes`,
   `--max-document-bytes`, `--max-http-timeout` and `--max-execution-timeout`.
   README and SECURITY.md list what is and is not restricted.
-- **A workflow can upload a file byte for byte** — `run --input-file
-  <name>=<path>` loads a file as a bytes input, and a step with
-  `payload: $inputs.<name>` and an explicit `contentType` that is neither JSON
-  nor form sends exactly those bytes, including across a 307 or 308 redirect.
-  The input must be declared in the workflow's `inputs` with a schema that has
-  no `type`, `$ref`, `enum`, `const`, `allOf`, `anyOf`, `oneOf`, `not` or `if`.
-  Any other schema, an undeclared name, a name also given by `--input` or
-  `--input-json`, an unreadable file and a file over `--max-input-file-size`
-  (default 10 MiB, counted while reading) fail before the run with
-  `RUN_INPUT_FILE`. The path is taken literally, and no document field names a
-  file: `payload: ./cat.jpg` is the text `./cat.jpg`.
+- **A workflow can upload a file byte for byte** — `run` and `test` take
+  `--input-file '<name>=<path>[;type=<media-type>][;filename=<name>]'`, and the
+  input's declared schema decides what the file becomes. A schema with no
+  `type` and no `$ref`, `enum`, `const` or applicator keyword loads bytes: a
+  step with `payload: $inputs.<name>` and an explicit `contentType` that is
+  neither JSON nor form sends exactly those bytes, including across a 307 or
+  308 redirect. Their `mediaType` comes from `;type=`, else the schema's
+  `contentMediaType`; their `filename` from `;filename=`, else the path's
+  basename. A `type: string` schema loads the file's base64 or base64url text
+  when `contentEncoding` says so, and otherwise the file as strict UTF-8 text.
+  `format: binary` changes nothing, and a schema `default` is never bytes. A
+  required input supplied by `--input-file` satisfies `required`.
+  - Any other `type`, another `contentEncoding`, `$ref` or an applicator, a
+    file that is not UTF-8 for a text input, a suffix on a text input, a
+    directory, an undeclared name, a name also given by `--input` or
+    `--input-json`, an unreadable file and a file over `--max-input-file-size`
+    (default 10 MiB, counted while reading) fail before the run with
+    `RUN_INPUT_FILE`. Under `test`, a malformed, unreadable or colliding flag
+    is `TEST_INPUT_FILE`; each workflow receives only the files its own
+    `inputs` declare, and a refused conversion is a suite error before any
+    request.
+  - The path runs to the first `;type=` or `;filename=` (case-sensitive) and
+    is otherwise taken literally, with no environment expansion. No document
+    field names a file: `payload: ./cat.jpg` is the text `./cat.jpg`.
   - Bytes are opaque, and the whole value as a request body is the only place
     they can go in this release. A JSON Pointer into them, `{}` interpolation,
     a criterion or Selector Object context, a `simple` condition operand, a

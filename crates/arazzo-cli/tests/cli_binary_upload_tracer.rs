@@ -510,7 +510,7 @@ fn input_file_is_refused_before_the_run() {
     let fixture = Fixture::new();
     fixture.write("big.bin", &[7; 65]);
     fixture.write("exact.bin", &[7; 64]);
-    let cases: [(&str, &[&str], &str); 14] = [
+    let cases: [(&str, &[&str], &str); 13] = [
         (
             "undeclared name",
             &["--input-file", "avatar=cat.jpg"],
@@ -532,29 +532,24 @@ fn input_file_is_refused_before_the_run() {
             "--input-file names input \"photo\" more than once",
         ),
         (
-            "typed schema",
+            "typed schema with a non-UTF-8 file",
             &["--input-file", "typed=cat.jpg"],
-            "--input-file input \"typed\": its schema declares type \"string\", which is not supported by this build",
-        ),
-        (
-            "encoded string schema",
-            &["--input-file", "encoded=cat.jpg"],
-            "--input-file input \"encoded\": its schema declares type \"string\", which is not supported by this build",
+            "--input-file input \"typed\": cat.jpg is not valid UTF-8",
         ),
         (
             "enum schema",
             &["--input-file", "listed=cat.jpg"],
-            "--input-file input \"listed\": its schema declares enum, which is not supported by this build",
+            "--input-file input \"listed\": its schema declares enum, which this runtime does not resolve for a file input",
         ),
         (
             "const schema",
             &["--input-file", "fixed=cat.jpg"],
-            "--input-file input \"fixed\": its schema declares const, which is not supported by this build",
+            "--input-file input \"fixed\": its schema declares const, which this runtime does not resolve for a file input",
         ),
         (
             "applicator schema",
             &["--input-file", "combined=cat.jpg"],
-            "--input-file input \"combined\": its schema declares allOf, which is not supported by this build",
+            "--input-file input \"combined\": its schema declares allOf, which this runtime does not resolve for a file input",
         ),
         (
             "file over the cap",
@@ -710,13 +705,12 @@ fn bytes_fail_closed_wherever_they_cannot_be_sent_or_read() {
 }
 
 #[test]
-fn a_required_bytes_input_fails_strict_input_validation_for_now() {
+fn a_required_bytes_input_passes_strict_input_validation() {
     let fixture = Fixture::new();
     let output = fixture.run(
         "required",
         &["--input-file", "photo=cat.jpg", "--strict-inputs"],
     );
-    let message = failed(&output, "RUNTIME_INPUT_VALIDATION");
-    assert!(message.contains("\"photo\""), "{message}");
-    assert!(fixture.take().is_empty());
+    assert_eq!(succeeded(&output)["outputs"]["id"], "p1");
+    assert_eq!(fixture.take()[0].body, jpeg());
 }

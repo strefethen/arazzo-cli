@@ -34,7 +34,7 @@ pub fn validate_inputs(
     schema: &SchemaObject,
     inputs: &mut BTreeMap<String, Value>,
 ) -> Vec<InputIssue> {
-    validate_inputs_inner(schema, inputs, &Default::default())
+    validate_inputs_inner(schema, inputs, &Default::default(), &Default::default())
 }
 
 pub(super) fn validate_provenanced_inputs(
@@ -47,19 +47,21 @@ pub(super) fn validate_provenanced_inputs(
         .filter(|name| inputs.values.contains_key(*name))
         .cloned()
         .collect();
-    validate_inputs_inner(schema, &mut inputs.values, &unknown)
+    let blobs = inputs.blobs.keys().cloned().collect();
+    validate_inputs_inner(schema, &mut inputs.values, &unknown, &blobs)
 }
 
 fn validate_inputs_inner(
     schema: &SchemaObject,
     inputs: &mut BTreeMap<String, Value>,
     unknown: &std::collections::BTreeSet<String>,
+    blobs: &std::collections::BTreeSet<String>,
 ) -> Vec<InputIssue> {
     let mut issues = Vec::new();
 
     // Phase 1: Default injection
     for (name, prop) in &schema.properties {
-        if !inputs.contains_key(name) {
+        if !inputs.contains_key(name) && !blobs.contains(name) {
             if let Some(default_val) = &prop.default {
                 match serde_json::to_value(default_val) {
                     Ok(json_val) => {
@@ -79,7 +81,7 @@ fn validate_inputs_inner(
 
     // Phase 2: Required check
     for required_name in &schema.required {
-        if unknown.contains(required_name) {
+        if unknown.contains(required_name) || blobs.contains(required_name) {
             continue;
         }
         match inputs.get(required_name) {
@@ -726,5 +728,47 @@ mod tests {
         );
         assert_eq!(issues[3].field, "undeclared");
         assert_eq!(issues[3].severity, InputIssueSeverity::Warning);
+    }
+
+    #[test]
+    fn a_blob_input_satisfies_required_and_is_never_defaulted_or_type_checked() {
+        let blob_property = PropertyDef {
+            default: Some(yaml_value("fallback")),
+            ..property_with_enum(yaml_value("[a]"))
+        };
+        let schema = SchemaObject {
+            properties: BTreeMap::from([
+                ("photo".to_string(), blob_property),
+                (
+                    "caption".to_string(),
+                    PropertyDef {
+                        type_: Some(JsonSchemaType::String),
+                        ..PropertyDef::default()
+                    },
+                ),
+            ]),
+            required: vec!["photo".to_string(), "caption".to_string()],
+            ..SchemaObject::default()
+        };
+        let mut inputs = super::super::ProvenancedValues::default();
+        inputs
+            .blobs
+            .insert("photo".to_string(), super::super::Blob::new(vec![0xFF]));
+
+        let issues = super::validate_provenanced_inputs(&schema, &mut inputs);
+
+        assert_eq!(
+            issues
+                .iter()
+                .map(|issue| issue.to_string())
+                .collect::<Vec<_>>(),
+            ["input \"caption\": required input is missing"]
+        );
+        assert!(!inputs.values.contains_key("photo"));
+
+        let mut absent = super::super::ProvenancedValues::default();
+        let issues = super::validate_provenanced_inputs(&schema, &mut absent);
+        assert_eq!(absent.values.get("photo"), Some(&json!("fallback")));
+        assert!(issues.iter().any(|issue| issue.field == "photo"));
     }
 }

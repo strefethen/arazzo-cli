@@ -134,6 +134,7 @@ dependencies = [
  "arazzo-runtime",
  "arazzo-spec",
  "arazzo-validate",
+ "base64",
  "clap",
  "humantime",
  "indexmap 2.13.0",

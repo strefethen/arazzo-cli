@@ -60,7 +60,7 @@ pub enum Commands {
         #[arg(long = "input-json")]
         input_json: Vec<String>,
 
-        /// Bytes input read from a file, as `name=path`, for an input whose schema declares no type. The path is taken literally. Repeatable.
+        /// Input read from a file, as `name=path[;type=<media-type>][;filename=<name>]`: bytes when the input's schema declares no type, the file's UTF-8 text or its base64/base64url (per `contentEncoding`) when it declares `type: string`. The path is taken literally up to the first `;type=` or `;filename=`. Repeatable.
         #[arg(long = "input-file", value_name = "NAME=PATH")]
         input_file: Vec<String>,
 
@@ -309,6 +309,18 @@ pub enum Commands {
         /// JSON-typed inputs (`key=<json-value>`)
         #[arg(long = "input-json")]
         input_json: Vec<String>,
+
+        /// Input read from a file, as `name=path[;type=<media-type>][;filename=<name>]`: bytes when the input's schema declares no type, the file's UTF-8 text or its base64/base64url (per `contentEncoding`) when it declares `type: string`. The path is taken literally up to the first `;type=` or `;filename=`. Repeatable.
+        #[arg(long = "input-file", value_name = "NAME=PATH")]
+        input_file: Vec<String>,
+
+        /// Maximum size in bytes of one --input-file, enforced while reading (default: 10485760 = 10 MiB)
+        #[arg(
+            long = "max-input-file-size",
+            value_name = "BYTES",
+            default_value_t = arazzo_runtime::DEFAULT_MAX_RESPONSE_BYTES
+        )]
+        max_input_file_size: usize,
 
         /// Per-request HTTP timeout
         #[arg(

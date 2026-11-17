@@ -4,13 +4,14 @@ use std::time::{Duration, Instant};
 
 use arazzo_runtime::{
     ClientConfig, EngineBuilder, EngineEvent, MessageTransportOptions, RuntimeErrorKind,
-    TransportWarning,
+    TransportWarning, WorkflowInputs,
 };
 use arazzo_spec::{classify_workflow_dependency, ArazzoSpec, WorkflowDependency};
 use serde_json::Value;
 
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::cli_error::CliError;
+use crate::input_file::{self, FileInputs, InputFile, Undeclared};
 use crate::output::{
     self, TestCaseResult, TestOutput, TestStatus, TestStepResult, TestSuiteResult, TestSummary,
 };
@@ -19,6 +20,7 @@ use crate::transport::{self, TransportFlags};
 /// Options for running the test suite (mirrors CLI flags).
 pub struct TestRunOptions {
     pub inputs: BTreeMap<String, Value>,
+    pub input_files: Vec<InputFile>,
     pub http_timeout: Duration,
     pub execution_timeout: Duration,
     pub headers: BTreeMap<String, String>,
@@ -166,6 +168,24 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
             }
         };
 
+        let file_inputs = match file_inputs_by_workflow(&spec, &workflow_ids, &opts.input_files) {
+            Ok(file_inputs) => file_inputs,
+            Err(error) => {
+                summary.suite_errors += 1;
+                suites.push(TestSuiteResult {
+                    file: file_str.clone(),
+                    name: suite_name,
+                    tests: vec![],
+                    duration_ms: suite_start.elapsed().as_millis() as u64,
+                    error: Some(error),
+                });
+                if opts.fail_fast {
+                    bail = true;
+                }
+                continue;
+            }
+        };
+
         // Build engine.
         let mut cfg = ClientConfig {
             timeout: opts.http_timeout,
@@ -216,10 +236,14 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         let mut completed_workflows = BTreeSet::new();
         for workflow_id in &workflow_ids {
             let wf_start = Instant::now();
+            let FileInputs { blobs, values } =
+                file_inputs.get(workflow_id).cloned().unwrap_or_default();
+            let mut inputs = opts.inputs.clone();
+            inputs.extend(values);
             let exec_result = engine
                 .execute_with_timeout_and_completed_workflows(
                     workflow_id,
-                    opts.inputs.clone(),
+                    WorkflowInputs::new(inputs, blobs),
                     opts.execution_timeout,
                     &completed_workflows,
                 )
@@ -392,6 +416,29 @@ pub async fn run_test_suite(specs: &[PathBuf], opts: &TestRunOptions) -> TestOut
         suites,
         transport_warnings,
     }
+}
+
+fn file_inputs_by_workflow(
+    spec: &ArazzoSpec,
+    workflow_ids: &[String],
+    files: &[InputFile],
+) -> Result<BTreeMap<String, FileInputs>, String> {
+    if files.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    workflow_ids
+        .iter()
+        .map(|workflow_id| {
+            let schema = spec
+                .workflows
+                .iter()
+                .find(|workflow| &workflow.workflow_id == workflow_id)
+                .and_then(|workflow| workflow.inputs.as_ref());
+            input_file::convert(files, workflow_id, schema, Undeclared::Skip)
+                .map(|inputs| (workflow_id.clone(), inputs))
+                .map_err(|error| format!("workflow \"{workflow_id}\": {error}"))
+        })
+        .collect()
 }
 
 fn plan_workflow_ids(

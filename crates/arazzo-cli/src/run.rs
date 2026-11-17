@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::cli::ExpressionDiagnosticsMode;
 use crate::cli_error::{self, CliError, SpecErrorCodes, CLI_OUTPUT_WRITE};
 use crate::handlers::{parse_input_kv, parse_input_value};
-use crate::input_file::{self, InputFiles};
+use crate::input_file::{self, FileInputs, Undeclared};
 use crate::message_transport::{ArmedLinePrinter, RUN_MESSAGE_CODES};
 use crate::output;
 use crate::run_context::RunContext;
@@ -132,15 +132,17 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         .iter()
         .find(|workflow| workflow.workflow_id == run.workflow_id)
         .and_then(|workflow| workflow.inputs.as_ref());
-    let input_blobs = InputFiles {
-        flags: &run.input_file_flags,
-        max_bytes: run.max_input_file_size,
-        workflow_id: &run.workflow_id,
-        schema: input_schema,
-        json_inputs: &inputs,
-    }
-    .load()
-    .map_err(|message| output::run_error("RUN_INPUT_FILE", message, &[], &transport_warnings))?;
+    let FileInputs {
+        blobs: input_blobs,
+        values: file_values,
+    } = input_file::read_all(&run.input_file_flags, run.max_input_file_size, &inputs)
+        .and_then(|files| {
+            input_file::convert(&files, &run.workflow_id, input_schema, Undeclared::Reject)
+        })
+        .map_err(|message| {
+            output::run_error("RUN_INPUT_FILE", message, &[], &transport_warnings)
+        })?;
+    inputs.extend(file_values);
     let input_blob_descriptors = input_file::descriptors(&input_blobs);
 
     // One sensitive input-name set feeds both the `--verbose` echo and the

@@ -467,6 +467,8 @@ pub async fn run_tests(
     format: TestFormat,
     input: Vec<String>,
     input_json: Vec<String>,
+    input_file: Vec<String>,
+    max_input_file_size: usize,
     http_timeout: std::time::Duration,
     execution_timeout: std::time::Duration,
     header: Vec<String>,
@@ -508,6 +510,8 @@ pub async fn run_tests(
         })?;
         inputs.insert(key, value);
     }
+    let input_files = crate::input_file::read_all(&input_file, max_input_file_size, &inputs)
+        .map_err(|message| CliError::new("TEST_INPUT_FILE", message))?;
 
     // Parse headers.
     let mut headers = BTreeMap::new();
@@ -554,6 +558,7 @@ pub async fn run_tests(
 
     let opts = TestRunOptions {
         inputs,
+        input_files,
         http_timeout,
         execution_timeout,
         headers,
