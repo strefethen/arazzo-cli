@@ -52,20 +52,12 @@ fn soap_step(
         target: Some(StepTarget::OperationPath(
             "{$sourceDescriptions.test.url}#/paths/~1soap/post".to_string(),
         )),
-        parameters: vec![
-            Parameter {
-                name: "Content-Type".to_string(),
-                in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String("text/xml".to_string()).into(),
-                ..Parameter::default()
-            },
-            Parameter {
-                name: "SOAPAction".to_string(),
-                in_: Some(ParamLocation::Header),
-                value: serde_yaml_ng::Value::String(soap_action.to_string()).into(),
-                ..Parameter::default()
-            },
-        ],
+        parameters: vec![Parameter {
+            name: "SOAPAction".to_string(),
+            in_: Some(ParamLocation::Header),
+            value: serde_yaml_ng::Value::String(soap_action.to_string()).into(),
+            ..Parameter::default()
+        }],
         request_body: Some(RequestBody {
             content_type: "text/xml".to_string(),
             payload: Some(serde_yaml_ng::Value::String(payload.to_string()).into()),

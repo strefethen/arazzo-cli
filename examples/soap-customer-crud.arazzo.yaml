@@ -16,9 +16,6 @@ workflows:
       - stepId: list-customers
         operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
-          - name: Content-Type
-            in: header
-            value: "text/xml"
           - name: SOAPAction
             in: header
             value: "http://example.com/customer-service/ListCustomers"
@@ -52,9 +49,6 @@ workflows:
       - stepId: get-customer
         operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
-          - name: Content-Type
-            in: header
-            value: "text/xml"
           - name: SOAPAction
             in: header
             value: "http://example.com/customer-service/GetCustomer"
@@ -86,9 +80,6 @@ workflows:
       - stepId: create-customer
         operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
-          - name: Content-Type
-            in: header
-            value: "text/xml"
           - name: SOAPAction
             in: header
             value: "http://example.com/customer-service/CreateCustomer"
@@ -127,9 +118,6 @@ workflows:
       - stepId: update-customer
         operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
-          - name: Content-Type
-            in: header
-            value: "text/xml"
           - name: SOAPAction
             in: header
             value: "http://example.com/customer-service/UpdateCustomer"
@@ -174,9 +162,6 @@ workflows:
       - stepId: delete-customer
         operationPath: '{$sourceDescriptions.soap.url}#/paths/~1api~1soap-mock~1service/post'
         parameters:
-          - name: Content-Type
-            in: header
-            value: "text/xml"
           - name: SOAPAction
             in: header
             value: "http://example.com/customer-service/DeleteCustomer"

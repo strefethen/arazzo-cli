@@ -280,8 +280,10 @@ impl Engine {
             self.build_url_with_evaluator(&resolved.path, &resolved.base, step, &eval, &admission)?;
 
         let mut prep_warnings = url_result.warnings.clone();
+        request_body::refuse_content_type_parameter(step)?;
         let request_body::PreparedBody {
             wire: body,
+            content_type,
             logical,
             projection: projected_body,
             warnings: body_warnings,
@@ -289,13 +291,7 @@ impl Engine {
         prep_warnings.extend(body_warnings);
 
         let mut headers = BTreeMap::new();
-        if body.is_some() {
-            let content_type = step
-                .request_body
-                .as_ref()
-                .map(|rb| rb.content_type.clone())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "application/json".to_string());
+        if let Some(content_type) = content_type {
             headers.insert("Content-Type".to_string(), content_type);
         }
         let mut projected_headers = headers.clone();

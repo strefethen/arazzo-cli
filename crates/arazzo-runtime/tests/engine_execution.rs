@@ -4224,7 +4224,7 @@ async fn dry_run_multi_step_and_custom_headers() {
                 }],
                 request_body: Some(RequestBody {
                     content_type: "application/xml".to_string(),
-                    payload: Some(to_yaml(json!({"key":"val"})).into()),
+                    payload: Some(to_yaml(json!("<key>val</key>")).into()),
                     ..RequestBody::default()
                 }),
                 success_criteria: success_200(),

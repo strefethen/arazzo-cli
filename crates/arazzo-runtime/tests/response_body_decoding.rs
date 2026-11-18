@@ -335,9 +335,9 @@ async fn request_serialization_classifies_json_and_form_through_the_parser() {
             r#"{"a":1}"#,
         ),
         (
-            json!({"contentType":"application/vnd.api+json", "payload":"text"}),
+            json!({"contentType":"application/vnd.api+json", "payload":{"data":"text"}}),
             "application/vnd.api+json",
-            r#""text""#,
+            r#"{"data":"text"}"#,
         ),
         (
             json!({"contentType":"Application/X-WWW-Form-Urlencoded; charset=UTF-8",

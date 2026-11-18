@@ -249,13 +249,7 @@ async fn evaluation_replacements_and_controls() {
     .await;
     assert!(result.outputs.is_ok());
     assert_eq!(requests[0].body, "name=a+b&c=d e");
-    for ct in [
-        "",
-        "application/json",
-        "application/x-www-form-urlencoded-extra",
-        "text/application/x-www-form-urlencoded",
-        "multipart/form-data",
-    ] {
+    for ct in ["", "application/json"] {
         let (_, requests, _) = exercise(
             json!({"contentType":ct,"payload":{"name":"a b"}}),
             BTreeMap::new(),
@@ -263,6 +257,24 @@ async fn evaluation_replacements_and_controls() {
         )
         .await;
         assert_eq!(requests[0].body, r#"{"name":"a b"}"#);
+    }
+    for ct in [
+        "application/x-www-form-urlencoded-extra",
+        "text/application/x-www-form-urlencoded",
+        "multipart/form-data",
+    ] {
+        let (result, requests, _) = exercise(
+            json!({"contentType":ct,"payload":{"name":"a b"}}),
+            BTreeMap::new(),
+            false,
+        )
+        .await;
+        assert_eq!(
+            result.outputs.as_ref().err().map(|e| e.code()),
+            Some("RUNTIME_INVALID_REQUEST_BODY"),
+            "{ct}: a map that is not form-encoded is not JSON either"
+        );
+        assert!(requests.is_empty(), "{ct}");
     }
     let (_, requests, _) =
         exercise(json!({"payload":{"name":"a b"}}), BTreeMap::new(), false).await;

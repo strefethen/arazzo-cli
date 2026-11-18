@@ -1,5 +1,6 @@
 use arazzo_expr::{BlobSlot, BodySlot};
-use arazzo_spec::{media_type, RequestBody};
+use arazzo_spec::{media_type::MediaType, RequestBody};
+use encoding_rs::{Encoding, UTF_8};
 use serde::ser::{Error as _, Serialize, Serializer};
 use serde_yaml_ng::Value as Yaml;
 
@@ -7,6 +8,8 @@ use super::request_admission::RequestAdmission;
 use super::*;
 
 const PAYLOAD: &str = "requestBody.payload";
+const FORM: &str = "application/x-www-form-urlencoded";
+const OMITTED_CONTENT_TYPE: &str = "application/json";
 const BYTES_BODY: &str = "request body is bytes, which only a whole output can carry";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +18,7 @@ pub(crate) enum BodyNode {
     Bool(bool),
     Number(serde_json::Number),
     String(String),
+    Template(String),
     Array(Vec<BodyNode>),
     Map(Vec<(String, BodyNode)>),
     Blob(Blob),
@@ -41,9 +45,23 @@ impl From<Value> for BodyNode {
 }
 
 impl BodyNode {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool(_) => "boolean",
+            Self::Number(_) => "number",
+            Self::String(_) | Self::Template(_) => "string",
+            Self::Array(_) => "array",
+            Self::Map(_) => "object",
+            Self::Blob(_) => "bytes",
+        }
+    }
+
     fn bytes_pointer(&self) -> Option<String> {
         match self {
-            Self::Null | Self::Bool(_) | Self::Number(_) | Self::String(_) => None,
+            Self::Null | Self::Bool(_) | Self::Number(_) | Self::String(_) | Self::Template(_) => {
+                None
+            }
             Self::Array(items) => items.iter().enumerate().find_map(|(index, item)| {
                 item.bytes_pointer().map(|rest| format!("/{index}{rest}"))
             }),
@@ -60,7 +78,7 @@ impl BodyNode {
             Self::Null => Value::Null,
             Self::Bool(value) => Value::Bool(value),
             Self::Number(value) => Value::Number(value),
-            Self::String(value) => Value::String(value),
+            Self::String(value) | Self::Template(value) => Value::String(value),
             Self::Array(items) => Value::Array(
                 items
                     .into_iter()
@@ -82,7 +100,7 @@ impl BodyNode {
             Self::Null => Value::Null,
             Self::Bool(value) => Value::Bool(*value),
             Self::Number(value) => Value::Number(value.clone()),
-            Self::String(value) => Value::String(value.clone()),
+            Self::String(value) | Self::Template(value) => Value::String(value.clone()),
             Self::Array(items) => Value::Array(items.iter().map(Self::presentation).collect()),
             Self::Map(entries) => Value::Object(
                 entries
@@ -103,7 +121,7 @@ impl Serialize for Json<'_> {
             BodyNode::Null => serializer.serialize_unit(),
             BodyNode::Bool(value) => serializer.serialize_bool(*value),
             BodyNode::Number(value) => value.serialize(serializer),
-            BodyNode::String(value) => serializer.serialize_str(value),
+            BodyNode::String(value) | BodyNode::Template(value) => serializer.serialize_str(value),
             BodyNode::Array(items) => serializer.collect_seq(items.iter().map(Json)),
             BodyNode::Map(entries) => {
                 serializer.collect_map(entries.iter().map(|(name, item)| (name, Json(item))))
@@ -123,19 +141,76 @@ fn no_text_form(content_type: &str, pointer: &str) -> RuntimeError {
     ))
 }
 
-fn encode_json(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeError> {
-    serde_json::to_vec(&Json(body)).map_err(|error| match body.bytes_pointer() {
-        Some(pointer) if media_type::is_json(content_type) => no_text_form(content_type, &pointer),
-        Some(pointer) => invalid(format!(
-            "{PAYLOAD}{pointer}: bytes inside an object or array cannot be sent under contentType {content_type:?}; only a payload that is the bytes value itself can be"
-        )),
-        None => invalid(format!("{PAYLOAD}: {error}")),
-    })
+enum Rule {
+    Json { omitted: bool },
+    Form,
+    Multipart { boundary: bool },
+    Other { charset: Option<String> },
+}
+
+impl Rule {
+    fn of(content_type: &str) -> Self {
+        if content_type.is_empty() {
+            return Self::Json { omitted: true };
+        }
+        let Some(media) = MediaType::parse(content_type) else {
+            return Self::Other { charset: None };
+        };
+        if media.is_json() {
+            Self::Json { omitted: false }
+        } else if media.is_form_urlencoded() {
+            Self::Form
+        } else if media.is_multipart_form_data() {
+            Self::Multipart {
+                boundary: media.boundary().is_some(),
+            }
+        } else {
+            Self::Other {
+                charset: media.charset().map(str::to_owned),
+            }
+        }
+    }
+}
+
+fn encode(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeError> {
+    match Rule::of(content_type) {
+        Rule::Json { omitted } => encode_json(content_type, omitted, body),
+        Rule::Form => encode_form(content_type, body),
+        Rule::Multipart { boundary } => Err(multipart_refusal(content_type, boundary, body)),
+        Rule::Other { charset } => encode_other(content_type, charset.as_deref(), body),
+    }
+}
+
+fn encode_json(
+    content_type: &str,
+    omitted: bool,
+    body: &BodyNode,
+) -> Result<Vec<u8>, RuntimeError> {
+    if let Some(pointer) = body.bytes_pointer() {
+        return Err(if omitted {
+            invalid(format!(
+                "{PAYLOAD}{pointer}: the payload carries bytes, so an explicit contentType is required"
+            ))
+        } else {
+            no_text_form(content_type, &pointer)
+        });
+    }
+    match body {
+        BodyNode::Template(text) => Ok(text.as_bytes().to_vec()),
+        body => {
+            serde_json::to_vec(&Json(body)).map_err(|error| invalid(format!("{PAYLOAD}: {error}")))
+        }
+    }
 }
 
 fn encode_form(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeError> {
     match body.clone().into_json() {
-        Ok(value) => form_body::encode(&value),
+        Ok(Value::Object(fields)) => Ok(form_body::encode(&fields)),
+        Ok(Value::String(text)) => Ok(text.into_bytes()),
+        Ok(_) => Err(invalid(format!(
+            "{FORM} request body must be an object or string; got {}",
+            body.kind()
+        ))),
         Err(BytesLeaf) => Err(no_text_form(
             content_type,
             &body.bytes_pointer().unwrap_or_default(),
@@ -143,28 +218,63 @@ fn encode_form(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeEr
     }
 }
 
-fn encode(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeError> {
-    if content_type.is_empty() {
-        if let Some(pointer) = body.bytes_pointer() {
-            return Err(invalid(format!(
-                "{PAYLOAD}{pointer}: the payload carries bytes, so an explicit contentType is required"
-            )));
+fn multipart_refusal(content_type: &str, boundary: bool, body: &BodyNode) -> RuntimeError {
+    invalid(match body {
+        _ if boundary => format!(
+            "{PAYLOAD}: contentType {content_type:?} carries a boundary parameter; the runtime chooses the multipart boundary, so remove it from contentType"
+        ),
+        BodyNode::Map(_) => format!("{PAYLOAD}: multipart/form-data is not supported by this build"),
+        body => format!(
+            "{PAYLOAD}: contentType {content_type:?} needs an object payload, one form-data part per entry; got {}",
+            body.kind()
+        ),
+    })
+}
+
+fn encode_other(
+    content_type: &str,
+    charset: Option<&str>,
+    body: &BodyNode,
+) -> Result<Vec<u8>, RuntimeError> {
+    let text = match body {
+        BodyNode::Blob(blob) => return Ok(blob.bytes().to_vec()),
+        BodyNode::String(text) | BodyNode::Template(text) => text.clone(),
+        BodyNode::Number(value) => value.to_string(),
+        BodyNode::Bool(value) => value.to_string(),
+        BodyNode::Null | BodyNode::Array(_) | BodyNode::Map(_) => {
+            return Err(invalid(match body.bytes_pointer() {
+                Some(pointer) => format!(
+                    "{PAYLOAD}{pointer}: bytes inside an object or array cannot be sent under contentType {content_type:?}; only a payload that is the bytes value itself can be"
+                ),
+                None => format!(
+                    "{PAYLOAD}: contentType {content_type:?} sends only a string, number, boolean or bytes payload; got {}; use a JSON contentType for structured data",
+                    body.kind()
+                ),
+            }))
         }
+    };
+    match charset {
+        Some(label) if Encoding::for_label(label.as_bytes()) != Some(UTF_8) => Err(invalid(format!(
+            "{PAYLOAD}: contentType {content_type:?} declares charset {label:?}; a {} payload is sent as UTF-8 and never transcoded, so declare charset=utf-8 or omit it",
+            body.kind()
+        ))),
+        Some(_) | None => Ok(text.into_bytes()),
     }
-    if form_body::is_form(content_type) {
-        return encode_form(content_type, body);
+}
+
+pub(super) fn refuse_content_type_parameter(step: &Step) -> Result<(), RuntimeError> {
+    if step.request_body.is_none() {
+        return Ok(());
     }
-    if media_type::is_json(content_type) {
-        return encode_json(content_type, body);
-    }
-    match body {
-        BodyNode::Blob(blob) => Ok(blob.bytes().to_vec()),
-        BodyNode::String(text) => Ok(text.as_bytes().to_vec()),
-        BodyNode::Null
-        | BodyNode::Bool(_)
-        | BodyNode::Number(_)
-        | BodyNode::Array(_)
-        | BodyNode::Map(_) => encode_json(content_type, body),
+    match step.parameters.iter().enumerate().find(|(_, parameter)| {
+        parameter.in_ == Some(ParamLocation::Header)
+            && parameter.name.eq_ignore_ascii_case("content-type")
+    }) {
+        Some((index, parameter)) => Err(invalid(format!(
+            "{}: the runtime sets Content-Type from requestBody.contentType alone, so a step with a requestBody cannot also send it as a header parameter; request not sent",
+            request_admission::RequestAdmission::parameter_location(index, parameter)
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -220,6 +330,7 @@ pub(super) fn recorded_bytes(request: &TraceRequest) -> Option<BodySlot> {
 #[derive(Debug, Default)]
 pub(super) struct PreparedBody {
     pub(super) wire: Option<Vec<u8>>,
+    pub(super) content_type: Option<String>,
     pub(super) logical: LogicalBody,
     pub(super) projection: Option<Value>,
     pub(super) warnings: Vec<String>,
@@ -276,6 +387,11 @@ pub(super) fn prepare(
         resolve_json(request_body, payload, eval, admission, dry_run)?
     };
     let wire = encode(content_type, &tree).map_err(refused)?;
+    let header = if content_type.is_empty() {
+        OMITTED_CONTENT_TYPE
+    } else {
+        content_type
+    };
     let logical = match tree {
         BodyNode::Blob(blob) => LogicalBody::Bytes(blob),
         tree => LogicalBody::Json(tree.into_json().map_err(|BytesLeaf| {
@@ -290,6 +406,7 @@ pub(super) fn prepare(
     };
     Ok(PreparedBody {
         wire: Some(wire),
+        content_type: Some(header.to_owned()),
         logical,
         projection: Some(projection),
         warnings,
@@ -304,6 +421,11 @@ fn resolve_json(
     dry_run: bool,
 ) -> Result<Resolved, RuntimeError> {
     let resolution = admission.resolve(payload, eval, PAYLOAD)?;
+    let template = matches!(payload, ValueSource::Literal(Yaml::String(_)))
+        && !resolution
+            .expressions
+            .iter()
+            .any(|occurrence| occurrence.direct && occurrence.pointer.is_empty());
     let mut projection = admission.project(&resolution, PAYLOAD)?;
     let mut body = resolution.value;
     let mut warnings: Vec<String> = resolution
@@ -338,8 +460,12 @@ fn resolve_json(
             warnings.extend(replaced);
         }
     }
+    let tree = match body {
+        Value::String(text) if template => BodyNode::Template(text),
+        body => BodyNode::from(body),
+    };
     Ok(Resolved {
-        tree: BodyNode::from(body),
+        tree,
         projection,
         warnings,
     })
@@ -458,9 +584,13 @@ mod tests {
         Blob::new(vec![0xFF, 0xD8, 0xFF, 0xE0]).with_media_type("image/jpeg")
     }
 
+    fn sent(content_type: &str, body: &BodyNode) -> Vec<u8> {
+        encode(content_type, body).unwrap_or_else(|error| panic!("{content_type:?}: {error}"))
+    }
+
     fn refusal(content_type: &str, body: &BodyNode) -> String {
         match encode(content_type, body) {
-            Ok(wire) => panic!("{content_type:?} must refuse bytes, sent {wire:?}"),
+            Ok(wire) => panic!("{content_type:?} must refuse {body:?}, sent {wire:?}"),
             Err(error) => {
                 assert_eq!(error.code(), "RUNTIME_INVALID_REQUEST_BODY");
                 error.message
@@ -469,16 +599,53 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_blob_is_sent_raw_only_under_an_explicit_type_that_is_not_json_or_form() {
+    fn content_types_classify_by_essence_case_insensitively() {
+        for content_type in [FORM, "Application/X-WWW-Form-Urlencoded; charset=UTF-8"] {
+            assert!(
+                matches!(Rule::of(content_type), Rule::Form),
+                "{content_type}"
+            );
+        }
+        for content_type in [
+            "application/x-www-form-urlencoded-extra",
+            "text/application/x-www-form-urlencoded",
+        ] {
+            assert!(
+                matches!(Rule::of(content_type), Rule::Other { .. }),
+                "{content_type}"
+            );
+        }
+        assert!(matches!(Rule::of(""), Rule::Json { omitted: true }));
+        for content_type in [
+            "application/json",
+            "Application/Problem+JSON; charset=utf-8",
+        ] {
+            assert!(
+                matches!(Rule::of(content_type), Rule::Json { omitted: false }),
+                "{content_type}"
+            );
+        }
+        assert!(matches!(
+            Rule::of("Multipart/Form-Data"),
+            Rule::Multipart { boundary: false }
+        ));
+        assert!(matches!(
+            Rule::of("multipart/form-data; Boundary=x"),
+            Rule::Multipart { boundary: true }
+        ));
+    }
+
+    #[test]
+    fn a_whole_blob_is_sent_raw_only_under_an_explicit_type_that_is_not_json_form_or_multipart() {
         let body = BodyNode::Blob(jpeg());
         for content_type in [
             "image/jpeg",
             "application/octet-stream",
             "text/plain",
-            "multipart/form-data",
+            "text/plain; charset=iso-8859-1",
         ] {
             assert_eq!(
-                encode(content_type, &body).unwrap_or_else(|error| panic!("{error}")),
+                sent(content_type, &body),
                 [0xFF, 0xD8, 0xFF, 0xE0],
                 "{content_type}"
             );
@@ -491,13 +658,17 @@ mod tests {
             "application/json",
             "application/problem+json",
             "Application/JSON; charset=utf-8",
-            "application/x-www-form-urlencoded",
+            FORM,
         ] {
             assert_eq!(
                 refusal(content_type, &body),
                 format!("requestBody.payload: contentType {content_type:?} cannot carry bytes; send bytes as the whole payload under a contentType that is neither JSON nor application/x-www-form-urlencoded")
             );
         }
+        assert_eq!(
+            refusal("multipart/form-data", &body),
+            "requestBody.payload: contentType \"multipart/form-data\" needs an object payload, one form-data part per entry; got bytes"
+        );
     }
 
     #[test]
@@ -514,7 +685,7 @@ mod tests {
             refusal("", &map),
             "requestBody.payload/a~1b/1: the payload carries bytes, so an explicit contentType is required"
         );
-        for content_type in ["application/json", "application/x-www-form-urlencoded"] {
+        for content_type in ["application/json", FORM] {
             assert!(
                 refusal(content_type, &map).starts_with(&format!(
                     "requestBody.payload/a~1b/1: contentType {content_type:?} cannot carry bytes"
@@ -523,8 +694,8 @@ mod tests {
             );
         }
         assert_eq!(
-            refusal("multipart/form-data", &map),
-            "requestBody.payload/a~1b/1: bytes inside an object or array cannot be sent under contentType \"multipart/form-data\"; only a payload that is the bytes value itself can be"
+            refusal("application/octet-stream", &map),
+            "requestBody.payload/a~1b/1: bytes inside an object or array cannot be sent under contentType \"application/octet-stream\"; only a payload that is the bytes value itself can be"
         );
         assert!(map.clone().into_json().is_err());
         assert_eq!(
@@ -535,39 +706,123 @@ mod tests {
     }
 
     #[test]
-    fn json_trees_encode_exactly_as_their_values_did() {
+    fn json_rows_send_a_literal_template_verbatim_and_serialize_everything_else() {
         let value = json!({"z": 1, "a": [true, null, 1.5, "é\"\n"], "n": {"k": -7}});
         let tree = BodyNode::from(value.clone());
         assert_eq!(tree.bytes_pointer(), None);
-        for content_type in ["application/json", "", "application/xml", "text/plain"] {
+        let template = BodyNode::Template("{\"id\": \"7\"}\n".to_owned());
+        for content_type in ["application/json", "", "application/vnd.api+json"] {
             assert_eq!(
-                encode(content_type, &tree).unwrap_or_else(|error| panic!("{error}")),
+                sent(content_type, &tree),
                 serde_json::to_vec(&value).unwrap_or_else(|error| panic!("{error}")),
                 "{content_type:?}"
             );
+            assert_eq!(sent(content_type, &template), b"{\"id\": \"7\"}\n");
+            assert_eq!(
+                sent(content_type, &BodyNode::from(json!("text"))),
+                b"\"text\""
+            );
+            assert_eq!(sent(content_type, &BodyNode::Null), b"null");
         }
+        assert_eq!(tree.clone().into_json().ok(), Some(value.clone()));
+        assert_eq!(tree.presentation(), value);
+        assert_eq!(template.presentation(), json!("{\"id\": \"7\"}\n"));
+    }
+
+    #[test]
+    fn form_rows_encode_a_map_or_send_a_string_and_refuse_other_shapes() {
         assert_eq!(
-            encode(
-                "application/x-www-form-urlencoded",
-                &BodyNode::from(json!({"b": "1 2", "a": [3, 4]}))
-            )
-            .unwrap_or_else(|error| panic!("{error}")),
+            sent(FORM, &BodyNode::from(json!({"b": "1 2", "a": [3, 4]}))),
             b"b=1+2&a=3&a=4"
         );
-        for content_type in ["", "text/plain", "application/xml"] {
+        for body in [
+            BodyNode::from(json!("x=a+b%20c")),
+            BodyNode::Template("x=a+b%20c".to_owned()),
+        ] {
+            assert_eq!(sent(FORM, &body), b"x=a+b%20c");
+        }
+        for (value, kind) in [
+            (json!([]), "array"),
+            (json!(["SECRET"]), "array"),
+            (json!(42), "number"),
+            (json!(true), "boolean"),
+            (Value::Null, "null"),
+        ] {
             assert_eq!(
-                encode(content_type, &BodyNode::from(json!("<a/>")))
-                    .unwrap_or_else(|error| panic!("{error}")),
-                b"<a/>"
+                refusal(FORM, &BodyNode::from(value)),
+                format!("application/x-www-form-urlencoded request body must be an object or string; got {kind}")
+            );
+        }
+    }
+
+    #[test]
+    fn multipart_rows_refuse_until_the_multipart_encoder_lands() {
+        let map = BodyNode::from(json!({"caption": "cat"}));
+        assert_eq!(
+            refusal("multipart/form-data", &map),
+            "requestBody.payload: multipart/form-data is not supported by this build"
+        );
+        for (body, kind) in [
+            (BodyNode::from(json!("text")), "string"),
+            (BodyNode::from(json!([1])), "array"),
+            (BodyNode::Null, "null"),
+        ] {
+            assert_eq!(
+                refusal("multipart/form-data", &body),
+                format!("requestBody.payload: contentType \"multipart/form-data\" needs an object payload, one form-data part per entry; got {kind}")
             );
         }
         assert_eq!(
-            encode("application/json", &BodyNode::from(json!("text")))
-                .unwrap_or_else(|error| panic!("{error}")),
-            b"\"text\""
+            refusal("multipart/form-data; boundary=abc", &map),
+            "requestBody.payload: contentType \"multipart/form-data; boundary=abc\" carries a boundary parameter; the runtime chooses the multipart boundary, so remove it from contentType"
         );
-        assert_eq!(tree.clone().into_json().ok(), Some(value.clone()));
-        assert_eq!(tree.presentation(), value);
+    }
+
+    #[test]
+    fn other_rows_send_text_and_scalars_as_utf8_and_refuse_structure_and_other_charsets() {
+        for content_type in [
+            "text/plain",
+            "application/xml",
+            "text/plain; charset=UTF-8",
+            "text/plain; charset=utf8",
+            "not a media type",
+        ] {
+            assert_eq!(
+                sent(content_type, &BodyNode::from(json!("<a/> é"))),
+                "<a/> é".as_bytes()
+            );
+            assert_eq!(
+                sent(content_type, &BodyNode::Template("t".to_owned())),
+                b"t"
+            );
+            assert_eq!(sent(content_type, &BodyNode::from(json!(42))), b"42");
+            assert_eq!(sent(content_type, &BodyNode::from(json!(-1.5))), b"-1.5");
+            assert_eq!(sent(content_type, &BodyNode::from(json!(true))), b"true");
+        }
+        for (value, kind) in [
+            (json!({"key": "val"}), "object"),
+            (json!(["a"]), "array"),
+            (Value::Null, "null"),
+        ] {
+            assert_eq!(
+                refusal("application/xml", &BodyNode::from(value)),
+                format!("requestBody.payload: contentType \"application/xml\" sends only a string, number, boolean or bytes payload; got {kind}; use a JSON contentType for structured data")
+            );
+        }
+        for (content_type, label) in [
+            ("text/plain; charset=iso-8859-1", "iso-8859-1"),
+            ("text/plain; charset=utf-16", "utf-16"),
+            ("text/plain; charset=bogus", "bogus"),
+        ] {
+            assert_eq!(
+                refusal(content_type, &BodyNode::from(json!("x"))),
+                format!("requestBody.payload: contentType {content_type:?} declares charset {label:?}; a string payload is sent as UTF-8 and never transcoded, so declare charset=utf-8 or omit it")
+            );
+        }
+        assert!(
+            refusal("text/plain; charset=latin1", &BodyNode::from(json!(1)))
+                .contains("a number payload is sent as UTF-8")
+        );
     }
 
     #[test]

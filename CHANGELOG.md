@@ -85,6 +85,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Request bodies follow one table, and a literal JSON template is sent as
+  written** — under `application/json`, any `+json` type or an omitted
+  `contentType`, a payload written as a string in the document, with or
+  without `{}` interpolation, is sent as its text: the specification's "JSON
+  templated example" now reaches the server as JSON instead of one quoted JSON
+  string. A whole runtime expression such as `payload: $inputs.s` keeps its
+  type, so a string input is still sent quoted; `payload: "{$inputs.s}"` sends
+  the string's text as is. Under a type that is neither JSON, form nor
+  multipart, a string is sent as UTF-8 and a number or boolean as its JSON
+  text; an object, array or null, and a `charset` other than UTF-8, now fail
+  with `RUNTIME_INVALID_REQUEST_BODY` before sending instead of being sent as
+  JSON or mislabelled. `multipart/form-data` fails the same way until its
+  encoder lands, and so does a `boundary` written in its `contentType`.
+- **Only `contentType` sets the request `Content-Type`** — a `Content-Type`
+  header parameter, in any letter case, on a step with a `requestBody` fails
+  with `RUNTIME_INVALID_REQUEST_BODY` before sending; it used to overwrite the
+  body's type silently. A step with no `requestBody` may still send one. Bytes
+  keep their own `mediaType` out of the header.
 - **Maps keep document order** — request payload maps now serialize in the
   order the document writes them, so a form payload `{z: 1, a: 2}` is sent as
   `z=1&a=2` instead of `a=2&z=1`. Nested maps in step outputs and response

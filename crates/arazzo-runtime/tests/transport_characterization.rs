@@ -205,10 +205,10 @@ async fn charac_301_302_preserve_non_post_methods_and_payload() {
 async fn charac_303_converts_put_but_retains_head_and_drops_payload() {
     for method in ["PUT", "HEAD"] {
         for (header_name, header_contents) in [
-            ("Content-Type", "application/json"),
-            ("Content-Length", "9"),
-            ("Content-Encoding", "identity"),
-            ("Transfer-Encoding", "chunked"),
+            ("Content-Type", None),
+            ("Content-Length", Some("9")),
+            ("Content-Encoding", Some("identity")),
+            ("Transfer-Encoding", Some("chunked")),
         ] {
             let log = new_request_log();
             let log_ref = std::sync::Arc::clone(&log);
@@ -227,7 +227,10 @@ async fn charac_303_converts_put_but_retains_head_and_drops_payload() {
                     "{{$sourceDescriptions.test.url}}#/paths/~1a/{}",
                     method.to_ascii_lowercase()
                 ),
-                vec![header_param(header_name, header_contents)],
+                header_contents
+                    .map(|contents| header_param(header_name, contents))
+                    .into_iter()
+                    .collect(),
                 Some(json!({"k":"v"})),
             )
             .await;
