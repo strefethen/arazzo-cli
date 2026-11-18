@@ -4,6 +4,10 @@ use std::pin::Pin;
 use super::step_attempt::{count_retry, RouteScope};
 use super::*;
 
+fn off_frame<F: Future>(construct: impl FnOnce() -> F) -> Pin<Box<F>> {
+    Box::pin(construct())
+}
+
 impl Engine {
     /// Creates a new engine from an Arazzo spec using default HTTP client settings.
     ///
@@ -300,15 +304,14 @@ impl Engine {
             // runs (D5): a message produced by an earlier step of the same
             // workflow is received even though it arrived before the receive
             // step began. Keys already armed by a parent invocation are reused.
-            self.arm_receivers(exec_ctx, workflow_id, workflow.steps.iter())
-                .await?;
+            off_frame(|| self.arm_receivers(exec_ctx, workflow_id, workflow.steps.iter())).await?;
 
             if self.inner.parallel_mode {
                 if let Some(fallback) = self.sequential_fallback(&workflow) {
                     Engine::push_sequential_fallback(exec_ctx, fallback).await;
                 } else {
-                    let result = self
-                        .execute_parallel(
+                    let result = off_frame(|| {
+                        self.execute_parallel(
                             exec_ctx,
                             workflow_id,
                             &workflow,
@@ -316,7 +319,8 @@ impl Engine {
                             depth,
                             completion,
                         )
-                        .await;
+                    })
+                    .await;
                     // execute_parallel settles cancellation before it reports a
                     // terminal outcome, so its result decides: a cancelled
                     // invocation did not complete and is not recorded. The
@@ -356,9 +360,10 @@ impl Engine {
                 let begun = self.begin_attempt(exec_ctx, workflow_id, &step).await;
                 exec_ctx.check_cancelled()?;
 
-                let run = self
-                    .execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, depth)
-                    .await;
+                let run = off_frame(|| {
+                    self.execute_step_with_result(exec_ctx, workflow_id, &step, &mut vars, depth)
+                })
+                .await;
                 let scope = RouteScope {
                     workflow_id,
                     workflow: &workflow,
@@ -369,9 +374,8 @@ impl Engine {
                     cancel: &exec_ctx.cancel,
                     is_timeout: &exec_ctx.is_timeout,
                 };
-                let (_settled, flow) = self
-                    .finish_attempt(exec_ctx, &step, begun, run, scope)
-                    .await;
+                let (_settled, flow) =
+                    off_frame(|| self.finish_attempt(exec_ctx, &step, begun, run, scope)).await;
                 exec_ctx.check_cancelled()?;
                 match flow {
                     FlowDecision::Done => {
@@ -390,8 +394,8 @@ impl Engine {
                     } => {
                         exec_ctx.check_cancelled()?;
                         if let Some(reference) = reference {
-                            if let Err(err) = self
-                                .execute_retry_reference(
+                            if let Err(err) = off_frame(|| {
+                                self.execute_retry_reference(
                                     exec_ctx,
                                     RetryReferenceContext {
                                         workflow_id,
@@ -402,7 +406,8 @@ impl Engine {
                                     reference,
                                     &mut vars,
                                 )
-                                .await
+                            })
+                            .await
                             {
                                 // A cancelled invocation did not complete, so it
                                 // is neither recorded nor reported as completed.
@@ -585,27 +590,33 @@ impl Engine {
         let execution = {
             #[cfg(test)]
             if let Some(exchange) = exchange {
-                super::controlled_exchange::execute(self, exchange, exec_ctx, step, vars).await?
+                off_frame(|| {
+                    super::controlled_exchange::execute(self, exchange, exec_ctx, step, vars)
+                })
+                .await?
             } else if let Some(trial) = self
                 .inner
                 .nats_trial
                 .as_ref()
                 .filter(|_| matches!(&step.target, Some(StepTarget::ChannelPath(_))))
             {
-                super::nats_transport_trial::execute(self, trial, exec_ctx, step, vars).await?
+                off_frame(|| {
+                    super::nats_transport_trial::execute(self, trial, exec_ctx, step, vars)
+                })
+                .await?
             } else if super::engine_message::is_message_step(step) {
-                self.execute_message_step(exec_ctx, workflow_id, step, vars, depth)
+                off_frame(|| self.execute_message_step(exec_ctx, workflow_id, step, vars, depth))
                     .await?
             } else {
-                self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+                off_frame(|| self.execute_http_step(exec_ctx, workflow_id, step, vars, depth))
                     .await?
             }
             #[cfg(not(test))]
             if super::engine_message::is_message_step(step) {
-                self.execute_message_step(exec_ctx, workflow_id, step, vars, depth)
+                off_frame(|| self.execute_message_step(exec_ctx, workflow_id, step, vars, depth))
                     .await?
             } else {
-                self.execute_http_step(exec_ctx, workflow_id, step, vars, depth)
+                off_frame(|| self.execute_http_step(exec_ctx, workflow_id, step, vars, depth))
                     .await?
             }
         };
