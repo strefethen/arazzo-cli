@@ -362,28 +362,30 @@ fn a_sensitive_blob_output_is_the_redacted_marker_on_every_surface() {
 }
 
 #[test]
-fn a_trace_that_recorded_a_blob_output_does_not_replay() {
+fn a_trace_that_recorded_a_blob_output_replays_its_descriptor() {
     let fixture = Fixture::new();
-    json_of(&fixture.run("carry", "photo", true));
+    let live = json_of(&fixture.run("carry", "photo", true));
+    assert!(!fixture.take().is_empty());
+    let replay = |trace: &str| {
+        Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
+            .args(["--json", "replay", trace])
+            .current_dir(&fixture.dir)
+            .output()
+            .unwrap_or_else(|err| panic!("running replay: {err}"))
+    };
+    let replayed = json_of(&replay("trace.json"));
+    assert_eq!(replayed["outputs"], live["outputs"], "{replayed}");
+
     let mut trace = parsed(&fixture.read("trace.json"));
     trace["inputBlobs"] = json!({});
     trace["steps"][0]["request"]
         .as_object_mut()
         .map(|request| request.remove("bodyBlobs"));
-    fixture.write("trace.json", trace.to_string().as_bytes());
-    let output = Command::new(env!("CARGO_BIN_EXE_arazzo-cli"))
-        .args(["--json", "replay", "trace.json"])
-        .current_dir(&fixture.dir)
-        .output()
-        .unwrap_or_else(|err| panic!("running replay: {err}"));
+    fixture.write("unmarked.json", trace.to_string().as_bytes());
+    let output = replay("unmarked.json");
     assert!(!output.status.success());
     let error: Value =
         serde_json::from_slice(&output.stdout).unwrap_or_else(|err| panic!("replay stdout: {err}"));
-    assert_eq!(error["code"], "REPLAY_TRACE_LOAD", "{error}");
-    assert!(
-        error["error"]
-            .as_str()
-            .is_some_and(|text| text.contains("outputBlobs of workflow \"carry\" step \"first\"")),
-        "{error}"
-    );
+    assert_eq!(error["code"], "RUNTIME_INVALID_REQUEST_BODY", "{error}");
+    assert!(fixture.take().is_empty(), "replay sends nothing");
 }

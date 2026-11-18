@@ -1093,7 +1093,7 @@ async fn a_breakpoint_condition_over_bytes_ends_the_run() {
 }
 
 #[tokio::test]
-async fn replaying_a_trace_whose_request_recorded_bytes_is_refused() {
+async fn replaying_a_trace_whose_request_recorded_bytes_matches_them_by_descriptor() {
     let server = UploadServer::start();
     let recorded = builder(
         &server.base_url,
@@ -1106,6 +1106,10 @@ async fn replaying_a_trace_whose_request_recorded_bytes_is_refused() {
     .execute_collect("main", photo())
     .await;
     assert!(recorded.outputs.is_ok(), "{:?}", recorded.outputs);
+    assert_eq!(
+        server.take_lines().first().map(String::as_str),
+        Some(UPLOAD)
+    );
     let steps: Vec<_> = recorded.trace_steps().into_iter().cloned().collect();
     let request = steps[0]
         .request
@@ -1121,16 +1125,40 @@ async fn replaying_a_trace_whose_request_recorded_bytes_is_refused() {
     assert!(serialized.contains("\"bodyBlobs\":{\"\":{\"kind\":\"bytes\",\"size\":6,"));
     assert!(!serialized.contains("/9j/4AAQ"), "{serialized}");
 
-    let refused = builder(&server.base_url, &json!({}), &json!({}))
-        .replay_trace_steps(steps)
-        .build();
-    let error = match refused {
-        Ok(_) => panic!("a trace that recorded bytes must not replay"),
-        Err(error) => error,
+    let replay = |inputs: WorkflowInputs| {
+        let steps = steps.clone();
+        let base_url = server.base_url.clone();
+        async move {
+            builder(
+                &base_url,
+                &body(Some("image/jpeg"), json!("$inputs.photo")),
+                &json!({}),
+            )
+            .replay_trace_steps(steps)
+            .build()
+            .unwrap_or_else(|error| panic!("replay engine: {error}"))
+            .execute_collect("main", inputs)
+            .await
+            .outputs
+        }
     };
-    assert_eq!(error.code(), UNAVAILABLE, "{error}");
+    let restored = |blob: Blob| {
+        let mut inputs = photo();
+        inputs
+            .blobs
+            .insert("photo".to_owned(), Blob::from_descriptor(blob.descriptor()));
+        inputs
+    };
+    let outputs = replay(restored(Blob::new(JPEG.to_vec()).with_filename("cat.jpg"))).await;
+    assert!(outputs.is_ok(), "{outputs:?}");
+    let error = replay(restored(Blob::new(PNG.to_vec())))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("different bytes must not replay"));
+    assert_eq!(error.code(), "RUNTIME_REPLAY_REQUEST_MISMATCH", "{error}");
     assert_eq!(
         error.message,
-        "replay trace records bytes in the request body of workflow \"main\" step \"upload\" (seq 1); replay cannot restore recorded bytes yet"
+        "step upload: replay request drift at seq 1 attempt 1: body mismatch"
     );
+    assert!(server.take_lines().is_empty(), "replay sends nothing");
 }

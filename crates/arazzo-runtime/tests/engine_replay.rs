@@ -494,3 +494,90 @@ async fn a_v2_trace_round_trips_through_json_and_replays_the_same_outcome() {
         assert_eq!(replayed, outputs, "{workflow}");
     }
 }
+
+#[tokio::test]
+async fn replay_matches_blob_bodies_by_descriptor_hash_and_redacted_markers_alike() {
+    use arazzo_runtime::{Blob, WorkflowInputs};
+    use common::{start_server, MockHttpResponse};
+    let ct = "image/png";
+    let inputs = |body: Blob| {
+        WorkflowInputs::new(BTreeMap::new(), BTreeMap::from([("body".to_owned(), body)]))
+    };
+    let server = start_server(|_, _, _, _| MockHttpResponse::json(200, "{}"));
+    let base = server.base_url.clone();
+    let live = Blob::new(PLANTED_PNG.to_vec());
+    let result = body_replay_builder(&base, ct)
+        .build()
+        .unwrap_or_else(|err| panic!("live engine: {err}"))
+        .execute_collect("wf", inputs(live.clone()))
+        .await;
+    assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+    let mut steps = result
+        .trace_steps()
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let request = steps[0]
+        .request
+        .as_mut()
+        .unwrap_or_else(|| panic!("missing request"));
+    arazzo_runtime::redact_trace_request(request);
+    assert_eq!(
+        request.body_blobs,
+        BTreeMap::from([(String::new(), live.descriptor())])
+    );
+    drop(server);
+    let recorded_as = |descriptor: BytesDescriptor| {
+        let mut steps = steps.clone();
+        if let Some(request) = steps[0].request.as_mut() {
+            request.body_blobs = BTreeMap::from([(String::new(), descriptor)]);
+        }
+        steps
+    };
+    let tampered = BytesDescriptor::of(b"\x89PNG other content", None, None);
+    let restored = Blob::from_descriptor(live.descriptor());
+    let redacted = Blob::from_descriptor(BytesDescriptor::redacted());
+    for (label, trace, replay_inputs, succeeds) in [
+        ("restored", steps.clone(), inputs(restored.clone()), true),
+        ("live bytes", steps.clone(), inputs(live.clone()), true),
+        (
+            "tampered hash",
+            recorded_as(tampered),
+            inputs(restored),
+            false,
+        ),
+        (
+            "two redacted",
+            recorded_as(BytesDescriptor::redacted()),
+            inputs(redacted.clone()),
+            true,
+        ),
+        (
+            "redacted against hashed",
+            recorded_as(BytesDescriptor::redacted()),
+            inputs(live.clone()),
+            false,
+        ),
+        (
+            "hashed against redacted",
+            steps.clone(),
+            inputs(redacted),
+            false,
+        ),
+    ] {
+        let outcome = body_replay_builder(&base, ct)
+            .replay_trace_steps(trace)
+            .build()
+            .unwrap_or_else(|err| panic!("replay engine: {err}"))
+            .execute_collect("wf", replay_inputs)
+            .await
+            .outputs;
+        match outcome {
+            Ok(_) => assert!(succeeds, "{label}: replayed"),
+            Err(err) => {
+                assert!(!succeeds, "{label}: {err}");
+                assert_eq!(err.code(), "RUNTIME_REPLAY_REQUEST_MISMATCH", "{label}");
+            }
+        }
+    }
+}

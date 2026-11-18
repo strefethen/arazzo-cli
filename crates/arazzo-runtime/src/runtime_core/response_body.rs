@@ -64,34 +64,35 @@ impl Response {
 
     pub(crate) fn replayed(recorded: TraceResponse, redirects: Vec<TraceRedirectHop>) -> Self {
         let media_type = recorded.media_type.as_deref().and_then(MediaType::parse);
-        let (body, body_value) = match (recorded.body, recorded.body_blob) {
+        let declared = content_type_header(&recorded.headers);
+        let (body, body_value, body_blob) = match (recorded.body, recorded.body_blob) {
             (Some(text), _) => {
-                let value = replayed_text(
-                    content_type_header(&recorded.headers),
-                    media_type.as_ref(),
-                    &text,
-                );
-                (text.into_bytes().into(), value)
+                let value = replayed_text(declared, media_type.as_ref(), &text);
+                (text.into_bytes().into(), value, None)
             }
-            (None, Some(_)) => {
-                let reason = recorded.body_error.unwrap_or_else(|| {
-                    undecoded_coding(&recorded.headers).unwrap_or_else(|| {
-                        format!(
-                            "{}, which a replay trace records only as a descriptor, so replay cannot restore it",
-                            bytes_kind(content_type_header(&recorded.headers), media_type.as_ref())
-                        )
-                    })
-                });
-                (Arc::default(), BodySlot::Unavailable { reason })
+            (None, Some(descriptor)) => {
+                match recorded
+                    .body_error
+                    .or_else(|| undecoded_coding(&recorded.headers))
+                {
+                    Some(reason) => (Arc::default(), BodySlot::Unavailable { reason }, None),
+                    None => (
+                        Arc::default(),
+                        BodySlot::Unavailable {
+                            reason: bytes_reason(declared, media_type.as_ref()),
+                        },
+                        Some(Blob::from_descriptor(descriptor)),
+                    ),
+                }
             }
-            (None, None) => (Arc::default(), BodySlot::Absent),
+            (None, None) => (Arc::default(), BodySlot::Absent, None),
         };
         Self {
             status_code: recorded.status_code,
             headers: recorded.headers,
             body,
             body_value,
-            body_blob: None,
+            body_blob,
             media_type,
             redirects,
         }
@@ -583,8 +584,10 @@ mod tests {
         let Some(blob) = &png.body_blob else {
             panic!("a PNG body is a blob");
         };
-        assert_eq!(blob.bytes(), b"\x89PNG");
-        assert!(std::ptr::eq(blob.bytes(), &*png.body));
+        assert_eq!(blob.content(), Some(b"\x89PNG".as_slice()));
+        assert!(blob
+            .content()
+            .is_some_and(|bytes| std::ptr::eq(bytes, &*png.body)));
         assert_eq!(blob.media_type(), Some("image/png"));
         assert_eq!(blob.filename(), None);
         let untyped = decoded(None, b"{}");
@@ -701,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_rebuilds_a_recorded_descriptor_as_an_unavailable_body() {
+    fn replay_rebuilds_a_recorded_descriptor_as_a_content_less_blob() {
         let mut png = recorded(Some("image/png"), None);
         png.headers = BTreeMap::from([("content-type".to_owned(), "image/png".to_owned())]);
         png.body_blob = Some(BytesDescriptor::of(
@@ -713,12 +716,24 @@ mod tests {
         assert_eq!(
             replayed.body_value,
             BodySlot::Unavailable {
-                reason: "response body is bytes (image/png), which a replay trace records only as a descriptor, so replay cannot restore it"
+                reason: "response body is bytes (image/png), which is not yet a readable value"
                     .to_owned()
             }
         );
         assert!(replayed.body.is_empty());
-        assert!(replayed.body_blob.is_none());
+        let blob = replayed
+            .body_blob
+            .as_ref()
+            .unwrap_or_else(|| panic!("a recorded descriptor replays as a blob"));
+        assert_eq!(blob.content(), None);
+        assert_eq!(Some(blob.descriptor()), png.body_blob);
+        assert!(matches!(
+            replayed.body_view(),
+            BodyView::Bytes { descriptor, decode_error: None } if descriptor == png.body_blob
+        ));
+        let mut failed = png.clone();
+        failed.body_error = Some("response body is not valid UTF-8 text".to_owned());
+        assert!(Response::replayed(failed, Vec::new()).body_blob.is_none());
         png.body_error = Some("response body is not valid UTF-8 text".to_owned());
         assert_eq!(
             Response::replayed(png, Vec::new()).body_value,

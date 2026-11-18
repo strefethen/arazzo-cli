@@ -436,47 +436,6 @@ fn an_input_file_named_like_a_credential_renders_the_redacted_marker_everywhere(
 }
 
 #[test]
-fn replaying_a_trace_that_recorded_bytes_is_refused() {
-    let fixture = Fixture::new();
-    succeeded(&fixture.run(
-        "upload",
-        &["--input-file", "photo=cat.jpg", "--trace", "trace.json"],
-    ));
-    assert_eq!(fixture.take().len(), 1);
-
-    let message = failed(
-        &fixture.cli(&["--json", "replay", "trace.json"]),
-        "REPLAY_TRACE_LOAD",
-    );
-    assert!(
-        message.ends_with("trace.json records bytes at inputBlobs.photo; a trace keeps only a descriptor of bytes, and replay cannot restore them yet"),
-        "{message}"
-    );
-
-    let mut trace: Value =
-        serde_json::from_str(&fixture.read("trace.json")).unwrap_or_else(|err| panic!("{err}"));
-    trace
-        .as_object_mut()
-        .unwrap_or_else(|| panic!("trace object"))
-        .remove("inputBlobs");
-    fixture.write("request-only.json", trace.to_string().as_bytes());
-    let message = failed(
-        &fixture.cli(&["--json", "replay", "request-only.json"]),
-        "REPLAY_TRACE_LOAD",
-    );
-    assert!(
-        message.ends_with("records bytes at request.bodyBlobs of workflow \"upload\" step \"upload\" (seq 1); a trace keeps only a descriptor of bytes, and replay cannot restore them yet"),
-        "{message}"
-    );
-
-    let human = fixture.cli(&["replay", "trace.json"]);
-    assert!(!human.status.success());
-    assert!(human.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&human.stderr).contains("records bytes at inputBlobs.photo"));
-    assert!(fixture.take().is_empty(), "a refused replay sends nothing");
-}
-
-#[test]
 fn dry_run_shows_the_descriptor_and_no_bytes() {
     let fixture = Fixture::new();
     let args = ["--input-file", "photo=cat.jpg", "--dry-run"];

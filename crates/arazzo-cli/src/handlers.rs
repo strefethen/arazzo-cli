@@ -68,7 +68,7 @@ pub async fn replay_trace(
 
     let expected_request_count = trace.steps.iter().filter(|s| s.request.is_some()).count();
     let exec_result = engine
-        .execute_with_timeout(&workflow_id, trace.inputs.clone(), execution_timeout)
+        .execute_with_timeout(&workflow_id, trace.workflow_inputs(), execution_timeout)
         .collect()
         .await;
 
@@ -90,7 +90,7 @@ pub async fn replay_trace(
     }
 
     let outputs = exec_result
-        .outputs
+        .presented_outputs()
         .map_err(|err| CliError::new(err.kind.code(), err.to_string()))?;
 
     if actual_request_count != expected_request_count {

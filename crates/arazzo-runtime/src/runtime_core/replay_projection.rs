@@ -1,9 +1,10 @@
 use super::*;
+use request_body::LogicalBody;
 
 pub(super) fn validate_replay_request(
     expected: &TraceRequest,
     actual: &RequestConfig,
-    logical_body: Option<&Value>,
+    logical_body: &LogicalBody,
     seq: u64,
     attempt: u32,
 ) -> Result<(), RuntimeError> {
@@ -12,8 +13,8 @@ pub(super) fn validate_replay_request(
         method: actual.method.clone(),
         url: actual.url.clone(),
         headers: actual.headers.clone(),
-        body: logical_body.cloned(),
-        body_blobs: BTreeMap::new(),
+        body: logical_body.json().cloned(),
+        body_blobs: logical_body.blobs(),
         redirects: Vec::new(),
     };
     redact_trace_request(&mut expected);
@@ -24,7 +25,8 @@ pub(super) fn validate_replay_request(
         Some("url")
     } else if expected.headers != actual.headers {
         Some("headers")
-    } else if expected.body != actual.body {
+    } else if expected.body != actual.body || !same_blobs(&expected.body_blobs, &actual.body_blobs)
+    {
         Some("body")
     } else {
         None
@@ -35,6 +37,30 @@ pub(super) fn validate_replay_request(
             format!("replay request drift at seq {seq} attempt {attempt}: {category} mismatch"),
         )),
         None => Ok(()),
+    }
+}
+
+fn same_blobs(
+    expected: &BTreeMap<String, BytesDescriptor>,
+    actual: &BTreeMap<String, BytesDescriptor>,
+) -> bool {
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .zip(actual)
+            .all(|((expected_name, expected), (actual_name, actual))| {
+                expected_name == actual_name && same_bytes(expected, actual)
+            })
+}
+
+fn same_bytes(expected: &BytesDescriptor, actual: &BytesDescriptor) -> bool {
+    match (expected, actual) {
+        (BytesDescriptor::Content(expected), BytesDescriptor::Content(actual)) => {
+            expected.size == actual.size && expected.sha256 == actual.sha256
+        }
+        (BytesDescriptor::Redacted(_), BytesDescriptor::Redacted(_)) => true,
+        (BytesDescriptor::Content(_), BytesDescriptor::Redacted(_))
+        | (BytesDescriptor::Redacted(_), BytesDescriptor::Content(_)) => false,
     }
 }
 
@@ -67,6 +93,65 @@ mod tests {
         }
     }
 
+    fn logical(body: Option<Value>) -> LogicalBody {
+        body.map_or(LogicalBody::Absent, LogicalBody::Json)
+    }
+
+    fn with_blob(cfg: &RequestConfig, descriptor: BytesDescriptor) -> TraceRequest {
+        TraceRequest {
+            body_blobs: BTreeMap::from([(String::new(), descriptor)]),
+            ..expected(cfg, None)
+        }
+    }
+
+    #[test]
+    fn blob_bodies_match_by_size_and_hash_and_redacted_markers_match_each_other() {
+        let cfg = config();
+        let live = Blob::new(b"jpeg".to_vec()).with_filename("cat.jpg");
+        let sent = LogicalBody::Bytes(live.clone());
+        let renamed =
+            BytesDescriptor::of(b"jpeg", Some("image/jpeg".into()), Some("dog.jpg".into()));
+        for recorded in [live.descriptor(), renamed] {
+            assert!(validate_replay_request(&with_blob(&cfg, recorded), &cfg, &sent, 1, 1).is_ok());
+        }
+        let redacted = LogicalBody::Bytes(live.clone().sensitive());
+        let marker = with_blob(&cfg, BytesDescriptor::redacted());
+        assert!(validate_replay_request(&marker, &cfg, &redacted, 1, 1).is_ok());
+        let restored = LogicalBody::Bytes(Blob::from_descriptor(BytesDescriptor::redacted()));
+        assert!(validate_replay_request(&marker, &cfg, &restored, 1, 1).is_ok());
+
+        let mismatches = [
+            (
+                with_blob(&cfg, BytesDescriptor::of(b"jpgg", None, None)),
+                &sent,
+            ),
+            (
+                with_blob(&cfg, BytesDescriptor::of(b"jpeg!", None, None)),
+                &sent,
+            ),
+            (marker.clone(), &sent),
+            (with_blob(&cfg, live.descriptor()), &redacted),
+            (expected(&cfg, None), &sent),
+            (with_blob(&cfg, live.descriptor()), &LogicalBody::Absent),
+            (
+                marker,
+                &LogicalBody::Json(json!({"kind": "bytes", "redacted": true})),
+            ),
+        ];
+        for (recorded, body) in mismatches {
+            assert_eq!(
+                validate_replay_request(&recorded, &cfg, body, 4, 1)
+                    .err()
+                    .unwrap_or_else(|| panic!("{recorded:?} must not match {body:?}"))
+                    .message,
+                "replay request drift at seq 4 attempt 1: body mismatch"
+            );
+        }
+        let mut keyed = with_blob(&cfg, live.descriptor());
+        keyed.body_blobs = BTreeMap::from([("/photo".to_owned(), live.descriptor())]);
+        assert!(validate_replay_request(&keyed, &cfg, &sent, 1, 1).is_err());
+    }
+
     #[test]
     fn method_ascii_case_and_sensitive_values() {
         let cfg = config();
@@ -78,10 +163,12 @@ mod tests {
             .headers
             .insert("Authorization".into(), "[REDACTED]".into());
         trace.body = Some(json!({"nested":[{"password":"[REDACTED]","safe":42}]}));
-        assert!(validate_replay_request(&trace, &cfg, Some(&body), 3, 2).is_ok());
+        assert!(
+            validate_replay_request(&trace, &cfg, &LogicalBody::Json(body.clone()), 3, 2).is_ok()
+        );
         trace.method = "POST".into();
         assert_eq!(
-            validate_replay_request(&trace, &cfg, Some(&body), 3, 2)
+            validate_replay_request(&trace, &cfg, &LogicalBody::Json(body.clone()), 3, 2)
                 .err()
                 .unwrap_or_else(|| panic!("expected replay mismatch"))
                 .message,
@@ -117,7 +204,7 @@ mod tests {
                     validate_replay_request(
                         &expected(&cfg, left.clone()),
                         &cfg,
-                        right.as_ref(),
+                        &logical(right.clone()),
                         1,
                         1
                     )
@@ -140,7 +227,7 @@ mod tests {
                 validate_replay_request(
                     &expected(&cfg, Some(json!(recorded))),
                     &cfg,
-                    Some(&json!(live)),
+                    &LogicalBody::Json(json!(live)),
                     1,
                     1
                 )
@@ -177,7 +264,7 @@ mod tests {
                 }
                 _ => {}
             }
-            let err = validate_replay_request(&trace, &actual, Some(&body), 99, 7)
+            let err = validate_replay_request(&trace, &actual, &LogicalBody::Json(body), 99, 7)
                 .err()
                 .unwrap_or_else(|| panic!("expected replay mismatch"));
             assert_eq!(err.kind, RuntimeErrorKind::ReplayRequestMismatch);
@@ -198,7 +285,7 @@ mod tests {
         for name in ["Authorization", "ordinary-actual-name"] {
             let mut trace = expected(&cfg, None);
             trace.headers.remove(name);
-            assert!(validate_replay_request(&trace, &cfg, None, 1, 1).is_err());
+            assert!(validate_replay_request(&trace, &cfg, &LogicalBody::Absent, 1, 1).is_err());
         }
         for url in [
             "https://example.invalid/path?safe=actual-canary",
@@ -208,7 +295,7 @@ mod tests {
         ] {
             let mut trace = expected(&cfg, None);
             trace.url = url.into();
-            assert!(validate_replay_request(&trace, &cfg, None, 1, 1).is_err());
+            assert!(validate_replay_request(&trace, &cfg, &LogicalBody::Absent, 1, 1).is_err());
         }
     }
 }

@@ -335,7 +335,7 @@ impl HttpClient {
     ) -> Result<Self, RuntimeError> {
         let mode = if let Some(steps) = replay_trace_steps {
             HttpClientMode::Replay(Arc::new(tokio::sync::Mutex::new(
-                ReplayState::from_trace_steps(&steps)?,
+                ReplayState::from_trace_steps(&steps),
             )))
         } else {
             // Redirects are followed by an explicit loop in `request` so
@@ -447,12 +447,15 @@ impl HttpClient {
     pub(super) async fn request(
         &self,
         cfg: RequestConfig,
-        logical_body: Option<&Value>,
+        logical_body: &super::request_body::LogicalBody,
         cancel: &CancellationToken,
         is_timeout: &AtomicBool,
     ) -> Result<Response, RuntimeError> {
         if let HttpClientMode::Replay(state) = &self.mode {
             return self.replay_request(state, cfg, logical_body).await;
+        }
+        if let Some(blob) = logical_body.blob() {
+            blob.bytes()?;
         }
 
         let (verified, insecure) = match &self.mode {
@@ -719,7 +722,7 @@ impl HttpClient {
         &self,
         state: &Arc<tokio::sync::Mutex<ReplayState>>,
         cfg: RequestConfig,
-        logical_body: Option<&Value>,
+        logical_body: &super::request_body::LogicalBody,
     ) -> Result<Response, RuntimeError> {
         let key = ReplayKey {
             workflow_id: cfg.workflow_id.clone(),

@@ -252,7 +252,10 @@ async fn a_sensitive_blob_output_renders_only_the_redacted_marker() {
         .presented_outputs()
         .unwrap_or_else(|error| panic!("presented: {error}"));
     assert_eq!(presented["key"], json!({"kind":"bytes", "redacted":true}));
-    assert_eq!(result.output_blobs["key"].bytes(), JPEG);
+    assert_eq!(
+        result.output_blobs["key"].bytes().ok(),
+        Some(JPEG.as_slice())
+    );
     assert_eq!(
         result.trace_steps()[0].output_blobs["photo"],
         BytesDescriptor::redacted()

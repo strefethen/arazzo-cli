@@ -71,8 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     same descriptor or marker in `run` output with or without `--json`, the
     export's final and per-attempt `outputs` and the MCP `run_workflow`
     result, and is recorded under the trace step's `outputBlobs`; in the export and the
-    trace, a bytes output named like a credential is the marker. `replay`
-    refuses a trace that recorded bytes with `REPLAY_TRACE_LOAD`.
+    trace, a bytes output named like a credential is the marker.
   - Library callers pass bytes through `WorkflowInputs`, which every
     `Engine::execute*` method accepts in place of the JSON input map. A
     bytes output is in `ExecutionResult::output_blobs`, never in `outputs`;
@@ -94,12 +93,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a response with no `Content-Type` the reason names the missing header. The
   output shows as a descriptor in `run` output and under the trace step's
   `outputBlobs`, never as content. A response body whose decoding failed stays
-  unavailable rather than becoming bytes. `replay` refuses the trace of such a
-  run with `REPLAY_TRACE_LOAD`, because it records `outputBlobs`. A replayed
-  bytes response body is never restored, so where a trace recorded only
-  `response.bodyBlob`, or a library caller uses `replay_trace_steps`, a
-  reference to that body fails with `RUNTIME_VALUE_UNAVAILABLE` and the reason
-  says the trace holds only a descriptor.
+  unavailable rather than becoming bytes.
+
+- **`replay` replays runs that moved bytes** — a trace that recorded
+  `inputBlobs`, `request.bodyBlobs`, `response.bodyBlob` or `outputBlobs`
+  now replays instead of failing with `REPLAY_TRACE_LOAD`. Replay never
+  touches the wire, so each recorded bytes value comes back as bytes that
+  carry only their descriptor: they flow to outputs and later request bodies
+  as in the live run, and the replay's outputs show the same descriptors. A
+  replayed request whose bytes body differs in `size` or `sha256` from the
+  recorded one fails with `RUNTIME_REPLAY_REQUEST_MISMATCH`; two redacted
+  markers match each other and never a hashed descriptor. Only the trace's
+  blob fields mark bytes: a JSON value shaped like a descriptor elsewhere
+  replays as JSON. A response whose decoding failed still replays as
+  unavailable, with its recorded reason.
+  - Library callers can build such bytes with `Blob::from_descriptor`.
+    **Upgrade note:** `Blob::bytes()` now returns `Result<&[u8], RuntimeError>`
+    and is an internal error for bytes restored from a trace.
 
 - **`run --output-file` saves a bytes output to disk** — `--output-file
   <outputName>=<path>` (repeatable) writes that workflow output's bytes to

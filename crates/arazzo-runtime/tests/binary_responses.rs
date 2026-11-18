@@ -181,7 +181,7 @@ async fn a_downloaded_png_is_a_blob_output_that_a_later_step_uploads_byte_for_by
     assert_eq!(seen[1].body, PNG);
 
     let blob = &result.output_blobs["photo"];
-    assert_eq!(blob.bytes(), PNG);
+    assert_eq!(blob.bytes().ok(), Some(PNG));
     assert_eq!(blob.media_type(), Some("image/png"));
     assert_eq!(blob.filename(), None);
     let descriptor = BytesDescriptor::of(PNG, Some("image/png".to_owned()), None);
@@ -243,7 +243,7 @@ async fn a_response_without_content_type_is_a_blob_and_a_pointer_names_the_missi
     );
     assert_eq!(seen[1].body, PNG);
     let blob = &result.output_blobs["photo"];
-    assert_eq!(blob.bytes(), PNG);
+    assert_eq!(blob.bytes().ok(), Some(PNG));
     assert_eq!(blob.media_type(), None);
     assert!(result
         .presented_outputs()
@@ -345,7 +345,7 @@ async fn every_use_but_a_whole_output_fails_and_status_criteria_still_pass() {
 }
 
 #[tokio::test]
-async fn replaying_a_binary_download_never_invents_a_blob() {
+async fn replaying_a_binary_download_restores_a_content_less_blob() {
     let server = PhotoServer::start();
     let live = run(
         &server.base_url,
@@ -370,40 +370,29 @@ async fn replaying_a_binary_download_never_invents_a_blob() {
     .unwrap_or_else(|error| panic!("replay engine: {error}"))
     .execute_collect("main", BTreeMap::new())
     .await;
-    assert!(replayed.output_blobs.is_empty());
-    let error = replayed
-        .outputs
-        .err()
-        .unwrap_or_else(|| panic!("replay must not produce a blob"));
-    assert_eq!(error.kind, RuntimeErrorKind::ValueUnavailable, "{error}");
     assert_eq!(
-        error.message,
-        "step download: output \"photo\": $response.body: response body is bytes (image/png), which a replay trace records only as a descriptor, so replay cannot restore it"
+        replayed.presented_outputs().ok(),
+        live.presented_outputs().ok()
     );
+    let photo = &replayed.output_blobs["photo"];
+    assert_eq!(photo.descriptor(), live.output_blobs["photo"].descriptor());
+    let error = photo
+        .bytes()
+        .err()
+        .unwrap_or_else(|| panic!("a replayed blob holds no content"));
+    assert_eq!(error.kind, RuntimeErrorKind::InternalError, "{error}");
     assert!(server.lines().is_empty());
 
-    let round_trip = run(
-        &server.base_url,
-        json!([download("photo", &whole_output()), upload("image/png")]),
-        json!({}),
-    )
-    .await;
+    let steps = json!([download("photo", &whole_output()), upload("image/png")]);
+    let round_trip = run(&server.base_url, steps.clone(), json!({})).await;
     assert!(round_trip.outputs.is_ok(), "{:?}", round_trip.outputs);
-    let refused = builder(
-        &server.base_url,
-        json!([download("photo", &whole_output()), upload("image/png")]),
-        json!({}),
-    )
-    .replay_trace_steps(owned_trace(&round_trip))
-    .build();
-    let error = refused
-        .err()
-        .unwrap_or_else(|| panic!("a trace that uploaded bytes must be refused"));
-    assert_eq!(error.code(), UNAVAILABLE, "{error}");
-    assert!(
-        error
-            .message
-            .contains("replay cannot restore recorded bytes yet"),
-        "{error}"
-    );
+    assert_eq!(server.lines(), ["GET /photo", "POST /upload"]);
+    let replayed = builder(&server.base_url, steps, json!({}))
+        .replay_trace_steps(owned_trace(&round_trip))
+        .build()
+        .unwrap_or_else(|error| panic!("replay engine: {error}"))
+        .execute_collect("main", BTreeMap::new())
+        .await;
+    assert!(replayed.outputs.is_ok(), "{:?}", replayed.outputs);
+    assert!(server.lines().is_empty());
 }

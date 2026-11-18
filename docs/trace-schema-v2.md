@@ -119,17 +119,20 @@ declared as a whole reference to bytes. An `outputBlobs` entry under a
 credential-like output name is the redacted marker. `/<part>` keys are part of
 the schema now so it does not change when multipart requests arrive.
 
-A trace that records `inputBlobs`, `request.bodyBlobs` or `outputBlobs` does
-not replay yet: `replay` refuses it with `REPLAY_TRACE_LOAD`, because the trace
-holds only descriptors and replay cannot restore the bytes.
+Replay restores each recorded blob as bytes that carry only their descriptor,
+never their content.
 
 ## Replay
 
 Replay injects each recorded response instead of sending the request. It
 rebuilds a `body` from its text by `mediaType` (JSON is parsed; text and XML
 stay a string), without applying the `charset` again. A `bodyBlob` replays as
-a bytes body, which no expression can read yet; a recorded `bodyError` is
-reported as the reason. Replay is as faithful as the recorded trace:
+bytes carrying that descriptor, which a whole `$response.body` output carries
+on; a recorded `bodyError` is reported as the reason instead. `inputBlobs`
+replay as bytes inputs. A request whose bytes body differs in `size` or
+`sha256` from the recorded `request.bodyBlobs` entry fails with
+`RUNTIME_REPLAY_REQUEST_MISMATCH`; two redacted markers match each other and
+never a hashed descriptor. Replay is as faithful as the recorded trace:
 redaction and truncation can change what a later step sees.
 
 ## Migrating from `trace.v1`

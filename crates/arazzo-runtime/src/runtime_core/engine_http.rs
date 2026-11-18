@@ -438,7 +438,7 @@ impl Engine {
                     headers: prep.headers.clone(),
                     body: prep.body.clone(),
                 },
-                prep.logical.json(),
+                &prep.logical,
                 &exec_ctx.cancel,
                 &exec_ctx.is_timeout,
             )

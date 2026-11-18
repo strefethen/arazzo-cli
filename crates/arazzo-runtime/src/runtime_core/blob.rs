@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use arazzo_expr::{BlobSlot, ExpressionEvaluator, ValueUnavailable};
 use serde_json::Value;
 
-use super::{BytesDescriptor, VarStore};
+use super::{BytesDescriptor, RuntimeError, RuntimeErrorKind, VarStore};
 
 pub(crate) const BYTES_SCOPE_MARKER: &str = "bytes (not viewable until descriptor support)";
 
@@ -27,6 +27,7 @@ pub struct Blob {
 #[derive(Clone)]
 enum Source {
     Memory(Arc<[u8]>),
+    Recorded(BytesDescriptor),
 }
 
 impl Blob {
@@ -36,6 +37,26 @@ impl Blob {
             filename: None,
             media_type: None,
             sensitive: false,
+            content: Arc::default(),
+        }
+    }
+
+    /// Bytes known only by the descriptor a trace recorded for them, as replay
+    /// restores them: they flow, render and compare, but hold no content.
+    pub fn from_descriptor(descriptor: BytesDescriptor) -> Self {
+        let (descriptor, filename, media_type) = match descriptor {
+            BytesDescriptor::Content(mut content) => {
+                let filename = content.filename.take();
+                let media_type = content.media_type.take();
+                (BytesDescriptor::Content(content), filename, media_type)
+            }
+            redacted @ BytesDescriptor::Redacted(_) => (redacted, None, None),
+        };
+        Self {
+            sensitive: matches!(descriptor, BytesDescriptor::Redacted(_)),
+            source: Source::Recorded(descriptor),
+            filename,
+            media_type,
             content: Arc::default(),
         }
     }
@@ -58,9 +79,21 @@ impl Blob {
         self
     }
 
-    pub fn bytes(&self) -> &[u8] {
+    /// The content; an internal error for bytes restored from a trace, which
+    /// keeps only their descriptor.
+    pub fn bytes(&self) -> Result<&[u8], RuntimeError> {
+        self.content().ok_or_else(|| {
+            RuntimeError::new(
+                RuntimeErrorKind::InternalError,
+                "bytes restored from a replay trace carry only their descriptor, so their content cannot be read",
+            )
+        })
+    }
+
+    pub(crate) fn content(&self) -> Option<&[u8]> {
         match &self.source {
-            Source::Memory(bytes) => bytes,
+            Source::Memory(bytes) => Some(bytes),
+            Source::Recorded(_) => None,
         }
     }
 
@@ -80,10 +113,13 @@ impl Blob {
         if self.sensitive {
             return BytesDescriptor::redacted();
         }
-        let mut descriptor = self
-            .content
-            .get_or_init(|| BytesDescriptor::of(self.bytes(), None, None))
-            .clone();
+        let mut descriptor = match &self.source {
+            Source::Memory(bytes) => self
+                .content
+                .get_or_init(|| BytesDescriptor::of(bytes, None, None))
+                .clone(),
+            Source::Recorded(descriptor) => descriptor.clone(),
+        };
         if let BytesDescriptor::Content(content) = &mut descriptor {
             content.media_type.clone_from(&self.media_type);
             content.filename.clone_from(&self.filename);
@@ -94,8 +130,12 @@ impl Blob {
 
 impl fmt::Debug for Blob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Blob")
-            .field("len", &self.bytes().len())
+        let mut debug = f.debug_struct("Blob");
+        match &self.source {
+            Source::Memory(bytes) => debug.field("len", &bytes.len()),
+            Source::Recorded(_) => debug.field("recorded", &self.descriptor().summary()),
+        };
+        debug
             .field("filename", &self.filename)
             .field("media_type", &self.media_type)
             .field("sensitive", &self.sensitive)
@@ -108,7 +148,12 @@ impl PartialEq for Blob {
         self.sensitive == other.sensitive
             && self.filename == other.filename
             && self.media_type == other.media_type
-            && self.bytes() == other.bytes()
+            && match (&self.source, &other.source) {
+                (Source::Memory(left), Source::Memory(right)) => left == right,
+                (Source::Recorded(left), Source::Recorded(right)) => left == right,
+                (Source::Memory(_), Source::Recorded(_))
+                | (Source::Recorded(_), Source::Memory(_)) => false,
+            }
     }
 }
 
@@ -246,7 +291,7 @@ mod tests {
         let blob = Blob::new(vec![0xFF, 0xD8, 0xFF])
             .with_filename("cat.jpg")
             .with_media_type("image/jpeg");
-        assert_eq!(blob.bytes(), [0xFF, 0xD8, 0xFF]);
+        assert_eq!(blob.content(), Some([0xFF, 0xD8, 0xFF].as_slice()));
         assert_eq!(
             rendered(&blob),
             json!({
@@ -275,7 +320,7 @@ mod tests {
         let copy = blob.clone();
         assert!(copy.is_sensitive());
         assert_eq!(rendered(&copy), json!({"kind": "bytes", "redacted": true}));
-        assert_eq!(copy.bytes(), b"secret");
+        assert_eq!(copy.content(), Some(b"secret".as_slice()));
     }
 
     #[test]
@@ -369,6 +414,34 @@ mod tests {
             std::collections::BTreeSet::new(),
         );
         assert!(!vars.blob_slots().workflow_outputs.contains_key("child"));
+    }
+
+    #[test]
+    fn a_recorded_blob_renders_its_descriptor_and_refuses_to_read_content() {
+        let live = Blob::new(b"planted-bytes".to_vec())
+            .with_filename("a.bin")
+            .with_media_type("image/png");
+        let recorded = Blob::from_descriptor(live.descriptor());
+        assert_eq!(rendered(&recorded), rendered(&live));
+        assert_eq!(recorded.filename(), Some("a.bin"));
+        assert_eq!(recorded.media_type(), Some("image/png"));
+        assert_eq!(recorded.content(), None);
+        assert!(live.content().is_some());
+        let error = recorded
+            .bytes()
+            .err()
+            .unwrap_or_else(|| panic!("a recorded blob has no content"));
+        assert_eq!(error.kind, RuntimeErrorKind::InternalError);
+        assert_ne!(recorded, live);
+        assert_eq!(recorded, Blob::from_descriptor(live.descriptor()));
+        assert!(format!("{recorded:?}").contains("<13 bytes, image/png>"));
+
+        let redacted = Blob::from_descriptor(BytesDescriptor::redacted());
+        assert!(redacted.is_sensitive());
+        assert_eq!(
+            rendered(&redacted),
+            json!({"kind": "bytes", "redacted": true})
+        );
     }
 
     #[test]

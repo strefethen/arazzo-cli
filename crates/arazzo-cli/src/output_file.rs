@@ -87,7 +87,11 @@ pub fn write(
     }
     let mut staged: Vec<(PathBuf, &Target)> = Vec::new();
     for (target, blob) in chosen {
-        match stage(&target.path, blob.bytes()) {
+        let staged_one = blob
+            .bytes()
+            .map_err(|err| err.to_string())
+            .and_then(|bytes| stage(&target.path, bytes));
+        match staged_one {
             Ok(temp) => staged.push((temp, target)),
             Err(err) => {
                 discard(&staged);

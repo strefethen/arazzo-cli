@@ -172,10 +172,10 @@ impl Rule {
     }
 }
 
-fn encode(content_type: &str, body: &BodyNode) -> Result<Vec<u8>, RuntimeError> {
+fn encode(content_type: &str, body: &BodyNode) -> Result<Option<Vec<u8>>, RuntimeError> {
     match Rule::of(content_type) {
-        Rule::Json { omitted } => encode_json(content_type, omitted, body),
-        Rule::Form => encode_form(content_type, body),
+        Rule::Json { omitted } => encode_json(content_type, omitted, body).map(Some),
+        Rule::Form => encode_form(content_type, body).map(Some),
         Rule::Multipart { boundary } => Err(multipart_refusal(content_type, boundary, body)),
         Rule::Other { charset } => encode_other(content_type, charset.as_deref(), body),
     }
@@ -235,9 +235,9 @@ fn encode_other(
     content_type: &str,
     charset: Option<&str>,
     body: &BodyNode,
-) -> Result<Vec<u8>, RuntimeError> {
+) -> Result<Option<Vec<u8>>, RuntimeError> {
     let text = match body {
-        BodyNode::Blob(blob) => return Ok(blob.bytes().to_vec()),
+        BodyNode::Blob(blob) => return Ok(blob.content().map(<[u8]>::to_vec)),
         BodyNode::String(text) | BodyNode::Template(text) => text.clone(),
         BodyNode::Number(value) => value.to_string(),
         BodyNode::Bool(value) => value.to_string(),
@@ -258,7 +258,7 @@ fn encode_other(
             "{PAYLOAD}: contentType {content_type:?} declares charset {label:?}; a {} payload is sent as UTF-8 and never transcoded, so declare charset=utf-8 or omit it",
             body.kind()
         ))),
-        Some(_) | None => Ok(text.into_bytes()),
+        Some(_) | None => Ok(Some(text.into_bytes())),
     }
 }
 
@@ -405,7 +405,7 @@ pub(super) fn prepare(
         })?),
     };
     Ok(PreparedBody {
-        wire: Some(wire),
+        wire,
         content_type: Some(header.to_owned()),
         logical,
         projection: Some(projection),
@@ -610,7 +610,11 @@ mod tests {
     }
 
     fn sent(content_type: &str, body: &BodyNode) -> Vec<u8> {
-        encode(content_type, body).unwrap_or_else(|error| panic!("{content_type:?}: {error}"))
+        match encode(content_type, body) {
+            Ok(Some(wire)) => wire,
+            Ok(None) => panic!("{content_type:?}: {body:?} has no wire form"),
+            Err(error) => panic!("{content_type:?}: {error}"),
+        }
     }
 
     fn refusal(content_type: &str, body: &BodyNode) -> String {
@@ -694,6 +698,20 @@ mod tests {
             refusal("multipart/form-data", &body),
             "requestBody.payload: contentType \"multipart/form-data\" needs an object payload, one form-data part per entry; got bytes"
         );
+    }
+
+    #[test]
+    fn a_recorded_blob_has_no_wire_form_and_keeps_every_refusal() {
+        let body = BodyNode::Blob(Blob::from_descriptor(jpeg().descriptor()));
+        for content_type in ["image/jpeg", "application/octet-stream"] {
+            assert!(
+                matches!(encode(content_type, &body), Ok(None)),
+                "{content_type}"
+            );
+        }
+        for content_type in ["", "application/json", FORM, "multipart/form-data"] {
+            assert!(encode(content_type, &body).is_err(), "{content_type:?}");
+        }
     }
 
     #[test]

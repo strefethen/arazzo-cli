@@ -5,8 +5,8 @@ use std::time::SystemTime;
 
 use arazzo_runtime::{
     is_sensitive_key, redact_headers, redact_inputs, redact_json_object, redact_json_value,
-    redact_text_patterns, redact_trace_request, BytesDescriptor, SequentialFallback,
-    TraceStepRecord, TransportWarning,
+    redact_text_patterns, redact_trace_request, Blob, BytesDescriptor, SequentialFallback,
+    TraceStepRecord, TransportWarning, WorkflowInputs,
 };
 use humantime::format_rfc3339;
 use serde::{Deserialize, Serialize};
@@ -30,27 +30,16 @@ pub struct TraceFile {
 }
 
 impl TraceFile {
-    fn recorded_bytes(&self) -> Option<String> {
-        if let Some(name) = self.input_blobs.keys().next() {
-            return Some(format!("inputBlobs.{name}"));
-        }
-        self.steps.iter().find_map(|step| {
-            let slot = if step
-                .request
-                .as_ref()
-                .is_some_and(|request| !request.body_blobs.is_empty())
-            {
-                "request.bodyBlobs"
-            } else if !step.output_blobs.is_empty() {
-                "outputBlobs"
-            } else {
-                return None;
-            };
-            Some(format!(
-                "{slot} of workflow \"{}\" step \"{}\" (seq {})",
-                step.workflow_id, step.step_id, step.seq
-            ))
-        })
+    /// The recorded inputs, each recorded bytes input restored as a
+    /// content-less blob carrying its descriptor.
+    pub fn workflow_inputs(&self) -> WorkflowInputs {
+        WorkflowInputs::new(
+            self.inputs.clone(),
+            self.input_blobs
+                .iter()
+                .map(|(name, descriptor)| (name.clone(), Blob::from_descriptor(descriptor.clone())))
+                .collect(),
+        )
     }
 }
 
@@ -124,14 +113,7 @@ pub fn read_trace_file(path: &Path) -> Result<TraceFile, String> {
             version.map_or_else(|| "(none)".to_owned(), |version| format!("\"{version}\""))
         ));
     }
-    let trace: TraceFile = serde_json::from_value(value).map_err(parse_error)?;
-    if let Some(slot) = trace.recorded_bytes() {
-        return Err(format!(
-            "trace {} records bytes at {slot}; a trace keeps only a descriptor of bytes, and replay cannot restore them yet",
-            path.display()
-        ));
-    }
-    Ok(trace)
+    serde_json::from_value(value).map_err(parse_error)
 }
 
 pub fn build_trace_file(
