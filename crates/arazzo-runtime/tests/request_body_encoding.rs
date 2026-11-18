@@ -458,3 +458,87 @@ async fn every_error_row_fails_before_sending_and_names_the_step() {
         }
     }
 }
+
+fn replaced(content_type: Option<&str>, payload: &str, target: &str) -> Value {
+    let mut request_body = json!({"payload":payload,
+        "replacements":[{"target":target, "value":"$inputs.s"}]});
+    if let Some(content_type) = content_type {
+        request_body["contentType"] = json!(content_type);
+    }
+    step(Some(request_body), json!([]))
+}
+
+#[tokio::test]
+async fn replacements_on_a_literal_json_template_apply_as_json_pointers_to_the_parsed_text() {
+    let server = WireServer::start();
+    let template = "{\"a\": {\"b\": 1, \"c\": \"{$inputs.s}\"}, \"z\": [1, 2.5, null]}";
+    let sent = "{\"a\":{\"b\":\"abc\",\"c\":\"abc\"},\"z\":[1,2.5,null]}";
+    for (row, content_type, header) in [
+        (
+            "application/json",
+            Some("application/json"),
+            "application/json",
+        ),
+        (
+            "+json",
+            Some("application/vnd.api+json"),
+            "application/vnd.api+json",
+        ),
+        ("omitted contentType", None, "application/json"),
+    ] {
+        let step = replaced(content_type, template, "/a/b");
+        let result = run(&server, &step, false).await;
+        assert!(result.outputs.is_ok(), "{row}: {:?}", result.outputs);
+        assert_eq!(
+            server.take(),
+            vec![Seen {
+                content_types: vec![header.to_owned()],
+                body: sent.into(),
+            }],
+            "{row}"
+        );
+        let dry = run(&server, &step, true).await;
+        assert!(dry.outputs.is_ok(), "{row}: {:?}", dry.outputs);
+        assert_eq!(server.take(), Vec::new(), "{row}");
+        assert_eq!(
+            dry.dry_run_requests()[0].body.as_ref(),
+            Some(&json!(sent)),
+            "{row}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn replacements_on_a_literal_json_template_that_does_not_parse_fail_before_sending() {
+    let server = WireServer::start();
+    let unparseable = "{\"a\": {$inputs.s}}";
+    for content_type in [Some("application/json"), None] {
+        let step = replaced(content_type, unparseable, "/a");
+        for dry_run in [false, true] {
+            let result = run(&server, &step, dry_run).await;
+            let error = result
+                .outputs
+                .as_ref()
+                .err()
+                .unwrap_or_else(|| panic!("{content_type:?}: must refuse"));
+            assert_eq!(error.code(), INVALID_BODY, "{error}");
+            assert_eq!(
+                error.message,
+                "step send: requestBody.payload: replacements apply to a literal JSON payload by parsing its interpolated text, which is not JSON: expected value at line 1 column 7"
+            );
+            assert!(result.dry_run_requests().is_empty());
+            assert_eq!(server.take(), Vec::new());
+        }
+    }
+    let verbatim = body(Some("application/json"), json!(unparseable));
+    let result = run(&server, &verbatim, false).await;
+    assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+    assert_eq!(
+        server.take(),
+        vec![Seen {
+            content_types: vec!["application/json".to_owned()],
+            body: b"{\"a\": abc}".to_vec(),
+        }],
+        "with no replacements the template is still sent as written"
+    );
+}

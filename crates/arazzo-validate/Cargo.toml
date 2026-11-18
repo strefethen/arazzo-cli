@@ -15,6 +15,7 @@ workspace = true
 arazzo-expr = { path = "../arazzo-expr" }
 arazzo-spec = { path = "../arazzo-spec" }
 iri-string = "0.7.12"
+serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
 
 [dev-dependencies]

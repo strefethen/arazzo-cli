@@ -262,6 +262,7 @@ dependencies = [
  "arazzo-spec",
  "criterion",
  "iri-string",
+ "serde_json",
  "serde_yaml_ng",
 ]
 

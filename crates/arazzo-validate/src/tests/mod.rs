@@ -31,3 +31,4 @@ include!("cases/action_references_02.rs");
 include!("cases/identifiers_02.rs");
 include!("cases/unknown_fields.rs");
 include!("cases/action_fixed_fields.rs");
+include!("cases/request_body_media.rs");

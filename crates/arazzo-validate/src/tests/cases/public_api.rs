@@ -146,6 +146,10 @@ workflows:
             ),
             (ValidationErrorKind::InvalidIdentifier, "invalidIdentifier"),
             (ValidationErrorKind::UnknownField, "unknownField"),
+            (
+                ValidationErrorKind::InvalidRequestBody,
+                "invalidRequestBody",
+            ),
         ];
 
         for (kind, expected) in cases {

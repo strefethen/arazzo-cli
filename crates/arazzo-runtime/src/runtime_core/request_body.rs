@@ -434,7 +434,17 @@ fn resolve_json(
         .map(|warning| format!("{PAYLOAD}: {warning}"))
         .collect();
     if !request_body.replacements.is_empty() {
-        let content_type = request_body.content_type.as_str();
+        let declared = request_body.content_type.as_str();
+        let json_text = template && matches!(Rule::of(declared), Rule::Json { .. });
+        let content_type = if json_text && declared.is_empty() {
+            OMITTED_CONTENT_TYPE
+        } else {
+            declared
+        };
+        if json_text {
+            body = parse_json_text(body)?;
+            projection = body.clone();
+        }
         if dry_run {
             let (mutated, display, replaced) = payload::apply_replacements_projected(
                 body,
@@ -459,6 +469,10 @@ fn resolve_json(
             projection = body.clone();
             warnings.extend(replaced);
         }
+        if json_text {
+            body = Value::String(body.to_string());
+            projection = Value::String(projection.to_string());
+        }
     }
     let tree = match body {
         Value::String(text) if template => BodyNode::Template(text),
@@ -468,6 +482,17 @@ fn resolve_json(
         tree,
         projection,
         warnings,
+    })
+}
+
+fn parse_json_text(body: Value) -> Result<Value, RuntimeError> {
+    let Value::String(text) = body else {
+        return Ok(body);
+    };
+    serde_json::from_str(&text).map_err(|error| {
+        invalid(format!(
+            "{PAYLOAD}: replacements apply to a literal JSON payload by parsing its interpolated text, which is not JSON: {error}"
+        ))
     })
 }
 

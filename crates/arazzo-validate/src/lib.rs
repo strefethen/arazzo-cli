@@ -17,6 +17,7 @@ use iri_string::types::UriReferenceStr;
 mod async_applicability;
 mod expressions;
 mod operation_id_target;
+mod request_body_media;
 mod step_dependencies;
 mod step_targets;
 mod version;
@@ -193,6 +194,10 @@ pub enum ValidationErrorKind {
     /// or `components.inputs`), where an unmodeled keyword is legitimate JSON
     /// Schema, not a mistake.
     UnknownField,
+    /// A request body the runtime will send in a form its `contentType`
+    /// does not describe. Warning severity, promoted to error only under
+    /// `--strict`.
+    InvalidRequestBody,
 }
 
 impl ValidationErrorKind {
@@ -220,6 +225,7 @@ impl ValidationErrorKind {
             Self::UnsupportedXpathVersion => "unsupportedXpathVersion",
             Self::InvalidIdentifier => "invalidIdentifier",
             Self::UnknownField => "unknownField",
+            Self::InvalidRequestBody => "invalidRequestBody",
         }
     }
 }
@@ -1472,6 +1478,11 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                     &format!("{step_path}.requestBody.replacements"),
                     &request_body.replacements,
                     &spec.arazzo,
+                    &mut diagnostics,
+                );
+                request_body_media::check(
+                    &format!("{step_path}.requestBody"),
+                    request_body,
                     &mut diagnostics,
                 );
             }

@@ -98,6 +98,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `RUNTIME_INVALID_REQUEST_BODY` before sending instead of being sent as
   JSON or mislabelled. `multipart/form-data` fails the same way until its
   encoder lands, and so does a `boundary` written in its `contentType`.
+- **`replacements` work on a literal JSON template** — under a JSON
+  `contentType` or an omitted one, a payload written as a string is parsed
+  as JSON after interpolation, the replacement targets apply as JSON
+  Pointers, and the result is sent as compact JSON. Interpolated text that
+  does not parse fails with `RUNTIME_INVALID_REQUEST_BODY` before sending.
+  `validate` warns, and `--strict` fails, when such a payload has no `{}`
+  interpolation and is not JSON text, under the new `invalidRequestBody`
+  kind. Treating a literal string as JSON text is an interpretation of the
+  specification's "JSON templated example", not its text.
 - **Only `contentType` sets the request `Content-Type`** — a `Content-Type`
   header parameter, in any letter case, on a step with a `requestBody` fails
   with `RUNTIME_INVALID_REQUEST_BODY` before sending; it used to overwrite the
