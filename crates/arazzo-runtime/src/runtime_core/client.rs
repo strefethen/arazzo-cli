@@ -821,8 +821,9 @@ pub struct RequestConfig {
 pub struct Response {
     pub status_code: i64,
     pub headers: BTreeMap<String, String>,
-    pub body: Vec<u8>,
+    pub body: Arc<[u8]>,
     pub body_value: arazzo_expr::BodySlot,
+    pub body_blob: Option<Blob>,
     pub media_type: Option<arazzo_spec::media_type::MediaType>,
     /// Redirect hops followed before this response, oldest first.
     pub redirects: Vec<TraceRedirectHop>,

@@ -35,6 +35,7 @@ pub enum BlobSlot {
     StepOutput { step_id: String, name: String },
     Output { name: String },
     RequestBody,
+    ResponseBody,
 }
 
 impl fmt::Display for BlobSlot {
@@ -46,6 +47,7 @@ impl fmt::Display for BlobSlot {
             }
             Self::Output { name } => write!(f, "output \"{name}\""),
             Self::RequestBody => f.write_str("request body"),
+            Self::ResponseBody => f.write_str("response body"),
         }
     }
 }
@@ -494,21 +496,16 @@ fn resolve_message_source(
             .map(Value::String)
             .ok_or_else(|| format!("request path parameter \"{name}\" not found in context")),
         (Namespace::Request, Form::Body(pointer)) => {
-            return match (&context.request_body, pointer) {
-                (BodySlot::Unavailable { reason }, None) if context.blob_slots.request_body => {
-                    Resolution {
-                        value: ResolvedValue::Blob {
-                            slot: BlobSlot::RequestBody,
-                            unavailable: ValueUnavailable {
-                                expression: expression.raw().to_owned(),
-                                reason: reason.clone(),
-                            },
-                        },
-                        warnings: Vec::new(),
-                    }
-                }
-                _ => resolve_body(expression, &context.request_body, *pointer, "request body"),
-            };
+            return resolve_body(
+                expression,
+                &context.request_body,
+                *pointer,
+                "request body",
+                context
+                    .blob_slots
+                    .request_body
+                    .then_some(BlobSlot::RequestBody),
+            );
         }
         (Namespace::Response, Form::Body(pointer)) => {
             return resolve_body(
@@ -516,7 +513,11 @@ fn resolve_message_source(
                 &context.response_body,
                 *pointer,
                 "response body",
-            )
+                context
+                    .blob_slots
+                    .response_body
+                    .then_some(BlobSlot::ResponseBody),
+            );
         }
         (Namespace::Message, Form::Payload(pointer)) => select_document(
             context.message_payload.as_ref(),
@@ -539,11 +540,26 @@ fn resolve_body(
     slot: &BodySlot,
     pointer: Option<RuntimeExpressionPointer<'_>>,
     label: &str,
+    blob: Option<BlobSlot>,
 ) -> Resolution {
     let document = match slot {
         BodySlot::Absent => None,
         BodySlot::Present(document) => Some(document.as_ref()),
-        BodySlot::Unavailable { reason } => return Resolution::unavailable(expression, reason),
+        BodySlot::Unavailable { reason } => {
+            return match (blob, pointer) {
+                (Some(slot), None) => Resolution {
+                    value: ResolvedValue::Blob {
+                        slot,
+                        unavailable: ValueUnavailable {
+                            expression: expression.raw().to_owned(),
+                            reason: reason.clone(),
+                        },
+                    },
+                    warnings: Vec::new(),
+                },
+                _ => Resolution::unavailable(expression, reason),
+            };
+        }
     };
     Resolution::from_lookup(expression, select_document(document, pointer, label))
 }
@@ -1480,6 +1496,11 @@ mod tests {
         context.request_body = crate::BodySlot::Unavailable {
             reason: sent.to_owned(),
         };
+        context.blob_slots.response_body = true;
+        let received = "response body is bytes (image/png), which is not yet a readable value";
+        context.response_body = crate::BodySlot::Unavailable {
+            reason: received.to_owned(),
+        };
         let evaluator = ExpressionEvaluator::new(context);
         let step = BlobSlot::StepOutput {
             step_id: "lookup".to_owned(),
@@ -1495,6 +1516,7 @@ mod tests {
             ("$steps.lookup.outputs.photo", &step),
             ("$outputs.copy", &output),
             ("$request.body", &BlobSlot::RequestBody),
+            ("$response.body", &BlobSlot::ResponseBody),
         ] {
             assert_eq!(evaluator.blob_slot(input), Some(slot.clone()), "{input}");
         }
@@ -1511,6 +1533,8 @@ mod tests {
             ),
             ("$request.body", sent.to_owned()),
             ("$request.body#/a", sent.to_owned()),
+            ("$response.body", received.to_owned()),
+            ("$response.body#/a", received.to_owned()),
             (
                 "$workflows.auth.outputs.photo",
                 "workflow \"auth\" output \"photo\" is bytes, which a $workflows reference cannot carry yet".to_owned(),

@@ -236,8 +236,9 @@ mod tests {
         let response = Response {
             status_code: 429,
             headers: BTreeMap::new(),
-            body: Vec::new(),
+            body: Default::default(),
             body_value: arazzo_expr::BodySlot::Absent,
+            body_blob: None,
             media_type: None,
             redirects: Vec::new(),
         };
@@ -266,8 +267,9 @@ mod tests {
         let response_with_json = Response {
             status_code: 200,
             headers: BTreeMap::new(),
-            body: br#"{"pets":[{"id":1}]}"#.to_vec(),
+            body: br#"{"pets":[{"id":1}]}"#.to_vec().into(),
             body_value: arazzo_expr::BodySlot::present(json!({"pets":[{"id":1}]})),
+            body_blob: None,
             media_type: None,
             redirects: Vec::new(),
         };

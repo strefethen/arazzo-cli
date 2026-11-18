@@ -12,6 +12,7 @@ pub(super) fn from_vars(vars: &VarStore, response: Option<&Response>) -> EvalCon
         ctx.status_code = Some(resp.status_code);
         ctx.response_headers = resp.headers.clone();
         ctx.response_body = resp.body_value.clone();
+        ctx.blob_slots.response_body = resp.body_blob.is_some();
     }
     #[cfg(test)]
     if let Some(reason) = &vars.unreadable_response_body {

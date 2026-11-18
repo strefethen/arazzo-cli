@@ -243,24 +243,38 @@ async fn failing_rows_are_unavailable_only_when_the_body_is_referenced() {
         ),
     ];
     for (name, reason) in cases {
-        let error = match body_of(&server, name).await {
-            Ok(body) => panic!("{name}: referencing the body must fail, got {body}"),
-            Err(error) => error,
-        };
-        assert_eq!(error.code(), UNAVAILABLE, "{name}: {error}");
-        assert_eq!(
-            error.message,
-            format!("step fetch: output \"body\": $response.body: {reason}"),
-            "{name}"
-        );
+        let whole = body_of(&server, name).await;
+        if reason.contains("so its body is bytes") || reason.starts_with("response body is bytes") {
+            assert!(
+                whole.is_ok(),
+                "{name}: a whole bytes body is a blob output: {whole:?}"
+            );
+        } else {
+            let error = match whole {
+                Ok(body) => panic!("{name}: referencing the body must fail, got {body}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code(), UNAVAILABLE, "{name}: {error}");
+            assert_eq!(
+                error.message,
+                format!("step fetch: output \"body\": $response.body: {reason}"),
+                "{name}"
+            );
+        }
         let pointer = run(
             &server,
             fetch(name, json!({"outputs":{"a":"$response.body#/a"}})),
             json!({}),
         )
         .await;
-        assert!(
-            pointer.is_err_and(|error| error.code() == UNAVAILABLE),
+        let error = match pointer {
+            Ok(outputs) => panic!("{name}: a pointer must fail, got {outputs:?}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), UNAVAILABLE, "{name}: pointer: {error}");
+        assert_eq!(
+            error.message,
+            format!("step fetch: output \"a\": $response.body#/a: {reason}"),
             "{name}: pointer"
         );
         let status = run(

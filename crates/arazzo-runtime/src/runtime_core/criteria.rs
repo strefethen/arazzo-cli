@@ -395,6 +395,10 @@ pub(super) fn evaluate_step_output(
     (Slot, Vec<arazzo_expr::ExpressionWarning>, ValueProvenance),
     arazzo_expr::ValueUnavailable,
 > {
+    let blobs = BlobSources {
+        response_body: response.and_then(|response| response.body_blob.as_ref()),
+        ..blobs
+    };
     if let OutputValue::RuntimeExpression(expression) = output {
         if let Some(blob) = blobs.whole(eval, expression)? {
             return Ok((Slot::Blob(blob), Vec::new(), ValueProvenance::default()));
@@ -590,8 +594,9 @@ mod tests {
         let response = Response {
             status_code: 200,
             headers: BTreeMap::new(),
-            body: xml.as_bytes().to_vec(),
+            body: xml.as_bytes().to_vec().into(),
             body_value: arazzo_expr::BodySlot::present(json!(xml)),
+            body_blob: None,
             media_type: None,
             redirects: Vec::new(),
         };

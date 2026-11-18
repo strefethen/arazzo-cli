@@ -145,6 +145,7 @@ pub struct BlobSlots {
     pub steps: Arc<BTreeMap<String, BTreeSet<String>>>,
     pub outputs: BTreeSet<String>,
     pub request_body: bool,
+    pub response_body: bool,
     pub workflow_inputs: Arc<BTreeMap<String, BTreeSet<String>>>,
     pub workflow_outputs: Arc<BTreeMap<String, BTreeSet<String>>>,
 }
@@ -157,6 +158,7 @@ impl BlobSlots {
             && self.steps.is_empty()
             && self.outputs.is_empty()
             && !self.request_body
+            && !self.response_body
     }
 }
 

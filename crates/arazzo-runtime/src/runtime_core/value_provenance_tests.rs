@@ -941,8 +941,9 @@ fn legacy_output_projections_retain_typed_xpath_and_dotted_failures() {
     let response = Response {
         status_code: 200,
         headers: BTreeMap::new(),
-        body: b"<root><id>1</id></root>".to_vec(),
+        body: b"<root><id>1</id></root>".to_vec().into(),
         body_value: arazzo_expr::BodySlot::present(json!("<root><id>1</id></root>")),
+        body_blob: None,
         media_type: None,
         redirects: Vec::new(),
     };

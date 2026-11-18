@@ -83,6 +83,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     such as `execute(id, serde_json::from_value(v)?)`, must now name the map
     type.
 
+- **A downloaded file can be uploaded byte for byte** — when a response is
+  bytes (for example `image/png`, or no `Content-Type` at all), a step output
+  that is the whole `$response.body` carries those bytes, and a later step
+  with `payload: $steps.<id>.outputs.<name>` and an explicit `contentType`
+  sends exactly what the server returned. The bytes' `mediaType` is the
+  response's media type without parameters, and they have no `filename`. A
+  JSON Pointer into them, `{}` interpolation, a criterion context or a
+  `simple` condition operand still fails with `RUNTIME_VALUE_UNAVAILABLE`; for
+  a response with no `Content-Type` the reason names the missing header. The
+  output shows as a descriptor in `run` output and under the trace step's
+  `outputBlobs`, never as content. A response body whose decoding failed stays
+  unavailable rather than becoming bytes. `replay` refuses the trace of such a
+  run with `REPLAY_TRACE_LOAD`, because it records `outputBlobs`. A replayed
+  bytes response body is never restored, so where a trace recorded only
+  `response.bodyBlob`, or a library caller uses `replay_trace_steps`, a
+  reference to that body fails with `RUNTIME_VALUE_UNAVAILABLE` and the reason
+  says the trace holds only a descriptor.
+
 ### Changed
 
 - **Request bodies follow one table, and a literal JSON template is sent as
@@ -145,9 +163,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `charset` are a string decoded by that charset, UTF-8 if absent: `text/plain`
   `123` stays the string `"123"`, and `text/plain; charset=iso-8859-1` decodes
   correctly. Every other type, a missing `Content-Type` and an unparseable one
-  are bytes, which no expression can read yet. Reading a JSON body that does
-  not parse, a body in an unknown charset or with bytes invalid for it, or a
-  bytes body fails with `RUNTIME_VALUE_UNAVAILABLE` and the reason; checks that
+  are bytes, which only a whole step output can carry (see "A downloaded file can be
+  uploaded byte for byte" under Added).
+  Reading a JSON body that does not parse, a body in an unknown charset or
+  with bytes invalid for it, or a bytes body any other way fails with
+  `RUNTIME_VALUE_UNAVAILABLE` and the reason; checks that
   never read the body, such as `$statusCode == 200`, still pass. An empty body,
   including a 204, is missing (`null` with a warning). Charset labels resolve
   through the WHATWG Encoding Standard table; its `replacement` labels (such as

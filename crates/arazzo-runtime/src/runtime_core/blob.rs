@@ -194,6 +194,7 @@ impl From<Value> for Slot {
 pub(super) struct BlobSources<'a> {
     pub(super) vars: &'a VarStore,
     pub(super) request_body: Option<&'a Blob>,
+    pub(super) response_body: Option<&'a Blob>,
     pub(super) outputs: Option<&'a BTreeMap<String, Blob>>,
 }
 
@@ -202,6 +203,7 @@ impl<'a> BlobSources<'a> {
         Self {
             vars,
             request_body: None,
+            response_body: None,
             outputs: None,
         }
     }
@@ -218,6 +220,7 @@ impl<'a> BlobSources<'a> {
         };
         let blob = match &slot {
             BlobSlot::RequestBody => self.request_body.cloned(),
+            BlobSlot::ResponseBody => self.response_body.cloned(),
             BlobSlot::Output { name } => self.outputs.and_then(|blobs| blobs.get(name)).cloned(),
             slot => self.vars.blob(slot),
         };

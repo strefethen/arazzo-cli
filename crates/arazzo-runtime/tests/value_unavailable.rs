@@ -2,8 +2,9 @@
 //! `null` plus a warning (plan `http-body-media-types-and-binary.md`, D1).
 //!
 //! The producer here is a response body classified as bytes (`image/jpeg`).
-//! Every site a workflow can put in front of that body is driven end to end
-//! against a hermetic server: each fails its step with
+//! Every site a workflow can put in front of that body, except a whole step
+//! output that carries it as bytes (`tests/binary_responses.rs`), is driven end
+//! to end against a hermetic server: each fails its step with
 //! `RUNTIME_VALUE_UNAVAILABLE`, names the step and the reason, and sends no
 //! later request. Sites that run before a response exists are proved in
 //! `src/runtime_core/value_unavailable_tests.rs`.
@@ -146,12 +147,6 @@ async fn every_site_a_workflow_reaches_fails_the_step_instead_of_reading_null() 
     let failing = json!({"condition":"$statusCode == 500"});
     let cases = [
         (
-            "whole reference",
-            json!({"outputs":{"raw":"$response.body"}}),
-            "step fetch: output \"raw\"",
-            "$response.body",
-        ),
-        (
             "pointer",
             json!({"outputs":{"id":"$response.body#/id"}}),
             "step fetch: output \"id\"",
@@ -288,7 +283,7 @@ async fn every_site_a_workflow_reaches_fails_the_step_instead_of_reading_null() 
         ),
         (
             "onFailure action criterion after an unavailable output",
-            json!({"outputs":{"raw":"$response.body"},
+            json!({"outputs":{"raw":"$response.body#/id"},
                 "onFailure":[{"name":"skip", "type":"goto", "stepId":"next",
                     "criteria":[{"condition":"$response.body == null"}]}]}),
             "step fetch: onFailure[0].criteria[0]",
@@ -315,7 +310,7 @@ async fn failure_routing_after_an_unavailable_output_reads_the_received_response
     let server = PhotoServer::start();
     let outputs = run(
         &server,
-        json!({"outputs":{"raw":"$response.body"},
+        json!({"outputs":{"raw":"$response.body#/id"},
         "onFailure":[{"name":"skip", "type":"goto", "stepId":"next", "criteria":[
             {"condition":"$statusCode == 200"},
             typed("regex", Some("$response.header.Content-Type"), "^image/jpeg$")
@@ -332,7 +327,7 @@ async fn an_attempt_failed_by_an_unavailable_output_keeps_its_exchange_on_record
     let result = builder(
         &server.base_url,
         json!({"successCriteria":[{"condition":"$statusCode == 200"}],
-            "outputs":{"status":"$statusCode", "raw":"$response.body"}}),
+            "outputs":{"status":"$statusCode", "raw":"$response.body#/id"}}),
     )
     .trace(true)
     .capture_run(true)
@@ -341,7 +336,7 @@ async fn an_attempt_failed_by_an_unavailable_output_keeps_its_exchange_on_record
     .execute_collect("main", BTreeMap::new())
     .await;
 
-    let message = format!("step fetch: output \"raw\": $response.body: {REASON}");
+    let message = format!("step fetch: output \"raw\": $response.body#/id: {REASON}");
     let error = match &result.outputs {
         Ok(outputs) => panic!("the step must fail, got {outputs:?}"),
         Err(error) => error,
@@ -418,7 +413,7 @@ async fn a_failure_action_that_ends_the_workflow_keeps_the_unavailable_code() {
     let server = PhotoServer::start();
     let error = match run(
         &server,
-        json!({"outputs":{"raw":"$response.body"},
+        json!({"outputs":{"raw":"$response.body#/id"},
             "onFailure":[{"name":"give-up", "type":"end"}]}),
     )
     .await

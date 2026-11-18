@@ -119,8 +119,9 @@ fn evaluate_criterion_xpath_uses_context_and_condition() {
     let response = Response {
         status_code: 200,
         headers: BTreeMap::new(),
-        body: xml.as_bytes().to_vec(),
+        body: xml.as_bytes().to_vec().into(),
         body_value: arazzo_expr::BodySlot::present(Value::String(xml.to_string())),
+        body_blob: None,
         media_type: None,
         redirects: Vec::new(),
     };

@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use arazzo_expr::BodySlot;
 use arazzo_spec::media_type::MediaType;
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8};
 use serde_json::Value;
 
-use super::{BytesDescriptor, Response, TraceRedirectHop, TraceResponse};
+use super::{Blob, BytesDescriptor, Response, TraceRedirectHop, TraceResponse};
 
 const NOT_YET_A_VALUE: &str = "which is not yet a readable value";
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -29,21 +30,33 @@ impl Response {
     ) -> Self {
         let declared = content_type_header(&headers);
         let media_type = declared.and_then(MediaType::parse);
-        let body_value = if body.is_empty() {
-            BodySlot::Absent
+        let body: Arc<[u8]> = body.into();
+        let textual = media_type
+            .as_ref()
+            .filter(|media_type| is_textual(media_type));
+        let (body_value, body_blob) = if body.is_empty() {
+            (BodySlot::Absent, None)
+        } else if let Some(reason) = undecoded_coding(&headers) {
+            (BodySlot::Unavailable { reason }, None)
+        } else if let Some(textual) = textual {
+            let value = decode(textual, &body)
+                .map_or_else(|reason| BodySlot::Unavailable { reason }, BodySlot::present);
+            (value, None)
         } else {
-            match undecoded_coding(&headers)
-                .map_or_else(|| decode(declared, media_type.as_ref(), &body), Err)
-            {
-                Ok(value) => BodySlot::present(value),
-                Err(reason) => BodySlot::Unavailable { reason },
-            }
+            let reason = bytes_reason(declared, media_type.as_ref());
+            let blob = Blob::new(Arc::clone(&body));
+            let blob = match &media_type {
+                Some(media_type) => blob.with_media_type(media_type.essence()),
+                None => blob,
+            };
+            (BodySlot::Unavailable { reason }, Some(blob))
         };
         Self {
             status_code,
             headers,
             body,
             body_value,
+            body_blob,
             media_type,
             redirects,
         }
@@ -58,23 +71,27 @@ impl Response {
                     media_type.as_ref(),
                     &text,
                 );
-                (text.into_bytes(), value)
+                (text.into_bytes().into(), value)
             }
             (None, Some(_)) => {
                 let reason = recorded.body_error.unwrap_or_else(|| {
                     undecoded_coding(&recorded.headers).unwrap_or_else(|| {
-                        bytes_reason(content_type_header(&recorded.headers), media_type.as_ref())
+                        format!(
+                            "{}, which a replay trace records only as a descriptor, so replay cannot restore it",
+                            bytes_kind(content_type_header(&recorded.headers), media_type.as_ref())
+                        )
                     })
                 });
-                (Vec::new(), BodySlot::Unavailable { reason })
+                (Arc::default(), BodySlot::Unavailable { reason })
             }
-            (None, None) => (Vec::new(), BodySlot::Absent),
+            (None, None) => (Arc::default(), BodySlot::Absent),
         };
         Self {
             status_code: recorded.status_code,
             headers: recorded.headers,
             body,
             body_value,
+            body_blob: None,
             media_type,
             redirects,
         }
@@ -96,13 +113,16 @@ impl Response {
                 other => Cow::Owned(other.to_string()),
             }),
             BodySlot::Unavailable { reason } => BodyView::Bytes {
-                descriptor: (!self.body.is_empty()).then(|| {
-                    BytesDescriptor::of(
-                        &self.body,
-                        self.media_type.as_ref().map(MediaType::essence),
-                        None,
-                    )
-                }),
+                descriptor: match &self.body_blob {
+                    Some(blob) => Some(blob.descriptor()),
+                    None => (!self.body.is_empty()).then(|| {
+                        BytesDescriptor::of(
+                            &self.body,
+                            self.media_type.as_ref().map(MediaType::essence),
+                            None,
+                        )
+                    }),
+                },
                 decode_error: self
                     .media_type
                     .as_ref()
@@ -156,19 +176,20 @@ fn is_textual(media_type: &MediaType) -> bool {
         || media_type.charset().is_some()
 }
 
-fn bytes_reason(declared: Option<&str>, media_type: Option<&MediaType>) -> String {
+fn bytes_kind(declared: Option<&str>, media_type: Option<&MediaType>) -> String {
     match (declared, media_type) {
-        (None, _) => format!(
-            "response has no Content-Type header, so its body is bytes, {NOT_YET_A_VALUE}"
-        ),
+        (None, _) => "response has no Content-Type header, so its body is bytes".to_owned(),
         (Some(declared), None) => format!(
-            "response Content-Type {declared:?} is not a valid media type, so its body is bytes, {NOT_YET_A_VALUE}"
+            "response Content-Type {declared:?} is not a valid media type, so its body is bytes"
         ),
-        (Some(_), Some(media_type)) => format!(
-            "response body is bytes ({}), {NOT_YET_A_VALUE}",
-            media_type.essence()
-        ),
+        (Some(_), Some(media_type)) => {
+            format!("response body is bytes ({})", media_type.essence())
+        }
     }
+}
+
+fn bytes_reason(declared: Option<&str>, media_type: Option<&MediaType>) -> String {
+    format!("{}, {NOT_YET_A_VALUE}", bytes_kind(declared, media_type))
 }
 
 fn replayed_text(declared: Option<&str>, media_type: Option<&MediaType>, text: &str) -> BodySlot {
@@ -195,14 +216,7 @@ fn json_reason(media_type: &MediaType, err: &serde_json::Error) -> String {
     )
 }
 
-fn decode(
-    declared: Option<&str>,
-    media_type: Option<&MediaType>,
-    body: &[u8],
-) -> Result<Value, String> {
-    let Some(media_type) = media_type.filter(|media_type| is_textual(media_type)) else {
-        return Err(bytes_reason(declared, media_type));
-    };
+fn decode(media_type: &MediaType, body: &[u8]) -> Result<Value, String> {
     if media_type.is_json() {
         let json = body.strip_prefix(UTF8_BOM).unwrap_or(body);
         return serde_json::from_slice(json).map_err(|err| json_reason(media_type, &err));
@@ -564,6 +578,45 @@ mod tests {
     }
 
     #[test]
+    fn only_a_bytes_row_holds_a_blob_and_it_shares_the_body_buffer() {
+        let png = decoded(Some("Image/PNG; token=FAKE-PARAM"), b"\x89PNG");
+        let Some(blob) = &png.body_blob else {
+            panic!("a PNG body is a blob");
+        };
+        assert_eq!(blob.bytes(), b"\x89PNG");
+        assert!(std::ptr::eq(blob.bytes(), &*png.body));
+        assert_eq!(blob.media_type(), Some("image/png"));
+        assert_eq!(blob.filename(), None);
+        let untyped = decoded(None, b"{}");
+        assert_eq!(
+            untyped.body_blob.as_ref().map(|blob| blob.media_type()),
+            Some(None)
+        );
+        assert!(decoded(Some("json"), b"{}").body_blob.is_some());
+        for (content_type, body) in [
+            (Some("application/json"), &b"{"[..]),
+            (Some("application/json"), &b"{}"[..]),
+            (Some("text/plain"), &b"caf\xE9"[..]),
+            (Some("text/plain; charset=klingon"), &b"x"[..]),
+            (Some("image/png"), &b""[..]),
+        ] {
+            assert!(
+                decoded(content_type, body).body_blob.is_none(),
+                "{content_type:?}"
+            );
+        }
+        let coded = BTreeMap::from([
+            ("Content-Type".to_owned(), "image/png".to_owned()),
+            ("Content-Encoding".to_owned(), "compress".to_owned()),
+        ]);
+        assert!(
+            Response::decoded(200, coded, b"\x1f\x9d".to_vec(), Vec::new())
+                .body_blob
+                .is_none()
+        );
+    }
+
+    #[test]
     fn a_bytes_descriptor_names_only_the_media_type_essence() {
         let response = decoded(Some("Image/PNG; token=FAKE-PARAM"), b"\x89PNG");
         let BodyView::Bytes {
@@ -660,11 +713,12 @@ mod tests {
         assert_eq!(
             replayed.body_value,
             BodySlot::Unavailable {
-                reason: "response body is bytes (image/png), which is not yet a readable value"
+                reason: "response body is bytes (image/png), which a replay trace records only as a descriptor, so replay cannot restore it"
                     .to_owned()
             }
         );
         assert!(replayed.body.is_empty());
+        assert!(replayed.body_blob.is_none());
         png.body_error = Some("response body is not valid UTF-8 text".to_owned());
         assert_eq!(
             Response::replayed(png, Vec::new()).body_value,

@@ -462,8 +462,9 @@ impl Engine {
         let fake = Response {
             status_code: 200,
             headers: BTreeMap::new(),
-            body: b"{}".to_vec(),
+            body: b"{}".to_vec().into(),
             body_value: arazzo_expr::BodySlot::present(json!({})),
+            body_blob: None,
             media_type: arazzo_spec::media_type::MediaType::parse("application/json"),
             redirects: Vec::new(),
         };
