@@ -339,8 +339,10 @@ pub enum RunOutput {
         error: String,
         /// The stage that failed: `RUN_INPUT_FORMAT` for a malformed `--input`
         /// or `--input-json`, `RUN_INPUT_FILE` for an `--input-file` that is
-        /// refused or cannot be read, another `RUN_*` code for the spec, trace
-        /// or export, and a `RUNTIME_*` code for execution.
+        /// refused or cannot be read, `RUN_OUTPUT_FILE` for an `--output-file`
+        /// that is refused before the run or cannot be written after it,
+        /// another `RUN_*` code for the spec, trace or export, and a `RUNTIME_*`
+        /// code for execution.
         code: String,
         /// Step expression diagnostics in warn or error mode, followed by workflow-output warnings in every mode.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

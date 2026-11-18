@@ -12,6 +12,7 @@ mod handlers;
 mod input_file;
 mod message_transport;
 mod output;
+mod output_file;
 mod run;
 mod run_context;
 mod run_export;
@@ -172,6 +173,7 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
             input_json,
             input_file,
             max_input_file_size,
+            output_file,
             http_timeout,
             execution_timeout,
             header,
@@ -206,6 +208,7 @@ async fn run(cli: Cli) -> Result<(), CliFailure> {
                     input_json_flags: input_json,
                     input_file_flags: input_file,
                     max_input_file_size,
+                    output_file_flags: output_file,
                     http_timeout,
                     execution_timeout,
                     header_flags: header,

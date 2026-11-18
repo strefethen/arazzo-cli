@@ -101,6 +101,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference to that body fails with `RUNTIME_VALUE_UNAVAILABLE` and the reason
   says the trace holds only a descriptor.
 
+- **`run --output-file` saves a bytes output to disk** — `--output-file
+  <outputName>=<path>` (repeatable) writes that workflow output's bytes to
+  `<path>` when the run succeeds, atomically replacing any existing file, as
+  `curl -o` does. Before any request is sent the name must be a declared
+  output of the workflow, the target must not be a directory, its directory
+  must exist and accept a new file, no output or target may repeat, and
+  `--dry-run` is refused. A non-bytes or absent output at the end of a
+  successful run writes no file for any flag; a failed run writes none. Each
+  failure is `RUN_OUTPUT_FILE`. Bytes are written even for an output marked
+  sensitive, because the flag is the explicit request. `replay` and `test`
+  have no such flag, and no document field names a file to write.
+
 ### Changed
 
 - **Request bodies follow one table, and a literal JSON template is sent as

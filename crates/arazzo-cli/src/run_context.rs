@@ -25,6 +25,7 @@ pub struct RunOptions {
     pub input_json_flags: Vec<String>,
     pub input_file_flags: Vec<String>,
     pub max_input_file_size: usize,
+    pub output_file_flags: Vec<String>,
     pub http_timeout: Duration,
     pub execution_timeout: Duration,
     pub header_flags: Vec<String>,

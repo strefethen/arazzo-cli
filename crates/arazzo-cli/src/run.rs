@@ -15,6 +15,7 @@ use crate::handlers::{parse_input_kv, parse_input_value};
 use crate::input_file::{self, FileInputs, Undeclared};
 use crate::message_transport::{ArmedLinePrinter, RUN_MESSAGE_CODES};
 use crate::output;
+use crate::output_file;
 use crate::run_context::RunContext;
 use crate::run_export::{self, RunMetadata};
 use crate::trace::{
@@ -144,6 +145,25 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
         })?;
     inputs.extend(file_values);
     let input_blob_descriptors = input_file::descriptors(&input_blobs);
+
+    let declared_outputs: Option<Vec<String>> = spec
+        .workflows
+        .iter()
+        .find(|workflow| workflow.workflow_id == run.workflow_id)
+        .map(|workflow| workflow.outputs.keys().cloned().collect());
+    let output_files = output_file::prepare(&run.output_file_flags, declared_outputs.as_deref())
+        .map_err(|message| {
+            output::run_error("RUN_OUTPUT_FILE", message, &[], &transport_warnings)
+        })?;
+    if run.dry_run && !output_files.is_empty() {
+        return Err(output::run_error(
+            "RUN_OUTPUT_FILE",
+            "--output-file cannot be combined with --dry-run: a dry run sends nothing, so no output holds bytes"
+                .to_string(),
+            &[],
+            &transport_warnings,
+        ));
+    }
 
     // One sensitive input-name set feeds both the `--verbose` echo and the
     // trace file, so the two sinks cannot disagree about what is a secret.
@@ -424,6 +444,21 @@ pub async fn run_workflow(ctx: RunContext) -> Result<(), CliError> {
             &expression_warnings,
             &transport_warnings,
         ));
+    }
+
+    if !output_files.is_empty() {
+        let no_values = BTreeMap::new();
+        let values = exec_result.outputs.as_ref().ok().unwrap_or(&no_values);
+        output_file::write(&output_files, values, &exec_result.output_blobs).map_err(
+            |message| {
+                output::run_error(
+                    "RUN_OUTPUT_FILE",
+                    message,
+                    &expression_warnings,
+                    &transport_warnings,
+                )
+            },
+        )?;
     }
 
     if run.dry_run {

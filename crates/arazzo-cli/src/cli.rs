@@ -72,6 +72,10 @@ pub enum Commands {
         )]
         max_input_file_size: usize,
 
+        /// Write a bytes workflow output to a file when the run succeeds, as `outputName=path`. The output must be declared by the workflow and the target directory writable, checked before the run starts; an existing file is replaced atomically, and a non-bytes or absent output is an error. Repeatable.
+        #[arg(long = "output-file", value_name = "NAME=PATH")]
+        output_file: Vec<String>,
+
         /// Per-request HTTP timeout, for example 500ms, 30s, or 2m.
         #[arg(
             short = 't',

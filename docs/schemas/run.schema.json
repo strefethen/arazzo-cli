@@ -41,7 +41,7 @@
           "type": "string"
         },
         "code": {
-          "description": "The stage that failed: `RUN_INPUT_FORMAT` for a malformed `--input`\nor `--input-json`, `RUN_INPUT_FILE` for an `--input-file` that is\nrefused or cannot be read, another `RUN_*` code for the spec, trace\nor export, and a `RUNTIME_*` code for execution.",
+          "description": "The stage that failed: `RUN_INPUT_FORMAT` for a malformed `--input`\nor `--input-json`, `RUN_INPUT_FILE` for an `--input-file` that is\nrefused or cannot be read, `RUN_OUTPUT_FILE` for an `--output-file`\nthat is refused before the run or cannot be written after it,\nanother `RUN_*` code for the spec, trace or export, and a `RUNTIME_*`\ncode for execution.",
           "type": "string"
         },
         "warnings": {
