@@ -65,6 +65,7 @@ mod helpers;
 mod input_validation;
 mod jsonpath;
 mod kafka;
+mod multipart_body;
 #[cfg(test)]
 mod nats_transport_trial;
 #[cfg(test)]

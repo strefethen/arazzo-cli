@@ -433,10 +433,9 @@ async fn every_error_row_fails_before_sending_and_names_the_step() {
             "step send: requestBody.payload: contentType \"multipart/form-data; boundary=fixed\" carries a boundary parameter; the runtime chooses the multipart boundary, so remove it from contentType".to_owned(),
         ),
         (
-            "multipart with a map",
-            body(Some("multipart/form-data"), json!({"caption":"cat"})),
-            "step send: requestBody.payload: multipart/form-data is not supported by this build"
-                .to_owned(),
+            "multipart with bytes inside a JSON part",
+            body(Some("multipart/form-data"), json!({"meta":{"file":"$inputs.photo"}})),
+            "step send: step \"send\": requestBody.payload/meta/file: multipart/form-data part \"meta\" is sent as application/json, which cannot carry bytes; give the bytes a part of their own; request not sent".to_owned(),
         ),
     ];
     for (row, step, message) in rows {

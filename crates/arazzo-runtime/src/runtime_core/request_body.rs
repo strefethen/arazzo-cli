@@ -4,6 +4,7 @@ use encoding_rs::{Encoding, UTF_8};
 use serde::ser::{Error as _, Serialize, Serializer};
 use serde_yaml_ng::Value as Yaml;
 
+use super::multipart_body::Form;
 use super::request_admission::RequestAdmission;
 use super::*;
 
@@ -24,7 +25,7 @@ pub(crate) enum BodyNode {
     Blob(Blob),
 }
 
-struct BytesLeaf;
+pub(super) struct BytesLeaf;
 
 impl From<Value> for BodyNode {
     fn from(value: Value) -> Self {
@@ -57,7 +58,7 @@ impl BodyNode {
         }
     }
 
-    fn bytes_pointer(&self) -> Option<String> {
+    pub(super) fn bytes_pointer(&self) -> Option<String> {
         match self {
             Self::Null | Self::Bool(_) | Self::Number(_) | Self::String(_) | Self::Template(_) => {
                 None
@@ -73,7 +74,7 @@ impl BodyNode {
         }
     }
 
-    fn into_json(self) -> Result<Value, BytesLeaf> {
+    pub(super) fn into_json(self) -> Result<Value, BytesLeaf> {
         Ok(match self {
             Self::Null => Value::Null,
             Self::Bool(value) => Value::Bool(value),
@@ -172,13 +173,26 @@ impl Rule {
     }
 }
 
-fn encode(content_type: &str, body: &BodyNode) -> Result<Option<Vec<u8>>, RuntimeError> {
+#[derive(Debug)]
+enum Encoded {
+    Body(Option<Vec<u8>>),
+    Multipart(Form),
+}
+
+fn encode(content_type: &str, body: &BodyNode) -> Result<Encoded, RuntimeError> {
     match Rule::of(content_type) {
         Rule::Json { omitted } => encode_json(content_type, omitted, body).map(Some),
         Rule::Form => encode_form(content_type, body).map(Some),
-        Rule::Multipart { boundary } => Err(multipart_refusal(content_type, boundary, body)),
+        Rule::Multipart { boundary: false } => match body {
+            BodyNode::Map(entries) => {
+                return Form::new(content_type, entries).map(Encoded::Multipart)
+            }
+            body => Err(multipart_refusal(content_type, false, body)),
+        },
+        Rule::Multipart { boundary: true } => Err(multipart_refusal(content_type, true, body)),
         Rule::Other { charset } => encode_other(content_type, charset.as_deref(), body),
     }
+    .map(Encoded::Body)
 }
 
 fn encode_json(
@@ -223,7 +237,6 @@ fn multipart_refusal(content_type: &str, boundary: bool, body: &BodyNode) -> Run
         _ if boundary => format!(
             "{PAYLOAD}: contentType {content_type:?} carries a boundary parameter; the runtime chooses the multipart boundary, so remove it from contentType"
         ),
-        BodyNode::Map(_) => format!("{PAYLOAD}: multipart/form-data is not supported by this build"),
         body => format!(
             "{PAYLOAD}: contentType {content_type:?} needs an object payload, one form-data part per entry; got {}",
             body.kind()
@@ -284,12 +297,14 @@ pub(crate) enum LogicalBody {
     Absent,
     Json(Value),
     Bytes(Blob),
+    Multipart(Form),
 }
 
 impl LogicalBody {
     pub(crate) fn json(&self) -> Option<&Value> {
         match self {
             Self::Json(value) => Some(value),
+            Self::Multipart(form) => Some(form.value()),
             Self::Absent | Self::Bytes(_) => None,
         }
     }
@@ -297,7 +312,7 @@ impl LogicalBody {
     pub(super) fn blob(&self) -> Option<&Blob> {
         match self {
             Self::Bytes(blob) => Some(blob),
-            Self::Absent | Self::Json(_) => None,
+            Self::Absent | Self::Json(_) | Self::Multipart(_) => None,
         }
     }
 
@@ -306,6 +321,7 @@ impl LogicalBody {
             Self::Absent => BodySlot::Absent,
             Self::Json(value) => BodySlot::present(value.clone()),
             Self::Bytes(_) => bytes_slot(),
+            Self::Multipart(_) => multipart_body::unreadable(),
         }
     }
 
@@ -313,6 +329,14 @@ impl LogicalBody {
         match self {
             Self::Absent | Self::Json(_) => BTreeMap::new(),
             Self::Bytes(blob) => BTreeMap::from([(String::new(), blob.descriptor())]),
+            Self::Multipart(form) => form.descriptors(),
+        }
+    }
+
+    pub(super) fn form(&self) -> Option<&Form> {
+        match self {
+            Self::Multipart(form) => Some(form),
+            Self::Absent | Self::Json(_) | Self::Bytes(_) => None,
         }
     }
 }
@@ -324,6 +348,9 @@ fn bytes_slot() -> BodySlot {
 }
 
 pub(super) fn recorded_bytes(request: &TraceRequest) -> Option<BodySlot> {
+    if multipart_body::is_multipart(request) {
+        return Some(multipart_body::unreadable());
+    }
     (!request.body_blobs.is_empty()).then(bytes_slot)
 }
 
@@ -331,6 +358,7 @@ pub(super) fn recorded_bytes(request: &TraceRequest) -> Option<BodySlot> {
 pub(super) struct PreparedBody {
     pub(super) wire: Option<Vec<u8>>,
     pub(super) content_type: Option<String>,
+    pub(super) wire_content_type: Option<String>,
     pub(super) logical: LogicalBody,
     pub(super) projection: Option<Value>,
     pub(super) warnings: Vec<String>,
@@ -386,11 +414,27 @@ pub(super) fn prepare(
     } else {
         resolve_json(request_body, payload, eval, admission, dry_run)?
     };
-    let wire = encode(content_type, &tree).map_err(refused)?;
     let header = if content_type.is_empty() {
         OMITTED_CONTENT_TYPE
     } else {
         content_type
+    };
+    let wire = match encode(content_type, &tree).map_err(refused)? {
+        Encoded::Body(wire) => wire,
+        Encoded::Multipart(form) => {
+            let sent = form.wire()?;
+            return Ok(PreparedBody {
+                wire_content_type: sent
+                    .as_ref()
+                    .filter(|_| !dry_run)
+                    .map(|sent| sent.content_type.clone()),
+                wire: sent.map(|sent| sent.bytes),
+                content_type: Some(header.to_owned()),
+                logical: LogicalBody::Multipart(form),
+                projection: Some(multipart_body::project(projection)),
+                warnings,
+            });
+        }
     };
     let logical = match tree {
         BodyNode::Blob(blob) => LogicalBody::Bytes(blob),
@@ -407,6 +451,7 @@ pub(super) fn prepare(
     Ok(PreparedBody {
         wire,
         content_type: Some(header.to_owned()),
+        wire_content_type: None,
         logical,
         projection: Some(projection),
         warnings,
@@ -611,8 +656,8 @@ mod tests {
 
     fn sent(content_type: &str, body: &BodyNode) -> Vec<u8> {
         match encode(content_type, body) {
-            Ok(Some(wire)) => wire,
-            Ok(None) => panic!("{content_type:?}: {body:?} has no wire form"),
+            Ok(Encoded::Body(Some(wire))) => wire,
+            Ok(encoded) => panic!("{content_type:?}: {body:?} has no raw wire form: {encoded:?}"),
             Err(error) => panic!("{content_type:?}: {error}"),
         }
     }
@@ -705,7 +750,7 @@ mod tests {
         let body = BodyNode::Blob(Blob::from_descriptor(jpeg().descriptor()));
         for content_type in ["image/jpeg", "application/octet-stream"] {
             assert!(
-                matches!(encode(content_type, &body), Ok(None)),
+                matches!(encode(content_type, &body), Ok(Encoded::Body(None))),
                 "{content_type}"
             );
         }
@@ -799,12 +844,17 @@ mod tests {
     }
 
     #[test]
-    fn multipart_rows_refuse_until_the_multipart_encoder_lands() {
+    fn multipart_rows_assemble_a_map_and_refuse_every_other_shape() {
         let map = BodyNode::from(json!({"caption": "cat"}));
-        assert_eq!(
-            refusal("multipart/form-data", &map),
-            "requestBody.payload: multipart/form-data is not supported by this build"
-        );
+        for content_type in ["multipart/form-data", "Multipart/Form-Data; charset=utf-8"] {
+            match encode(content_type, &map) {
+                Ok(Encoded::Multipart(form)) => {
+                    assert_eq!(form.content_type(), content_type);
+                    assert_eq!(form.value(), &json!({"caption": "cat"}));
+                }
+                other => panic!("{content_type:?}: {other:?}"),
+            }
+        }
         for (body, kind) in [
             (BodyNode::from(json!("text")), "string"),
             (BodyNode::from(json!([1])), "array"),
@@ -887,5 +937,28 @@ mod tests {
         assert_eq!(json.slot(), BodySlot::present(json!({"a": 1})));
         assert!(json.blobs().is_empty());
         assert_eq!(LogicalBody::Absent.slot(), BodySlot::Absent);
+        let form = match encode("multipart/form-data", &BodyNode::from(json!({"a": "b"}))) {
+            Ok(Encoded::Multipart(form)) => LogicalBody::Multipart(form),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(form.json(), Some(&json!({"a": "b"})));
+        assert_eq!(form.blob(), None);
+        assert_eq!(
+            form.slot(),
+            BodySlot::Unavailable {
+                reason:
+                    "request body is multipart/form-data, whose parts have no single value to read"
+                        .to_owned()
+            }
+        );
+        let recorded = TraceRequest {
+            headers: BTreeMap::from([(
+                "Content-Type".to_owned(),
+                "multipart/form-data".to_owned(),
+            )]),
+            body: Some(json!({"a": "b"})),
+            ..TraceRequest::default()
+        };
+        assert_eq!(recorded_bytes(&recorded), Some(form.slot()));
     }
 }

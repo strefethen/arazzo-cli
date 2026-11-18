@@ -417,9 +417,14 @@ async fn bytes_under_a_content_type_that_cannot_carry_them_are_an_invalid_body()
             no_text_form("application/x-www-form-urlencoded", "/photo"),
         ),
         (
-            "blob leaf under multipart before its encoder lands",
-            body(Some("multipart/form-data"), nested.clone()),
-            "step upload: step \"upload\": requestBody.payload: multipart/form-data is not supported by this build; request not sent".to_owned(),
+            "blob leaf inside a multipart JSON part",
+            body(Some("multipart/form-data"), json!({"meta":{"photo":"$inputs.photo"}})),
+            "step upload: step \"upload\": requestBody.payload/meta/photo: multipart/form-data part \"meta\" is sent as application/json, which cannot carry bytes; give the bytes a part of their own; request not sent".to_owned(),
+        ),
+        (
+            "blob item inside a nested multipart array",
+            body(Some("multipart/form-data"), json!({"tags":[["$inputs.photo"]]})),
+            "step upload: step \"upload\": requestBody.payload/tags/0/0: multipart/form-data part \"tags\" is sent as application/json, which cannot carry bytes; give the bytes a part of their own; request not sent".to_owned(),
         ),
         (
             "blob leaf in a map under a type that is not multipart",

@@ -9,10 +9,17 @@ pub(super) fn validate_replay_request(
     attempt: u32,
 ) -> Result<(), RuntimeError> {
     let mut expected = expected.clone();
+    let mut headers = actual.headers.clone();
+    if let Some(form) = logical_body.form() {
+        headers.insert(
+            multipart_body::CONTENT_TYPE.to_owned(),
+            form.content_type().to_owned(),
+        );
+    }
     let mut actual = TraceRequest {
         method: actual.method.clone(),
         url: actual.url.clone(),
-        headers: actual.headers.clone(),
+        headers,
         body: logical_body.json().cloned(),
         body_blobs: logical_body.blobs(),
         redirects: Vec::new(),
@@ -25,7 +32,9 @@ pub(super) fn validate_replay_request(
         Some("url")
     } else if expected.headers != actual.headers {
         Some("headers")
-    } else if expected.body != actual.body || !same_blobs(&expected.body_blobs, &actual.body_blobs)
+    } else if expected.body != actual.body
+        || !same_blobs(&expected.body_blobs, &actual.body_blobs)
+        || (logical_body.form().is_some() && !same_part_order(&expected.body, &actual.body))
     {
         Some("body")
     } else {
@@ -38,6 +47,15 @@ pub(super) fn validate_replay_request(
         )),
         None => Ok(()),
     }
+}
+
+fn same_part_order(expected: &Option<Value>, actual: &Option<Value>) -> bool {
+    let names = |body: &Option<Value>| {
+        body.as_ref()
+            .and_then(Value::as_object)
+            .map(|parts| parts.keys().cloned().collect::<Vec<_>>())
+    };
+    names(expected) == names(actual)
 }
 
 fn same_blobs(
@@ -150,6 +168,56 @@ mod tests {
         let mut keyed = with_blob(&cfg, live.descriptor());
         keyed.body_blobs = BTreeMap::from([("/photo".to_owned(), live.descriptor())]);
         assert!(validate_replay_request(&keyed, &cfg, &sent, 1, 1).is_err());
+    }
+
+    fn multipart(entries: Vec<(&str, request_body::BodyNode)>) -> LogicalBody {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|(name, node)| (name.to_owned(), node))
+            .collect();
+        LogicalBody::Multipart(
+            multipart_body::Form::new("multipart/form-data", &entries)
+                .unwrap_or_else(|error| panic!("{error}")),
+        )
+    }
+
+    #[test]
+    fn multipart_bodies_match_parts_in_order_whatever_the_wire_boundary() {
+        let photo = Blob::new(b"jpeg".to_vec()).with_media_type("image/jpeg");
+        let text = |value: &str| request_body::BodyNode::String(value.to_owned());
+        let sent = multipart(vec![
+            ("caption", text("cat")),
+            ("photo", request_body::BodyNode::Blob(photo.clone())),
+        ]);
+        let mut cfg = config();
+        cfg.headers.insert(
+            "Content-Type".into(),
+            "multipart/form-data; boundary=arazzo-0123".into(),
+        );
+        let mut recorded = expected(&cfg, Some(json!({"caption": "cat", "photo": null})));
+        recorded
+            .headers
+            .insert("Content-Type".into(), "multipart/form-data".into());
+        recorded.body_blobs = BTreeMap::from([("/photo".to_owned(), photo.descriptor())]);
+        assert!(validate_replay_request(&recorded, &cfg, &sent, 1, 1).is_ok());
+
+        let reordered = multipart(vec![
+            ("photo", request_body::BodyNode::Blob(photo.clone())),
+            ("caption", text("cat")),
+        ]);
+        let recaptioned = multipart(vec![
+            ("caption", text("dog")),
+            ("photo", request_body::BodyNode::Blob(photo)),
+        ]);
+        for body in [&reordered, &recaptioned] {
+            assert_eq!(
+                validate_replay_request(&recorded, &cfg, body, 2, 1)
+                    .err()
+                    .unwrap_or_else(|| panic!("{body:?} must not match"))
+                    .message,
+                "replay request drift at seq 2 attempt 1: body mismatch"
+            );
+        }
     }
 
     #[test]

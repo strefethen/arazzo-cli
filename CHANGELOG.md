@@ -123,6 +123,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sensitive, because the flag is the explicit request. `replay` and `test`
   have no such flag, and no document field names a file to write.
 
+- **A step can upload `multipart/form-data`** — under `contentType:
+  multipart/form-data` a map payload is sent as one part per entry, in
+  document order. A string, number or boolean is a text part with no part
+  `Content-Type`; an object is an `application/json` part; an array is one
+  part per item under the same name, an item that is itself an array being an
+  `application/json` part; a null entry, null item or empty array sends no
+  part. A bytes value is a file part carrying its `mediaType` (else
+  `application/octet-stream`) and its `filename` (else the part name), so
+  `{caption: $inputs.caption, tags: [a, b], photo: $inputs.photo}` uploads
+  a JPEG from `--input-file` with its caption and tags. Part names and
+  filenames are sent as UTF-8 with `"`, CR and LF percent-escaped. Part
+  defaults follow the OpenAPI Encoding Object's defaults by value kind; the
+  operation's own `encoding` is not read.
+  - Every request attempt, retries included, gets a fresh random boundary on
+    the wire; a 307 or 308 resend within the attempt sends identical bytes.
+    Traces, dry runs and replay comparison see `Content-Type:
+    multipart/form-data` without the boundary.
+  - The trace records the parts as `body`, with `null` in place of each
+    file part and the file's descriptor in `bodyBlobs` at `/<name>` (or
+    `/<name>/<index>`); dry runs show the descriptor in place. No bytes are
+    ever written. Replay matches parts by name, order, value and descriptor.
+  - Bytes inside an object or nested-array part, and a bytes `mediaType`
+    holding a control character, fail with `RUNTIME_INVALID_REQUEST_BODY`
+    before sending. `$request.body` after a multipart request fails with
+    `RUNTIME_VALUE_UNAVAILABLE`, with or without file parts.
+
 ### Changed
 
 - **Request bodies follow one table, and a literal JSON template is sent as
@@ -136,8 +162,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multipart, a string is sent as UTF-8 and a number or boolean as its JSON
   text; an object, array or null, and a `charset` other than UTF-8, now fail
   with `RUNTIME_INVALID_REQUEST_BODY` before sending instead of being sent as
-  JSON or mislabelled. `multipart/form-data` fails the same way until its
-  encoder lands, and so does a `boundary` written in its `contentType`.
+  JSON or mislabelled. Under `multipart/form-data` a payload that is not a
+  map fails the same way, and so does a `boundary` written in its
+  `contentType`.
 - **`replacements` work on a literal JSON template** — under a JSON
   `contentType` or an omitted one, a payload written as a string is parsed
   as JSON after interpolation, the replacement targets apply as JSON

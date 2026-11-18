@@ -284,6 +284,7 @@ impl Engine {
         let request_body::PreparedBody {
             wire: body,
             content_type,
+            wire_content_type,
             logical,
             projection: projected_body,
             warnings: body_warnings,
@@ -349,6 +350,9 @@ impl Engine {
             redirects: Vec::new(),
         };
 
+        if let Some(wire_content_type) = wire_content_type {
+            headers.insert("Content-Type".to_string(), wire_content_type);
+        }
         prep_warnings.extend(admission.presentation_warnings(step));
         let presentation = TraceRequest {
             method: method.clone(),

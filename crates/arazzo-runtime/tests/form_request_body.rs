@@ -261,7 +261,6 @@ async fn evaluation_replacements_and_controls() {
     for ct in [
         "application/x-www-form-urlencoded-extra",
         "text/application/x-www-form-urlencoded",
-        "multipart/form-data",
     ] {
         let (result, requests, _) = exercise(
             json!({"contentType":ct,"payload":{"name":"a b"}}),
@@ -276,6 +275,31 @@ async fn evaluation_replacements_and_controls() {
         );
         assert!(requests.is_empty(), "{ct}");
     }
+    let (result, requests, _) = exercise(
+        json!({"contentType":"multipart/form-data","payload":{"name":"a b"}}),
+        BTreeMap::new(),
+        false,
+    )
+    .await;
+    assert_eq!(
+        result.outputs.as_ref().err().map(|e| e.code()),
+        Some("RUNTIME_VALUE_UNAVAILABLE"),
+        "$request.body after a multipart request has no value"
+    );
+    let content_type = requests[0]
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or_default();
+    let boundary = content_type
+        .strip_prefix("multipart/form-data; boundary=")
+        .unwrap_or_else(|| panic!("a multipart map is sent as multipart: {content_type}"));
+    assert_eq!(
+        requests[0].body,
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\na b\r\n--{boundary}--\r\n"),
+        "a multipart map is neither form-encoded nor JSON"
+    );
     let (_, requests, _) =
         exercise(json!({"payload":{"name":"a b"}}), BTreeMap::new(), false).await;
     assert_eq!(requests[0].body, r#"{"name":"a b"}"#);
