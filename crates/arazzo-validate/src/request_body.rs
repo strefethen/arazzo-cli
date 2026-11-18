@@ -1,10 +1,32 @@
 use arazzo_expr::{classify_value_string, ValueStringSyntax};
 use arazzo_spec::{media_type, RequestBody, ValueSource};
 
-use crate::{Diagnostic, ValidationErrorKind};
+use crate::expressions::{validate_replacements, validate_value_source};
+use crate::{check_unknown_fields, Diagnostic, ValidationErrorKind};
 
-pub(crate) fn check(path: &str, request_body: &RequestBody, diagnostics: &mut Vec<Diagnostic>) {
-    if let Some(diagnostic) = literal_json_text(path, request_body) {
+pub(crate) fn validate(
+    step_path: &str,
+    request_body: &RequestBody,
+    arazzo_version: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let path = format!("{step_path}.requestBody");
+    check_unknown_fields(&path, &request_body.extensions, diagnostics);
+    if let Some(payload) = &request_body.payload {
+        validate_value_source(
+            &format!("{path}.payload"),
+            payload,
+            arazzo_version,
+            diagnostics,
+        );
+    }
+    validate_replacements(
+        &format!("{path}.replacements"),
+        &request_body.replacements,
+        arazzo_version,
+        diagnostics,
+    );
+    if let Some(diagnostic) = literal_json_text(&path, request_body) {
         diagnostics.push(diagnostic);
     }
 }

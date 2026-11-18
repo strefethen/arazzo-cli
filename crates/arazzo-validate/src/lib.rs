@@ -17,7 +17,7 @@ use iri_string::types::UriReferenceStr;
 mod async_applicability;
 mod expressions;
 mod operation_id_target;
-mod request_body_media;
+mod request_body;
 mod step_dependencies;
 mod step_targets;
 mod version;
@@ -25,7 +25,7 @@ mod xpath_advisory;
 
 use expressions::{
     validate_criterion, validate_output_step_reference, validate_output_value,
-    validate_replacements, validate_value_source,
+    validate_value_source,
 };
 use step_dependencies::{
     classify_step_dependency, local_step_depends_on_has_cycle, local_workflow_depends_on_has_cycle,
@@ -1461,30 +1461,7 @@ fn collect_diagnostics(spec: &ArazzoSpec, provenance: &ResolutionProvenance) -> 
                 }
             }
             if let Some(request_body) = &step.request_body {
-                check_unknown_fields(
-                    &format!("{step_path}.requestBody"),
-                    &request_body.extensions,
-                    &mut diagnostics,
-                );
-                if let Some(payload) = &request_body.payload {
-                    validate_value_source(
-                        &format!("{step_path}.requestBody.payload"),
-                        payload,
-                        &spec.arazzo,
-                        &mut diagnostics,
-                    );
-                }
-                validate_replacements(
-                    &format!("{step_path}.requestBody.replacements"),
-                    &request_body.replacements,
-                    &spec.arazzo,
-                    &mut diagnostics,
-                );
-                request_body_media::check(
-                    &format!("{step_path}.requestBody"),
-                    request_body,
-                    &mut diagnostics,
-                );
+                request_body::validate(&step_path, request_body, &spec.arazzo, &mut diagnostics);
             }
 
             for (criterion_idx, criterion) in step.success_criteria.iter().enumerate() {
