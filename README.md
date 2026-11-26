@@ -258,7 +258,7 @@ Abbreviated structure (not a complete replayable artifact; the tool version refl
 ```json
 {
   "schemaVersion": "trace.v2",
-  "tool": { "name": "arazzo", "version": "0.9.0" },
+  "tool": { "name": "arazzo", "version": "0.10.0" },
   "run": {
     "workflowId": "status-check",
     "status": "success",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-26
+
 Send and receive real files: byte-exact uploads, `multipart/form-data`, binary downloads, and response bodies read by their declared media type.
 
 **Upgrade if** your workflows upload photos or other files, post forms with file
@@ -16,7 +18,7 @@ MCP server back. Review the behavior changes below before upgrading.
 - **Bytes in and out** — `--input-file` uploads a file byte for byte, a bytes response flows to a later step, and `run --output-file` saves it to disk; bytes are never printed or traced.
 - **`multipart/form-data`** — a map payload becomes one part per entry in document order, file parts carrying their filename and media type.
 - **One media-type table** — request and response bodies follow the declared `contentType` and `Content-Type`; charsets, gzip and brotli decode, and nothing is sniffed or decoded lossily.
-- **Behavior changes** — an untyped or mislabeled response is no longer read as JSON, maps keep document order, a literal JSON template is sent as written, and traces move to `trace.v2`, so `trace.v1` files no longer replay.
+- **Behavior changes** — an untyped or mislabeled response is no longer read as JSON, maps keep document order, a literal JSON template is sent as written, step actions no longer hide the workflow's other actions, and traces move to `trace.v2`, so `trace.v1` files no longer replay.
 - **MCP is back** — `arazzo-cli serve` returns under an explicit trust model.
 
 ### Added
@@ -335,6 +337,22 @@ MCP server back. Review the behavior changes below before upgrading.
   `RUNTIME_SOURCE_DESCRIPTION_PARSE`) naming the budget. As a consequence
   `parse_unvalidated_bytes` and `generate` now reject duplicate mapping keys,
   which `validate` and runtime source binding already rejected.
+- **Step actions keep inherited workflow actions** — a step that declares its
+  own `onSuccess` or `onFailure` used to ignore the workflow's
+  `successActions` or `failureActions` entirely. Now a step action replaces
+  only the workflow action with the same case-sensitive `name`, after reusable
+  references resolve; the rest still apply, evaluated after the step's own
+  actions in workflow order. An exhausted retry moves on to those inherited
+  actions too. See [docs/action-inheritance.md](docs/action-inheritance.md);
+  the combined order is a repository choice. **Upgrade note:** a step that
+  declared one action to suppress the whole workflow list must now name the
+  workflow actions it replaces.
+
+### Security
+
+- Cleared advisories in locked dependencies that are not in the shipped
+  binary: `quinn-proto` 0.11.18 → 0.11.19 (RUSTSEC-2026-0523,
+  RUSTSEC-2026-0524) and `quinn-udp` 0.5.14 → 0.5.16 (RUSTSEC-2026-0538).
 
 ## [0.9.0] - 2026-11-06
 

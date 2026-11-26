@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#080f1e">
-    <meta name="arazzo-cli:version" content="0.9.0">
-    <meta name="arazzo-cli:release-tag" content="v0.9.0">
-    <meta name="arazzo-cli:page-updated" content="2026-11-06">
+    <meta name="arazzo-cli:version" content="0.10.0">
+    <meta name="arazzo-cli:release-tag" content="v0.10.0">
+    <meta name="arazzo-cli:page-updated" content="2026-11-26">
     <title>arazzo-cli — Execute API workflows from YAML</title>
     <meta name="description" content="Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Define multi-step HTTP and Kafka workflows in YAML, then validate, run, test, trace, replay, and debug them.">
     <meta property="og:title" content="arazzo-cli — Execute API workflows from YAML">
@@ -27,12 +27,12 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "arazzo-cli",
-        "softwareVersion": "0.9.0",
-        "dateModified": "2026-11-06",
+        "softwareVersion": "0.10.0",
+        "dateModified": "2026-11-26",
         "operatingSystem": "Linux, macOS, Windows",
         "applicationCategory": "DeveloperApplication",
         "description": "Standalone Arazzo workflow executor, CI test runner, and VS Code debugger. Define multi-step HTTP and Kafka workflows in YAML, then validate, run, test, trace, replay, and debug them.",
-        "downloadUrl": "https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0",
+        "downloadUrl": "https://github.com/strefethen/arazzo-cli/releases/tag/v0.10.0",
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "license": "https://opensource.org/licenses/MIT"
     }
@@ -322,7 +322,7 @@
         <div class="relative z-10 text-center px-6 max-w-4xl mx-auto mb-12 md:mb-16">
             <a id="hero-badge" href="#whats-new" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface border border-line text-xs text-ink-2 hover:text-ink transition-colors mb-8">
                 <span class="w-1.5 h-1.5 rounded-full bg-accent-teal animate-pulse"></span>
-                v0.9.0 &middot; Arazzo 1.1.0 &middot; OpenAPI Initiative
+                v0.10.0 &middot; Arazzo 1.1.0 &middot; OpenAPI Initiative
             </a>
             <h1 id="hero-title" class="text-4xl sm:text-5xl md:text-7xl font-extrabold leading-[1.08] tracking-tight mb-6">
                 Execute API workflows<br>
@@ -400,36 +400,36 @@
     <section id="whats-new" class="py-24 md:py-32 bg-alt">
         <div class="max-w-6xl mx-auto px-6">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">New in v0.9.0</h2>
-                <p class="text-lg text-ink-2 max-w-2xl mx-auto">Run HTTP and Kafka workflows with more faithful Arazzo behavior and clearer automation failures.</p>
+                <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight mb-4">New in v0.10.0</h2>
+                <p class="text-lg text-ink-2 max-w-2xl mx-auto">Send and receive real files: byte-exact uploads, multipart/form-data, binary downloads, and response bodies read by their declared media type.</p>
             </div>
             <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
                 <div class="new-card card rounded-2xl p-6">
-                    <i data-lucide="radio" class="w-6 h-6 mb-4" style="color:var(--i-blue)"></i>
-                    <h3 class="text-lg font-bold mb-2">Kafka receive</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">Receive JSON messages, filter on correlation IDs, and validate AsyncAPI targets offline.</p>
+                    <i data-lucide="upload" class="w-6 h-6 mb-4" style="color:var(--i-blue)"></i>
+                    <h3 class="text-lg font-bold mb-2">Bytes in and out</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed"><code class="inline">--input-file</code> uploads a file byte for byte, a downloaded file can feed a later step, and <code class="inline">run --output-file</code> saves it to disk. Bytes are never printed or traced.</p>
                 </div>
                 <div class="new-card card rounded-2xl p-6">
-                    <i data-lucide="file-check-2" class="w-6 h-6 mb-4" style="color:var(--i-teal)"></i>
-                    <h3 class="text-lg font-bold mb-2">Spec fidelity</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">Standard operation targets, explicit reusable actions, and typed Criterion interpolation.</p>
+                    <i data-lucide="paperclip" class="w-6 h-6 mb-4" style="color:var(--i-teal)"></i>
+                    <h3 class="text-lg font-bold mb-2">Multipart uploads</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Under <code class="inline">multipart/form-data</code>, a map payload becomes one part per entry in document order, with file parts carrying their filename and media type.</p>
                 </div>
                 <div class="new-card card rounded-2xl p-6">
-                    <i data-lucide="timer" class="w-6 h-6 mb-4" style="color:var(--i-indigo)"></i>
-                    <h3 class="text-lg font-bold mb-2">Reliable execution</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">Corrected timeout classification, workflow output diagnostics, and cancellation-aware debugger teardown.</p>
+                    <i data-lucide="file-type" class="w-6 h-6 mb-4" style="color:var(--i-indigo)"></i>
+                    <h3 class="text-lg font-bold mb-2">Media-type decoding</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Bodies follow the declared <code class="inline">contentType</code> and <code class="inline">Content-Type</code>. Charsets, gzip, and brotli decode; nothing is sniffed or decoded lossily.</p>
                 </div>
                 <div class="new-card card rounded-2xl p-6">
-                    <i data-lucide="braces" class="w-6 h-6 mb-4" style="color:var(--i-amber)"></i>
-                    <h3 class="text-lg font-bold mb-2">Automation contracts</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">Shared JSON errors with stable codes, plus stronger validation with machine-readable diagnostics.</p>
+                    <i data-lucide="file-search" class="w-6 h-6 mb-4" style="color:var(--i-amber)"></i>
+                    <h3 class="text-lg font-bold mb-2">trace.v2</h3>
+                    <p class="text-ink-2 text-sm leading-relaxed">Traces record the parsed media type and decoded body text. Bytes appear only as size and SHA-256 descriptors, and runs that moved bytes still replay.</p>
                 </div>
             </div>
             <div class="grid md:grid-cols-2 gap-5 mb-8">
                 <div id="mcp-server" class="new-card card rounded-2xl p-6">
                     <div class="flex items-center gap-2.5 mb-2">
                         <i data-lucide="shield-check" class="w-5 h-5 flex-shrink-0" style="color:var(--i-teal)"></i>
-                        <h3 class="font-bold">MCP server, explicit trust</h3>
+                        <h3 class="font-bold">MCP server is back, with explicit trust</h3>
                     </div>
                     <p class="text-ink-2 text-sm leading-relaxed"><code class="inline">arazzo-cli serve</code> exposes loaded workflows to an MCP client, which can run them with your credentials and no per-call approval. File reads stay inside the configured roots, and request, result, body, document, and timeout limits are flags. Hosts a workflow contacts are not restricted; see SECURITY.md.</p>
                 </div>
@@ -438,11 +438,11 @@
                         <i data-lucide="triangle-alert" class="w-5 h-5 flex-shrink-0" style="color:rgb(var(--warn))"></i>
                         <h3 class="font-bold text-warn">Breaking changes</h3>
                     </div>
-                    <p class="text-ink-2 text-sm leading-relaxed">Operation targets must use an <code class="inline">operationId</code> or a canonical JSON Pointer resolved from a declared source. Action <code class="inline">name</code> fields are literal, so component reuse requires <code class="inline">reference</code>. <code class="inline">generate</code> writes YAML only.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">A response without a JSON <code class="inline">Content-Type</code> is no longer read as JSON. A literal JSON template is sent as written. Step actions no longer hide the workflow's other actions. Traces are <code class="inline">trace.v2</code>, so <code class="inline">trace.v1</code> files no longer replay.</p>
                 </div>
             </div>
             <p class="text-center text-sm">
-                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="inline-flex items-center gap-2 text-link font-semibold hover:underline">
+                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.10.0" class="inline-flex items-center gap-2 text-link font-semibold hover:underline">
                     Read the full release notes
                     <i data-lucide="external-link" class="w-4 h-4"></i>
                 </a>
@@ -497,7 +497,7 @@
                         <i data-lucide="play-circle" class="w-6 h-6" style="color:var(--i-blue)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Run Workflows</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">Execute HTTP steps, resolve expressions, evaluate success criteria, and route control flow. Preview with --dry-run or run one step with --step.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">Execute HTTP steps, resolve expressions, evaluate success criteria, and route control flow. Preview with --dry-run or run one step with --step. Upload files with --input-file and save binary responses with --output-file.</p>
                 </div>
                 <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-accent-blue/10 flex items-center justify-center mb-4">
@@ -518,7 +518,7 @@
                         <i data-lucide="file-search" class="w-6 h-6" style="color:var(--i-indigo)"></i>
                     </div>
                     <h3 class="text-lg font-bold mb-2">Execution Traces</h3>
-                    <p class="text-ink-2 text-sm leading-relaxed">trace.v1 JSON artifacts record each attempt's request, response, criteria, and routing decision. Recognized sensitive values are redacted on a best-effort basis, so review traces before sharing.</p>
+                    <p class="text-ink-2 text-sm leading-relaxed">trace.v2 JSON artifacts record each attempt's request, response, criteria, and routing decision, with bytes kept out as descriptors. Recognized sensitive values are redacted on a best-effort basis, so review traces before sharing.</p>
                 </div>
                 <div class="feature-card card rounded-2xl p-6">
                     <div class="w-12 h-12 rounded-xl bg-emerald-400/10 flex items-center justify-center mb-4">
@@ -664,22 +664,22 @@
 
             <div class="space-y-6 mb-16">
                 <div>
-                    <p class="text-ink-2 text-sm font-medium mb-3">Install v0.9.0 from source</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Install v0.10.0 from source</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> cargo install <span class="flag">--git</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span> <span class="flag">--tag</span> <span class="arg">v0.9.0</span> <span class="flag">--locked</span> arazzo-cli
+                        <span class="prompt">$</span> cargo install <span class="flag">--git</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span> <span class="flag">--tag</span> <span class="arg">v0.10.0</span> <span class="flag">--locked</span> arazzo-cli
                     </div>
                 </div>
                 <div>
                     <p class="text-ink-2 text-sm font-medium mb-3">Or download a prebuilt binary</p>
                     <div class="terminal-block">
                         <span class="comment"># Linux x86_64, macOS, and Windows x86_64</span><br>
-                        <span class="prompt">$</span> gh release download v0.9.0 <span class="flag">-R</span> <span class="arg">strefethen/arazzo-cli</span> <span class="flag">-p</span> <span class="arg">'arazzo-cli-v0.9.0-*'</span>
+                        <span class="prompt">$</span> gh release download v0.10.0 <span class="flag">-R</span> <span class="arg">strefethen/arazzo-cli</span> <span class="flag">-p</span> <span class="arg">'arazzo-cli-v0.10.0-*'</span>
                     </div>
                 </div>
                 <div>
                     <p class="text-ink-2 text-sm font-medium mb-3">Get the example workflows</p>
                     <div class="terminal-block">
-                        <span class="prompt">$</span> git clone <span class="flag">--branch</span> <span class="arg">v0.9.0</span> <span class="flag">--depth</span> <span class="arg">1</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span><br>
+                        <span class="prompt">$</span> git clone <span class="flag">--branch</span> <span class="arg">v0.10.0</span> <span class="flag">--depth</span> <span class="arg">1</span> <span class="arg">https://github.com/strefethen/arazzo-cli.git</span><br>
                         <span class="prompt">$</span> cd arazzo-cli
                     </div>
                 </div>
@@ -711,7 +711,7 @@
                     </div>
                 </div>
                 <div>
-                    <p class="text-ink-2 text-sm font-medium mb-3">Validate a Kafka receive workflow without a broker (<a href="https://github.com/strefethen/arazzo-cli/blob/v0.9.0/docs/kafka-receive.md" class="text-link hover:underline">full Kafka guide</a>)</p>
+                    <p class="text-ink-2 text-sm font-medium mb-3">Validate a Kafka receive workflow without a broker (<a href="https://github.com/strefethen/arazzo-cli/blob/v0.10.0/docs/kafka-receive.md" class="text-link hover:underline">full Kafka guide</a>)</p>
                     <div class="terminal-block">
                         <span class="prompt">$</span> arazzo-cli validate <span class="arg">examples/kafka-order-followup.arazzo.yaml</span>
                     </div>
@@ -727,7 +727,7 @@
                     <i data-lucide="puzzle" class="w-5 h-5"></i>
                     VS Code Extension
                 </a>
-                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-ink border border-line hover:border-ink-3 transition-colors">
+                <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.10.0" class="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-full font-semibold text-ink border border-line hover:border-ink-3 transition-colors">
                     <i data-lucide="download" class="w-5 h-5"></i>
                     Download Binaries
                 </a>
@@ -743,7 +743,7 @@
                 <div class="flex items-center gap-2.5">
                     <img src="https://raw.githubusercontent.com/strefethen/arazzo-cli/main/vscode-arazzo-debug/images/icon.png" alt="" class="w-6 h-6 rounded-md">
                     <span class="font-medium text-ink-2">arazzo-cli</span>
-                    <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.9.0" class="text-sm text-ink-3 hover:text-ink transition-colors">v0.9.0</a>
+                    <a href="https://github.com/strefethen/arazzo-cli/releases/tag/v0.10.0" class="text-sm text-ink-3 hover:text-ink transition-colors">v0.10.0</a>
                 </div>
                 <div class="flex flex-wrap items-center justify-center gap-6 text-sm text-ink-3">
                     <a href="https://github.com/strefethen/arazzo-cli" class="hover:text-ink transition-colors">GitHub</a>
