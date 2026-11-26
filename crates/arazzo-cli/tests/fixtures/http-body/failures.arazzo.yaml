@@ -1,0 +1,240 @@
+arazzo: 1.1.0
+info:
+  title: HTTP body failure paths
+  version: "1"
+sourceDescriptions:
+  - name: api
+    url: ./api.openapi.json
+    type: openapi
+workflows:
+  - workflowId: pointer
+    inputs: &inputs
+      type: object
+      properties:
+        photo: {}
+        caption:
+          type: string
+        count:
+          type: integer
+        typed:
+          type: string
+        encoded:
+          type: string
+          contentEncoding: base32
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo#/exif
+
+  - workflowId: interpolation
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: text/plain
+          payload: "photo={$inputs.photo}"
+
+  - workflowId: criterion-context
+    steps:
+      - stepId: download
+        operationId: download
+        successCriteria:
+          - context: $response.body
+            condition: PNG
+            type: regex
+
+  - workflowId: selector-context
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: application/json
+          payload:
+            context: $inputs.photo
+            selector: $.exif
+            type: jsonpath
+
+  - workflowId: parameter
+    inputs: *inputs
+    steps:
+      - stepId: download
+        operationId: download
+        parameters:
+          - name: q
+            in: query
+            value: $inputs.photo
+
+  - workflowId: replacement-target
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: multipart/form-data
+          payload:
+            caption: $inputs.caption
+            photo: $inputs.photo
+          replacements:
+            - target: /photo
+              value: replaced
+
+  - workflowId: bytes-without-content-type
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          payload: $inputs.photo
+
+  - workflowId: multipart-without-content-type
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          payload:
+            caption: $inputs.caption
+            photo: $inputs.photo
+
+  - workflowId: bytes-under-json
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: application/json
+          payload: $inputs.photo
+
+  - workflowId: bytes-under-form
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: application/x-www-form-urlencoded
+          payload: $inputs.photo
+
+  - workflowId: object-under-text
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: text/plain
+          payload:
+            caption: cat
+
+  - workflowId: array-under-text
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: text/plain
+          payload:
+            - cat
+            - dog
+
+  - workflowId: multipart-non-map
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: multipart/form-data
+          payload: $inputs.photo
+
+  - workflowId: multipart-boundary
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: multipart/form-data; boundary=chosen-by-the-author
+          payload:
+            caption: $inputs.caption
+            photo: $inputs.photo
+
+  - workflowId: content-type-header
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        parameters:
+          - name: Content-Type
+            in: header
+            value: image/png
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+
+  - workflowId: upload
+    inputs: *inputs
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          sent: $request.body
+          id: $response.body#/id
+    outputs:
+      sent: $steps.upload.outputs.sent
+      id: $steps.upload.outputs.id
+
+  - workflowId: bad-json
+    steps:
+      - stepId: read
+        operationId: badJson
+        outputs:
+          field: $response.body#/field
+
+  - workflowId: bad-charset
+    steps:
+      - stepId: read
+        operationId: badCharset
+        outputs:
+          text: $response.body
+
+  - workflowId: unknown-charset
+    steps:
+      - stepId: read
+        operationId: unknownCharset
+        outputs:
+          text: $response.body
+
+  - workflowId: undecodable-coding
+    steps:
+      - stepId: read
+        operationId: compressed
+        outputs:
+          field: $response.body#/field
+
+  - workflowId: corrupt-gzip
+    steps:
+      - stepId: read
+        operationId: corruptGzip
+        outputs:
+          field: $response.body#/field
+
+  - workflowId: selector-output
+    steps:
+      - stepId: download
+        operationId: download
+        outputs:
+          width:
+            context: $response.body
+            selector: $.width
+            type: jsonpath
+
+  - workflowId: criterion-operand
+    steps:
+      - stepId: download
+        operationId: download
+        successCriteria:
+          - condition: $response.body != null

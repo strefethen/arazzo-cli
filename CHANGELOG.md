@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Send and receive real files: byte-exact uploads, `multipart/form-data`, binary downloads, and response bodies read by their declared media type.
+
+**Upgrade if** your workflows upload photos or other files, post forms with file
+parts, download binary responses, read non-UTF-8 or gzip responses, or need the
+MCP server back. Review the behavior changes below before upgrading.
+
+- **Bytes in and out** — `--input-file` uploads a file byte for byte, a bytes response flows to a later step, and `run --output-file` saves it to disk; bytes are never printed or traced.
+- **`multipart/form-data`** — a map payload becomes one part per entry in document order, file parts carrying their filename and media type.
+- **One media-type table** — request and response bodies follow the declared `contentType` and `Content-Type`; charsets, gzip and brotli decode, and nothing is sniffed or decoded lossily.
+- **Behavior changes** — an untyped or mislabeled response is no longer read as JSON, maps keep document order, a literal JSON template is sent as written, and traces move to `trace.v2`, so `trace.v1` files no longer replay.
+- **MCP is back** — `arazzo-cli serve` returns under an explicit trust model.
+
 ### Added
 
 - **`arazzo-cli serve` is back** — the MCP server returns to release binaries

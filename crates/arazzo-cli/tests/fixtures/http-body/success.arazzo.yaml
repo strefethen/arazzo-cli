@@ -1,0 +1,161 @@
+arazzo: 1.1.0
+info:
+  title: HTTP body system success condition
+  version: "1"
+sourceDescriptions:
+  - name: api
+    url: ./api.openapi.json
+    type: openapi
+workflows:
+  - workflowId: upload-jpeg
+    inputs:
+      type: object
+      properties:
+        photo: {}
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          id: $response.body#/id
+          sent: $request.body
+    outputs:
+      id: $steps.upload.outputs.id
+      sent: $steps.upload.outputs.sent
+
+  - workflowId: reupload
+    inputs:
+      type: object
+      properties:
+        photo: {}
+        other: {}
+    steps:
+      - stepId: first
+        operationId: putPhoto
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 201
+        outputs:
+          status: $statusCode
+      - stepId: identical
+        operationId: putPhoto
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 204
+        outputs:
+          status: $statusCode
+      - stepId: different
+        operationId: putPhoto
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.other
+        successCriteria:
+          - condition: $statusCode == 409
+        outputs:
+          status: $statusCode
+    outputs:
+      first: $steps.first.outputs.status
+      identical: $steps.identical.outputs.status
+      different: $steps.different.outputs.status
+
+  - workflowId: multipart
+    inputs:
+      type: object
+      properties:
+        caption:
+          type: string
+        tags:
+          type: array
+        photo: {}
+    steps:
+      - stepId: upload
+        operationId: upload
+        requestBody:
+          contentType: multipart/form-data
+          payload:
+            caption: $inputs.caption
+            tags: $inputs.tags
+            photo: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          id: $response.body#/id
+    outputs:
+      id: $steps.upload.outputs.id
+
+  - workflowId: roundtrip
+    steps:
+      - stepId: download
+        operationId: download
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          png: $response.body
+      - stepId: reupload
+        operationId: upload
+        requestBody:
+          contentType: image/png
+          payload: $steps.download.outputs.png
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          id: $response.body#/id
+    outputs:
+      png: $steps.download.outputs.png
+      id: $steps.reupload.outputs.id
+
+  - workflowId: decoding
+    steps:
+      - stepId: latin1
+        operationId: latin1
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          text: $response.body
+      - stepId: gzip
+        operationId: gzipped
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          name: $response.body#/name
+          sizes: $response.body#/sizes
+    outputs:
+      text: $steps.latin1.outputs.text
+      name: $steps.gzip.outputs.name
+      sizes: $steps.gzip.outputs.sizes
+
+  - workflowId: redirected
+    inputs:
+      type: object
+      properties:
+        photo: {}
+    steps:
+      - stepId: upload
+        operationId: redirected
+        requestBody:
+          contentType: image/jpeg
+          payload: $inputs.photo
+        successCriteria:
+          - condition: $statusCode == 200
+        outputs:
+          id: $response.body#/id
+    outputs:
+      id: $steps.upload.outputs.id
+
+  - workflowId: secret
+    steps:
+      - stepId: read
+        operationId: secret
+        successCriteria:
+          - condition: $statusCode == 200
+          - context: $response.body
+            condition: "^café token="
+            type: regex
