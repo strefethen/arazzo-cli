@@ -353,6 +353,9 @@ MCP server back. Review the behavior changes below before upgrading.
 - Cleared advisories in locked dependencies that are not in the shipped
   binary: `quinn-proto` 0.11.18 → 0.11.19 (RUSTSEC-2026-0523,
   RUSTSEC-2026-0524) and `quinn-udp` 0.5.14 → 0.5.16 (RUSTSEC-2026-0538).
+- Upgraded `url` 2.5.8 → 2.5.9 (RUSTSEC-2026-0592, a stack overflow in
+  `Url::origin()` on nested `blob:` URLs) and `form_urlencoded` 1.2.2 → 1.2.3.
+  `url` is in the shipped binary.
 
 ## [0.9.0] - 2026-11-06
 
