@@ -454,9 +454,7 @@ impl HttpClient {
         if let HttpClientMode::Replay(state) = &self.mode {
             return self.replay_request(state, cfg, logical_body).await;
         }
-        if let Some(blob) = logical_body.blob() {
-            blob.bytes()?;
-        }
+        logical_body.require_content()?;
 
         let (verified, insecure) = match &self.mode {
             HttpClientMode::Live { verified, insecure } => (verified, insecure.as_ref()),

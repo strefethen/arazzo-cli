@@ -129,8 +129,12 @@ impl Form {
         super::blob::descriptors(&self.blobs)
     }
 
-    /// The body as sent under a fresh boundary; `None` when a part's bytes
-    /// were restored from a trace and hold no content.
+    pub(super) fn require_content(&self) -> Result<(), RuntimeError> {
+        self.blobs
+            .values()
+            .try_for_each(|blob| blob.bytes().map(drop))
+    }
+
     pub(super) fn wire(&self) -> Result<Option<Wire>, RuntimeError> {
         let boundary = boundary()?;
         let mut bytes = Vec::new();
@@ -190,8 +194,6 @@ pub(super) fn is_multipart(request: &TraceRequest) -> bool {
         .is_some_and(|media| media.is_multipart_form_data())
 }
 
-/// The dry-run projection of the parts: entries and items that send no part
-/// are dropped, as they are from the wire.
 pub(super) fn project(projection: Value) -> Value {
     let Value::Object(entries) = projection else {
         return projection;

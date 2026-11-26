@@ -72,7 +72,9 @@ and read by `arazzo-cli replay <path>`. The JSON Schema is
 - `body` (any, optional): the logical request body, redacted by JSON key
 - `bodyBlobs` (object, optional): bytes in the request body, keyed by JSON
   Pointer into `body`, each a bytes descriptor. `""` is a whole-body blob;
-  `/<name>` is a `multipart/form-data` part.
+  `/<name>` is a `multipart/form-data` file part and `/<name>/<index>` a file
+  part sent as one item of an array entry. `body` holds `null` at each of
+  those pointers.
 - `redirects` (array, optional): `{statusCode, from, to}` hops, oldest first
 
 ## `steps[*].response`
@@ -113,11 +115,19 @@ Blob slots are marked out of band, by `inputBlobs`, `outputBlobs`,
 that merely has the descriptor's shape is ordinary JSON, not bytes.
 
 This release records `response.bodyBlob`, `inputBlobs` for inputs loaded with
-`run --input-file`, `request.bodyBlobs` with the single key `""` for a
-request body that is bytes as a whole, and `outputBlobs` for a step output
-declared as a whole reference to bytes. An `outputBlobs` entry under a
-credential-like output name is the redacted marker. `/<part>` keys are part of
-the schema now so it does not change when multipart requests arrive.
+`run --input-file`, `request.bodyBlobs` for a request body that is bytes as a
+whole (the single key `""`) or a `multipart/form-data` body with file parts,
+and `outputBlobs` for a step output declared as a whole reference to bytes. An
+`outputBlobs` entry under a credential-like output name is the redacted
+marker.
+
+A `multipart/form-data` request records its parts as `body`, an object in
+part order: each part name maps to its value, or to an array of values when
+the name repeats. A file part is `null` in `body`, with its descriptor in
+`bodyBlobs` under `/<name>`, or `/<name>/<index>` for an array item. The
+recorded `Content-Type` is `multipart/form-data` without the boundary. Replay
+compares parts by name, order, and value or descriptor, so reordering parts is
+drift.
 
 Replay restores each recorded blob as bytes that carry only their descriptor,
 never their content.

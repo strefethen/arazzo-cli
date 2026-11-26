@@ -150,12 +150,13 @@ MCP server back. Review the behavior changes below before upgrading.
   operation's own `encoding` is not read.
   - Every request attempt, retries included, gets a fresh random boundary on
     the wire; a 307 or 308 resend within the attempt sends identical bytes.
-    Traces, dry runs and replay comparison see `Content-Type:
-    multipart/form-data` without the boundary.
+    Traces, dry runs, replay comparison and `$request.header.Content-Type`
+    see `Content-Type: multipart/form-data` without the boundary.
   - The trace records the parts as `body`, with `null` in place of each
     file part and the file's descriptor in `bodyBlobs` at `/<name>` (or
-    `/<name>/<index>`); dry runs show the descriptor in place. No bytes are
-    ever written. Replay matches parts by name, order, value and descriptor.
+    `/<name>/<index>`); dry runs show the descriptor in place, and a part fed
+    by a skipped response the `<unresolved:…>` marker and its warning. No
+    bytes are ever written. Replay matches parts by name, order, value and descriptor.
   - Bytes inside an object or nested-array part, and a bytes `mediaType`
     holding a control character, fail with `RUNTIME_INVALID_REQUEST_BODY`
     before sending. `$request.body` after a multipart request fails with

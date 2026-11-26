@@ -170,6 +170,10 @@ fn upload(operation: &str, payload: Value) -> Value {
 }
 
 fn builder(server: &WireServer, step: Value) -> EngineBuilder {
+    builder_with(server, json!([step]))
+}
+
+fn builder_with(server: &WireServer, steps: Value) -> EngineBuilder {
     let spec: ArazzoSpec = serde_json::from_value(json!({
         "arazzo":"1.1.0", "info":{"title":"multipart", "version":"1"},
         "sourceDescriptions":[{"name":"api", "url":SOURCE, "type":"openapi"}],
@@ -177,7 +181,7 @@ fn builder(server: &WireServer, step: Value) -> EngineBuilder {
             "inputs":{"type":"object", "properties":{"caption":{"type":"string"},
                 "meta":{"type":"object"}, "tags":{"type":"array"},
                 "photo":{}, "raw":{}, "odd":{}}},
-            "steps":[step], "outputs":{"id":"$steps.upload.outputs.id"}}]
+            "steps":steps, "outputs":{"id":"$steps.upload.outputs.id"}}]
     }))
     .unwrap_or_else(|error| panic!("fixture: {error}"));
     let operation = |id: &str| {
@@ -500,4 +504,102 @@ async fn bytes_inside_a_json_part_fail_before_sending() {
         "{error}"
     );
     assert!(server.take().is_empty());
+}
+
+#[tokio::test]
+async fn a_dry_run_marks_parts_fed_by_a_skipped_response_beside_a_file_part() {
+    let server = WireServer::start();
+    let create = json!({"stepId":"create", "operationId":"upload",
+        "successCriteria":[{"condition":"$statusCode == 200"}],
+        "outputs":{"id":"$response.body#/id"}});
+    let step = upload(
+        "upload",
+        json!({"albumId":"$steps.create.outputs.id", "caption":"c",
+            "tags":["t", "$steps.create.outputs.id"], "photo":"$inputs.photo"}),
+    );
+    let result = run(
+        builder_with(&server, json!([create, step])).dry_run(true),
+        "cat",
+    )
+    .await;
+    assert!(result.outputs.is_ok(), "{:?}", result.outputs);
+    assert!(server.take().is_empty());
+    let planned = result.dry_run_requests()[1].clone();
+    assert_eq!(
+        planned.body,
+        Some(
+            json!({"albumId":"<unresolved:$response.body#/id>", "caption":"c",
+            "tags":["t", "<unresolved:$response.body#/id>"],
+            "photo":photo().descriptor().to_value()})
+        )
+    );
+    assert_eq!(
+        planned.warnings,
+        [
+            "dry-run unresolved main/upload/requestBody.payload/albumId: main/create.outputs.id depends on $response.body#/id; transport was skipped",
+            "dry-run unresolved main/upload/requestBody.payload/tags/1: main/create.outputs.id depends on $response.body#/id; transport was skipped",
+            "dry-run unresolved output main/upload.outputs.id: $response.body#/id requires a response; transport was skipped",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_live_file_part_whose_bytes_carry_only_a_descriptor_fails_before_sending() {
+    let server = WireServer::start();
+    let inputs = WorkflowInputs::new(
+        BTreeMap::new(),
+        BTreeMap::from([(
+            "photo".to_owned(),
+            Blob::from_descriptor(photo().descriptor()),
+        )]),
+    );
+    let result = builder(
+        &server,
+        upload("upload", json!({"caption":"c", "photo":"$inputs.photo"})),
+    )
+    .build()
+    .unwrap_or_else(|error| panic!("engine: {error}"))
+    .execute_collect("main", inputs)
+    .await;
+    let error = result
+        .outputs
+        .err()
+        .unwrap_or_else(|| panic!("a descriptor-only file part has nothing to send"));
+    assert_eq!(error.code(), "RUNTIME_INTERNAL_ERROR", "{error}");
+    assert!(
+        error.message.contains("carry only their descriptor"),
+        "{error}"
+    );
+    assert!(server.take().is_empty(), "nothing reaches the wire");
+}
+
+#[tokio::test]
+async fn request_content_type_after_a_multipart_request_is_the_logical_header_live_and_on_replay() {
+    let server = WireServer::start();
+    let expected = BTreeMap::from([("id".to_owned(), json!("multipart/form-data"))]);
+    for payload in [payload(), json!({"caption":"$inputs.caption"})] {
+        let mut step = upload("upload", payload);
+        step["outputs"]["id"] = json!("$request.header.Content-Type");
+        let live = run(builder(&server, step.clone()), "cat").await;
+        assert_eq!(
+            live.outputs.as_ref().ok(),
+            Some(&expected),
+            "{:?}",
+            live.outputs
+        );
+        assert!(server.take()[0]
+            .content_type
+            .starts_with("multipart/form-data; boundary="));
+        let replayed = run(
+            builder(&server, step).replay_trace_steps(trace_of(&live)),
+            "cat",
+        )
+        .await;
+        assert_eq!(
+            replayed.outputs.as_ref().ok(),
+            Some(&expected),
+            "{:?}",
+            replayed.outputs
+        );
+    }
 }

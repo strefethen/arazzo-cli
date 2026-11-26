@@ -4,6 +4,7 @@ use std::pin::Pin;
 use super::step_attempt::{count_retry, RouteScope};
 use super::*;
 
+#[inline(never)]
 fn off_frame<F: Future>(construct: impl FnOnce() -> F) -> Pin<Box<F>> {
     Box::pin(construct())
 }

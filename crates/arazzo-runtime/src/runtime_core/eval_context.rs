@@ -57,6 +57,12 @@ pub(super) fn post_request(
     ctx.method = Some(prep.method.clone());
     ctx.url = Some(prep.url_result.url.clone());
     ctx.request_headers = prep.headers.clone();
+    if let Some(form) = prep.logical.form() {
+        ctx.request_headers.insert(
+            super::multipart_body::CONTENT_TYPE.to_owned(),
+            form.content_type().to_owned(),
+        );
+    }
     ctx.request_query = prep.url_result.query_params.clone();
     ctx.request_path = prep.url_result.path_params.clone();
     ctx.request_body = prep.logical.slot();

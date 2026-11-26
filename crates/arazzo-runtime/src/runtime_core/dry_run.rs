@@ -25,6 +25,7 @@ impl<'a> RequestPresentation<'a> {
         vars: &VarStore,
         result: &payload::ResolvedValueSource,
         location: &str,
+        within: &str,
     ) -> Value {
         let mut value = result.value.clone();
         let mut warnings = Vec::new();
@@ -60,9 +61,9 @@ impl<'a> RequestPresentation<'a> {
             }
             let producer = producer_name(first);
             let pointer = if location == "requestBody.payload" {
-                occurrence.pointer.as_str()
+                format!("{within}{}", occurrence.pointer)
             } else {
-                ""
+                String::new()
             };
             warnings.push(format!("dry-run unresolved {}/{}/{location}{pointer}: {producer} depends on {}; transport was skipped", self.workflow_id, self.step_id, first.source));
         }

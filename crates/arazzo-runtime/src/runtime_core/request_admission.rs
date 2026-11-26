@@ -109,10 +109,19 @@ impl<'a> RequestAdmission<'a> {
         result: &payload::ResolvedValueSource,
         location: &str,
     ) -> Result<Value, RuntimeError> {
-        self.check(result, location)?;
+        self.project_within(result, location, "")
+    }
+
+    pub(super) fn project_within(
+        &self,
+        result: &payload::ResolvedValueSource,
+        location: &str,
+        pointer: &str,
+    ) -> Result<Value, RuntimeError> {
+        self.check(result, &format!("{location}{pointer}"))?;
         Ok(self.presentation.as_ref().map_or_else(
             || result.value.clone(),
-            |presentation| presentation.project(self.vars, result, location),
+            |presentation| presentation.project(self.vars, result, location, pointer),
         ))
     }
 

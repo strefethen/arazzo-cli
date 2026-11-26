@@ -316,6 +316,14 @@ impl LogicalBody {
         }
     }
 
+    pub(super) fn require_content(&self) -> Result<(), RuntimeError> {
+        match self {
+            Self::Bytes(blob) => blob.bytes().map(drop),
+            Self::Multipart(form) => form.require_content(),
+            Self::Absent | Self::Json(_) => Ok(()),
+        }
+    }
+
     pub(super) fn slot(&self) -> BodySlot {
         match self {
             Self::Absent => BodySlot::Absent,
@@ -409,6 +417,7 @@ pub(super) fn prepare(
             eval,
             admission,
             warnings: Vec::new(),
+            presented: Vec::new(),
         }
         .resolve(payload, request_body)?
     } else {
@@ -563,6 +572,7 @@ struct BytesPayload<'a> {
     eval: &'a ExpressionEvaluator,
     admission: &'a RequestAdmission<'a>,
     warnings: Vec<String>,
+    presented: Vec<(String, Value)>,
 }
 
 impl BytesPayload<'_> {
@@ -582,8 +592,14 @@ impl BytesPayload<'_> {
                 ),
             ));
         }
+        let mut projection = tree.presentation();
+        for (pointer, presented) in self.presented {
+            if let Some(leaf) = projection.pointer_mut(&pointer) {
+                *leaf = presented;
+            }
+        }
         Ok(Resolved {
-            projection: tree.presentation(),
+            projection,
             tree,
             warnings: self.warnings,
         })
@@ -635,13 +651,18 @@ impl BytesPayload<'_> {
     fn leaf(&mut self, source: &ValueSource, pointer: &str) -> Result<BodyNode, RuntimeError> {
         let location = format!("{PAYLOAD}{pointer}");
         let resolution = self.admission.resolve(source, self.eval, &location)?;
-        self.admission.check(&resolution, &location)?;
+        let presented = self
+            .admission
+            .project_within(&resolution, PAYLOAD, pointer)?;
         self.warnings.extend(
             resolution
                 .warnings
                 .iter()
                 .map(|warning| format!("{PAYLOAD}: {warning}")),
         );
+        if presented != resolution.value {
+            self.presented.push((pointer.to_owned(), presented));
+        }
         Ok(BodyNode::from(resolution.value))
     }
 }
