@@ -17,9 +17,26 @@ if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! git -C "$ROOT_DIR" diff --quiet || ! git -C "$ROOT_DIR" diff --cached --quiet; then
-  echo "ERROR: working tree must be clean before cutting a release tag." >&2
+if ! git -C "$ROOT_DIR" diff --cached --quiet; then
+  echo "ERROR: the index must be empty before cutting a release tag." >&2
   exit 1
+fi
+
+DIRTY="$(git -C "$ROOT_DIR" diff --name-only -- . ':(exclude)plans')"
+if [ -n "$DIRTY" ]; then
+  echo "ERROR: tracked files outside plans/ have uncommitted changes:" >&2
+  printf '%s\n' "$DIRTY" | sed 's/^/  /' >&2
+  echo "The preflight checks would test content the tag does not contain." >&2
+  exit 1
+fi
+
+if [ "$PUSH_FLAG" = "--push" ]; then
+  git -C "$ROOT_DIR" fetch --quiet "$REMOTE" main
+  if ! git -C "$ROOT_DIR" merge-base --is-ancestor HEAD "$REMOTE/main"; then
+    echo "ERROR: HEAD is not on $REMOTE/main." >&2
+    echo "Push main and wait for its CI run before cutting the tag." >&2
+    exit 1
+  fi
 fi
 
 if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then

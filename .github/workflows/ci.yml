@@ -76,6 +76,9 @@ jobs:
       - name: Test the site version gate
         run: bash scripts/ci/tests/verify-site-version-test.sh
 
+      - name: Test the release tag guards
+        run: bash scripts/ci/tests/cut-tag-guard-test.sh
+
       - name: Set up Rust 1.98.1
         uses: dtolnay/rust-toolchain@1.98.1
 
